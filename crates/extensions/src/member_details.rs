@@ -148,7 +148,7 @@ mod tests {
 		};
 		value.validate().unwrap();
 		let wire = serde_json::to_value(&value).unwrap();
-		let sdk: serein_extension_sdk::MemberDetailsSnapshot =
+		let sdk: nivra_extension_sdk::MemberDetailsSnapshot =
 			serde_json::from_value(wire.clone()).unwrap();
 		assert_eq!(serde_json::to_value(sdk).unwrap(), wire);
 		value.items[0].role_ids = vec!["4".into(); 2];

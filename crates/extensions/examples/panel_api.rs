@@ -65,8 +65,8 @@ fn main() {
 	let module = wat::parse_str(format!(
 		r#"(module (memory (export "memory") 1 256)
         (data (i32.const 32768) "{data}")
-        (func (export "serein_alloc") (param i32) (result i32) (i32.const 0))
-        (func (export "serein_invoke") (param i32 i32) (result i64) (i64.const {})))"#,
+        (func (export "nivra_alloc") (param i32) (result i32) (i32.const 0))
+        (func (export "nivra_invoke") (param i32 i32) (result i64) (i64.const {})))"#,
 		(32768_u64 << 32) | response.len() as u64
 	))
 	.unwrap();

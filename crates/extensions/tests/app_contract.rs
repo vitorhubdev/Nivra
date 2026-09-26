@@ -1,5 +1,5 @@
 use extensions::*;
-use serein_extension_sdk as sdk;
+use nivra_extension_sdk as sdk;
 
 #[test]
 fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validation() {

@@ -21,6 +21,16 @@ fn engine() -> Engine {
 	Engine::new(&config)
 }
 
+/// Preferred (Nivra) and legacy (Serein) Wasm export names. Same signatures.
+const ALLOC_NAMES: [&str; 2] = ["nivra_alloc", "serein_alloc"];
+const INVOKE_NAMES: [&str; 2] = ["nivra_invoke", "serein_invoke"];
+
+fn has_export(module: &Module, names: &[&str], ty: &FuncType) -> bool {
+		names.iter().any(|name| {
+			matches!(module.get_export(name), Some(ExternType::Func(actual)) if actual == *ty)
+		})
+}
+
 fn module(engine: &Engine, bytes: &[u8]) -> Result<Module, Error> {
 	if bytes.len() > MAX_MODULE_BYTES {
 		return Err(Error::Limit);
@@ -30,8 +40,16 @@ fn module(engine: &Engine, bytes: &[u8]) -> Result<Module, Error> {
 		return Err(Error::Module);
 	}
 	if !matches!(module.get_export("memory"), Some(ExternType::Memory(_)))
-		|| !matches!(module.get_export("serein_alloc"), Some(ExternType::Func(ty)) if ty == FuncType::new([ValType::I32], [ValType::I32]))
-		|| !matches!(module.get_export("serein_invoke"), Some(ExternType::Func(ty)) if ty == FuncType::new([ValType::I32, ValType::I32], [ValType::I64]))
+		|| !has_export(
+			&module,
+			&ALLOC_NAMES,
+			&FuncType::new([ValType::I32], [ValType::I32]),
+		)
+		|| !has_export(
+			&module,
+			&INVOKE_NAMES,
+			&FuncType::new([ValType::I32, ValType::I32], [ValType::I64]),
+		)
 	{
 		return Err(Error::Module);
 	}
@@ -79,7 +97,8 @@ fn instantiate(engine: &Engine, module: &Module) -> Result<(Store<StoreLimits>, 
 }
 
 /// Execute once, on the host worker. All Wasm state is dropped before returning.
-/// ABI: `serein_alloc(i32) -> i32`, `serein_invoke(i32, i32) -> i64`.
+/// ABI: `nivra_alloc(i32) -> i32`, `nivra_invoke(i32, i32) -> i64`, with a
+/// fallback to the legacy `serein_alloc` / `serein_invoke` (same signatures).
 /// The result packs the output pointer in its high 32 bits and byte length in its low 32 bits.
 pub fn invoke(package: &Package, input: &Invocation) -> Result<Output, Error> {
 	if package.manifest.kind != ExtensionKind::Plugin || package.theme.is_some() {
@@ -111,12 +130,18 @@ pub fn invoke(package: &Package, input: &Invocation) -> Result<Output, Error> {
 	let module = module(&engine, &package.wasm)?;
 	let (mut store, instance) = instantiate(&engine, &module)?;
 	let memory = instance.get_memory(&store, "memory").ok_or(Error::Module)?;
-	let alloc = instance
-		.get_typed_func::<i32, i32>(&store, "serein_alloc")
-		.map_err(|_| Error::Module)?;
-	let run = instance
-		.get_typed_func::<(i32, i32), i64>(&store, "serein_invoke")
-		.map_err(|_| Error::Module)?;
+	let alloc = ALLOC_NAMES
+		.iter()
+		.find_map(|name| instance.get_typed_func::<i32, i32>(&store, name).ok())
+		.ok_or(Error::Module)?;
+	let run = INVOKE_NAMES
+		.iter()
+		.find_map(|name| {
+			instance
+				.get_typed_func::<(i32, i32), i64>(&store, name)
+				.ok()
+		})
+		.ok_or(Error::Module)?;
 	let pointer = alloc
 		.call(&mut store, bytes.len() as i32)
 		.map_err(execution_error)?;
@@ -146,4 +171,38 @@ pub fn invoke(package: &Package, input: &Invocation) -> Result<Output, Error> {
 			other => other,
 		})?;
 	Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn module_wat(alloc: &str, invoke: &str) -> Vec<u8> {
+		wat::parse_str(format!(
+			"(module (memory 1) (export \"memory\" (memory 0)) (func (export \"{alloc}\") (param i32) (result i32) (i32.const 0)) \
+			 (func (export \"{invoke}\") (param i32 i32) (result i64) (i64.const 0)))"
+		))
+		.expect("test wat")
+	}
+
+	#[test]
+	fn accepts_nivra_alloc_invoke_first_and_serein_as_legacy() {
+		// New-style module (nivra_*) must validate; old code only knew serein_*.
+		validate_module(&module_wat("nivra_alloc", "nivra_invoke")).expect("nivra exports");
+		// Legacy module (serein_*) keeps loading via fallback.
+		validate_module(&module_wat("serein_alloc", "serein_invoke")).expect("serein exports");
+		// Both exported: still valid (prefers nivra at call time).
+		let both = wat::parse_str(
+			"(module (memory 1) (export \"memory\" (memory 0)) \
+			 (func (export \"nivra_alloc\") (param i32) (result i32) (i32.const 0)) \
+			 (func (export \"serein_alloc\") (param i32) (result i32) (i32.const 0)) \
+			 (func (export \"nivra_invoke\") (param i32 i32) (result i64) (i64.const 0)) \
+			 (func (export \"serein_invoke\") (param i32 i32) (result i64) (i64.const 0)))",
+		)
+		.expect("test wat");
+		validate_module(&both).expect("both exports");
+		// Neither / wrong signature: still rejected.
+		assert!(validate_module(&module_wat("other_alloc", "nivra_invoke")).is_err());
+		assert!(validate_module(&module_wat("nivra_alloc", "other_invoke")).is_err());
+	}
 }

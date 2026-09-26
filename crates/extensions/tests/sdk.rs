@@ -1,5 +1,5 @@
 use extensions::{Action, Capability, ExtensionKind, Invocation, Manifest, Output, Surface};
-use serein_extension_sdk as sdk;
+use nivra_extension_sdk as sdk;
 
 fn manifest(action: &str, surface: Surface) -> Manifest {
 	let mut capabilities = vec![Capability::Storage];

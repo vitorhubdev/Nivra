@@ -122,7 +122,7 @@ impl Updater {
 			if check {
 				self.demo_available = true;
 				self.status =
-					"Synthetic preview: Serein 99.0.0 is available. No network request was made."
+					"Synthetic preview: Nivra 99.0.0 is available. No network request was made."
 						.into();
 			}
 			if download && self.demo_available {
@@ -423,7 +423,7 @@ fn client() -> Result<reqwest::Client, String> {
 		.https_only(true)
 		.no_proxy()
 		.user_agent(concat!(
-			"SereinExt/",
+			"Nivra/",
 			env!("CARGO_PKG_VERSION"),
 			" (+https://github.com/vitorhubdev/SereinExt)"
 		))
@@ -513,7 +513,7 @@ fn release_version(tag: &str) -> Option<semver::Version> {
 }
 fn asset_name(tag: &str) -> Option<String> {
 	if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-		return install::appimage_session().then(|| format!("serein-{tag}-Linux-X64.AppImage"));
+		return install::appimage_session().then(|| format!("nivra-{tag}-Linux-X64.AppImage"));
 	}
 	let os = if cfg!(target_os = "macos") {
 		"macOS"
@@ -529,7 +529,7 @@ fn asset_name(tag: &str) -> Option<String> {
 	} else {
 		return None;
 	};
-	Some(format!("serein-{tag}-{os}-{arch}.zip"))
+	Some(format!("nivra-{tag}-{os}-{arch}.zip"))
 }
 fn select_release(
 	releases: Vec<Release>,
@@ -587,7 +587,7 @@ fn select_release(
 			release.tag_name
 		);
 		if asset.browser_download_url != expected {
-			return Err("The asset is not from the SereinExt release repository.".into());
+			return Err("The asset is not from the Nivra release repository.".into());
 		}
 		Ok(asset.clone())
 	};
@@ -617,7 +617,7 @@ async fn check_release(nightly: bool, cancel: Arc<AtomicBool>) -> Result<Option<
 	};
 	let body = match bounded_body(&client, &endpoint, MAX_METADATA, &cancel).await {
 		Ok(body) => body,
-		// SereinExt is tag-only until a release is explicitly published. An empty
+		// Nivra is tag-only until a release is explicitly published. An empty
 		// release channel is therefore a valid "no update" state, not an updater failure.
 		Err(error) if error == "No published release is available on this channel yet." => {
 			return Ok(None);

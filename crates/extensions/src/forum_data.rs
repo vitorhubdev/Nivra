@@ -77,7 +77,7 @@ mod tests {
 		};
 		value.validate().unwrap();
 		let wire = serde_json::to_value(&value).unwrap();
-		let sdk: serein_extension_sdk::ForumDataSnapshot =
+		let sdk: nivra_extension_sdk::ForumDataSnapshot =
 			serde_json::from_value(wire.clone()).unwrap();
 		assert_eq!(serde_json::to_value(sdk).unwrap(), wire);
 		value.posts[0].name = "x".repeat(129);

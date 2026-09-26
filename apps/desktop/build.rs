@@ -10,7 +10,7 @@ fn main() {
 		let plist = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
 			.join("../../packaging/macos/Info.plist");
 		println!(
-			"cargo:rustc-link-arg-bin=serein=-Wl,-sectcreate,__TEXT,__info_plist,{}",
+			"cargo:rustc-link-arg-bin=nivra=-Wl,-sectcreate,__TEXT,__info_plist,{}",
 			plist.display()
 		);
 	}
@@ -55,5 +55,5 @@ fn windows_icon() {
 			.success(),
 		"application icon resource compilation failed"
 	);
-	println!("cargo:rustc-link-arg-bin=serein={}", resource.display());
+	println!("cargo:rustc-link-arg-bin=nivra={}", resource.display());
 }

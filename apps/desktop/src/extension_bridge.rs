@@ -413,7 +413,7 @@ impl Bridge {
 			.map(|u| u.id.0.to_string());
 		if self.host.is_none() {
 			let root = if demo {
-				Some(std::env::temp_dir().join("serein-extension-demo"))
+				Some(std::env::temp_dir().join("nivra-extension-demo"))
 			} else {
 				dirs::data_local_dir().map(|root| root.join("nivra").join("extensions"))
 			};
@@ -841,7 +841,7 @@ impl Bridge {
 					let (send, receive) = mpsc::sync_channel(1);
 					let future = platform::save::theme_destination(
 						window.clone(),
-						&format!("{}.serein-extension", package.manifest.id),
+						&format!("{}.nivra-extension", package.manifest.id),
 					);
 					let ctx = ctx.clone();
 					runtime.spawn(async move {

@@ -1,5 +1,5 @@
 [package]
-name = "serein"
+name = "nivra"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

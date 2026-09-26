@@ -70,6 +70,10 @@ const SIGN_IN_HEADER_HEIGHT: f32 = if cfg!(target_os = "windows") {
 
 fn main() -> eframe::Result {
 	discord_api::ensure_tls_provider();
+	if std::env::args().any(|arg| arg == "--version") {
+		println!("Nivra {}", env!("CARGO_PKG_VERSION"));
+		return Ok(());
+	}
 	// One-time Nivra migration (data dir, keyring, autostart/shortcut).
 	// Data-dir failure is fatal: never open empty over old data.
 	if let Err(error) = platform::migration::migrate_all() {

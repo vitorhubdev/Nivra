@@ -315,6 +315,28 @@ fn shipped_rust_examples_execute_through_the_real_abi() {
 }
 
 #[test]
+fn nivra_and_legacy_extension_packages_both_load() {
+	// New-style package (.nivra-extension, nivra_* exports) loads via the new ABI.
+	let new = parse_package(include_bytes!(
+		"../../../examples/extensions/packages/message-delete-protector.nivra-extension"
+	))
+	.expect("new nivra package validates");
+	let input = Invocation {
+		action: "activate".into(),
+		..Default::default()
+	};
+	assert!(
+		invoke(&new, &input).is_ok(),
+		"new nivra package executes through the new ABI"
+	);
+	// Legacy fixture (.serein-extension, serein_* exports) still loads via fallback.
+	parse_package(include_bytes!(
+		"fixtures/sdk-legacy/app-toolbox.serein-extension"
+	))
+	.expect("legacy serein package still validates");
+}
+
+#[test]
 fn catalog_preview_metadata_is_optional_and_bounded() {
 	let mut catalog: serde_json::Value =
 		serde_json::from_slice(include_bytes!("../../../extensions/catalog.json")).unwrap();

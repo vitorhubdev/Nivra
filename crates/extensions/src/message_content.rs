@@ -184,7 +184,7 @@ mod tests {
 		};
 		snapshot.validate().unwrap();
 		let wire = serde_json::to_value(&snapshot).unwrap();
-		let sdk: serein_extension_sdk::MessageContentSnapshot =
+		let sdk: nivra_extension_sdk::MessageContentSnapshot =
 			serde_json::from_value(wire.clone()).unwrap();
 		assert_eq!(serde_json::to_value(sdk).unwrap(), wire);
 		snapshot.items[0].embeds[0].description = Some("x".repeat(513));

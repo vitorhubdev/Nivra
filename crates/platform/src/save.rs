@@ -7,8 +7,8 @@ pub fn extension_source(
 ) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
 	let dialog = rfd::AsyncFileDialog::new()
 		.set_parent(parent.as_ref())
-		.set_title("Import Serein extension")
-		.add_filter("Serein extensions", &["serein-extension", "json"])
+		.set_title("Import Nivra extension")
+		.add_filter("Nivra extensions", &["nivra-extension", "serein-extension", "json"])
 		.pick_file();
 	async move {
 		let file = dialog.await?;
@@ -69,9 +69,9 @@ pub fn theme_destination(
 ) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
 	let dialog = rfd::AsyncFileDialog::new()
 		.set_parent(parent.as_ref())
-		.set_title("Export Serein theme")
+		.set_title("Export Nivra theme")
 		.set_file_name(safe_filename(filename))
-		.add_filter("Serein theme", &["serein-extension"])
+		.add_filter("Nivra theme", &["nivra-extension", "serein-extension"])
 		.save_file();
 	async move {
 		let file = dialog.await?;
@@ -235,7 +235,7 @@ mod tests {
 	fn completed_files_publish_without_clobbering() {
 		let mut random = [0_u8; 16];
 		getrandom::fill(&mut random).unwrap();
-		let root = std::env::temp_dir().join(format!("serein-save-{random:02x?}"));
+		let root = std::env::temp_dir().join(format!("nivra-save-{random:02x?}"));
 		std::fs::create_dir(&root).unwrap();
 		let source = root.join("partial");
 		let destination = root.join("attachment");

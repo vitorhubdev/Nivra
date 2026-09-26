@@ -2,7 +2,7 @@
 //!
 //! Test handlers locally through the same JSON path as the Wasm exports:
 //! ```
-//! use serein_extension_sdk::{dispatch, Invocation, Output, serde_json};
+//! use nivra_extension_sdk::{dispatch, Invocation, Output, serde_json};
 //! fn handle(input: Invocation) -> Output {
 //!     Output { replacement: input.composer.map(|text| text.to_uppercase()), ..Default::default() }
 //! }
@@ -260,13 +260,14 @@ fn encode<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, Error> {
 	Ok(buffer.0)
 }
 
-/// Export a typed handler as Serein ABI version 1, including `fn(Invocation) -> Output`.
+/// Export a typed handler as Nivra ABI version 1, including `fn(Invocation) -> Output`.
 /// Each invocation gets a fresh instance, so buffers are reclaimed when it finishes.
+/// Also exports the legacy `serein_*` aliases (same signatures) so older hosts keep loading.
 #[macro_export]
 macro_rules! export {
 	($handler:path) => {
 		#[unsafe(no_mangle)]
-		pub extern "C" fn serein_alloc(length: u32) -> u32 {
+		pub extern "C" fn nivra_alloc(length: u32) -> u32 {
 			if length == 0 || length as usize > $crate::MAX_IO_BYTES {
 				return 0;
 			}
@@ -275,9 +276,9 @@ macro_rules! export {
 		}
 
 		/// # Safety
-		/// The Serein host supplies the pointer returned by `serein_alloc` and its allocated length.
+		/// The Nivra host supplies the pointer returned by `nivra_alloc` and its allocated length.
 		#[unsafe(no_mangle)]
-		pub unsafe extern "C" fn serein_invoke(pointer: u32, length: u32) -> u64 {
+		pub unsafe extern "C" fn nivra_invoke(pointer: u32, length: u32) -> u64 {
 			if pointer == 0 || length == 0 || length as usize > $crate::MAX_IO_BYTES {
 				return 0;
 			}
@@ -290,6 +291,20 @@ macro_rules! export {
 			let length = output.len() as u64;
 			let pointer = ::std::boxed::Box::into_raw(output.into_boxed_slice()) as *mut u8 as u32;
 			((pointer as u64) << 32) | length
+		}
+
+		// Legacy aliases for Serein hosts (same signatures, same behavior).
+		#[unsafe(no_mangle)]
+		pub extern "C" fn serein_alloc(length: u32) -> u32 {
+			nivra_alloc(length)
+		}
+
+		/// # Safety
+		/// Legacy entry point; see `nivra_invoke`.
+		#[unsafe(no_mangle)]
+		pub unsafe extern "C" fn serein_invoke(pointer: u32, length: u32) -> u64 {
+			// SAFETY: same contract as `nivra_invoke`.
+			unsafe { nivra_invoke(pointer, length) }
 		}
 	};
 }

@@ -459,7 +459,7 @@ impl ExtensionHost {
 		let context = self.context.clone();
 		self.active = Some((token, receiver));
 		if std::thread::Builder::new()
-			.name("serein-extension".into())
+			.name("nivra-extension".into())
 			.spawn(move || {
 				let result = run(&root, job, &gate);
 				let _ = sender.send(result);
@@ -1660,7 +1660,7 @@ mod tests {
 			let mut nonce = [0; 16];
 			getrandom::fill(&mut nonce).unwrap();
 			let path =
-				std::env::temp_dir().join(format!("serein-extension-test-{}", digest(&nonce)));
+				std::env::temp_dir().join(format!("nivra-extension-test-{}", digest(&nonce)));
 			fs::create_dir(&path).unwrap();
 			Self(path)
 		}

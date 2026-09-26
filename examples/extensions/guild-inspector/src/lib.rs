@@ -1,4 +1,4 @@
-use serein_extension_sdk::{AppInvocation, AppOutput, Element, Output};
+use nivra_extension_sdk::{AppInvocation, AppOutput, Element, Output};
 
 fn text(text: impl Into<String>) -> Element {
 	Element::Text { text: text.into() }
@@ -149,12 +149,12 @@ fn handle(input: AppInvocation) -> AppOutput {
 	}
 }
 
-serein_extension_sdk::export!(handle);
+nivra_extension_sdk::export!(handle);
 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use serein_extension_sdk::{dispatch_typed, serde_json};
+	use nivra_extension_sdk::{dispatch_typed, serde_json};
 
 	#[test]
 	fn loaded_data_and_unknown_permissions_remain_distinct() {

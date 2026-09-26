@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serein_extension_sdk::{Element, EventInvocation, MessageEventKind, Output};
+use nivra_extension_sdk::{Element, EventInvocation, MessageEventKind, Output};
 
 // Store only bounded counters, never message content or identifiers.
 #[derive(Default, Deserialize, Serialize)]
@@ -65,12 +65,12 @@ fn handle(input: EventInvocation) -> Output {
 	];
 	output
 }
-serein_extension_sdk::export!(handle);
+nivra_extension_sdk::export!(handle);
 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use serein_extension_sdk::{Invocation, MessageEvent, dispatch_typed, serde_json};
+	use nivra_extension_sdk::{Invocation, MessageEvent, dispatch_typed, serde_json};
 
 	fn run(action: &str, storage: Option<String>, kind: Option<MessageEventKind>) -> Output {
 		let input = EventInvocation {

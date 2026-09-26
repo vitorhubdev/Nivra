@@ -1,4 +1,4 @@
-use serein_extension_sdk::{Invocation, Output};
+use nivra_extension_sdk::{Invocation, Output};
 
 // The host stages an ordinary attachment; only the user can send it.
 fn activate(input: Invocation) -> Output {
@@ -7,4 +7,4 @@ fn activate(input: Invocation) -> Output {
 		..Default::default()
 	}
 }
-serein_extension_sdk::export!(activate);
+nivra_extension_sdk::export!(activate);

@@ -1,4 +1,4 @@
-use serein_extension_sdk::{Error, Invocation, MAX_IO_BYTES, Output, dispatch, serde_json};
+use nivra_extension_sdk::{Error, Invocation, MAX_IO_BYTES, Output, dispatch, serde_json};
 
 // These names must not affect the exported macro's implementation.
 #[allow(dead_code, unused_macros)]
@@ -15,7 +15,7 @@ mod abi {
 		panic!("invalid ABI input reached handler")
 	}
 
-	serein_extension_sdk::export!(handler);
+	nivra_extension_sdk::export!(handler);
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn typed_values_and_storage_distinguish_missing_from_invalid() {
 
 #[test]
 fn typed_event_dispatch_keeps_bounds_and_rejects_bad_json_before_the_handler() {
-	use serein_extension_sdk::{EventInvocation, MessageEventKind, dispatch_typed};
+	use nivra_extension_sdk::{EventInvocation, MessageEventKind, dispatch_typed};
 	let bytes = dispatch_typed(
 		br#"{"action":"event","message_event":{"kind":"delete","channel_id":"1","message_id":"2"}}"#,
 		|input: EventInvocation| {

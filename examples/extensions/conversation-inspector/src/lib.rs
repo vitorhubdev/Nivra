@@ -1,4 +1,4 @@
-use serein_extension_sdk::{AppInvocation, AppOutput, Element, Output, PollAvailability};
+use nivra_extension_sdk::{AppInvocation, AppOutput, Element, Output, PollAvailability};
 fn text(text: impl Into<String>) -> Element {
 	Element::Text { text: text.into() }
 }
@@ -159,11 +159,11 @@ fn handle(input: AppInvocation) -> AppOutput {
 		..Default::default()
 	}
 }
-serein_extension_sdk::export!(handle);
+nivra_extension_sdk::export!(handle);
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use serein_extension_sdk::{dispatch_typed, serde_json};
+	use nivra_extension_sdk::{dispatch_typed, serde_json};
 	fn run(wire: &str) -> AppOutput {
 		serde_json::from_slice(&dispatch_typed(wire.as_bytes(), handle).unwrap()).unwrap()
 	}

@@ -104,6 +104,9 @@ struct CallCues {
 	peers: Option<[u64; voice::MAX_PARTICIPANTS]>,
 }
 impl CallCues {
+	fn self_leave(&self) -> Option<Sound> {
+		self.joined.then_some(Sound::UserLeave)
+	}
 	fn poll(
 		&mut self,
 		ready: bool,
@@ -154,6 +157,12 @@ impl CallCues {
 		}
 		cues
 	}
+}
+fn push_membership_cue(cues: &mut Vec<Sound>, cue: Sound) {
+	if cues.len() >= 4 {
+		cues.remove(0);
+	}
+	cues.push(cue);
 }
 /// Remote cameras kept as textures at once; matches the transport's source limit.
 const MAX_REMOTE_VIDEO: usize = 16;
@@ -254,8 +263,18 @@ impl Voice {
 		if let Some(live) = self.live.take() {
 			live.audio.set_ready(false);
 			live.task.abort();
-			self.retiring = Some(live.audio.shutdown());
+		self.retiring = Some(live.audio.shutdown());
 		}
+	}
+	pub fn joined(&self) -> bool {
+		self.live.as_ref().is_some_and(|live| live.cues.joined)
+	}
+	pub fn push_self_leave_cue(&self, cues: &mut Vec<Sound>) -> bool {
+		if let Some(cue) = self.live.as_ref().and_then(|live| live.cues.self_leave()) {
+			push_membership_cue(cues, cue);
+			return true;
+		}
+		false
 	}
 	pub fn stop_camera(&mut self) {
 		if let Some(camera) = &self.camera {
@@ -508,6 +527,9 @@ impl Voice {
 					.map(|c| (c.generation, c.channel, c.request))
 			});
 		if current.is_some() && current != expected {
+			if self.push_self_leave_cue(&mut ui.notification_cues) {
+				ctx.request_repaint();
+			}
 			self.stop();
 			// Permission/removal failures must leave the service too; never target a new account.
 			return current
@@ -788,6 +810,9 @@ impl Voice {
 			);
 		}
 		let command = if let Some(error) = failure {
+			if self.push_self_leave_cue(&mut ui.notification_cues) {
+				ctx.request_repaint();
+			}
 			self.fail(state, error)
 		} else {
 			self.poll_camera(state, ui, ctx).or(command)
@@ -1488,6 +1513,40 @@ mod tests {
 			vec![Sound::UserJoin, Sound::UserLeave],
 			"a move that swaps people plays both sounds"
 		);
+	}
+
+	#[test]
+	fn self_leave_plays_once_after_join_and_never_before() {
+		let participant = |id| voice::Participant {
+			user: Id(id),
+			muted: false,
+			deafened: false,
+			server_muted: false,
+			server_deafened: false,
+			video: false,
+			streaming: false,
+		};
+		let owner = participant(1);
+		let peer = participant(2);
+		let fresh = CallCues::default();
+		assert!(fresh.self_leave().is_none(), "never joined means no leave sound");
+		let mut cues = CallCues::default();
+		assert!(cues.poll(false, true, owner.user, &[owner, peer]).is_empty());
+		assert!(cues.self_leave().is_none(), "not yet joined means no leave sound");
+		assert_eq!(
+			cues.poll(true, true, owner.user, &[owner, peer]),
+			vec![Sound::UserJoin]
+		);
+		assert_eq!(cues.self_leave(), Some(Sound::UserLeave));
+		let mut full = vec![Sound::UserJoin; 4];
+		push_membership_cue(&mut full, Sound::UserLeave);
+		assert_eq!(full.len(), 4);
+		assert_eq!(full.last(), Some(&Sound::UserLeave));
+		let voice = Voice::default();
+		assert!(!voice.joined());
+		let mut empty: Vec<Sound> = Vec::new();
+		assert!(!voice.push_self_leave_cue(&mut empty));
+		assert!(empty.is_empty());
 	}
 
 	#[test]

@@ -3136,6 +3136,7 @@ impl Desktop {
 				self.messaging.voice_camera_preview = None;
 			}
 			if matches!(control, client_core::voice::Command::Leave { .. }) {
+				self.voice.push_self_leave_cue(&mut self.messaging.notification_cues);
 				self.voice.stop();
 				self.messaging.camera_test_requested = false;
 				self.messaging.camera_test_texture = None;
@@ -5493,10 +5494,11 @@ public static class NivraShortcut {
 						self.messaging.channel_preferences.forget(channel);
 				}
 			}
-			if let Some(error) = voice_failure
-				&& let Some(command) = self.voice.fail(&mut self.state, error)
-			{
-				self.command(command);
+			if let Some(error) = voice_failure {
+				self.voice.push_self_leave_cue(&mut self.messaging.notification_cues);
+				if let Some(command) = self.voice.fail(&mut self.state, error) {
+					self.command(command);
+				}
 			}
 			// ponytail: accepted navigation removals clear account-wide history;
 			// add scoped disk deletion if channel churn makes refetch cost significant.

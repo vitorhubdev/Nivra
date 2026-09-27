@@ -3,6 +3,39 @@
 mod account_badge;
 mod account_menu;
 pub mod anim;
+pub mod text_preview;
+
+#[cfg(test)]
+mod preview_tests {
+	use super::*;
+
+	fn sample() -> text_preview::TextPreview {
+		text_preview::TextPreview {
+			filename: "notes.md".into(),
+			format: text_preview::PreviewFormat::Markdown,
+			text: "# Title\n\nBody text".into(),
+			truncated: false,
+		}
+	}
+
+	#[test]
+	fn preview_dialog_renders_and_closes() {
+		let ctx = egui::Context::default();
+		let mut view = MessagingUi::default();
+		assert!(view.preview.is_none());
+		view.set_preview(sample());
+		ctx.run_ui(Default::default(), |_ui| {
+			view.show_preview(&ctx);
+		})
+		.drop_without_applying_deltas();
+		assert!(
+			view.preview.is_some(),
+			"an open preview stays until it is closed"
+		);
+		view.close_preview();
+		assert!(view.preview.is_none());
+	}
+}
 mod archives;
 mod audio;
 pub mod batch_select;
@@ -407,6 +440,8 @@ pub struct MessagingUi {
 	pub long_text_attachment: Option<LongTextAttachment>,
 	/// Rename dialog for over-limit text; closed on send or cancel.
 	pub long_text_dialog: Option<LongTextDialog>,
+	/// Bounded text, markdown or code preview opened from a file card.
+	pub preview: Option<text_preview::TextPreview>,
 	/// Send was pressed with over-limit text; the dialog opens once the fresh
 	/// buffer is in scope. Private: only the composer sets and consumes this.
 	long_text_send_requested: bool,
@@ -941,6 +976,22 @@ impl MessagingUi {
 	}
 	pub fn downloads(&mut self) -> &mut DownloadUi {
 		&mut self.timeline.download
+	}
+	/// Desktop bridge: a file card asked to read a text, markdown or code body.
+	pub fn take_preview_request(&mut self) -> Option<model::Attachment> {
+		self.timeline.download.preview_request.take()
+	}
+	/// Desktop bridge: the bounded body was fetched and decoded; show it.
+	pub fn set_preview(&mut self, preview: text_preview::TextPreview) {
+		self.preview = Some(preview);
+	}
+	/// Report a preview failure through the shared toast channel.
+	pub fn preview_failed(&mut self, reason: &str) {
+		self.toasts.push(design::Level::Error, reason);
+	}
+	/// Close the open preview dialog.
+	pub fn close_preview(&mut self) {
+		self.preview = None;
 	}
 	/// Desktop bridge: folder-pick + sequential download request. Attachments are
 	/// bounded (at most 15) by the floating bar before they reach here.
@@ -3296,6 +3347,81 @@ impl MessagingUi {
 			}) {
 			self.editing = None;
 			self.edit_sent = false;
+		}
+	}
+	/// Bounded, read-only preview of a text, markdown or code attachment. The
+	/// body was fetched off the render thread; layout only happens here.
+	pub fn show_preview(&mut self, ctx: &egui::Context) {
+		if self.preview.is_none() {
+			return;
+		}
+		let language = self.language;
+		let mut close = false;
+		// Move the pending external link out so the shared borrow of `preview`
+		// cannot overlap a mutable borrow of the timeline.
+		let mut opening = self.timeline.opening.take();
+		let Some(preview) = self.preview.as_ref() else {
+			return;
+		};
+		crate::dialog::Dialog::new("text-preview", preview.filename.clone())
+			.width(640.0)
+			.show(ctx, |d| {
+				d.content(|ui| {
+					if preview.truncated {
+						ui.label(
+							RichText::new(crate::i18n::text(
+								language,
+								"Showing the beginning of a large file.",
+							))
+							.size(12.0)
+							.color(design::palette(ui).muted),
+						);
+						ui.add_space(4.0);
+					}
+					egui::ScrollArea::vertical()
+						.max_height(420.0)
+						.auto_shrink([false, false])
+						.show(ui, |ui| {
+							ui.set_width(ui.available_width());
+							if preview.format == text_preview::PreviewFormat::Markdown {
+								let mut images = crate::avatars::Avatars::default();
+								let mut profile = crate::profiles::ProfileSession::default();
+								markdown::Formatted::parse(&preview.text).show_with_images(
+									ui,
+									&mut opening,
+									&[],
+									None,
+									&mut profile,
+									(&mut images, false, &[]),
+								);
+							} else {
+								ui.add(
+									egui::Label::new(
+										RichText::new(preview.text.as_str()).monospace().size(12.0),
+									)
+									.wrap()
+									.selectable(true),
+								);
+							}
+						});
+				});
+				d.footer(|ui| {
+					if crate::dialog::action(
+						ui,
+						crate::i18n::text(language, "Close"),
+						crate::dialog::Action::Neutral,
+					)
+					.clicked()
+					{
+						close = true;
+					}
+				});
+			});
+		if opening.is_some() {
+			self.timeline.opening = opening;
+		}
+		if close {
+			self.preview = None;
 		}
 	}
 	/// Rename dialog for over-limit composer text. Enviar stages the text as a

@@ -222,6 +222,16 @@ fn file_card(
 ) {
 	let colors = design::palette(ui);
 	let kind = file_kind(&attachment.filename, attachment.content_type.as_deref());
+	// Text, markdown and code can be read inline once the desktop fetches a
+	// bounded body; other files keep the download-only card.
+	let previewable = matches!(kind, FileKind::Text | FileKind::Code)
+		&& attachment
+			.media
+			.url
+			.as_deref()
+			.or(attachment.media.proxy_url.as_deref())
+			.and_then(external_url)
+			.is_some();
 	egui::Frame::new()
 		.fill(colors.raised)
 		.stroke(Stroke::new(1.0, colors.border))
@@ -234,6 +244,13 @@ fn file_card(
 				icons::inline(ui, kind.icon(), 32.0, kind.tint(&colors));
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					ui.spacing_mut().item_spacing.x = 6.0;
+					if previewable {
+						let preview = ui.small_button("Preview");
+						if preview.clicked() {
+							download.preview_request = Some(attachment.clone());
+						}
+						surface.keep(&preview);
+					}
 					let download = download_button(ui, attachment, download, demo);
 					ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
 						ui.vertical(|ui| {
@@ -454,6 +471,8 @@ fn open_original(
 #[derive(Default)]
 pub struct DownloadUi {
 	pub request: Option<Attachment>,
+	/// Plain-text, markdown or code attachment the owner asked to preview inline.
+	pub preview_request: Option<Attachment>,
 	pub copy_request: Option<Attachment>,
 	pub embed_request: Option<(model::EmbedMedia, bool)>,
 	pub cancel_requested: bool,

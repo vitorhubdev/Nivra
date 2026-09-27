@@ -499,6 +499,53 @@ impl Drop for Partial<'_> {
 		}
 	}
 }
+/// Fetch a bounded text body into memory for an inline preview. Nothing is
+/// written to disk and the transfer is refused up front when the declared size
+/// already exceeds the UI preview limit; the streaming loop enforces the same
+/// cap so a lying Content-Length cannot grow the buffer.
+pub(crate) async fn fetch_preview(url: url::Url, expected: u64) -> Result<Vec<u8>, &'static str> {
+	let limit = ui::text_preview::MAX_PREVIEW_BYTES;
+	if expected == 0 || expected > limit {
+		return Err("File is too large to preview");
+	}
+	let client = reqwest::Client::builder()
+		.no_proxy()
+		.redirect(reqwest::redirect::Policy::none())
+		.connect_timeout(Duration::from_secs(15))
+		.read_timeout(Duration::from_secs(30))
+		.timeout(Duration::from_secs(60))
+		.build()
+		.map_err(|_| "Preview unavailable")?;
+	let response = client
+		.get(url)
+		.header(reqwest::header::ACCEPT_ENCODING, "identity")
+		.send()
+		.await
+		.map_err(|_| "Preview request failed")?;
+	if response.status() != reqwest::StatusCode::OK {
+		return Err("Preview unavailable; reload the conversation");
+	}
+	if response
+		.headers()
+		.get(reqwest::header::CONTENT_ENCODING)
+		.is_some_and(|encoding| encoding != "identity")
+	{
+		return Err("Unexpected encoding; reload the conversation");
+	}
+	let mut response = response;
+	let mut bytes = Vec::new();
+	while let Some(chunk) = response
+		.chunk()
+		.await
+		.map_err(|_| "Preview transfer interrupted")?
+	{
+		if bytes.len() as u64 + chunk.len() as u64 > limit {
+			return Err("File is too large to preview");
+		}
+		bytes.extend_from_slice(&chunk);
+	}
+	Ok(bytes)
+}
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn download(
 	client: &reqwest::Client,

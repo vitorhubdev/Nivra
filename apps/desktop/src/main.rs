@@ -743,6 +743,8 @@ struct Desktop {
 	downloads: downloads::Downloads,
 	batch_downloads: batch_downloads::BatchDownloads,
 	save_txt_done: Option<std::sync::mpsc::Receiver<bool>>,
+	/// Bounded text preview fetched off the render thread, drained each frame.
+	preview_done: Option<std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>>>,
 	audio: audio::Audio,
 	video: video::Video,
 	/// Offline fixture flags start (and optionally pause) the demo attachment without input.
@@ -1928,6 +1930,7 @@ impl Desktop {
 			downloads: downloads::Downloads::default(),
 			batch_downloads: batch_downloads::BatchDownloads::default(),
 			save_txt_done: None,
+			preview_done: None,
 			audio: audio::Audio::default(),
 			video: video::Video::default(),
 			demo_video_autoplay: if std::env::args().any(|arg| arg == "--demo-video-paused") {
@@ -4095,6 +4098,7 @@ impl Desktop {
 			self.messaging.open_licenses();
 		}
 		self.messaging.show_licenses(ctx);
+		self.messaging.show_preview(ctx);
 		if accept {
 			accept_notices(&mut self.app_settings);
 		}
@@ -6184,6 +6188,18 @@ impl eframe::App for Desktop {
 		};
 		self.messaging.downloads().active = self.downloads.is_active();
 		self.messaging.downloads().status = download_status;
+		// Inline text preview: publish the fetched body or its failure once.
+		if let Some(result) = self.preview_done.as_ref().and_then(|done| match done.try_recv() {
+			Ok(result) => Some(result),
+			Err(std::sync::mpsc::TryRecvError::Empty) => None,
+			Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err("Preview worker stopped")),
+		}) {
+			self.preview_done = None;
+			match result {
+				Ok(preview) => self.messaging.set_preview(preview),
+				Err(reason) => self.messaging.preview_failed(reason),
+			}
+		}
 		// Smart-select batch transfers: publish the manager snapshot, announce
 		// completion once, and honor manager actions.
 		if let Some(done) = self
@@ -6777,10 +6793,50 @@ impl eframe::App for Desktop {
 								return;
 							};
 							let saved = std::fs::write(&path, &bytes).is_ok();
-							let _ = send.send(saved);
+					let _ = send.send(saved);
 						});
-					})
+				})
 					.ok();
+			}
+
+			// Inline preview: fetch a bounded text body off the render thread and
+			// hand the decoded result to the UI on a later frame.
+			if let Some(attachment) = self.messaging.take_preview_request()
+				&& !self.state.demo
+				&& !self.fixture_only
+			{
+				match downloads::original_url(&attachment) {
+					Some(url) => {
+						let runtime = self.runtime.handle().clone();
+						let (send, receive) = std::sync::mpsc::sync_channel(1);
+						self.preview_done = Some(receive);
+						let filename = attachment.filename.clone();
+						let format = ui::text_preview::preview_format(
+							&attachment.filename,
+							attachment.content_type.as_deref(),
+						)
+						.unwrap_or(ui::text_preview::PreviewFormat::Plain);
+						let size = attachment.size;
+						std::thread::Builder::new()
+							.name("nivra-preview".into())
+							.spawn(move || {
+								let result = runtime.block_on(async {
+									let bytes = downloads::fetch_preview(url, size).await?;
+									let (text, truncated) = ui::text_preview::decode_preview(&bytes)
+										.ok_or("This file has no readable text")?;
+									Ok(ui::text_preview::TextPreview {
+										filename,
+										format,
+										text,
+										truncated,
+									})
+								});
+								let _ = send.send(result);
+							})
+							.ok();
+					}
+					None => self.messaging.preview_failed("Preview unavailable"),
+				}
 			}
 
 			if let Some(scope) = self.messaging.take_profile_picture_request() {

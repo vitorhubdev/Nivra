@@ -2,12 +2,12 @@
 
 `build.py` prepares static HTTPS repository trees for apt, dnf/zypper and pacman.
 The repository is hosted on GitHub Pages at
-`https://viceverse-cz.github.io/Serein/`. Its current package-signing fingerprint is
+`https://vitorhubdev.github.io/Nivra/`. Its current package-signing fingerprint is
 `CA19DA939E9BCAB500751CE480FE95CAD86141A5`; verify this through an independent
 channel before trusting the key. Configure the repository Actions secret
 `PACKAGE_SIGNING_KEY` with the ASCII-armored dedicated private signing key, and
 Actions variable `PACKAGE_SIGNING_FINGERPRINT` with its full fingerprint. Run the package-repository preparation workflow with
-`tag` (an existing Serein release), `channel` (`nightly` or `production`) and
+`tag` (an existing Nivra release), `channel` (`nightly` or `production`) and
 `base_url` (the final HTTPS root). It downloads the distribution-labelled assets,
 verifies their release `SHA256SUMS`, signs repositories and uploads the
 `signed-package-repositories` artifact. The release workflow calls the same workflow
@@ -61,22 +61,22 @@ declare `ID_LIKE=arch`. Other versions and derivatives must use the Flatpak bund
 instead of incompatible native packages:
 
 ```sh
-curl -fsSL https://viceverse-cz.github.io/Serein/setup.sh | sh
+curl -fsSL https://vitorhubdev.github.io/Nivra/setup.sh | sh
 # Or run from the cloned repository:
 # sh packaging/repositories/setup.sh
 ```
 
 To configure a specific channel or base URL:
 ```sh
-curl -fsSL https://viceverse-cz.github.io/Serein/setup.sh | SEREIN_CHANNEL=production sh
+curl -fsSL https://vitorhubdev.github.io/Nivra/setup.sh | NIVRA_CHANNEL=production sh
 ```
 
-After running the script, update your package lists and install `serein` using your distribution's native package manager (`apt`, `dnf`, `zypper`, or `pacman`). Subsequent system updates will automatically update Serein.
+After running the script, update your package lists and install `nivra` using your distribution's native package manager (`apt`, `dnf`, `zypper`, or `pacman`). Subsequent system updates will automatically update Nivra.
 
 Fedora setup selects the host's exact version (43 or 44). Fedora 43 needs a new
 release containing its matching build and signed repository; older releases only
 contain Fedora 44 packages. Rerunning the corrected script after publication replaces
-the previously incorrect `/etc/yum.repos.d/serein.repo` on Fedora 43.
+the previously incorrect `/etc/yum.repos.d/nivra.repo` on Fedora 43.
 The installer passes terminal input to the package manager even under `curl | sh`,
 so DNF's separate repository-key confirmation remains interactive. Compare its
 fingerprint with the verified key above before accepting; signature checks stay enabled.
@@ -98,14 +98,14 @@ For Ubuntu 26.04 amd64:
 
 ```sh
 URL="$BASE/$CHANNEL/ubuntu-26.04/amd64/apt"
-curl --fail --location "$URL/serein.asc" -o serein.asc
-gpg --show-keys --with-subkey-fingerprint serein.asc
+curl --fail --location "$URL/nivra.asc" -o nivra.asc
+gpg --show-keys --with-subkey-fingerprint nivra.asc
 # Compare the displayed full fingerprint with EXPECTED_FINGERPRINT before continuing.
-sudo install -Dm644 serein.asc /etc/apt/keyrings/serein.asc
-printf 'deb [arch=amd64 signed-by=/etc/apt/keyrings/serein.asc] %s ./\n' "$URL" |
-  sudo tee /etc/apt/sources.list.d/serein.list
+sudo install -Dm644 nivra.asc /etc/apt/keyrings/nivra.asc
+printf 'deb [arch=amd64 signed-by=/etc/apt/keyrings/nivra.asc] %s ./\n' "$URL" |
+  sudo tee /etc/apt/sources.list.d/nivra.list
 sudo apt update
-sudo apt install serein
+sudo apt install nivra
 ```
 
 For Fedora 43/44 x86_64 (use `opensuse-tumbleweed` and zypper commands for openSUSE):
@@ -113,42 +113,42 @@ For Fedora 43/44 x86_64 (use `opensuse-tumbleweed` and zypper commands for openS
 ```sh
 . /etc/os-release
 URL="$BASE/$CHANNEL/fedora-$VERSION_ID/x86_64/rpm"
-curl --fail --location "$URL/serein.asc" -o serein.asc
-gpg --show-keys --with-subkey-fingerprint serein.asc
+curl --fail --location "$URL/nivra.asc" -o nivra.asc
+gpg --show-keys --with-subkey-fingerprint nivra.asc
 # Compare the full fingerprint before importing.
-sudo rpm --import serein.asc
-curl --fail --location "$URL/serein.repo" -o serein.repo
-sudo install -m644 serein.repo /etc/yum.repos.d/serein.repo
-sudo dnf install serein
+sudo rpm --import nivra.asc
+curl --fail --location "$URL/nivra.repo" -o nivra.repo
+sudo install -m644 nivra.repo /etc/yum.repos.d/nivra.repo
+sudo dnf install nivra
 ```
 
-On openSUSE copy `serein.repo` to `/etc/zypp/repos.d/serein.repo`, then run
-`sudo zypper refresh && sudo zypper install serein`. Retain both package and
+On openSUSE copy `nivra.repo` to `/etc/zypp/repos.d/nivra.repo`, then run
+`sudo zypper refresh && sudo zypper install nivra`. Retain both package and
 repository signature checking; never work around a signature failure by disabling it.
 
 For Arch x86_64:
 
 ```sh
 URL="$BASE/$CHANNEL/arch/x86_64/arch"
-curl --fail --location "$URL/serein.asc" -o serein.asc
-gpg --show-keys --with-subkey-fingerprint serein.asc
+curl --fail --location "$URL/nivra.asc" -o nivra.asc
+gpg --show-keys --with-subkey-fingerprint nivra.asc
 # Compare the full fingerprint before importing and locally trusting it.
-sudo pacman-key --add serein.asc
+sudo pacman-key --add nivra.asc
 sudo pacman-key --lsign-key "$EXPECTED_FINGERPRINT"
 ```
 
 Add this stanza to `/etc/pacman.conf`, substituting the actual URL:
 
 ```ini
-[serein]
+[nivra]
 SigLevel = Required
 Server = https://YOUR-HOST/YOUR-PATH/nightly/arch/x86_64/arch
 ```
 
-Run `sudo pacman -Syu serein`. Normal `apt upgrade`, `dnf upgrade`, `zypper update`
-or `pacman -Syu` subsequently update Serein. Switching channels may require an
+Run `sudo pacman -Syu nivra`. Normal `apt upgrade`, `dnf upgrade`, `zypper update`
+or `pacman -Syu` subsequently update Nivra. Switching channels may require an
 explicit package-manager downgrade; do not enable both channels concurrently.
-This does not register Serein with Ubuntu/Debian archives, Fedora, AUR or Flathub.
+This does not register Nivra with Ubuntu/Debian archives, Fedora, AUR or Flathub.
 
 Run `python3 packaging/repositories/test_build.py` for input-boundary checks and
 `sh packaging/repositories/smoke-deb.sh` on a Debian/Ubuntu host with the tools above

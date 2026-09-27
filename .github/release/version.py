@@ -20,7 +20,7 @@ def update(version):
             package = tomllib.loads(pathlib.Path(path).read_text())['package']
             if package.get('version') == {'workspace': True}:
                 names.add(package['name'])
-    assert 'serein' in names, 'Desktop must inherit the workspace version'
+    assert 'nivra' in names, 'Desktop must inherit the workspace version'
     updated, count = re.subn(
         r'(\[workspace\.package\]\s*\nversion\s*=\s*")[^"]+("\s*\n)',
         lambda match: match[1] + version + match[2], source, count=1,

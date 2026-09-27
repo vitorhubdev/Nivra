@@ -5,11 +5,11 @@ scale, using the default dark and light themes. The commands, application names,
 icons and conversation are synthetic. No account or service adapter is connected.
 
 ```powershell
-cargo run --locked -p serein --features demo --example profile_preview -- --demo --page=slash-commands --width=1400 --height=1000 --output=dark.png
-cargo run --locked -p serein --features demo --example profile_preview -- --demo --page=slash-commands --light --width=800 --height=900 --output=light.png
-cargo run --locked -p serein --features demo --example profile_preview -- --demo --page=slash-command-options --width=1120 --height=760 --output=arguments-dark.png
-cargo run --locked -p serein --features demo --example profile_preview -- --demo --page=slash-command-options --light --width=800 --height=760 --output=arguments-light.png
-cargo run --locked -p serein --features demo --example profile_preview -- --demo --page=slash-command-options --command=weather --light --width=800 --height=760 --output=arguments-multiple.png
+cargo run --locked -p nivra --features demo --example profile_preview -- --demo --page=slash-commands --width=1400 --height=1000 --output=dark.png
+cargo run --locked -p nivra --features demo --example profile_preview -- --demo --page=slash-commands --light --width=800 --height=900 --output=light.png
+cargo run --locked -p nivra --features demo --example profile_preview -- --demo --page=slash-command-options --width=1120 --height=760 --output=arguments-dark.png
+cargo run --locked -p nivra --features demo --example profile_preview -- --demo --page=slash-command-options --light --width=800 --height=760 --output=arguments-light.png
+cargo run --locked -p nivra --features demo --example profile_preview -- --demo --page=slash-command-options --command=weather --light --width=800 --height=760 --output=arguments-multiple.png
 ```
 
 The fixture explicitly keeps the picker visible without keyboard/window focus.

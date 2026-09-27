@@ -7,7 +7,7 @@ and a clipped session error. The dialog shares the application's colors, typogra
 focus rules and cancellation controls; the provider widget uses its light or dark
 theme.
 
-Choose Verify, complete the provider's check, and Serein submits the resulting
+Choose Verify, complete the provider's check, and Nivra submits the resulting
 passcode once for the same invite. A new challenge requires another explicit
 verification. Cancellation, expiry, logout and replaced requests invalidate the old
 response. Gateway membership still determines server access; a CAPTCHA passcode
@@ -18,7 +18,7 @@ stop behavior.
 ## Friend requests
 
 Sending a friend request (by username or from a profile) or accepting one can return the
-same challenge shape. Serein reuses this dialog and scopes the challenge to that single
+same challenge shape. Nivra reuses this dialog and scopes the challenge to that single
 pending relationship write: the solved passcode is submitted once, on the same request,
 through the same `X-Captcha-Key`, `X-Captcha-Rqtoken` and `X-Captcha-Session-Id`
 headers. Cancelling or letting the challenge expire releases the pending write so the

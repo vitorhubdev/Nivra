@@ -12,7 +12,7 @@ evidence. Native window capture/control is unavailable in this session.
   and inspected locally; the narrow viewport uses two columns without clipping actions.
 
 ```powershell
-cargo run --locked -p serein --features demo --example profile_preview -- --demo --page=extensions --themes --width=1400 --height=1000 --output=target/theme-gallery-after.png
+cargo run --locked -p nivra --features demo --example profile_preview -- --demo --page=extensions --themes --width=1400 --height=1000 --output=target/theme-gallery-after.png
 ```
 
 For light appearance add `--light`; for the narrow check use `--width=800 --height=900`.

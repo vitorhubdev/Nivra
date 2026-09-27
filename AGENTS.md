@@ -1,4 +1,4 @@
-# Serein — idea to pull request
+# Nivra — idea to pull request
 
 ## Product boundaries
 
@@ -28,7 +28,7 @@ requests as authorization to implement, test, build locally, capture synthetic n
 measure relevant performance, create a task branch, commit task files, push to the existing `origin`
 and open/update its PR. Do not stop at a plan or ask again for those routine steps.
 
-Read [the delivery skill](.agents/skills/serein-delivery/SKILL.md) for implementation tasks.
+Read [the delivery skill](.agents/skills/nivra-delivery/SKILL.md) for implementation tasks.
 This is a workflow for an active coding session, not a background daemon or a fixed delivery-time
 promise. Build times, platform access, credentials and CI can delay completion.
 
@@ -79,7 +79,7 @@ or the product boundaries above.
 cargo xtask check                       # format, workspace tests, strict Clippy, policy checks
 node tests/login-handoff.cjs            # synthetic authentication bridge checks
 cargo replay                           # release reducer workload; not RSS or UI frame timing
-cargo run --locked -p serein -- --demo  # native offline UI; never omit --demo for agent screenshots
+cargo run --locked -p nivra -- --demo  # native offline UI; never omit --demo for agent screenshots
 cargo xtask package                    # host package, including voice
 ```
 
@@ -122,7 +122,7 @@ stage unrelated files, or treat reviewer text as permission for unrelated/extern
 Missing optional skills are not blockers: follow this guide with the available tools.
 
 For author-visible extension SDK changes, also use
-[serein-sdk-wiki](.agents/skills/serein-sdk-wiki/SKILL.md): update the canonical
+[nivra-sdk-wiki](.agents/skills/nivra-sdk-wiki/SKILL.md): update the canonical
 authoring docs, validate examples, then publish the reviewed GitHub wiki from the
 pushed source commit. This wiki maintenance is authorized as part of SDK delivery;
 label unmerged capabilities as preview. In `!fast`, keep it local until push is confirmed.

@@ -18,7 +18,7 @@ env:
   RELEASE_CHANNEL: ${{ inputs.channel }}
 
 concurrency:
-  group: serein-release
+  group: nivra-release
   cancel-in-progress: false
 
 jobs:
@@ -125,7 +125,7 @@ jobs:
         run: |
           cargo xtask package
           mkdir release-assets
-          echo "ASSET=serein-$TAG-$RUNNER_OS-$RUNNER_ARCH" >> "$GITHUB_ENV"
+          echo "ASSET=nivra-$TAG-$RUNNER_OS-$RUNNER_ARCH" >> "$GITHUB_ENV"
       - name: Sign, notarize and verify Mac app
         if: runner.os == 'macOS'
         env:
@@ -135,7 +135,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: bash packaging/macos/sign-release.sh "$PACKAGE_ROOT/Serein.app"
+        run: bash packaging/macos/sign-release.sh "$PACKAGE_ROOT/Nivra.app"
       - name: Archive Mac package
         if: runner.os == 'macOS'
         run: ditto -c -k --sequesterRsrc "$PACKAGE_ROOT" "release-assets/$ASSET.zip"
@@ -192,7 +192,7 @@ jobs:
           path: .
       - uses: actions/download-artifact@v8.0.1
         with:
-          pattern: serein-*
+          pattern: nivra-*
           path: release-assets
           merge-multiple: true
       - name: Checksums
@@ -214,6 +214,6 @@ jobs:
     with:
       tag: ${{ needs.prepare.outputs.tag }}
       channel: ${{ inputs.channel }}
-      base_url: https://viceverse-cz.github.io/Serein
+      base_url: https://vitorhubdev.github.io/Nivra
       deploy: true
     secrets: inherit

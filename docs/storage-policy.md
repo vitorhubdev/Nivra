@@ -198,7 +198,7 @@ marker so a save can replace an editor-created theme without overwriting an impo
 or reviewed package. The eight-installed-theme and 16 MiB package limits remain.
 Each theme embeds at most one 2 MiB background PNG/JPEG and one separate 2 MiB
 card cover PNG/JPEG; no source image path is persisted.
-Removing a theme deletes only Serein's copy, preserving originals and exports.
+Removing a theme deletes only Nivra's copy, preserving originals and exports.
 Exports use a unique temporary sibling and replace the selected destination only
 after a complete write. Failed saves/exports leave the editor draft available.
 
@@ -305,7 +305,7 @@ for the one live call, with no allocation or persisted membership history.
 
 Explicit media clipboard copies (September 13) reuse the bounded attachment
 download worker. One original video, at most 100 MiB, remains in a randomized
-`serein-clipboard-*` OS temporary directory while its file clipboard entry is
+`nivra-clipboard-*` OS temporary directory while its file clipboard entry is
 usable. The next media copy, logout, or normal exit releases it; pasting requires
 the app to remain open. Image staging files are removed after decoding. All file
 work and cleanup run outside rendering. Forced termination or filesystem failures
@@ -359,7 +359,7 @@ account-isolated; declarative themes are device preferences. Up to eight install
 themes remain available in Colour preset; switching only changes the bounded
 64-byte active theme identifier and retains the packages. Installation,
 validation, invocation storage and removal run on a bounded background worker.
-Disabling removes Serein's package and extension data, and failed cleanup is
+Disabling removes Nivra's package and extension data, and failed cleanup is
 reported and retried. Logout removes the account's plugin data. Imported
 original files and source repositories are never deleted. No credentials belong
 in plugin storage; it is not encrypted. Only bounded metadata may remain after
@@ -519,11 +519,11 @@ The owner explicitly withdrew the no-storage policy on 2026-09-09. Local files, 
 
 | Data | Location / bound | Removal |
 |---|---|---|
-| Discord token | OS credential store, service `cz.viceverse.serein`, account `discord-session` for the session restored on launch and `discord-session.<account id>` for each remembered account; at most 2048 bytes each. A per-account entry is written once, when the roster records none, and rewritten only for a token the owner just supplied: on macOS every access to an existing entry is governed by that item's keychain ACL | Explicit logout / Forget saved login removes both entries for that account; forgetting or pruning a saved account removes its per-account entry; invalid-token expiry also requests deletion |
+| Discord token | OS credential store, service `io.github.vitorhubdev.Nivra`, account `discord-session` for the session restored on launch and `discord-session.<account id>` for each remembered account; at most 2048 bytes each. A per-account entry is written once, when the roster records none, and rewritten only for a token the owner just supplied: on macOS every access to an existing entry is governed by that item's keychain ACL | Explicit logout / Forget saved login removes both entries for that account; forgetting or pruning a saved account removes its per-account entry; invalid-token expiry also requests deletion |
 | Remembered accounts (switcher) | `accounts` table in `client.sqlite3`: at most 8 rows of account ID, username, display name (64 bytes each), avatar hash, last-use timestamp and a flag recording whether the credential store holds that account's entry; no token | Logging out of, or forgetting, that account; the least recently used row is pruned past 8, taking its token and cached data with it |
-| History and drafts | `dirs::data_local_dir()/serein/client.sqlite3` | Clear cached history also clears service images and keeps drafts; logout clears the authenticated account’s history and drafts |
+| History and drafts | `dirs::data_local_dir()/nivra/client.sqlite3` | Clear cached history also clears service images and keeps drafts; logout clears the authenticated account’s history and drafts |
 | Messages | 500 per window, at most 20 stored channel windows globally, 48 MiB estimated text/metadata; SQLite main database capped at 64 MiB | Oldest touched channel evicted transactionally |
-| Avatar, server-icon, profile-banner and message-preview PNGs | Account subdirectory beneath `dirs::data_local_dir()/serein/avatars`; 1 GiB / 4096 files per account, 90 days since last use, at most 2 MiB per preview (512 KiB for icons/avatars) | Clear cache or account logout; versioned avatar/icon/banner keys and hashed media-source keys separate changed images |
+| Avatar, server-icon, profile-banner and message-preview PNGs | Account subdirectory beneath `dirs::data_local_dir()/nivra/avatars`; 1 GiB / 4096 files per account, 90 days since last use, at most 2 MiB per preview (512 KiB for icons/avatars) | Clear cache or account logout; versioned avatar/icon/banner keys and hashed media-source keys separate changed images |
 | Selected profile metadata | One session-memory record, at most 64 KiB; profile response body at most 256 KiB | Closing/changing the profile, session reset or logout; no SQLite profile table |
 | Explicit attachment downloads | User-selected destination, 1 byte through 100 MiB per original file; one active dialog/transfer; randomized sibling partial while writing | Cancel/error removes the partial when possible; completed downloads remain user-owned outside cache cleanup |
 | Selected upload source | Up to ten session-only paths (4096 encoded bytes each), filenames (256 UTF-8 bytes each) and size/modified metadata; 500,000,000 bytes total, read in 64 KiB chunks | Removal, send completion/failure, cancellation or session teardown; sources are never copied to recovery/cache files or deleted |
@@ -536,9 +536,9 @@ The owner explicitly withdrew the no-storage policy on 2026-09-09. Local files, 
 | Audio devices, input profile/custom processing, push-to-talk and gain | Device-wide `app_preferences` SQLite singleton, bounded to 16 KiB; device names ≤1,024 bytes each | Retained across restart/logout; demo changes remain in memory |
 | Recent-call reconnect hint | Optional `reconnect_call` record in the same 16 KiB `app_preferences` JSON: channel, guild, account and timestamp only | Cleared on hang-up, dismiss or after 15 minutes; abrupt process exit leaves it so the next launch can offer an explicit reconnect |
 | Authentication page | Wry incognito on Windows/macOS; ephemeral WebKit6 NetworkSession on Linux, destroyed on token handoff/cancel/timeout | Platform engine teardown; OS artifacts not promised erased |
-| Optional signed-in web media profile | Dedicated `dirs::data_local_dir()/serein/web-media` (Windows WebView2 via wry `WebContext::new`); default play stays incognito. Isolated from the Discord login webview. macOS uses wry `with_data_store_identifier`, Linux `NetworkSession::new` | Not cleared on logout; owner may delete the folder |
+| Optional signed-in web media profile | Dedicated `dirs::data_local_dir()/nivra/web-media` (Windows WebView2 via wry `WebContext::new`); default play stays incognito. Isolated from the Discord login webview. macOS uses wry `with_data_store_identifier`, Linux `NetworkSession::new` | Not cleared on logout; owner may delete the folder |
 
-Typical database directories: macOS `~/Library/Application Support/serein`, Windows `%LOCALAPPDATA%/serein`, Linux `$XDG_DATA_HOME/serein` or `~/.local/share/serein`. The Unix directory is private (0700). Database contents are **not encrypted by Serein**. OS token protection does not encrypt history, backups or drafts.
+Typical database directories: macOS `~/Library/Application Support/nivra`, Windows `%LOCALAPPDATA%/nivra`, Linux `$XDG_DATA_HOME/nivra` or `~/.local/share/nivra`. The Unix directory is private (0700). Database contents are **not encrypted by Nivra**. OS token protection does not encrypt history, backups or drafts.
 
 The app writes no background log, analytics, crash upload, saved password, MFA ticket, or plaintext credential file. A separate credential-free CDN downloader loads visible avatars, server icons, profile banners and validated service-proxied message images. Build outputs, this documentation, synthetic test databases and package files are development artifacts.
 
@@ -610,7 +610,7 @@ reference-picture, hardware and displayed-frame memory are additional. The synch
 software-video sink borrows the reusable RGBA buffer, avoiding a full-frame clone before
 conversion to UI pixels. No live media was used to establish these implementation bounds.
 
-Voice introduces no application audio files, recordings or voice-key store. Device preferences are saved locally as described above. Voice tokens/session IDs use redacted, zeroizing buffers and never enter SQLite or diagnostics; DAVE identities are regenerated for a new call. Eight-frame PCM queues, bounded Opus packets and one bounded decoder/jitter/PCM working set per remote speaker (up to 63) are transient media allocations, not disk caches. Guild voice rosters are session-only with 4,096-entry and 1 MiB budgets; they are never persisted. Upstream cryptographic tracing is compiled out. Audio-device shutdown is fenced before another device session starts. Synthetic crypto, transport and device-free capture-gate tests passed; actual audio-driver/permission artifacts and process writes during a physical call have not been traced. OS microphone permissions and driver behavior are outside Serein's cache-clearing guarantee.
+Voice introduces no application audio files, recordings or voice-key store. Device preferences are saved locally as described above. Voice tokens/session IDs use redacted, zeroizing buffers and never enter SQLite or diagnostics; DAVE identities are regenerated for a new call. Eight-frame PCM queues, bounded Opus packets and one bounded decoder/jitter/PCM working set per remote speaker (up to 63) are transient media allocations, not disk caches. Guild voice rosters are session-only with 4,096-entry and 1 MiB budgets; they are never persisted. Upstream cryptographic tracing is compiled out. Audio-device shutdown is fenced before another device session starts. Synthetic crypto, transport and device-free capture-gate tests passed; actual audio-driver/permission artifacts and process writes during a physical call have not been traced. OS microphone permissions and driver behavior are outside Nivra's cache-clearing guarantee.
 
 The optional READY voice-user lookup and per-snapshot/passive-update member lookup each admit
 at most 4,096 unique nonzero users / 1 MiB of estimated model storage, checking before insertion.
@@ -623,7 +623,7 @@ the actual roster's 4,096-entry / 1 MiB bounds are unchanged; no new disk storag
 
 Image attachment metadata remains bounded by 10 attachments / 64 KiB retained metadata and 256 KiB JSON per message, including original/proxy signed URLs. It counts toward existing window, pending-patch and database budgets. Decoded pixels reuse the shared media worker/cache; spoiler attachments are not requested before explicit reveal. Profile metadata (bio, pronouns, badges, connections and mutual-server summaries) stays in the single bounded RAM view. Profile and server-specific banner/avatar pixels may remain in the shared account image cache after closing the profile; cache clear/logout removes them under the same policy.
 
-Explicit Download creates an original attachment file only at the user-selected location. Suggested filenames are sanitized; downloads never reinterpret message filenames as destination paths, follow redirects, or send credentials to the CDN. Existing regular files are replaced only after native Save confirmation and a complete, flushed transfer. A new destination is published without overwriting a file created meanwhile. The one worker closes/removes its sibling partial on cancellation or failure; cleanup failures are visible. Forced termination or a filesystem error can leave a `.serein-*.partial` sibling, and macOS, Linux and Windows publish new files with exclusive native moves so hard-link support is not required. Normal close waits for the active worker; a cancelled native dialog must still be dismissed. Downloads are explicit user files, not account cache entries, and survive logout/cache clearing. Limits and transfer bounds are strictly enforced.
+Explicit Download creates an original attachment file only at the user-selected location. Suggested filenames are sanitized; downloads never reinterpret message filenames as destination paths, follow redirects, or send credentials to the CDN. Existing regular files are replaced only after native Save confirmation and a complete, flushed transfer. A new destination is published without overwriting a file created meanwhile. The one worker closes/removes its sibling partial on cancellation or failure; cleanup failures are visible. Forced termination or a filesystem error can leave a `.nivra-*.partial` sibling, and macOS, Linux and Windows publish new files with exclusive native moves so hard-link support is not required. Normal close waits for the active worker; a cancelled native dialog must still be dismissed. Downloads are explicit user files, not account cache entries, and survive logout/cache clearing. Limits and transfer bounds are strictly enforced.
 
 Conversation search queries and result snippets are session-only, limited to one 25-result / 256 KiB page and a 256-character query. Neither is written to SQLite or diagnostics. Opening a result uses normal bounded history retrieval, whose revalidated messages can enter the existing account cache.
 
@@ -740,7 +740,7 @@ Schema 7 adds one checked integer `message_kind` (0..255) per cached message, wi
 
 ### Opt-in synchronization and compatibility diagnostics
 
-Voice performance diagnostics (`SEREIN_VOICE_DIAGNOSTICS=1`) are also off by default.
+Voice performance diagnostics (`NIVRA_VOICE_DIAGNOSTICS=1`) are also off by default.
 They retain at most eight fixed-size numeric reports in a worker queue (under 2 KiB),
 plus one report per producer and one being written. One background writer formats
 reports and caps attempted stderr output at 8,192 reports AND 8 MiB per process,
@@ -750,8 +750,8 @@ names, payloads, audio, keys or telemetry are produced. Explicit shell redirecti
 is owner-managed; unrelated output and appended runs are outside these limits.
 See [voice CPU diagnostics](voice.md#investigating-high-cpu-during-a-call) for usage.
 
-`SEREIN_MEMBER_DIAGNOSTICS=1` enables fixed-label member synchronization diagnostics;
-`SEREIN_GATEWAY_DIAGNOSTICS=1` enables Gateway compatibility diagnostics. Both are off by default.
+`NIVRA_MEMBER_DIAGNOSTICS=1` enables fixed-label member synchronization diagnostics;
+`NIVRA_GATEWAY_DIAGNOSTICS=1` enables Gateway compatibility diagnostics. Both are off by default.
 Each enabled scope has a hard budget of 64 attempted records AND 8 KiB of formatted UTF-8
 output per Gateway run, shared across reconnect attempts. The desktop adds at most one
 fixed-label terminal session-failure line per enabled scope (less than 256 bytes). Failed or
@@ -765,7 +765,7 @@ dispatches continue to be ignored and grant no capabilities. The diagnostic deli
 identify the exact unknown service event: even its received name is excluded, along with payloads,
 credentials, account/channel/list IDs, usernames, message content and signed URLs.
 
-Output goes only to stderr. Serein creates no log file; explicit shell redirection is owner-managed
+Output goes only to stderr. Nivra creates no log file; explicit shell redirection is owner-managed
 and can also capture unrelated framework output, to which these limits do not apply. Repeated
 application runs appended to one external file are not bounded by a single Gateway-run budget.
 Windows GUI builds may have no inherited stderr; launch with deliberate stderr redirection to
@@ -850,7 +850,7 @@ Eframe `system_fonts` enumerates installed fonts on a background thread and uses
 read-only memory-mapped OS font files for missing glyphs, including native color
 emoji. No font download or font-file copy is added. Upstream fallback can wait
 for enumeration on its first missing glyph; its font/cache memory is framework
-overhead, separate from Serein message/image budgets. OS font availability and
+overhead, separate from Nivra message/image budgets. OS font availability and
 emoji coverage vary by platform. Bundled text faces and Twemoji remain in use.
 
 
@@ -907,7 +907,7 @@ is created even for existing schema-10/12 databases, requires no message migrati
 account logout like appearance. A failed load stays off; failed writes are visible in settings.
 Preview controls never load or save this preference.
 
-While enabled in an authenticated connection, Serein owns one standard Discord IPC endpoint
+While enabled in an authenticated connection, Nivra owns one standard Discord IPC endpoint
 and at most eight connected game workers. Windows uses a current-user-only pipe DACL and
 rejects remote connections; Unix uses a 0600 socket and checks peer UID. Occupied paths are
 never replaced or unlinked. Unix removes only its own device/inode on teardown; Windows
@@ -979,7 +979,7 @@ raw presence payloads. Connection teardown clears these reports and workers.
 ### Account menu presence (September 12, 2026)
 
 The account status and custom status are Discord settings (`settings-proto/1`,
-status field). Serein reads them before gateway identify, so a launch does not
+status field). Nivra reads them before gateway identify, so a launch does not
 force Online, and writes that field again when the owner changes them. The
 gateway still publishes one replaceable watch value. One local row per account
 (`account_presence`: status, custom text at most 512 bytes, optional expiry) is
@@ -1015,17 +1015,17 @@ actions. No disk storage, network endpoint or friend-management write is added.
 ### Opt-in Windows startup
 
 General settings can register this executable for the current Windows user's sign-in,
-off by default. The sole source of truth is the `Serein` REG_SZ value under
+off by default. The sole source of truth is the `Nivra` REG_SZ value under
 `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`: a quoted absolute
 executable path with `--autostart` and optionally `--start-minimized`, at most 260
 UTF-16 code units plus its terminator. It contains no account data or credentials.
 Turning startup off removes only this value. It survives logout; moving the portable
 executable requires enabling startup again from its new location. Windows Startup Apps
-can independently block the entry; Serein does not override that OS decision.
+can independently block the entry; Nivra does not override that OS decision.
 One off-thread operation and one fixed-size completion may exist at a time. Failed
 writes restore the last known setting and display an error. Demo mode does not read
 or write the startup entry. Automatic launches use the existing saved-login behavior;
-ordinary manual launches remain visible even when Start Serein minimized is selected.
+ordinary manual launches remain visible even when Start Nivra minimized is selected.
 
 ### Account-type badges (schema 14)
 
@@ -1118,7 +1118,7 @@ leftover Nightly values are ignored and rewritten as production. A leftover
 Update checks wait for preferences to load; demo actions remain
 in memory and never open update transports or create installation files.
 
-The updater uses a separate credential-free HTTPS client for the Serein GitHub
+The updater uses a separate credential-free HTTPS client for the Nivra GitHub
 release repository. It keeps one worker/result slot, at most 2 MiB of release
 metadata, a 64 KiB checksum list and one streamed archive capped at 512 MiB.
 Progress is coalesced into one atomic byte counter; release bodies, URLs and
@@ -1162,7 +1162,7 @@ are persisted, and no background pagination or new queue is introduced.
 ### Opt-in macOS startup
 
 The existing startup worker writes only
-`~/Library/LaunchAgents/cz.viceverse.serein.startup.plist`, at most 16 KiB,
+`~/Library/LaunchAgents/io.github.vitorhubdev.Nivra.startup.plist`, at most 16 KiB,
 with an absolute executable path and fixed autostart/minimized flags. Reads are
 bounded to 16 KiB; unknown or moved entries report an error. Enabling atomically
 replaces this file using a private sibling temporary file; disabling removes it.

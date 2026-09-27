@@ -15,10 +15,10 @@ assert(['nightly', 'production'].includes(channel), 'Choose nightly or productio
 const planPath = 'target/release-plan.json';
 const plan = mode === 'publish' ? JSON.parse(readFileSync(planPath, 'utf8')) : null;
 if (plan) assert.equal(channel, plan.channel, 'Release channel changed');
-const caskPath = 'Casks/serein.rb';
+const caskPath = 'Casks/nivra.rb';
 
 function updateCask() {
-  const asset = `release-assets/serein-${plan.gitTag}-macOS-ARM64.zip`;
+  const asset = `release-assets/nivra-${plan.gitTag}-macOS-ARM64.zip`;
   const checksum = createHash('sha256').update(readFileSync(asset)).digest('hex');
   const source = readFileSync(caskPath, 'utf8');
   assert.match(source, /^  version "[^"]+"$/m, 'Cannot locate Homebrew cask version');
@@ -54,7 +54,7 @@ if (plan && channel === 'production') {
       successComment: false,
       failComment: false,
       releasedLabels: false,
-      releaseNameTemplate: 'Serein <%= nextRelease.version %>',
+      releaseNameTemplate: 'Nivra <%= nextRelease.version %>',
     }],
   );
 }
@@ -95,7 +95,7 @@ if (mode === 'plan') {
     const assets = readdirSync('release-assets')
       .map(name => `release-assets/${name}`);
     execFileSync('gh', ['release', 'create', plan.gitTag, ...assets,
-      '--target', plan.gitHead, '--title', `Serein ${plan.version}`,
+      '--target', plan.gitHead, '--title', `Nivra ${plan.version}`,
       '--notes-file', 'target/release-notes.md', '--prerelease', '--latest=false', '--draft'],
     { stdio: 'inherit' });
     execFileSync('gh', ['release', 'edit', plan.gitTag, '--draft=false', '--prerelease', '--latest=false'],

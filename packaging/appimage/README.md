@@ -1,15 +1,15 @@
 # Linux AppImage
 
-Download `serein-<version>-Linux-X64.AppImage` from
+Download `nivra-<version>-Linux-X64.AppImage` from
 [Releases](https://github.com/ViceVerse-cz/rustcord/releases), keep it in a writable
 directory, and make it executable:
 
 ```sh
-chmod +x ./serein-<version>-Linux-X64.AppImage
-./serein-<version>-Linux-X64.AppImage
+chmod +x ./nivra-<version>-Linux-X64.AppImage
+./nivra-<version>-Linux-X64.AppImage
 ```
 
-The x86_64 image contains Serein including voice, its desktop entry, icon and
+The x86_64 image contains Nivra including voice, its desktop entry, icon and
 application licenses. It uses **host runtime libraries**, including GTK4 and
 WebKitGTK 6.0; it is not a self-contained distribution of those libraries. Release
 builds use Ubuntu 24.04 (glibc 2.39), so systems with an older glibc or incompatible
@@ -30,7 +30,7 @@ sudo apt install libgtk-4-1 libwebkitgtk-6.0-4 libasound2t64 libfontconfig1 \
 ```
 
 The WebKitGTK package supplies its matching browser subprocesses, data files and
-GTK dependencies. Serein does not relocate or patch WebKit, disable its sandbox,
+GTK dependencies. Nivra does not relocate or patch WebKit, disable its sandbox,
 or override the host library search path. A graphical session, graphics driver,
 portal backend and unlocked Secret Service provider are still required. A KDE
 portal/keyring provider can replace the GNOME choices above. No library or desktop
@@ -40,7 +40,7 @@ The embedded runtime includes FUSE support without requiring the old `libfuse2`
 package. Systems that cannot mount AppImages can run:
 
 ```sh
-./serein-<version>-Linux-X64.AppImage --appimage-extract-and-run
+./nivra-<version>-Linux-X64.AppImage --appimage-extract-and-run
 ```
 
 Settings → Updates uses the production GitHub latest release, the same as
@@ -49,7 +49,7 @@ AppImage filename. Both the file and its directory must be writable, and the
 filesystem must support hard links for the rollback copy (for example ext4 or
 Btrfs; FAT/exFAT require manual replacement). An extracted
 `squashfs-root/AppRun` and native/Flatpak installations use manual or package-manager
-updates. Keep the outer AppImage file in place while Serein is running.
+updates. Keep the outer AppImage file in place while Nivra is running.
 
 New AppImages embed the standard `gh-releases-zsync` update information and ship
 with a matching `.AppImage.zsync` release asset. Compatible tools such as
@@ -57,7 +57,7 @@ with a matching `.AppImage.zsync` release asset. Compatible tools such as
 unchanged blocks from your existing image, reducing update downloads. Production
 images track `latest`; prerelease images track `latest-pre`. This follows the
 [AppImage update specification](https://github.com/AppImage/AppImageSpec/blob/master/draft.md#github-releases).
-Serein's Settings → Updates also reuses local blocks when the selected release has
+Nivra's Settings → Updates also reuses local blocks when the selected release has
 a verified `.zsync` asset. It uses the production GitHub latest release and
 checks the reconstructed image against the release SHA-256 before staging it.
 Missing or incompatible metadata, unsupported HTTP ranges, or failed reconstruction
@@ -82,7 +82,7 @@ and [Type 2 runtime 20251108](https://github.com/AppImage/type2-runtime/releases
 verifying each against its pinned SHA-256 before use. The packager reuses the native
 payload allowlist, rejects unresolved host libraries, verifies the output's Type 2
 x86_64 header, and extracts it to compare packaged file contents and executable
-permissions. It never starts Serein or opens a session. Packages over the updater's
+permissions. It never starts Nivra or opens a session. Packages over the updater's
 512 MiB limit fail the build. Runtime sources and build instructions are available
 at the pinned runtime release; its license and third-party notices are included.
 The runtime statically links third-party components including LGPL libfuse; its
@@ -97,7 +97,7 @@ The Ubuntu 24.04 job in `linux-packages.yml` builds the AppImage separately from
 the Ubuntu 26.04 `.deb`, then uploads the image and its `.zsync` sidecar. Both are
 included in release checksums. The packager verifies the embedded update information
 and requires a nonempty sidecar. Local artifacts use the workspace version; CI sets
-`SEREIN_RELEASE_TAG=v<version>` so both artifacts use their final published names
+`NIVRA_RELEASE_TAG=v<version>` so both artifacts use their final published names
 before zsync generation. The sidecar points to the absolute, versioned GitHub asset
 URL. Release publication is not performed by local packaging.
 

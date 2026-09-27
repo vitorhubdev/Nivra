@@ -71,5 +71,5 @@ mod test_mls;
 
 // Exercise the exact vendored SHAKE adapter, without enabling unused HPKE backends.
 #[cfg(test)]
-#[path = "../../../vendor/hpke-rs/src/serein_sha3.rs"]
+#[path = "../../../vendor/hpke-rs/src/nivra_sha3.rs"]
 mod hpke_sha3;

@@ -59,7 +59,7 @@ discovery of a real existing Discord call remains unverified.
 `cargo run --locked -- --demo --demo-existing-call` shows a synthetic
 ongoing DM call with no local media session. The preview Join button is deliberately disabled.
 For the owner-controlled live gate, leave the peer connected in a private DM call, open that
-DM in Serein, wait for the banner, then explicitly Join. Verify no new ring, actual two-way
+DM in Nivra, wait for the banner, then explicitly Join. Verify no new ring, actual two-way
 audio, leaving/rejoining while the peer stays, and disappearance after the peer ends the call.
 
 Mute/deafen, saved input/output selection and focused V push-to-talk are implemented. Remappable mute and deafen bindings use global native registration when supported and when a modifier is present; they fall back to focused input on Wayland or when registration is unavailable. Push-to-talk releases when focus is lost and is disabled while text entry has focus. It remains focused-only by default. Devices are initialized only following an explicit call with authenticated empty-room waiting or encrypted readiness, or an explicit local microphone test; no microphone test runs at startup. Acoustic echo cancellation follows the selected input profile; see below for its limits. A microphone that fails to open or start, reports a fatal callback error, or delivers no audio callbacks for five seconds is disabled with a visible warning. The call and speaker playback remain connected, and the client periodically retries microphone setup in the background while selecting another input immediately retries. Transient buffer discontinuities and non-fatal stream glitches do not disable the microphone. Ordinary silence does not trigger the warning. Selected speaker failures can fall back to the default output; an unusable output can still fail the call.
@@ -81,7 +81,7 @@ only this account and known group recipients, rejects duplicate participants, an
 to 64 participants per call. Recipient removal drops stale participant/watch UI state; removal
 of this account closes local media and revokes subsequent call actions.
 
-The offline debug command is `cargo run --locked -p serein --example group_call`.
+The offline debug command is `cargo run --locked -p nivra --example group_call`.
 Group signaling remains unofficial and live-unverified. For owner-controlled verification,
 repeat the one-to-one gate below in a private group whose participating clients the owner
 controls, including simultaneous speech, additions/removals, ringing/decline/join, camera,
@@ -103,7 +103,7 @@ The [compatibility matrix](discord-compatibility.md) distinguishes this from res
 
 Run only when the owner explicitly elects to test and controls both sides of a private one-to-one DM. Ordinary tests/CI never access Discord or audio devices. Do not put credentials in chat, command-line arguments, screenshots, fixtures or reports.
 
-1. Build `cargo run --locked`. Complete the [normal-user text gate](authentication.md) with the owner's Serein session and an official Discord client. Prefer Serein's own official-login webview; do not extract another application's credential.
+1. Build `cargo run --locked`. Complete the [normal-user text gate](authentication.md) with the owner's Nivra session and an official Discord client. Prefer Nivra's own official-login webview; do not extract another application's credential.
 2. With headphones on both sides, open the existing private DM and deliberately select Start. Verify that the official client rings, Answer there, and wait for encrypted audio readiness. Compare the displayed current-epoch privacy codes where available. If login, transport, DAVE or permissions fail, record the redacted failure and stop that attempt; do not bypass it.
 3. Speak short test phrases in both directions. Confirm intelligibility, latency and absence of unexpected echo. A connected label, participant list or socket handshake alone is not success. Check mute, deafen, focused V press/release, focus loss and navigation to another text conversation.
 4. Hang up and verify both clients leave, microphone access ends and another call can start after departure acknowledgment. Reverse direction: call from the official client, test Decline, then a separate Answer. Confirm there is no automatic answer or retry.
@@ -174,7 +174,7 @@ static status messages; no identifiers, tokens, audio or raw signaling are logge
 Audio-device opening has a 20-second deadline after encrypted readiness, including device changes.
 If a system device API stalls, local audio is disabled and departure is requested. The existing
 worker must retire before another call can open devices; a driver that never returns can require
-restarting Serein. The watchdog cannot forcibly cancel an operating-system driver call.
+restarting Nivra. The watchdog cannot forcibly cancel an operating-system driver call.
 
 The outgoing DAVE key-package encoding was corrected to match reference implementations; see
 [the adapter's source comparison](../crates/discord-voice/README.md#key-package-interoperability-correction).
@@ -189,10 +189,10 @@ Audio/transport worker failures use a separate fixed slot so a full progress que
 cannot discard the cause. Copying includes only the failure text, not participants,
 channel identifiers, credentials or media. The timing summaries below do not explain
 a terminal failure; copy the failed-call reason as well when troubleshooting.
-`cargo run --locked -p serein -- --demo --demo-voice-failed` previews a synthetic
+`cargo run --locked -p nivra -- --demo --demo-voice-failed` previews a synthetic
 failure and checks that subsequent cleanup/progress events retain its original reason.
 
-Set `SEREIN_VOICE_DIAGNOSTICS=1` before launching Serein to get aggregate voice
+Set `NIVRA_VOICE_DIAGNOSTICS=1` before launching Nivra to get aggregate voice
 timings on stderr every five seconds and a best-effort final summary on teardown.
 `StreamSend` reports the active screen encoder; `Transport` reports camera encoding
 and call video decoding; `StreamReceive` reports its own video decoding. Values are
@@ -203,11 +203,11 @@ the software fallback after keyframe recovery.
 For example, launch an already-built macOS app from a terminal:
 
 ```sh
-SEREIN_VOICE_DIAGNOSTICS=1 SEREIN_FRAME_DIAGNOSTICS=1 /Applications/Serein.app/Contents/MacOS/serein 2> serein-voice.log
+NIVRA_VOICE_DIAGNOSTICS=1 NIVRA_FRAME_DIAGNOSTICS=1 /Applications/Nivra.app/Contents/MacOS/nivra 2> nivra-voice.log
 ```
 
-On Windows PowerShell, set `$env:SEREIN_VOICE_DIAGNOSTICS="1"` and
-`$env:SEREIN_FRAME_DIAGNOSTICS="1"`, then launch `serein.exe 2> serein-voice.log`.
+On Windows PowerShell, set `$env:NIVRA_VOICE_DIAGNOSTICS="1"` and
+`$env:NIVRA_FRAME_DIAGNOSTICS="1"`, then launch `nivra.exe 2> nivra-voice.log`.
 On Linux, use the same environment assignments as macOS with the installed executable.
 Quit an already-running instance first. Join/leave the call yourself; diagnostics never
 enable capture, join a call or send media. Quit normally to obtain the existing UI frame
@@ -235,7 +235,7 @@ separate writer; media workers never wait for stderr. Output stops after 128 rep
 or 64 KiB per process, shared by all calls, so restart for another capture. A full queue
 drops summaries. No IDs, device names, endpoints, keys, audio or signaling payloads
 are logged; upstream cryptographic tracing remains disabled. No files are created by
-Serein. Shell redirection is owner-managed and may include unrelated framework logs.
+Nivra. Shell redirection is owner-managed and may include unrelated framework logs.
 The device-free check is `cargo run --locked -p discord-voice --example voice_diagnostics`.
 Instrumentation alone does not establish the cause of a reported CPU spike or a speedup.
 
@@ -261,7 +261,7 @@ owner-operated listening checks. The existing linear resampling fallback remains
 
 ## macOS microphone permission
 
-Before opening a microphone for an explicitly joined, secured call, Serein checks
+Before opening a microphone for an explicitly joined, secured call, Nivra checks
 AVFoundation authorization and requests access if undecided. Denied/restricted
 access produces a visible error directing the owner to System Settings > Privacy
 & Security > Microphone. The worker waits at most 20 seconds, checks call/device
@@ -367,13 +367,13 @@ inline parameter sets, without joining a call or capturing a screen or microphon
 The check fails if the legacy encoder cannot start; it does not silently use software.
 
 System audio defaults off on Linux and Windows. It shares other applications' playback,
-even when sharing one window, and excludes Serein's own audio, including call playback
+even when sharing one window, and excludes Nivra's own audio, including call playback
 and watched streams. Exclusion happens at capture on the sender: a viewer cannot remove
 their voice once another sender has mixed it into stream audio. Other apps' notifications
 and audio remain included. macOS retains ScreenCaptureKit's current-process exclusion.
 
 Linux captures individual playback streams through PulseAudio's per-stream monitor API,
-also implemented by PipeWire's PulseAudio server. It excludes Serein and streams whose
+also implemented by PipeWire's PulseAudio server. It excludes Nivra and streams whose
 application identity cannot be established; it never falls back to a whole-output monitor
 or microphone. The ScreenCast portal grants video only; audio uses the existing desktop
 audio access, including Flatpak's PulseAudio socket permission. A separate bounded worker
@@ -381,7 +381,7 @@ handles discovery, capture and mixing outside video encoding and rendering. No a
 are moved between outputs and no virtual device is installed.
 
 Windows uses native process loopback with `PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE`,
-excluding Serein and its child processes across outputs. This requires Windows build 20348+
+excluding Nivra and its child processes across outputs. This requires Windows build 20348+
 (Windows 11 or Windows Server 2022; ordinary Windows 10 22H2 is older). Unsupported systems
 or failed isolation report an audio error; turn audio off to share video alone. There is no
 whole-output fallback. Neither adapter records to disk.
@@ -409,7 +409,7 @@ Use two clients with headphones, enable audio on the sender, play another app an
 from the viewer: the app should be audible without the viewer's voice returning in the
 stream. Repeat while starting/stopping apps, changing outputs, rekeying and stopping sharing.
 
-The native demo (`cargo run --locked -p serein -- --demo --demo-voice`) exposes a synthetic picker without OS source discovery or capture. Live screen sharing requires the same owner-controlled login gate as voice testing. See [compatibility and limits](discord-compatibility.md#outgoing-screen-sharing--september-11-2026).
+The native demo (`cargo run --locked -p nivra -- --demo --demo-voice`) exposes a synthetic picker without OS source discovery or capture. Live screen sharing requires the same owner-controlled login gate as voice testing. See [compatibility and limits](discord-compatibility.md#outgoing-screen-sharing--september-11-2026).
 
 ## Camera in calls (macOS, Windows and Linux)
 
@@ -525,7 +525,7 @@ Both feed the existing camera transport; no Discord wire behavior changed in thi
 
 ### Screen-share audio diagnostics
 
-The existing opt-in `SEREIN_VOICE_DIAGNOSTICS=1` reporter now also emits `StreamSend`
+The existing opt-in `NIVRA_VOICE_DIAGNOSTICS=1` reporter now also emits `StreamSend`
 and `StreamReceive` summaries. `StreamSend` encode calls count captured 20 ms audio
 frames encoded, encrypted and sent. `StreamReceive` receive calls count accepted
 DAVE audio packets; mix calls count decoded frames offered to the parent call's output.
@@ -565,7 +565,7 @@ between the UDP socket and the display, so a frozen viewer is diagnosed from one
 
 - `packets` / `rtx`: accepted video RTP packets (including restored retransmissions),
   and received retransmission packets (payload 102). Announced RTX sources can repair
-  gaps in the current picture; Serein does not yet send NACK requests.
+  gaps in the current picture; Nivra does not yet send NACK requests.
 - `open_failed`: packets of any payload rejected by the transport AEAD.
 - `not_ready`: video packets received before the DAVE session was ready or from a
   user outside the group; expected briefly after joining or an epoch change.
@@ -612,7 +612,7 @@ sharer's status and the viewer's notice now show a message derived from it (for 
 "Discord reported the stream as ended") instead of the same text a local stop shows, and
 an unrecognised value still reads "Discord ended the stream". A `user_requested` deletion
 stays silent because it is the local stop acknowledging. With the diagnostics variable set,
-the bounded raw value is also printed as `[Serein voice Stream] discord_delete_reason=…`.
+the bounded raw value is also printed as `[Nivra voice Stream] discord_delete_reason=…`.
 
 Linux application audio reports under `ScreenAudio` as well: `capture_restart` counts
 completed application enumerations, `capture_read` monitor reads, `capture_queue` chunks
@@ -656,13 +656,13 @@ until it drains. Software encoding a desktop is the usual reason for the latter,
 A capture source with nothing new to send still emits a keepalive picture once a second, so
 a frozen share shows as a run of seconds carrying only that keepalive rather than a gap
 between pictures. Such a run is reported once it ends as
-`[Serein voice Screen] capture_slow_ms=… withheld=…`. A `withheld` of zero means the desktop
+`[Nivra voice Screen] capture_slow_ms=… withheld=…`. A `withheld` of zero means the desktop
 stopped producing pictures while the transport was keeping up, which is a compositor or
 portal matter; a non-zero `withheld` means the pipeline was held back waiting for the
 transport to drain, which throttles the capture source until it catches up.
 
 Three lines name why a share ended, because the status only shows the most recent message
-and a later stop overwrites it: `[Serein voice Screen] capture_stopped=…` from the capture
+and a later stop overwrites it: `[Nivra voice Screen] capture_stopped=…` from the capture
 worker, `stream_transport_stopped=…` from its RTC connection, and `share_stopped=…` for the
 message the desktop finally acted on. Read them in that order; the first is the cause and
 the others usually follow from it.
@@ -681,8 +681,8 @@ redirection can leave an empty file. After closing the previous test instance, r
 the intended build on each endpoint with separate output files:
 
 ```powershell
-$env:SEREIN_VOICE_DIAGNOSTICS="1"
-Start-Process .\dist\serein.exe -RedirectStandardError "$PWD\stream-debug-retest.log" -Wait
+$env:NIVRA_VOICE_DIAGNOSTICS="1"
+Start-Process .\dist\nivra.exe -RedirectStandardError "$PWD\stream-debug-retest.log" -Wait
 ```
 
 Start sharing promptly after launch so the bounded diagnostic budget covers the test.
@@ -698,7 +698,7 @@ alone never opens streams. Leaving the voice settings page, joining a call, logo
 stop the preview. Testing is disabled during calls and in offline demo mode.
 The existing eight-frame rings bound loopback PCM; meter state is one atomic value and is not
 persisted. The meter is measured before the sensitivity gate; playback follows the gate.
-`cargo run --locked -p serein --features demo -- --demo --demo-check-mic-preview`
+`cargo run --locked -p nivra --features demo -- --demo --demo-check-mic-preview`
 checks settings rendering and capture guards without opening devices. Physical loopback and
 microphone permission prompts remain owner-verified behavior.
 

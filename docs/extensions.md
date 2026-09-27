@@ -1,15 +1,15 @@
 # Community extensions
 
-Serein extensions are local, opt-in tools for the native client. The Extensions
+Nivra extensions are local, opt-in tools for the native client. The Extensions
 and Themes pages in Settings contain packages, links to their source, their
 requested capabilities and their review status. A plugin cannot directly call Discord, read credentials, open files or make
 network requests. Separately granted foreground actions can propose messages
-and other app operations; the user reviews and applies each operation in Serein.
+and other app operations; the user reviews and applies each operation in Nivra.
 
 ## Install and remove
 
 Themes and plugins are published together in
-[Serein-extensions](https://github.com/ViceVerse-cz/Serein-extensions).
+[Nivra-extensions](https://github.com/ViceVerse-cz/Serein-extensions).
 Opening Settings > Themes or Extensions checks that repository's shared catalog
 on the existing worker. Normal builds embed no package payloads; bundled examples
 remain available only in offline demo/test builds.
@@ -23,13 +23,13 @@ imported packages are never replaced by catalog updates.
 
 Enable downloads the selected, hash-pinned package after its capabilities have
 been accepted. Updates are manual and require renewed capability consent.
-Import selects a local `.serein-extension` JSON package. An import is unreviewed;
+Import selects a local `.nivra-extension` JSON package (legacy `.serein-extension` still loads). An import is unreviewed;
 importing alone does not grant it capabilities or execute it.
 
-Disable stops accepting results immediately, then removes Serein's downloaded
+Disable stops accepting results immediately, then removes Nivra's downloaded
 package, temporary files and extension data. A failure to remove files is shown
 and cleanup is retried on the next load. Re-enabling requires downloading or
-importing the package again and starts with fresh extension settings. Serein
+importing the package again and starts with fresh extension settings. Nivra
 never deletes the creator's Git repository, the user's imported original, or an
 exported theme/image source.
 
@@ -53,7 +53,7 @@ preference. There is no periodic background polling or automatic package update.
    computer. Other languages can implement the same Wasm buffer/JSON contract.
 3. Package the manifest and Wasm bytes (or declarative theme) as a single JSON
    file. Test through Import with an offline `--demo` build first.
-4. Add the package and reproducible source/build instructions to `Serein-extensions`.
+4. Add the package and reproducible source/build instructions to `Nivra-extensions`.
    Commit the package first, then regenerate that repository's `catalog.json` with
    the package commit. Its publishing script records immutable package URLs,
    byte lengths and SHA-256 hashes. See the repository README for exact commands.
@@ -61,7 +61,7 @@ preference. There is no periodic background polling or automatic package update.
    artifact relationship. A catalog checksum identifies reviewed bytes; it is
    not a signature or a guarantee that code is harmless. Updates need review too.
 
-The in-app catalog reads `Serein-extensions/main/catalog.json`. A new catalog entry
+The in-app catalog reads `Nivra-extensions/main/catalog.json`. A new catalog entry
 is not available through that endpoint until it reaches that repository's main branch. Empty catalogs
 are valid; imports allow development before a release is listed.
 
@@ -241,7 +241,7 @@ Four opt-in additions extend the same ABI without changing existing SDK structs:
 
 - `data_queries` adds `ExtendedAppInvocation.queries` and approved request actions for
   message search, pins, archived threads, member search, profiles and GIF search.
-  Results reuse Serein's bounded native views: at most 25 rows and 48 KiB total,
+  Results reuse Nivra's bounded native views: at most 25 rows and 48 KiB total,
   with loading, error, truncation and next-cursor fields where applicable.
 - `messaging_settings` adds the loaded account privacy snapshot and approved updates
   for DM, message-request, friend-source and game-DM preferences.
@@ -251,7 +251,7 @@ Four opt-in additions extend the same ABI without changing existing SDK structs:
 - `action_feedback` adds `tracked_app_action`. Supply a unique `request_id`; after
   **Apply**, the app-event handler receives `action_result` with `accepted` or
   `rejected` and a stable code (`accepted`, `context_changed`, `unavailable`,
-  `invalid`, `denied` or `failed`). Acceptance means Serein admitted the action to
+  `invalid`, `denied` or `failed`). Acceptance means Nivra admitted the action to
   its native path; it does not claim that a later network request succeeded.
 
 Use `ExtendedAppInvocation` only when reading these fields. Existing
@@ -358,7 +358,7 @@ The **Emoji & Sticker Images** catalog plugin requests `image_sharing`. Its
 activation output makes custom emoji and sticker selections stage artwork as ordinary
 image attachments. Selecting artwork authorizes one send after host download and
 validation, without another composer confirmation. Text drafts stay intact. Existing
-file selections must be sent or removed first. Serein displays these attachments at
+file selections must be sent or removed first. Nivra displays these attachments at
 32px for emoji and 160px for stickers; other clients control their own attachment layout. Enabling the plugin never sends anything, grants
 network access to Wasm, or changes native sticker/emoji entitlements. Disabling removes the option. Logout, account changes and channel navigation cancel
 pending image preparation; already selected files follow ordinary attachment handling.
@@ -444,14 +444,14 @@ cleanup succeeds. Shared host code and bounded catalog metadata still cost some
 application space. Freed allocations may remain in the process allocator; an
 unchanged RSS reading alone does not mean an instance remains active.
 
-Plugin storage is ordinary local data, not encrypted by Serein. Do not use it
+Plugin storage is ordinary local data, not encrypted by Nivra. Do not use it
 for credentials. No extension diagnostics or private invocation data are
 uploaded. Sandboxing and review reduce exposure but cannot prove absence of
-bugs in the runtime or host; keep Serein updated.
+bugs in the runtime or host; keep Nivra updated.
 
 The buffer ABI is documented in the
 [authoring guide](../examples/extensions/README.md#abi-version-1). The demo uses
-a separate bounded temporary `serein-extension-demo` profile; it can import local
+a separate bounded temporary `nivra-extension-demo` profile; it can import local
 fixtures and browse the embedded starter catalog/previews but cannot download a
 catalog, preview or package. `Ctrl+Shift+F12` resets a
 community theme if its colors make controls difficult to read.

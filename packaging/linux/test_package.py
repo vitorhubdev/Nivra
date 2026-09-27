@@ -1,4 +1,4 @@
-"""Synthetic native package regression check; never launches Serein or installs it."""
+"""Synthetic native package regression check; never launches Nivra or installs it."""
 
 from pathlib import Path
 import argparse
@@ -14,11 +14,11 @@ ARTIFACTS = None
 
 class NativePackageTest(unittest.TestCase):
     def test_package_allowlist_and_corrupt_archive_detection(self):
-        with tempfile.TemporaryDirectory(prefix="serein-debian-test-") as directory:
+        with tempfile.TemporaryDirectory(prefix="nivra-debian-test-") as directory:
             root = Path(directory)
             staged = root / "staged"
             staged.mkdir()
-            shutil.copyfile("/bin/true", staged / "serein")
+            shutil.copyfile("/bin/true", staged / "nivra")
             for name in ["README.md", "LICENSE-MIT", "LICENSE-APACHE", "THIRD_PARTY_NOTICES.md"]:
                 (staged / name).write_text("synthetic package fixture\n")
             (staged / "docs").mkdir()
@@ -66,19 +66,19 @@ class NativePackageTest(unittest.TestCase):
                         packaging.native_package(staged, "0.1.0-test", FORMAT)
                 with self.assertRaisesRegex(ValueError, "semantic application version"):
                     packaging.native_package(staged, "0.1.0\nmalformed", FORMAT)
-                (staged / "serein").write_bytes(b"MZ synthetic wrong architecture")
+                (staged / "nivra").write_bytes(b"MZ synthetic wrong architecture")
                 with self.assertRaisesRegex(ValueError, "ELF executable"):
                     packaging.native_package(staged, "0.1.0", FORMAT)
                 return
             packaging.package(staged, "0.1.0-test")
-            artifact = next(staged.glob("serein_*.deb"))
-            self.assertEqual(packaging.output("dpkg-deb", "--field", str(artifact), "Package"), "serein")
+            artifact = next(staged.glob("nivra_*.deb"))
+            self.assertEqual(packaging.output("dpkg-deb", "--field", str(artifact), "Package"), "nivra")
             self.assertIn("gstreamer1.0-plugins-good", packaging.output(
                 "dpkg-deb", "--field", str(artifact), "Depends").split(", "))
             listing = packaging.output("dpkg-deb", "--contents", str(artifact))
             for excluded in ["debug.log", "stale.log", "stale.deb", "previous.deb", "stale-nested.log"]:
                 self.assertNotIn(excluded, listing)
-            self.assertNotIn("usr/share/doc/serein/docs/", listing)
+            self.assertNotIn("usr/share/doc/nivra/docs/", listing)
             self.assertNotIn("source/hpke-rs/", listing)
             self.assertIn("licenses/dependencies/PROVENANCE.md", listing)
             self.assertIn("licenses/voice/", listing)
@@ -92,7 +92,7 @@ class NativePackageTest(unittest.TestCase):
                     artifact, wrong_stage, check, "0.1.0~test-1",
                     packaging.output("dpkg", "--print-architecture"),
                     packaging.output("dpkg-deb", "--field", str(artifact), "Depends"))
-            (staged / "serein").write_bytes(b"MZ synthetic wrong architecture")
+            (staged / "nivra").write_bytes(b"MZ synthetic wrong architecture")
             with self.assertRaisesRegex(ValueError, "ELF executable"):
                 packaging.package(staged, "0.1.0")
 

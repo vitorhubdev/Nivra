@@ -1,18 +1,51 @@
-# SereinExt
+# Nivra
 
 <p align="center">
   <a href="https://github.com/vitorhubdev/SereinExt">
-    <img src="docs/preview.png" alt="SereinExt — modified Serein fork" width="900" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+    <img src="docs/preview.png" alt="Nivra — independent fork of Serein" width="900" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
   </a>
 </p>
 
 <p align="center">
-  <strong>SereinExt — a modified fork of Serein, focused on fixes, usability and additional client features.</strong>
+  <strong>Nivra — a native community and communication client built with Rust, egui and wgpu.</strong>
 </p>
 
 > [!IMPORTANT]
-> **SereinExt is an independent modified fork of [ViceVerse-cz/Serein](https://github.com/ViceVerse-cz/Serein).**
-> Upstream remains credited as the original project. SereinExt versions and changes are maintained in this repository and may intentionally diverge from upstream.
+> **Nivra is an independent modified fork of [ViceVerse-cz/Serein](https://github.com/ViceVerse-cz/Serein).**
+> Upstream remains credited as the original project. Nivra versions and changes are maintained in this repository and may intentionally diverge from upstream.
+
+## Origin & attribution
+
+Nivra originated as an independent fork of
+[Serein](https://github.com/ViceVerse-cz/Serein),
+developed by the Serein contributors and ViceVerse-cz.
+
+Nivra is independently maintained by
+[vitorhubdev](https://github.com/vitorhubdev)
+and has since developed its own fixes, features, integrations,
+branding and release lifecycle.
+
+Original Serein code remains copyright the Serein contributors
+and is available under MIT OR Apache-2.0.
+
+Nivra is not affiliated with, endorsed by, or an official client
+of Discord Inc.
+
+### Nivra 1.0.5
+
+SereinExt is now Nivra.
+
+The project retains its existing version history and Git history.
+This release introduces the new Nivra identity and begins the
+migration of application identifiers from SereinExt/Serein.
+
+Previous project name:
+SereinExt
+
+Original upstream:
+Serein by the Serein contributors / ViceVerse-cz.
+
+Existing installations are migrated where applicable.
 
 ### SereinExt 1.0.4
 
@@ -106,7 +139,7 @@ The workspace pins Rust **1.98** and uses the same native platform dependencies 
 ```sh
 git clone https://github.com/vitorhubdev/SereinExt.git
 cd SereinExt
-cargo build --locked --release -p serein
+cargo build --locked --release -p nivra
 ```
 
 Platform-specific runtime/build requirements remain documented under [Platform Support](docs/platform-support.md) and the `packaging/` directory. Upstream documentation can still be useful as technical reference, but its downloads belong to the original project, not this fork.
@@ -150,12 +183,12 @@ Platform-specific runtime/build requirements remain documented under [Platform S
 
 > **Testing Scenario:** Browsing channels while joined in a Voice Channel (VC) and streaming screen at 60 FPS on macOS.
 
-| Metric | Official Discord Client (Electron) | Serein (Native Rust + egui/wgpu) | Advantage |
+| Metric | Official Discord Client (Electron) | Nivra (Native Rust + egui/wgpu) | Advantage |
 |---|:---:|:---:|:---:|
 | **Memory (RAM)** | **1,178.4 MB** *(across 7 helper processes)* | **129.7 MB** *(single unified process)* | **~9× less memory (-89%)** |
 | **CPU Usage** | **22.8%** *(Renderer + Helper processes)* | **8.1%** | **~2.8× lower CPU (-64%)** |
 
-| Official Discord (Electron) | Serein (Native Rust) |
+| Official Discord (Electron) | Nivra (Native Rust) |
 | :---: | :---: |
 | **RAM: ~1,178.4 MB across 7 processes** | **RAM: 129.7 MB single process** |
 | <img src="docs/screenshots/perf-discord-ram.png" alt="Discord RAM Usage" width="450" /> | <img src="docs/screenshots/perf-serein-ram.png" alt="Serein RAM Usage" width="450" /> |
@@ -224,7 +257,7 @@ cargo xtask package
 | **Profile Cards & Editing** | Implemented | On-demand profile popouts with banners, bios, badges, connections; native in-app editor for display name, bio, pronouns, and custom accent color with live preview |
 | **Server & Group Actions** | Implemented | Server dropdown with friend invites and leave server; group DM actions (edit name/icon preview, mute, leave) |
 | **Context Menus & Shortcuts** | Implemented | Right-click context menus for messages, media (save/copy), server channels, and members |
-| **Typing Indicators** | Implemented | Displays incoming typing with short expiry; Serein strictly avoids emitting outgoing typing signals |
+| **Typing Indicators** | Implemented | Displays incoming typing with short expiry; Nivra strictly avoids emitting outgoing typing signals |
 | **Persistence & Drafts** | Implemented | Bounded SQLite cache for history, drafts, settings, and diagnostics; OS credential store for auth tokens; sanitary logout |
 | **Internationalization** | Partial | Bundled Inter font, CJK and Arabic font fallbacks included; full IME and bidirectional editing unverified |
 

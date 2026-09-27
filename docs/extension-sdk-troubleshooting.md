@@ -22,7 +22,7 @@ cargo run --locked -p extensions --example manifest_check -- examples/extensions
 ```
 
 Replace the path with your manifest. This checks a standalone JSON manifest of
-at most 16 KiB, not the Wasm module or a `.serein-extension` package. See
+at most 16 KiB, not the Wasm module or a `.nivra-extension` package. See
 [manifest fields](../examples/extensions/README.md#configure-the-manifest) and
 [host discovery](extension-sdk-reference.md#hostinfo-discover-supported-names).
 

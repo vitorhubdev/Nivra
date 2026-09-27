@@ -9,7 +9,7 @@ body:
         Thank you for reporting a crash or performance issue.
 
         > [!TIP]
-        > **Quickly copy your client diagnostics:** In Serein, go to **Settings → Updates** and click **"Copy issue diagnostics"** (or click the **"Copy issue info"** link at the bottom of the Settings sidebar) to copy your Serein version, OS, display scale, and theme settings.
+        > **Quickly copy your client diagnostics:** In Nivra, go to **Settings → Updates** and click **"Copy issue diagnostics"** (or click the **"Copy issue info"** link at the bottom of the Settings sidebar) to copy your Nivra version, OS, display scale, and theme settings.
 
         > [!CAUTION]
         > **NEVER** share your Discord authentication token or credentials in logs, panic messages, or traces.
@@ -44,7 +44,7 @@ body:
       label: Steps to Reproduce
       description: Steps to consistently reproduce the crash or performance issue.
       placeholder: |
-        1. Run Serein with `RUST_BACKTRACE=1`
+        1. Run Nivra with `RUST_BACKTRACE=1`
         2. ...
         3. ...
     validations:
@@ -55,7 +55,7 @@ body:
     attributes:
       label: Rust Backtrace / Crash Log
       description: |
-        Run Serein from the terminal with `RUST_BACKTRACE=1 serein` (or via `cargo run --bin serein`) and paste the complete panic backtrace or crash report here.
+        Run Nivra from the terminal with `RUST_BACKTRACE=1 nivra` (or via `cargo run --bin nivra`) and paste the complete panic backtrace or crash report here.
       render: shell
     validations:
       required: true
@@ -87,7 +87,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Serein Version / Commit Hash
+      label: Nivra Version / Commit Hash
       description: Release tag or git commit hash. Found in **Settings → Updates** or copied via **"Copy issue diagnostics"**.
       placeholder: "e.g. 0.1.0 or commit 36b5336"
     validations:
@@ -98,9 +98,9 @@ body:
     attributes:
       label: Client & Environment Diagnostics
       description: |
-        Paste the information copied from Serein (**Settings → Updates → "Copy issue diagnostics"** or the sidebar link) here.
+        Paste the information copied from Nivra (**Settings → Updates → "Copy issue diagnostics"** or the sidebar link) here.
       placeholder: |
-        - **Serein Version:** ...
+        - **Nivra Version:** ...
         - **Operating System:** ...
         - **Display Scale:** ...
         - **Theme:** ...

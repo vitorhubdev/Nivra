@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=Serein
+Name=Nivra
 Comment=Experimental unofficial native Discord client
-Exec=serein
-Icon=serein
-StartupWMClass=cz.viceverse.serein
+Exec=nivra
+Icon=nivra
+StartupWMClass=io.github.vitorhubdev.Nivra
 Terminal=false
 Categories=Network;InstantMessaging;

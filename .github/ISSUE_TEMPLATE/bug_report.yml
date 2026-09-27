@@ -1,15 +1,15 @@
 name: Bug Report
-description: Report a bug or unexpected behavior in Serein
+description: Report a bug or unexpected behavior in Nivra
 title: "[Bug]: "
 labels: ["bug", "triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you for helping improve Serein!
+        Thank you for helping improve Nivra!
 
         > [!TIP]
-        > **Quickly copy your client diagnostics:** In Serein, go to **Settings → Updates** and click **"Copy issue diagnostics"** (or click the **"Copy issue info"** link at the bottom of the Settings sidebar) to copy your Serein version, OS, display scale, and theme settings.
+        > **Quickly copy your client diagnostics:** In Nivra, go to **Settings → Updates** and click **"Copy issue diagnostics"** (or click the **"Copy issue info"** link at the bottom of the Settings sidebar) to copy your Nivra version, OS, display scale, and theme settings.
 
         > [!CAUTION]
         > **NEVER** share your Discord authentication token, email, passwords, or personal message content in issues.
@@ -30,7 +30,7 @@ body:
       label: Steps to Reproduce
       description: How can maintainers or contributors reproduce this issue?
       placeholder: |
-        1. Launch Serein
+        1. Launch Nivra
         2. Select server / channel '...'
         3. Perform action '...'
         4. Observe the bug
@@ -75,7 +75,7 @@ body:
     id: installation
     attributes:
       label: Installation Method
-      description: How did you install or run Serein?
+      description: How did you install or run Nivra?
       options:
         - "GitHub Release (Setup Installer / .app / package)"
         - "Homebrew Cask (macOS)"
@@ -91,7 +91,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Serein Version / Commit Hash
+      label: Nivra Version / Commit Hash
       description: Release tag or git commit hash (e.g. `v0.1.0` or `36b5336`). Found in **Settings → Updates** or copied via **"Copy issue diagnostics"**.
       placeholder: "e.g. 0.1.0"
     validations:
@@ -102,9 +102,9 @@ body:
     attributes:
       label: Client & Environment Diagnostics
       description: |
-        Paste the information copied from Serein (**Settings → Updates → "Copy issue diagnostics"** or the sidebar link) here.
+        Paste the information copied from Nivra (**Settings → Updates → "Copy issue diagnostics"** or the sidebar link) here.
       placeholder: |
-        - **Serein Version:** ...
+        - **Nivra Version:** ...
         - **Operating System:** ...
         - **Display Scale:** ...
         - **Theme:** ...

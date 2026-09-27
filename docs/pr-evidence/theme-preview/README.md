@@ -13,7 +13,7 @@ captures or live Discord evidence. Windows, 125% scale, 1400 x 1000 logical view
   not a matched before/after comparison of the old preview modal.
 
 ```powershell
-cargo run --locked -p serein --features demo --example profile_preview -- --demo --page=extensions --themes --width=1400 --height=1000 --output=target/gallery.png
+cargo run --locked -p nivra --features demo --example profile_preview -- --demo --page=extensions --themes --width=1400 --height=1000 --output=target/gallery.png
 & target/debug/examples/profile_preview.exe --demo --page=extensions --themes --theme-preview --width=1400 --height=1000 --output=target/app-preview.png
 & target/debug/examples/profile_preview.exe --demo --page=extensions --themes --theme-preview --light --width=800 --height=900 --output=target/app-preview-light.png
 ```

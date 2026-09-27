@@ -1,15 +1,15 @@
-# Run explicitly after extracting Serein to its final folder. No administrator rights required.
-# Creates only the current user's Serein Start Menu shortcut; does not enable OS alerts in Serein.
+# Run explicitly after extracting Nivra to its final folder. No administrator rights required.
+# Creates only the current user's Nivra Start Menu shortcut; does not enable OS alerts in Nivra.
 param([switch]$Remove, [switch]$Force)
 $ErrorActionPreference = 'Stop'
-$shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Serein.lnk'
+$shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Nivra.lnk'
 if ($Remove) {
     if (Test-Path -LiteralPath $shortcut) { Remove-Item -LiteralPath $shortcut }
     return
 }
-$executable = Join-Path $PSScriptRoot 'serein.exe'
-if (!(Test-Path -LiteralPath $executable)) { throw 'Keep this script next to serein.exe in its final folder.' }
-if ((Test-Path -LiteralPath $shortcut) -and !$Force) { throw 'Serein.lnk already exists. Remove it explicitly with -Remove before replacing it.' }
+$executable = Join-Path $PSScriptRoot 'Nivra.exe'
+if (!(Test-Path -LiteralPath $executable)) { throw 'Keep this script next to Nivra.exe in its final folder.' }
+if ((Test-Path -LiteralPath $shortcut) -and !$Force) { throw 'Nivra.lnk already exists. Remove it explicitly with -Remove before replacing it.' }
 if ($Force -and (Test-Path -LiteralPath $shortcut)) { Remove-Item -LiteralPath $shortcut -Force }
 
 # A desktop toast requires a Start Menu shortcut carrying the same AppUserModelID as the notifier.
@@ -17,7 +17,7 @@ if ($Force -and (Test-Path -LiteralPath $shortcut)) { Remove-Item -LiteralPath $
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
-public static class SereinShortcut {
+public static class NivraShortcut {
     [StructLayout(LayoutKind.Sequential)] struct PropertyKey {
         public Guid format; public uint id;
     }
@@ -42,7 +42,7 @@ public static class SereinShortcut {
         IPropertyStore store;
         SHGetPropertyStoreFromParsingName(path, IntPtr.Zero, 2, ref iid, out store);
         PropertyKey key = new PropertyKey { format = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), id = 5 };
-        PropVariant value = new PropVariant { type = 31, value = Marshal.StringToCoTaskMemUni("cz.viceverse.serein") };
+        PropVariant value = new PropVariant { type = 31, value = Marshal.StringToCoTaskMemUni("io.github.vitorhubdev.Nivra") };
         try { store.SetValue(ref key, ref value); store.Commit(); }
         finally { Marshal.FreeCoTaskMem(value.value); Marshal.FinalReleaseComObject(store); }
     }
@@ -53,9 +53,9 @@ try {
     $link = $shell.CreateShortcut($shortcut)
     $link.TargetPath = $executable
     $link.WorkingDirectory = $PSScriptRoot
-    $link.Description = 'Serein'
+    $link.Description = 'Nivra'
     $link.Save()
-    [SereinShortcut]::SetAppId($shortcut)
+    [NivraShortcut]::SetAppId($shortcut)
 } catch {
     if (Test-Path -LiteralPath $shortcut) { Remove-Item -LiteralPath $shortcut }
     throw
@@ -63,4 +63,4 @@ try {
     if ($null -ne $link) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) }
     [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
 }
-Write-Output 'Serein Start Menu shortcut registered. Enable system notifications separately in Serein for each session.'
+Write-Output 'Nivra Start Menu shortcut registered. Enable system notifications separately in Nivra for each session.'

@@ -19,7 +19,7 @@ fn main() {
 fn windows_icon() {
 	use std::{path::PathBuf, process::Command};
 	println!("cargo:rerun-if-changed=../../packaging/windows/Nivra.ico");
-	println!("cargo:rerun-if-changed=../../packaging/windows/serein.rc");
+	println!("cargo:rerun-if-changed=../../packaging/windows/nivra.rc");
 	let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
 		.join("../../packaging/windows");
 	let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
@@ -33,18 +33,18 @@ fn windows_icon() {
 			.map(|path| path.join("rc.exe"))
 			.find(|path| path.is_file())
 			.expect("Windows SDK rc.exe");
-		let resource = out.join("serein.res");
+		let resource = out.join("nivra.res");
 		let mut compiler = Command::new(rc);
 		compiler
 			.arg("/nologo")
 			.arg("/fo")
 			.arg(&resource)
-			.arg("serein.rc");
+			.arg("nivra.rc");
 		(compiler, resource)
 	} else {
-		let resource = out.join("serein-icon.o");
+		let resource = out.join("nivra-icon.o");
 		let mut compiler = Command::new("windres");
-		compiler.args(["-i", "serein.rc", "-o"]).arg(&resource);
+		compiler.args(["-i", "nivra.rc", "-o"]).arg(&resource);
 		(compiler, resource)
 	};
 	assert!(

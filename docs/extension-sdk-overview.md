@@ -4,7 +4,7 @@
 > sticker, forward, channel, server, role, moderation and host-mediated media
 > operations.
 
-Build tools that run inside Serein: inspect loaded app data, show native panels,
+Build tools that run inside Nivra: inspect loaded app data, show native panels,
 format a draft, or propose an app action for the user to approve. Plugins are
 Rust code compiled to WebAssembly. Themes are declarative packages and do not
 need a handler.
@@ -29,7 +29,7 @@ or [action reference](extension-sdk-actions.md#outputs-and-host-actions).
    is discarded; saved plugin state uses the separately granted storage field.
 
 There is no persistent plugin process, network connection or render callback.
-Reading a snapshot uses data Serein already has; it does not fetch missing data.
+Reading a snapshot uses data Nivra already has; it does not fetch missing data.
 See [runtime limits](extensions.md#resource-and-privacy-limits) for the bounded
 worker and [storage](extension-sdk-actions.md#storage-is-one-value-not-a-filesystem)
 for state that survives invocations.
@@ -107,7 +107,7 @@ contract; they are not standalone packages.
 | Term | Meaning |
 | --- | --- |
 | Wire field | The JSON key passed across the Wasm boundary |
-| Rust type | The corresponding type exported by `serein_extension_sdk` |
+| Rust type | The corresponding type exported by `nivra_extension_sdk` |
 | Capability | A manifest permission that must also be granted by the user |
 | Action ID | Your manifest's stable action name; received in `action` |
 | Surface | Where the host can invoke an action: `panel`, `message`, `composer`, `activation`, `message_event`, or `app_event` |
@@ -133,7 +133,7 @@ explains their return values and failure behavior.
 
 `api_version: 1` identifies the Wasm buffer/JSON ABI, not a Discord API version
 or a promise that every host supports every field. The wiki's source banner
-identifies the exact Serein revision documented here. A merged source change
+identifies the exact Nivra revision documented here. A merged source change
 may not be in the installed release yet.
 
 [Host discovery](extension-sdk-reference.md#hostinfo-discover-supported-names)

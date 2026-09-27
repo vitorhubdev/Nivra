@@ -20,7 +20,7 @@ installing the pinned development tools described in [fuzz/README.md](fuzz/READM
 Fuzzing uses its own lockfile and nightly toolchain; normal application builds remain stable.
 
 Agent implementation requests follow the [idea-to-PR contract](AGENTS.md) and the
-[delivery skill](.agents/skills/serein-delivery/SKILL.md). Native UI changes include synthetic
+[delivery skill](.agents/skills/nivra-delivery/SKILL.md). Native UI changes include synthetic
 before/after screenshots; runtime changes include comparable release performance evidence.
 Use the PR template and leave blocked checks/evidence visible in a draft. Do not merge automatically.
 

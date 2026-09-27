@@ -24,7 +24,7 @@ assert.equal(getLastRelease({
   ] }, options: { tagFormat: 'v${version}' },
 }).version, '1.0.0');
 const notes = await generateNotes({ preset: 'conventionalcommits' }, {
-  cwd: process.cwd(), logger, options: { repositoryUrl: 'https://github.com/example/serein' },
+  cwd: process.cwd(), logger, options: { repositoryUrl: 'https://github.com/example/nivra' },
   commits: [{ message: 'fix(ui): fix scrolling', hash: 'abcdef1' }],
   lastRelease: { gitTag: 'v1.0.0' }, nextRelease: { version: '1.0.1', gitTag: 'v1.0.1' },
 });

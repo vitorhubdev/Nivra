@@ -20,7 +20,7 @@ keychain_list=$(security list-keychains -d user)
 while IFS= read -r entry; do
   [[ "$entry" =~ \"(.*)\" ]] && original_keychains+=("${BASH_REMATCH[1]}")
 done <<< "$keychain_list"
-temporary=$(mktemp -d "$RUNNER_TEMP/serein-signing.XXXXXX")
+temporary=$(mktemp -d "$RUNNER_TEMP/nivra-signing.XXXXXX")
 keychain="$temporary/signing.keychain-db"
 cleanup() {
   security list-keychains -d user -s ${original_keychains[@]+"${original_keychains[@]}"} >/dev/null 2>&1 || true
@@ -62,12 +62,12 @@ sign_options+=(--entitlements packaging/macos/voice.entitlements)
 codesign "${sign_options[@]}" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 
-xcrun notarytool store-credentials serein-release --keychain "$keychain" \
+xcrun notarytool store-credentials nivra-release --keychain "$keychain" \
   --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
   --password "$APPLE_APP_SPECIFIC_PASSWORD" >/dev/null
 ditto -c -k --keepParent "$app" "$temporary/notarization.zip"
 xcrun notarytool submit "$temporary/notarization.zip" \
-  --keychain "$keychain" --keychain-profile serein-release --wait --timeout 30m
+  --keychain "$keychain" --keychain-profile nivra-release --wait --timeout 30m
 xcrun stapler staple "$app"
 xcrun stapler validate "$app"
 codesign --verify --deep --strict --verbose=2 "$app"

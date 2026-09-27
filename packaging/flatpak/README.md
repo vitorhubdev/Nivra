@@ -18,25 +18,25 @@ sources and downloads exactly Cargo.lock's registry/Git dependencies with
 The actual application build is offline inside Flatpak's build sandbox, using
 the standard release configuration including voice and bundled notices/source.
 The build produces:
-- `target/flatpak-build/Serein-linux.flatpak`: single-file standalone bundle
+- `target/flatpak-build/Nivra-linux.flatpak`: single-file standalone bundle
 - `target/flatpak-build/repo/`: exported static OSTree repository with static deltas
-- `target/flatpak-build/serein.flatpakref`: one-click repository install file
+- `target/flatpak-build/nivra.flatpakref`: one-click repository install file
 
 ### Installing and Automatic Updates
 
 #### Option A: One-click repository install (Recommended for automatic updates)
-To install Serein configured to receive automatic updates from the hosted OSTree repository:
+To install Nivra configured to receive automatic updates from the hosted OSTree repository:
 
 ```sh
-flatpak install --user packaging/flatpak/serein.flatpakref
+flatpak install --user packaging/flatpak/nivra.flatpakref
 # Or from a published URL:
-# flatpak install --user https://viceverse-cz.github.io/Serein/flatpak/serein.flatpakref
+# flatpak install --user https://vitorhubdev.github.io/Nivra/flatpak/nivra.flatpakref
 ```
 
 Once installed via `.flatpakref`, your desktop environment (GNOME Software, KDE Discover)
 and `flatpak update` will automatically discover and install new releases.
 
-If installation reports `No such ref 'app/cz.viceverse.serein/x86_64/master'`,
+If installation reports `No such ref 'app/io.github.vitorhubdev.Nivra/x86_64/master'`,
 check that the hosted `flatpak/repo/summary` exists. Publishing the `.flatpakref`
 alone is insufficient. The package-repository workflow imports the release's
 checksum-verified Flatpak bundle and requires the app ref before uploading the
@@ -45,15 +45,15 @@ run the corrected workflow with deployment enabled for a release tag containing
 all native build-matrix assets (including Fedora 43) and the Flatpak bundle.
 Until it is republished, use the standalone release bundle below.
 
-The in-app **Settings -> Updates** screen automatically detects when Serein is running
+The in-app **Settings -> Updates** screen automatically detects when Nivra is running
 inside Flatpak, checks GitHub releases, and prompts you to update through `flatpak update`
 or your desktop software manager when a new release is available.
 
 #### Option B: Standalone bundle (Offline install)
 ```sh
-flatpak install --user ./target/flatpak-build/Serein-linux.flatpak
-flatpak run cz.viceverse.serein
-flatpak uninstall --user cz.viceverse.serein
+flatpak install --user ./target/flatpak-build/Nivra-linux.flatpak
+flatpak run io.github.vitorhubdev.Nivra
+flatpak uninstall --user io.github.vitorhubdev.Nivra
 ```
 
 ### Sandbox Permissions
@@ -66,35 +66,35 @@ automatic clipboard fallback on Wayland compositors without the data-control
 protocol. Files are selected through
 the existing desktop portal; home and session-bus access are not granted.
 Caches/preferences use Flatpak's isolated XDG directories under
-`~/.var/app/cz.viceverse.serein`; a native installation's data is not imported.
+`~/.var/app/io.github.vitorhubdev.Nivra`; a native installation's data is not imported.
 Saved credentials still require the host's unlocked Secret Service and never
 fall back to files. That service permission is not an application-specific
-credential isolation guarantee. Audio access permits microphone use, but Serein's
+credential isolation guarantee. Audio access permits microphone use, but Nivra's
 existing explicit call/device-testing gates still apply.
 
 Sandboxed login, keyring, file chooser, notifications and physical audio require
 owner-controlled Linux desktop validation. Screen sharing uses the ScreenCast portal
 and PipeWire; optional system audio monitors individual applications through native
-libpulse and the existing PulseAudio socket. Serein's playback and applications without
+libpulse and the existing PulseAudio socket. Nivra's playback and applications without
 a usable identity are excluded. No additional sandbox permissions are needed.
 The camera adapter uses direct V4L2, with no camera portal; camera capture is
 unavailable under these permissions. Do not grant blanket devices/home access to hide
 these limitations.
 
 Game Activity binds `discord-ipc-N` in the sandbox's private `$XDG_RUNTIME_DIR`,
-which the host sees as `$XDG_RUNTIME_DIR/.flatpak/cz.viceverse.serein/xdg-run`
+which the host sees as `$XDG_RUNTIME_DIR/.flatpak/io.github.vitorhubdev.Nivra/xdg-run`
 (the same layout as the Vesktop Flatpak). Leftovers from a crash are replaced on
 the next start. Host games need a link, either for the current session:
-`ln -sf "$XDG_RUNTIME_DIR"/{.flatpak/cz.viceverse.serein/xdg-run,}/discord-ipc-0`,
+`ln -sf "$XDG_RUNTIME_DIR"/{.flatpak/io.github.vitorhubdev.Nivra/xdg-run,}/discord-ipc-0`,
 or on every login:
 
 ```sh
 mkdir -p ~/.config/user-tmpfiles.d
-echo 'L %t/discord-ipc-0 - - - - .flatpak/cz.viceverse.serein/xdg-run/discord-ipc-0' > ~/.config/user-tmpfiles.d/discord-rpc.conf
+echo 'L %t/discord-ipc-0 - - - - .flatpak/io.github.vitorhubdev.Nivra/xdg-run/discord-ipc-0' > ~/.config/user-tmpfiles.d/discord-rpc.conf
 systemctl --user enable --now systemd-tmpfiles-setup.service
 ```
 
-Flatpak games additionally need `--filesystem=xdg-run/.flatpak/cz.viceverse.serein:create`
+Flatpak games additionally need `--filesystem=xdg-run/.flatpak/io.github.vitorhubdev.Nivra:create`
 and `--filesystem=xdg-run/discord-ipc-0`. The loopback WebSocket transport needs no setup.
 
 References: [Flatpak sandbox permissions](https://docs.flatpak.org/en/latest/sandbox-permissions.html),

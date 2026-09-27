@@ -1,6 +1,6 @@
 # Architecture
 
-Serein is a desktop protocol client for Discord, with no project messaging service. The final owner revisions permit an authentication-only webview, saved login, and local caches.
+Nivra is a desktop protocol client for Discord, with no project messaging service. The final owner revisions permit an authentication-only webview, saved login, and local caches.
 
 Incoming typing has its own eight-slot lossy inbox, separate from reliable message events.
 The producer filters the selected channel and limits duplicate/burst wakeups to eight per two

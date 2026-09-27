@@ -4,7 +4,7 @@ These screenshots use the native egui renderer with the repository's offline dem
 state. They contain no account session and make no Discord requests.
 
 ```powershell
-cargo run --locked -p serein --example profile_preview --features demo -- --demo --page=server-stickers --output=docs/pr-evidence/server-stickers/after.png --width=1320 --height=900
+cargo run --locked -p nivra --example profile_preview --features demo -- --demo --page=server-stickers --output=docs/pr-evidence/server-stickers/after.png --width=1320 --height=900
 ```
 
 The before image is the existing `docs/screenshots/server-settings.png` at the

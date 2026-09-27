@@ -90,11 +90,11 @@ jobs:
           for package in dist/*.deb dist/*.rpm dist/*.pkg.tar.zst; do
             test -f "$package" || continue
             # GitHub replaces ~ in asset names; normalize before generating checksums.
-            cp "$package" "release-assets/serein-$TAG-Linux-$DISTRIBUTION-$(basename "$package" | tr '~' '.')"
+            cp "$package" "release-assets/nivra-$TAG-Linux-$DISTRIBUTION-$(basename "$package" | tr '~' '.')"
           done
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: serein-linux-${{ matrix.distribution }}
+          name: nivra-linux-${{ matrix.distribution }}
           path: release-assets/*
           if-no-files-found: error
           retention-days: 14
@@ -129,7 +129,7 @@ jobs:
           key: linux-appimage-ubuntu-24.04-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
       - name: Build AppImage including voice
         env:
-          SEREIN_RELEASE_TAG: ${{ inputs.release && inputs.tag || '' }}
+          NIVRA_RELEASE_TAG: ${{ inputs.release && inputs.tag || '' }}
         run: |
           chown -R builder:builder /home/builder "$GITHUB_WORKSPACE"
           runuser -u builder -- env HOME=/home/builder bash <<'BUILD'
@@ -143,14 +143,14 @@ jobs:
       - name: Collect AppImage
         run: |
           mkdir release-assets
-          set -- dist/serein-*-Linux-X64.AppImage
+          set -- dist/nivra-*-Linux-X64.AppImage
           test "$#" -eq 1
           test -f "$1"
           test -s "$1.zsync"
           cp "$1" "$1.zsync" release-assets/
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: serein-linux-appimage
+          name: nivra-linux-appimage
           path: release-assets/*
           if-no-files-found: error
           retention-days: 14
@@ -183,11 +183,11 @@ jobs:
           TAG: ${{ inputs.tag || 'development' }}
         run: |
           mkdir release-assets
-          cp target/flatpak-build/Serein-linux.flatpak "release-assets/serein-$TAG-Linux-x86_64.flatpak"
-          cp target/flatpak-build/serein.flatpakref "release-assets/serein.flatpakref"
+          cp target/flatpak-build/Nivra-linux.flatpak "release-assets/nivra-$TAG-Linux-x86_64.flatpak"
+          cp target/flatpak-build/nivra.flatpakref "release-assets/nivra.flatpakref"
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: serein-linux-flatpak
+          name: nivra-linux-flatpak
           path: release-assets/*
           if-no-files-found: error
           retention-days: 14
@@ -195,9 +195,9 @@ jobs:
         run: |
           mkdir -p target/flatpak-site/flatpak
           cp -a target/flatpak-build/repo target/flatpak-site/flatpak/
-          cp target/flatpak-build/serein.flatpakref target/flatpak-site/flatpak/
+          cp target/flatpak-build/nivra.flatpakref target/flatpak-site/flatpak/
           mkdir -p target/flatpak-site/icons
-          cp packaging/linux/hicolor/256x256/apps/serein.png target/flatpak-site/icons/serein.png
+          cp packaging/linux/hicolor/256x256/apps/nivra.png target/flatpak-site/icons/nivra.png
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: flatpak-site

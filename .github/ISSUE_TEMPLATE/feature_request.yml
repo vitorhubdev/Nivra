@@ -1,12 +1,12 @@
 name: Feature Request
-description: Suggest an enhancement or new capability for Serein
+description: Suggest an enhancement or new capability for Nivra
 title: "[Feature]: "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you for suggesting a feature for Serein!
+        Thank you for suggesting a feature for Nivra!
 
   - type: textarea
     id: problem
@@ -21,7 +21,7 @@ body:
     id: solution
     attributes:
       label: Proposed Solution
-      description: Describe what you would like Serein to do.
+      description: Describe what you would like Nivra to do.
       placeholder: "Provide a detailed description of how the feature should behave and integrate into the UI/UX."
     validations:
       required: true
@@ -37,7 +37,7 @@ body:
     id: parity
     attributes:
       label: Discord Feature Alignment
-      description: Does this feature mirror official Discord functionality or is it unique to Serein?
+      description: Does this feature mirror official Discord functionality or is it unique to Nivra?
       options:
         - "Official Discord desktop feature parity"
         - "Native desktop enhancement (custom shortcuts, windowing, tray, system notifications)"

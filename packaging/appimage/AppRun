@@ -4,4 +4,4 @@ set -eu
 # APPIMAGE/APPDIR are supplied by the runtime and identify the writable outer file
 # to the in-app updater. Extracted AppDirs deliberately cannot self-update.
 appdir=${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
-exec "$appdir/usr/bin/serein" "$@"
+exec "$appdir/usr/bin/nivra" "$@"

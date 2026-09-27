@@ -57,7 +57,7 @@ Declare `count` as a `composer` action and request `composer`. A panel response
 does not need an extra capability.
 
 ```rust
-use serein_extension_sdk::{Element, Invocation, Output};
+use nivra_extension_sdk::{Element, Invocation, Output};
 
 fn handle(input: Invocation) -> Output {
     if input.action != "count" {
@@ -70,7 +70,7 @@ fn handle(input: Invocation) -> Output {
     Output { panel: vec![Element::Text { text }], ..Default::default() }
 }
 
-serein_extension_sdk::export!(handle);
+nivra_extension_sdk::export!(handle);
 ```
 
 ### Additional wrapper fields
@@ -251,7 +251,7 @@ This handler counts delivered creates and displays the count on `show`. Request
 Invalid saved JSON is preserved instead of silently replaced.
 
 ```rust
-use serein_extension_sdk::{Element, EventInvocation, MessageEventKind, Output};
+use nivra_extension_sdk::{Element, EventInvocation, MessageEventKind, Output};
 
 fn handle(input: EventInvocation) -> Output {
     let count = match input.invocation.storage_json::<u64>() {
@@ -276,7 +276,7 @@ fn handle(input: EventInvocation) -> Output {
     Output::default()
 }
 
-serein_extension_sdk::export!(handle);
+nivra_extension_sdk::export!(handle);
 ```
 
 ### AppEventKind: why an app observer ran
@@ -362,7 +362,7 @@ completion.
 This complete app-event handler reads the extended wrapper while remaining passive:
 
 ```rust
-use serein_extension_sdk::{AppOutput, ExtendedAppInvocation};
+use nivra_extension_sdk::{AppOutput, ExtendedAppInvocation};
 
 fn handle(input: ExtendedAppInvocation) -> AppOutput {
     if let Some(result) = input.action_result {
@@ -375,7 +375,7 @@ fn handle(input: ExtendedAppInvocation) -> AppOutput {
     AppOutput::default()
 }
 
-serein_extension_sdk::export!(handle);
+nivra_extension_sdk::export!(handle);
 ```
 
 Declare the handler action with surface `app_event`. Request `app_events` plus only
@@ -592,7 +592,7 @@ its foreground panel and leaves background output empty. A returned panel is
 shown immediately; there is no host command requiring Apply.
 
 ```rust
-use serein_extension_sdk::{AppInvocation, AppOutput, Element, Output};
+use nivra_extension_sdk::{AppInvocation, AppOutput, Element, Output};
 
 fn handle(input: AppInvocation) -> AppOutput {
     if input.app_event.is_some() || input.message_event.is_some()
@@ -610,7 +610,7 @@ fn handle(input: AppInvocation) -> AppOutput {
         ..Default::default()
     }
 }
-serein_extension_sdk::export!(handle);
+nivra_extension_sdk::export!(handle);
 ```
 
 ### ChannelMetadataSnapshot: loaded channel settings, threads and permissions
@@ -1022,7 +1022,7 @@ or a host command requiring Apply. To observe invalidations separately, add an
 `app_event` action plus `app_events` and `data_events`; keep its output passive.
 
 ```rust
-use serein_extension_sdk::{AppInvocation, AppOutput, Element, Output};
+use nivra_extension_sdk::{AppInvocation, AppOutput, Element, Output};
 
 fn handle(input: AppInvocation) -> AppOutput {
     if input.app_event.is_some() || input.message_event.is_some()
@@ -1046,7 +1046,7 @@ fn handle(input: AppInvocation) -> AppOutput {
     }
     AppOutput { output: Output { panel, ..Default::default() }, ..Default::default() }
 }
-serein_extension_sdk::export!(handle);
+nivra_extension_sdk::export!(handle);
 ```
 
 ### MembersSnapshot: loaded people in this conversation
@@ -1240,7 +1240,7 @@ conversation content, fetch anything or propose a host action. The event guard
 also makes it safe if you later add an `app_event` action.
 
 ```rust
-use serein_extension_sdk::{AppInvocation, AppOutput, Element, Output};
+use nivra_extension_sdk::{AppInvocation, AppOutput, Element, Output};
 
 fn handle(input: AppInvocation) -> AppOutput {
     if input.app_event.is_some() || input.message_event.is_some()
@@ -1274,5 +1274,5 @@ fn handle(input: AppInvocation) -> AppOutput {
     }
 }
 
-serein_extension_sdk::export!(handle);
+nivra_extension_sdk::export!(handle);
 ```

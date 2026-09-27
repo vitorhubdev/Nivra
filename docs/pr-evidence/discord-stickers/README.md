@@ -6,7 +6,7 @@ do not establish native input, accessibility, or live Discord interoperability.
 The Windows computer-use connection failed with native-pipe OS error 2.
 
 ```powershell
-cargo run --locked -p serein --features demo --example profile_preview -- --demo --page=stickers --output=target/sticker-preview.png
+cargo run --locked -p nivra --features demo --example profile_preview -- --demo --page=stickers --output=target/sticker-preview.png
 target/debug/examples/profile_preview.exe --demo --page=stickers --light --width=900 --height=700 --output=target/sticker-preview-light.png
 ```
 

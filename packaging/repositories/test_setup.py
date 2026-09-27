@@ -89,9 +89,9 @@ class SetupTest(unittest.TestCase):
                 self.assertNotIn(r"\033[", output)
                 if expected_status == 0:
                     path = (
-                        "/arch/x86_64/arch/serein.asc"
+                        "/arch/x86_64/arch/nivra.asc"
                         if id_like == "arch"
-                        else f"/fedora-{version}/x86_64/rpm/serein.repo"
+                        else f"/fedora-{version}/x86_64/rpm/nivra.repo"
                     )
                     self.assertIn(path, output)
                 else:

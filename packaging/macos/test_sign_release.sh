@@ -12,7 +12,7 @@ export MACOS_SIGNING_IDENTITY='Developer ID Application: Synthetic Owner (TESTTE
 export APPLE_ID=synthetic@example.invalid APPLE_TEAM_ID=TESTTEAM01
 export APPLE_APP_SPECIFIC_PASSWORD=synthetic-apple-password
 expected_fingerprint=0123456789ABCDEF0123456789ABCDEF01234567
-mkdir -p "$RUNNER_TEMP" "$fixture/Serein.app/Contents/MacOS"
+mkdir -p "$RUNNER_TEMP" "$fixture/Nivra.app/Contents/MacOS"
 
 security() {
   case "$1" in
@@ -70,7 +70,7 @@ for scenario in success empty-search-list missing mismatch ambiguous import-fail
   : > "$fixture/events"
   # Launch a subshell normally: an `if source ...` would disable the script's errexit.
   set +e
-  ( source "$script" "$fixture/Serein.app" ) > "$fixture/output" 2>&1
+  ( source "$script" "$fixture/Nivra.app" ) > "$fixture/output" 2>&1
   result=$?
   set -e
   cmp "$fixture/original" "$fixture/search-list"

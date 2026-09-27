@@ -1,5 +1,5 @@
-; Serein Windows Installer Script (NSIS Modern UI 2)
-; Installs per-user to $LOCALAPPDATA\Programs\Serein without elevation
+; Nivra Windows Installer Script (NSIS Modern UI 2)
+; Installs per-user to $LOCALAPPDATA\Programs\Nivra without elevation
 ; Preserves write permissions for seamless in-app autoupdates
 
 Unicode True
@@ -11,10 +11,10 @@ SetCompressor /SOLID lzma
 !include "LogicLib.nsh"
 !include "x64.nsh"
 
-!define PRODUCT_NAME "SereinExt"
+!define PRODUCT_NAME "Nivra"
 !define PRODUCT_PUBLISHER "vitorhubdev"
 !define PRODUCT_WEB_SITE "https://github.com/vitorhubdev/SereinExt"
-!define APP_EXE "serein.exe"
+!define APP_EXE "Nivra.exe"
 
 !ifndef VERSION
   !define VERSION "0.1.0"
@@ -37,8 +37,8 @@ SetCompressor /SOLID lzma
 !endif
 
 Name "${PRODUCT_NAME} ${VERSION}"
-OutFile "${OUTPUT_DIR}\serein-${VERSION}-setup.exe"
-InstallDir "$LOCALAPPDATA\Programs\Serein"
+OutFile "${OUTPUT_DIR}\nivra-${VERSION}-setup.exe"
+InstallDir "$LOCALAPPDATA\Programs\Nivra"
 InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "InstallLocation"
 
 !if /FileExists "packaging\windows\Nivra.ico"
@@ -80,10 +80,10 @@ Function .onInit
   ${EndIf}
 
   ${Do}
-    nsExec::Exec 'powershell -NoProfile -NonInteractive -Command "if (Get-Process serein -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"'
+    nsExec::Exec 'powershell -NoProfile -NonInteractive -Command "if (Get-Process nivra -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"'
     Pop $0
     ${If} $0 != 0
-      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${PRODUCT_NAME} is currently running. Please close SereinExt before continuing." IDRETRY retry_init IDCANCEL cancel_init
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${PRODUCT_NAME} is currently running. Please close Nivra before continuing." IDRETRY retry_init IDCANCEL cancel_init
       retry_init:
         ${Continue}
       cancel_init:
@@ -134,10 +134,10 @@ Function un.onInit
   ${EndIf}
 
   ${Do}
-    nsExec::Exec 'powershell -NoProfile -NonInteractive -Command "if (Get-Process serein -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"'
+    nsExec::Exec 'powershell -NoProfile -NonInteractive -Command "if (Get-Process nivra -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"'
     Pop $0
     ${If} $0 != 0
-      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${PRODUCT_NAME} is currently running. Please close SereinExt before uninstalling." IDRETRY retry_uninit IDCANCEL cancel_uninit
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${PRODUCT_NAME} is currently running. Please close Nivra before uninstalling." IDRETRY retry_uninit IDCANCEL cancel_uninit
       retry_uninit:
         ${Continue}
       cancel_uninit:

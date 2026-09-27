@@ -48,7 +48,7 @@ token handoff before this change and confirmed that it disappears after the chan
 Live Discord login remains unverified.
 These are implemented limits, not measured teardown/storage or live login compatibility.
 
-Serein uses Discord’s official login page in a temporary platform webview, not OAuth. The credential handoff is unofficial and live-unverified; see the compatibility matrix. Complete authentication yourself, in the application. Never send passwords, tokens, MFA codes, QR screenshots, or private message contents to the coding agent, issues, logs, or CI.
+Nivra uses Discord’s official login page in a temporary platform webview, not OAuth. The credential handoff is unofficial and live-unverified; see the compatibility matrix. Complete authentication yourself, in the application. Never send passwords, tokens, MFA codes, QR screenshots, or private message contents to the coding agent, issues, logs, or CI.
 
 1. Build `cargo run --locked` on a supported platform. Use a private conversation controlled by the account owner. The owner enables the private-test acknowledgment and presses **Sign in with Discord**.
 2. Complete one of the real login methods available in Discord’s page. Do not bypass a challenge or spoof a fingerprint if Discord rejects the engine. Cancel if the page or handoff is unsupported. The webview expires after ten minutes and closes when it supplies a candidate token.
@@ -60,7 +60,7 @@ Serein uses Discord’s official login page in a temporary platform webview, not
 
 Record only date, OS/build, methods tested, pass/fail and redacted failure category in the task PR description. Never record credentials, account/channel IDs, signed URLs, message contents or QR data. **No real owner-controlled session was supplied or exercised during implementation; the live milestone remains blocked.**
 
-Every build's sign-in screen also offers "Sign in with a token": the owner pastes a session token they already hold, for example from another signed-in Serein install. It skips Discord's hosted login page entirely, still requires the owner-authorization checkbox, still validates through `SessionSecret::from_owner_input`, and is saved to the OS credential store the same way a normal login is. It never reads or extracts a credential from another application.
+Every build's sign-in screen also offers "Sign in with a token": the owner pastes a session token they already hold, for example from another signed-in Nivra install. It skips Discord's hosted login page entirely, still requires the owner-authorization checkbox, still validates through `SessionSecret::from_owner_input`, and is saved to the OS credential store the same way a normal login is. It never reads or extracts a credential from another application.
 
 Saved-login startup reports credential lookup separately from Discord connection. A found credential advances the status immediately; absent/invalid/unavailable outcomes remain visible. The UI stops awaiting lookup after 10 seconds and permits manual hosted login. Manual login, preview, logout and timeout discard late lookup results. The synchronous OS call remains on the existing single worker; no background retry workers or plaintext fallback are created.
 

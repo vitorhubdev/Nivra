@@ -31,8 +31,10 @@ pub const NEW_DATA_DIR_NAME: &str = "nivra";
 
 /// Old keyring service.
 pub const OLD_CREDENTIAL_SERVICE: &str = "io.github.vitorhubdev.SereinExt";
-/// Old app id / AUMID.
+/// Old app id / AUMID (oldest credential source, upstream). Newer old first.
 pub const OLD_APP_ID: &str = "cz.viceverse.serein";
+/// Old keyring sources, newer old first: fork SereinExt, then upstream cz.
+pub const OLD_SOURCES: [&str; 2] = [OLD_CREDENTIAL_SERVICE, OLD_APP_ID];
 /// Old Windows Run value.
 pub const OLD_RUN_VALUE: &str = "Serein";
 /// Old Start-Menu shortcut.
@@ -104,6 +106,17 @@ pub fn ensure_data_dir() -> Result<PathBuf, DataMigrationError> {
         let _ = std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o700));
     }
     Ok(new)
+}
+
+/// Read account IDs the app knows (accounts table in the migrated nivra store).
+/// Best effort for keyring migration: if the store cannot be opened/read (fresh
+/// install with no DB yet, incompatible version, locked, etc.), return Err and
+/// the caller skips per-account migration but still returns Ok overall.
+fn read_account_ids(data_dir: &Path) -> Result<Vec<model::Id>, String> {
+    let store = local_store::LocalStore::open(&data_dir.join("client.sqlite3"))
+        .map_err(|e| format!("{e:?}"))?;
+    let accounts = store.accounts().map_err(|e| format!("{e:?}"))?;
+    Ok(accounts.into_iter().map(|a| a.id).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -246,9 +259,66 @@ pub fn migrate_one_entry(
     }
 }
 
-/// Migrate the main `discord-session` entry. Non-fatal: callers log and continue.
+/// Migrate one credential `account` (principal `discord-session` or per-account
+/// `discord-session.<id>`) from old sources (newer SereinExt, then oldest cz)
+/// to `new_service`. Same rule per source: copy, read back, verify equal,
+/// only then delete that source; if `new_service` already holds a different
+/// value, do not overwrite it and do not delete the differing old source.
+/// After migrating from the newer old source, the oldest source is cleaned
+/// only if its value equals the migrated (new) value.
+pub fn migrate_entry_from_sources(
+    store: &impl CredentialStore,
+    new_service: &str,
+    account: &str,
+) -> Result<CredentialOutcome, String> {
+    let mut migrated: Option<CredentialOutcome> = None;
+    let mut saw_different_new = false;
+    for old_service in OLD_SOURCES {
+        match migrate_one_entry(store, old_service, new_service, account) {
+            Ok(CredentialOutcome::Migrated) => {
+                migrated = Some(CredentialOutcome::Migrated);
+                // Continue to clean the older source if it holds the same value.
+            }
+            Ok(CredentialOutcome::AlreadyMigrated) => {
+                // Old source already cleaned (equal case) - continue to older source
+                // in case it still holds the same value needing cleanup.
+                if migrated.is_none() {
+                    migrated = Some(CredentialOutcome::AlreadyMigrated);
+                }
+            }
+            Ok(CredentialOutcome::NoOldEntry) => {}
+            Err(e) => {
+                // `migrate_one_entry` errs when new already holds a different value
+                // (do not overwrite, do not delete) or on store failures (keep old).
+                // Remember that new differs so older sources must not overwrite it;
+                // still try older sources for equal-value cleanup (which will also
+                // refuse to overwrite differing new, but may clean equal older).
+                if e.contains("different value") || e.contains("already exists") {
+                    saw_different_new = true;
+                }
+                // For store failures (keep old), continue to older source? No -
+                // if the store itself fails, older sources likely fail too; still
+                // try once for equal-value cleanup, but do not overwrite differing new.
+                // Fall through to next source (which will see differing new and refuse).
+                if !e.contains("different") && !e.contains("already exists") {
+                    return Err(e);
+                }
+                saw_different_new = true;
+            }
+        }
+    }
+    if let Some(out) = migrated {
+        return Ok(out);
+    }
+    if saw_different_new {
+        return Err("new credential already exists with a different value".to_owned());
+    }
+    Ok(CredentialOutcome::NoOldEntry)
+}
+
+/// Migrate the main `discord-session` entry from both old sources. Non-fatal.
 pub fn migrate_keyring(store: &impl CredentialStore, new_service: &str) -> Result<CredentialOutcome, String> {
-    migrate_one_entry(store, OLD_CREDENTIAL_SERVICE, new_service, super::ACCOUNT)
+    migrate_entry_from_sources(store, new_service, super::ACCOUNT)
 }
 
 // ---------------------------------------------------------------------------
@@ -465,13 +535,24 @@ impl std::fmt::Display for MigrationError {
 /// autostart and shortcut failures are logged and ignored (Ok) so the app can
 /// still open (re-login may be needed).
 pub fn migrate_all() -> Result<(), MigrationError> {
-    let _data = ensure_data_dir().map_err(MigrationError::Data)?;
+    let data = ensure_data_dir().map_err(MigrationError::Data)?;
 
-    // Keyring: best effort.
+    // Keyring: best effort, principal + per-account from the accounts table.
+    // Must also run on already-migrated installs (nivra exists, per-account
+    // still old): do not depend on the data-dir rename having just happened.
     {
         let store = OsStore;
         // `super::CREDENTIAL_SERVICE` is the new service after ETAPA C.
         let _ = migrate_keyring(&store, super::CREDENTIAL_SERVICE);
+        // Per-account: read IDs the app knows (accounts table in the migrated
+        // nivra store; if the store cannot be opened/read, skip per-account and
+        // still return Ok overall since the data dir itself migrated).
+        if let Ok(ids) = read_account_ids(&data) {
+            for id in ids {
+                let name = super::account_entry(id);
+                let _ = migrate_entry_from_sources(&store, super::CREDENTIAL_SERVICE, &name);
+            }
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -755,5 +836,66 @@ mod tests {
                 let _ = RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(w.as_ptr()));
             }
         }
+    }
+
+    #[test]
+    fn per_account_migrates_from_newer_old_source_only() {
+        let store = MockStore::default();
+        store.set(OLD_CREDENTIAL_SERVICE, "discord-session.42", "tok-newer").unwrap();
+        let out = migrate_entry_from_sources(&store, "new.service", "discord-session.42").unwrap();
+        assert_eq!(out, CredentialOutcome::Migrated);
+        assert_eq!(store.get("new.service", "discord-session.42").unwrap(), Some("tok-newer".to_owned()));
+        assert_eq!(store.get(OLD_CREDENTIAL_SERVICE, "discord-session.42").unwrap(), None);
+        assert_eq!(store.get(OLD_APP_ID, "discord-session.42").unwrap(), None);
+    }
+
+    #[test]
+    fn per_account_migrates_from_oldest_when_newer_empty() {
+        let store = MockStore::default();
+        store.set(OLD_APP_ID, "discord-session.43", "tok-oldest").unwrap();
+        let out = migrate_entry_from_sources(&store, "new.service", "discord-session.43").unwrap();
+        assert_eq!(out, CredentialOutcome::Migrated);
+        assert_eq!(store.get("new.service", "discord-session.43").unwrap(), Some("tok-oldest".to_owned()));
+        assert_eq!(store.get(OLD_APP_ID, "discord-session.43").unwrap(), None);
+    }
+
+    #[test]
+    fn per_account_uses_newer_when_both_olds_differ_and_keeps_different() {
+        let store = MockStore::default();
+        store.set(OLD_CREDENTIAL_SERVICE, "discord-session.44", "tok-newer").unwrap();
+        store.set(OLD_APP_ID, "discord-session.44", "tok-older-different").unwrap();
+        let out = migrate_entry_from_sources(&store, "new.service", "discord-session.44").unwrap();
+        assert_eq!(out, CredentialOutcome::Migrated);
+        // Newer wins, older different kept.
+        assert_eq!(store.get("new.service", "discord-session.44").unwrap(), Some("tok-newer".to_owned()));
+        assert_eq!(store.get(OLD_CREDENTIAL_SERVICE, "discord-session.44").unwrap(), None);
+        assert_eq!(
+            store.get(OLD_APP_ID, "discord-session.44").unwrap(),
+            Some("tok-older-different".to_owned())
+        );
+    }
+
+    #[test]
+    fn per_account_new_existing_different_is_not_overwritten() {
+        let store = MockStore::default();
+        store.set("new.service", "discord-session.45", "tok-current").unwrap();
+        store.set(OLD_CREDENTIAL_SERVICE, "discord-session.45", "tok-stale").unwrap();
+        assert!(migrate_entry_from_sources(&store, "new.service", "discord-session.45").is_err());
+        assert_eq!(store.get("new.service", "discord-session.45").unwrap(), Some("tok-current".to_owned()));
+        assert_eq!(
+            store.get(OLD_CREDENTIAL_SERVICE, "discord-session.45").unwrap(),
+            Some("tok-stale".to_owned())
+        );
+    }
+
+    #[test]
+    fn per_account_second_run_has_no_effect() {
+        let store = MockStore::default();
+        store.set(OLD_CREDENTIAL_SERVICE, "discord-session.46", "tok-once").unwrap();
+        let first = migrate_entry_from_sources(&store, "new.service", "discord-session.46").unwrap();
+        assert_eq!(first, CredentialOutcome::Migrated);
+        let second = migrate_entry_from_sources(&store, "new.service", "discord-session.46").unwrap();
+        assert_eq!(second, CredentialOutcome::NoOldEntry);
+        assert_eq!(store.get("new.service", "discord-session.46").unwrap(), Some("tok-once".to_owned()));
     }
 }

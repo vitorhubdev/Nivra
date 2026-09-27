@@ -256,6 +256,8 @@ struct Pointer {
 	menu: bool,
 	silent: bool,
 	cached: String,
+	/// Pending save-selection-as-txt request from the selection popup.
+	save_txt: Option<Vec<u8>>,
 }
 
 impl egui::Plugin for Pointer {
@@ -315,6 +317,13 @@ impl egui::Plugin for Pointer {
 		.show(|ui| {
 			if ui.button("Copy").clicked() {
 				request_copy(ui.ctx());
+				ui.close();
+			}
+			if ui.button("Save .txt").clicked() {
+				let text = selected_text(ui.ctx());
+				if !text.is_empty() {
+					self.save_txt = Some(text.into_bytes());
+				}
 				ui.close();
 			}
 		});
@@ -378,6 +387,49 @@ pub fn request_copy(ctx: &egui::Context) {
 
 pub(crate) fn band_sense() -> Sense {
 	Sense::CLICK | Sense::DRAG
+}
+
+/// Edge zone around the scroll viewport that pulls a text-selection drag.
+pub const SELECT_EDGE_ZONE: f32 = 48.0;
+/// Edge-scroll speed at the zone's far edge, points per second.
+pub const SELECT_EDGE_MAX_SPEED: f32 = 640.0;
+
+/// Signed scroll speed (px/s, positive scrolls down) for a text-selection drag
+/// at `pointer_y` against viewport [`top`, `bottom`]. Still in the middle,
+/// grows with distance outside, capped at the far edge.
+pub fn edge_scroll_speed(pointer_y: f32, top: f32, bottom: f32) -> f32 {
+	if pointer_y <= top {
+		let t = ((top - pointer_y) / SELECT_EDGE_ZONE).clamp(0.0, 1.0);
+		-(0.5 + 0.5 * t) * SELECT_EDGE_MAX_SPEED
+	} else if pointer_y >= bottom {
+		let t = ((pointer_y - bottom) / SELECT_EDGE_ZONE).clamp(0.0, 1.0);
+		(0.5 + 0.5 * t) * SELECT_EDGE_MAX_SPEED
+	} else if pointer_y - top < SELECT_EDGE_ZONE {
+		-((1.0 - (pointer_y - top) / SELECT_EDGE_ZONE) * 0.5 * SELECT_EDGE_MAX_SPEED)
+	} else if bottom - pointer_y < SELECT_EDGE_ZONE {
+		(1.0 - (bottom - pointer_y) / SELECT_EDGE_ZONE) * 0.5 * SELECT_EDGE_MAX_SPEED
+	} else {
+		0.0
+	}
+}
+
+/// Chrome labels (headers, rails) never join text selection: dragging a
+/// message selection past them keeps the range inside the messages.
+pub(crate) fn chrome_label(ui: &mut egui::Ui, text: egui::RichText) -> egui::Response {
+	ui.add(egui::Label::new(text).selectable(false).truncate())
+}
+
+/// Text cached from the last selected range (empty when nothing selected).
+pub fn selected_text(ctx: &egui::Context) -> String {
+	ctx.plugin_opt::<Pointer>()
+		.map(|plugin| plugin.lock().cached.clone())
+		.unwrap_or_default()
+}
+
+/// Take a pending save-selection-as-txt request from the selection popup.
+pub fn take_save_txt(ctx: &egui::Context) -> Option<Vec<u8>> {
+	ctx.plugin_opt::<Pointer>()
+		.and_then(|plugin| plugin.lock().save_txt.take())
 }
 
 /// Paint a deferred widget galley, registering its selection unless a menu owns the pointer.
@@ -667,6 +719,10 @@ mod tests {
 
 	/// Drag from `from` to `to` and return what a copy would yield.
 	fn drag(from: Pos2, to: Pos2) -> String {
+		drag_with(show, from, to)
+	}
+
+	fn drag_with(show: impl Fn(&mut egui::Ui), from: Pos2, to: Pos2) -> String {
 		let ctx = egui::Context::default();
 		for events in [
 			Vec::new(),
@@ -675,7 +731,7 @@ mod tests {
 			press(to, false),
 			vec![Event::Copy],
 		] {
-			let output = ctx.run_ui(input(events), show);
+			let output = ctx.run_ui(input(events), &show);
 			let copied = output
 				.platform_output
 				.commands
@@ -721,5 +777,113 @@ mod tests {
 			drag(Pos2::new(120.0, 22.0), Pos2::new(60.0, 7.0)),
 			"o charlie delta echo foxtrot golf hotel https://exa"
 		);
+	}
+
+	#[test]
+	fn select_edge_scroll_is_still_in_the_middle_and_capped_outside() {
+		let (top, bottom) = (100.0, 500.0);
+		assert_eq!(super::edge_scroll_speed(300.0, top, bottom), 0.0);
+		assert_eq!(super::edge_scroll_speed(top, top, bottom), -320.0);
+		assert_eq!(super::edge_scroll_speed(top - 48.0, top, bottom), -640.0);
+		assert_eq!(super::edge_scroll_speed(top - 480.0, top, bottom), -640.0);
+		assert_eq!(super::edge_scroll_speed(bottom, top, bottom), 320.0);
+		assert_eq!(super::edge_scroll_speed(bottom + 24.0, top, bottom), 480.0);
+		assert_eq!(super::edge_scroll_speed(bottom + 48.0, top, bottom), 640.0);
+		assert_eq!(super::edge_scroll_speed(top + 24.0, top, bottom), -160.0);
+		assert_eq!(super::edge_scroll_speed(bottom - 24.0, top, bottom), 160.0);
+		assert!(
+			super::edge_scroll_speed(top - 40.0, top, bottom)
+				< super::edge_scroll_speed(top - 8.0, top, bottom),
+			"farther past the edge scrolls faster"
+		);
+		assert!(
+			super::edge_scroll_speed(bottom + 40.0, top, bottom)
+				> super::edge_scroll_speed(bottom + 8.0, top, bottom),
+			"farther past the edge scrolls faster"
+		);
+		assert_eq!(super::SELECT_EDGE_ZONE, 48.0);
+		assert_eq!(super::SELECT_EDGE_MAX_SPEED, 640.0);
+	}
+
+	/// Two stacked message bodies, each with its own surface like timeline rows.
+	fn show_two(ui: &mut egui::Ui) {
+		for (salt, text) in [("one", "first message body"), ("two", "second message body")] {
+			let mut surface = Surface::new(ui, salt);
+			ui.allocate_ui_with_layout(
+				egui::vec2(ui.available_width(), 0.0),
+				egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
+				|ui| {
+					ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+					ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+					let label = egui::Label::new(text).wrap().selectable(false);
+					let (pos, galley, response) = label.layout_in_ui(ui);
+					surface.run(ui, &response, pos, galley, Vec::new());
+				},
+			);
+			surface.finish(ui);
+		}
+	}
+
+	#[test]
+	fn a_drag_across_messages_selects_both() {
+		let selected = drag_with(show_two, Pos2::new(4.0, 7.0), Pos2::new(60.0, 25.0));
+		assert!(
+			selected.contains("irst message body") && selected.contains("second"),
+			"selection spans messages, got {selected:?}"
+		);
+	}
+
+	/// Header-style chrome above the messages, selectable only in the buggy variant.
+	fn show_with_chrome(selectable_chrome: bool) -> impl Fn(&mut egui::Ui) {
+		move |ui: &mut egui::Ui| {
+			if selectable_chrome {
+				ui.add(egui::Label::new("general"));
+			} else {
+				super::chrome_label(ui, egui::RichText::new("general"));
+			}
+			show(ui);
+		}
+	}
+
+	#[test]
+	fn a_drag_from_the_messages_through_the_chrome_leaves_the_header_out() {
+		// Bug repro: a selectable chrome label joins the range.
+		let buggy = drag_with(
+			show_with_chrome(true),
+			Pos2::new(4.0, 30.0),
+			Pos2::new(20.0, 5.0),
+		);
+		assert!(
+			buggy.contains("era"),
+			"repro: selectable chrome joins the range, got {buggy:?}"
+		);
+		// Fixed: chrome labels never join.
+		let fixed = drag_with(
+			show_with_chrome(false),
+			Pos2::new(4.0, 30.0),
+			Pos2::new(20.0, 5.0),
+		);
+		assert!(
+			!fixed.contains("general"),
+			"chrome must stay out, got {fixed:?}"
+		);
+		assert!(!fixed.is_empty(), "message text stays selected");
+	}
+
+	#[test]
+	fn selected_text_and_save_txt_round_trip_through_the_plugin() {
+		let ctx = egui::Context::default();
+		super::install(&ctx);
+		assert_eq!(super::selected_text(&ctx), "");
+		assert_eq!(super::take_save_txt(&ctx), None);
+		ctx.plugin::<Pointer>()
+			.lock()
+			.cached = "hello".to_owned();
+		assert_eq!(super::selected_text(&ctx), "hello");
+		ctx.plugin::<Pointer>()
+			.lock()
+			.save_txt = Some(b"hello".to_vec());
+		assert_eq!(super::take_save_txt(&ctx), Some(b"hello".to_vec()));
+		assert_eq!(super::take_save_txt(&ctx), None);
 	}
 }

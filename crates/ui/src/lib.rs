@@ -2310,25 +2310,22 @@ impl MessagingUi {
 									((ui.available_height() - name_height - subtitle_height) / 2.0)
 										.max(0.0),
 								);
-								ui.spacing_mut().item_spacing.y = 1.0;
-								ui.add(
-									egui::Label::new(
-										design::semibold(ui, name, 16.0).color(colors.text_strong),
-									)
-									.truncate(),
-								);
+							ui.spacing_mut().item_spacing.y = 1.0;
+							// Chrome never joins text selection: a drag past the
+							// viewport keeps its range inside the messages.
+							crate::select::chrome_label(
+								ui,
+								design::semibold(ui, name, 16.0).color(colors.text_strong),
+							);
 								{
-									if let Some(text) = subtitle {
-										ui.add(
-											egui::Label::new(
-												RichText::new(&text).size(12.0).color(colors.muted),
-											)
-											.truncate(),
-										)
-										.on_hover_text(text);
-									}
+								if let Some(text) = subtitle {
+									crate::select::chrome_label(
+										ui,
+										RichText::new(&text).size(12.0).color(colors.muted),
+									)
+									.on_hover_text(text);
 								}
-							});
+							}});
 							let in_call = state.voice.active.as_ref().is_some_and(|call| {
 								Some(call.channel) == state.selected
 									&& matches!(

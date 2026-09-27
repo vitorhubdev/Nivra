@@ -60,6 +60,9 @@ pub struct TimelineView {
 	pub(super) removing: BTreeMap<Id, f64>,
 	/// Ids painted this frame, backing "select all visible".
 	pub(super) last_visible: Vec<Id>,
+	/// Last pointer height while a text-selection drag runs; survives hover loss
+	/// past the window edge so the list keeps scrolling in that direction.
+	pub(super) drag_pointer_y: Option<f32>,
 	/// Folder-pick + sequential download requested with these attachments (max 15).
 	pub(super) batch_download_requested: bool,
 	pub(super) batch_download_attachments: Vec<model::Attachment>,
@@ -869,6 +872,7 @@ fn message_actions(
 	deleting: &mut Option<(Id, Id)>,
 	batch_delete: &mut BTreeSet<Id>,
 	select: (&mut bool, &mut Option<Id>),
+	save_txt: &mut Option<(String, Vec<u8>)>,
 	pin: (bool, bool, &mut Option<(Id, Id, bool)>),
 	thread: (bool, &mut Option<(Id, Id)>),
 	forward: (bool, &mut Option<Id>),
@@ -901,6 +905,15 @@ fn message_actions(
 			&& ui.button(crate::i18n::text(language, "Copy")).clicked()
 		{
 			crate::select::request_copy(ui.ctx());
+			ui.close();
+		}
+		if crate::select::has_selection(ui.ctx())
+			&& ui.button(crate::i18n::text(language, "Save .txt")).clicked()
+		{
+			let text = crate::select::selected_text(ui.ctx());
+			if !text.is_empty() {
+				*save_txt = Some(("selection.txt".to_owned(), text.into_bytes()));
+			}
 			ui.close();
 		}
 		if ui
@@ -1762,6 +1775,30 @@ impl TimelineView {
 		if autoscroll_delta > 0.0 {
 			self.following = false;
 		}
+		// Text-selection drag near or past the edge scrolls the list: faster
+		// the farther, capped. The header never joins the range (chrome
+		// labels are not selectable), so the selection stays in the messages.
+		let dragging_text = ui.input(|input| {
+			input.pointer.primary_down() && input.pointer.is_decidedly_dragging()
+		});
+		if dragging_text {
+			if let Some(pos) = ui.input(|input| input.pointer.hover_pos()) {
+				self.drag_pointer_y = Some(pos.y);
+			}
+		} else {
+			self.drag_pointer_y = None;
+		}
+		let mut select_scroll = 0.0;
+		if dragging_text
+			&& crate::select::has_selection(ui.ctx())
+			&& let Some(y) = self.drag_pointer_y
+		{
+			let speed = crate::select::edge_scroll_speed(y, area.top(), area.bottom());
+			if speed != 0.0 {
+				let dt = crate::anim::clamp_dt(ui.input(|input| input.stable_dt));
+				select_scroll = speed * dt;
+			}
+		}
 		let total: f32 = self.rows.iter().map(|(_, height)| height).sum();
 		// The typing indicator floats in the reserved strip above the composer; the gap keeps
 		// it from covering the last message, and stays there when nobody is typing.
@@ -1934,6 +1971,16 @@ impl TimelineView {
 			if next != self.scroll_offset {
 				ui.ctx().request_repaint();
 			}
+		}
+		if select_scroll != 0.0 {
+			// Text-selection drag at the edge: same viewport-first handling so
+			// the range keeps extending into newly revealed messages.
+			let max_offset = live_edge_offset;
+			let next =
+				(offset.unwrap_or(self.scroll_offset) + select_scroll).clamp(0.0, max_offset);
+			offset = Some(next);
+			self.following = false;
+			ui.ctx().request_repaint();
 		}
 		if let Some(offset) = offset {
 			scroll = scroll.vertical_scroll_offset(offset);
@@ -3234,8 +3281,9 @@ impl TimelineView {
 									),
 									(editing, &mut self.edit_started),
 									deleting,
-									&mut self.batch_delete,
-									(&mut self.select_mode, &mut self.select_anchor),
+								&mut self.batch_delete,
+								(&mut self.select_mode, &mut self.select_anchor),
+								&mut self.save_txt_request,
 									(
 										state.can_pin(message.channel, id),
 										state.is_pinned(message.channel, id),
@@ -3747,6 +3795,11 @@ impl TimelineView {
 					});
 				},
 			);
+		}
+		// Selection popup asked to save the text range: forward through the
+		// same desktop bridge as the smart-select export.
+		if let Some(bytes) = crate::select::take_save_txt(ui.ctx()) {
+			self.save_txt_request = Some(("selection.txt".to_owned(), bytes));
 		}
 		if self.batch_mgr_open {
 			let language = self.language;
@@ -5000,6 +5053,7 @@ mod tests {
 			let mut batch_delete = BTreeSet::new();
 			let mut select_mode = false;
 			let mut select_anchor = None;
+			let mut save_txt: Option<(String, Vec<u8>)> = None;
 			let mut reply = None;
 			let mut frame = |events: Vec<egui::Event>| {
 				let output = ctx.run_ui(
@@ -5023,6 +5077,7 @@ mod tests {
 							&mut deleting,
 							&mut batch_delete,
 							(&mut select_mode, &mut select_anchor),
+							&mut save_txt,
 							(false, false, &mut None),
 							(own, &mut thread_request),
 							(false, &mut None),

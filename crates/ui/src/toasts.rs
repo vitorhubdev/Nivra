@@ -19,7 +19,7 @@ fn lifetime(level: design::Level) -> f64 {
 	}
 }
 /// Trailing fade, counted inside the lifetime.
-const FADE: f64 = 0.45;
+const FADE: f64 = crate::anim::FADE_SECS;
 /// Older notices are dropped past this. A stack of toasts is just a status line again.
 const MAX: usize = 3;
 const WIDTH: f32 = 360.0;

@@ -500,7 +500,7 @@ impl Drop for Partial<'_> {
 	}
 }
 #[allow(clippy::too_many_arguments)]
-async fn download(
+pub(crate) async fn download(
 	client: &reqwest::Client,
 	url: url::Url,
 	destination: &Path,

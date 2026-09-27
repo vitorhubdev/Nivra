@@ -53,6 +53,27 @@ pub struct TimelineView {
 	pub(super) edit_started: bool,
 	pub(super) reply_started: bool,
 	pub(super) quick_delete: Option<(Id, Id)>,
+	/// Smart-select mode: column always reserved, boxes fade, Esc/Cancel exits.
+	pub(super) select_mode: bool,
+	pub(super) select_anchor: Option<Id>,
+	/// Removal fade start (egui time) per id sent for delete; space held until echo.
+	pub(super) removing: BTreeMap<Id, f64>,
+	/// Ids painted this frame, backing "select all visible".
+	pub(super) last_visible: Vec<Id>,
+	/// Folder-pick + sequential download requested with these attachments (max 15).
+	pub(super) batch_download_requested: bool,
+	pub(super) batch_download_attachments: Vec<model::Attachment>,
+	/// Save selection as .txt: filename + bytes for the desktop to write.
+	pub(super) save_txt_request: Option<(String, Vec<u8>)>,
+	/// Download manager snapshot written by the desktop; rendered in the timeline.
+	pub(super) batch_mgr_open: bool,
+	pub(super) batch_mgr_folder: Option<String>,
+	pub(super) batch_files: Vec<crate::batch_select::BatchFileView>,
+	/// Manager actions the desktop polls and clears.
+	pub(super) batch_mgr_cancel: bool,
+	pub(super) batch_mgr_retry: bool,
+	pub(super) batch_mgr_open_folder: bool,
+	pub(super) batch_mgr_dismiss: bool,
 	/// Up to five messages authored by the current account, selected for one confirmed delete action.
 	pub(super) batch_delete: BTreeSet<Id>,
 	pub(super) batch_delete_requested: bool,
@@ -732,6 +753,44 @@ fn action_button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> eg
 
 const MAX_BATCH_DELETE: usize = 5;
 
+impl TimelineView {
+	/// Enter smart-select, optionally seeding the selection. Column space is
+	/// identical in and out of mode, so rows never shift.
+	pub(super) fn enter_select_mode(&mut self, seed: Option<Id>) {
+		self.select_mode = true;
+		if let Some(id) = seed {
+			if !self.batch_delete.contains(&id) {
+				let _ = toggle_batch_delete(&mut self.batch_delete, id);
+			}
+			self.select_anchor = Some(id);
+		}
+	}
+	/// Leave smart-select. In-flight deletes keep running; only the UI mode clears.
+	pub(super) fn exit_select_mode(&mut self) {
+		self.select_mode = false;
+		self.select_anchor = None;
+		self.batch_delete.clear();
+	}
+	/// Sum cached row heights for echoed ids, forgetting their removal fades.
+	/// Callers add the result to the scroll offset so the viewport holds still.
+	pub(super) fn take_removal_compensation(&mut self, ids: &[Id]) -> f32 {
+		let mut total = 0.0;
+		for id in ids {
+			if self.removing.remove(id).is_some()
+				&& let Some((_, height)) = self.rows.iter().find(|(row, _)| row == id)
+			{
+				total += *height;
+			}
+		}
+		total
+	}
+	pub(super) fn compensate_scroll(&mut self, delta: f32) {
+		if delta > 0.0 {
+			self.scroll_offset += delta;
+		}
+	}
+}
+
 fn toggle_batch_delete(selected: &mut BTreeSet<Id>, id: Id) -> bool {
 	if selected.remove(&id) {
 		return true;
@@ -741,6 +800,37 @@ fn toggle_batch_delete(selected: &mut BTreeSet<Id>, id: Id) -> bool {
 	}
 	selected.insert(id);
 	true
+}
+
+/// Selection as "Author [date time]: text" lines in id order, attachments by name.
+/// Inputs are bounded (at most five server-limited messages), so no extra cap.
+fn selection_txt(state: &State, ids: &BTreeSet<Id>) -> String {
+	let messages: Vec<crate::batch_select::TxtMessage> = ids
+		.iter()
+		.filter_map(|id| {
+			state.timeline.get(*id).map(|message| {
+				let when = timestamp(message.id);
+				crate::batch_select::TxtMessage {
+					author: message.author.name.clone(),
+					when: format!(
+						"{:02}/{:02}/{:04} {:02}:{:02}",
+						when.day(),
+						when.month() as u8,
+						when.year(),
+						when.hour(),
+						when.minute()
+					),
+					text: message.display_text().into_owned(),
+					attachments: message
+						.attachments
+						.iter()
+						.map(|attachment| attachment.filename.clone())
+						.collect(),
+				}
+			})
+		})
+		.collect();
+	crate::batch_select::format_txt(&messages)
 }
 
 enum DeletedLocalAction {
@@ -778,6 +868,7 @@ fn message_actions(
 	editing: (&mut Option<(Id, Id, String)>, &mut bool),
 	deleting: &mut Option<(Id, Id)>,
 	batch_delete: &mut BTreeSet<Id>,
+	select: (&mut bool, &mut Option<Id>),
 	pin: (bool, bool, &mut Option<(Id, Id, bool)>),
 	thread: (bool, &mut Option<(Id, Id)>),
 	forward: (bool, &mut Option<Id>),
@@ -941,30 +1032,16 @@ fn message_actions(
 			*edit_started = true;
 			ui.close();
 		}
-		if own && can_delete {
-			let selected = batch_delete.contains(&message.id);
-			let room = selected || batch_delete.len() < MAX_BATCH_DELETE;
-			if ui
-				.add_enabled(
-					room,
-					egui::Button::new(crate::i18n::text(
-						language,
-						if selected {
-							"Remove from delete selection"
-						} else {
-							"Select for batch delete"
-						},
-					)),
-				)
-				.on_disabled_hover_text(crate::i18n::text(
-					language,
-					"You can select up to 5 messages at a time.",
-				))
-				.clicked()
-			{
+		// Single smart-select entry: enters select mode and seeds the selection.
+		// Delete eligibility is decided later on the floating bar, never here.
+		let (select_mode, select_anchor) = select;
+		if ui.button(crate::i18n::text(language, "Select")).clicked() {
+			*select_mode = true;
+			if !batch_delete.contains(&message.id) {
 				let _ = toggle_batch_delete(batch_delete, message.id);
-				ui.close();
 			}
+			*select_anchor = Some(message.id);
+			ui.close();
 		}
 		if (own || can_delete)
 			&& ui
@@ -1932,6 +2009,7 @@ impl TimelineView {
 				&& !crate::select::has_selection(ui.ctx())
 				&& !ui.input(|input| input.pointer.any_down() || input.pointer.any_released());
 			let mut end = first;
+			self.last_visible.clear();
 			for index in first..self.rows.len() {
 				let row_id = ui.make_persistent_id(self.rows[index].0.0);
 				let ui = if index < anchor {
@@ -1944,6 +2022,9 @@ impl TimelineView {
 				}
 				end = index + 1;
 				let id = self.rows[index].0;
+				if self.last_visible.len() < 512 {
+					self.last_visible.push(id);
+				}
 				if Some(id) == self.starter_row
 					&& let Some(starter) = state.thread_starter()
 				{
@@ -2760,32 +2841,91 @@ impl TimelineView {
 							surface.finish(ui);
 						});
 					let rect = row.response.rect;
-					let own_message = state
-						.user
-						.as_ref()
-						.is_some_and(|user| message.author.id == user.id);
-					if !self.batch_delete.is_empty()
-						&& own_message && state.can_delete(message.channel, id)
-					{
+					// The select column is always reserved and painted: entering or
+					// leaving select mode fades the boxes instead of shifting rows.
+					let select_alpha = crate::anim::bool_alpha(
+						ui.ctx(),
+						ui.id().with("batch-select-col"),
+						self.select_mode,
+						0.15,
+					);
+					if select_alpha > 0.01 {
 						let hit =
 							egui::Rect::from_min_size(rect.min, egui::vec2(36.0, rect.height()));
-						let toggle = ui.interact(
-							hit,
-							ui.id().with(("batch-select", id)),
-							egui::Sense::click(),
-						);
+						let toggle = if self.select_mode {
+							Some(ui.interact(
+								hit,
+								ui.id().with(("batch-select", id)),
+								egui::Sense::click(),
+							))
+						} else {
+							None
+						};
 						let on = self.batch_delete.contains(&id);
 						let center = egui::pos2(rect.left() + 18.0, rect.center().y);
+						let ring = if on { colors.accent } else { colors.muted };
 						ui.painter().circle_stroke(
 							center,
 							8.0,
-							egui::Stroke::new(1.5, if on { colors.accent } else { colors.muted }),
+							egui::Stroke::new(1.5, ring.gamma_multiply(select_alpha)),
 						);
 						if on {
-							ui.painter().circle_filled(center, 4.5, colors.accent);
+							ui.painter().circle_filled(
+								center,
+								4.5,
+								colors.accent.gamma_multiply(select_alpha),
+							);
 						}
-						if toggle.clicked() {
-							let _ = toggle_batch_delete(&mut self.batch_delete, id);
+						if let Some(toggle) = toggle {
+							let shift = ui.input(|input| input.modifiers.shift);
+							let ctrl =
+								ui.input(|input| input.modifiers.ctrl || input.modifiers.command);
+							if toggle.clicked() {
+								if shift {
+									let ordered: Vec<Id> =
+										self.rows.iter().map(|(row, _)| *row).collect();
+									let _ = crate::batch_select::range_select(
+										&ordered,
+										self.select_anchor,
+										id,
+										&mut self.batch_delete,
+									);
+								} else {
+									let _ = toggle_batch_delete(&mut self.batch_delete, id);
+									if !ctrl {
+										self.select_anchor = Some(id);
+									}
+								}
+							}
+							// Dragging across boxes paints the selection without
+							// untoggling on release: add-only while decidedly dragging.
+							let dragging = ui.input(|input| {
+								input.pointer.primary_down()
+									&& input.pointer.is_decidedly_dragging()
+							});
+							if dragging && toggle.hovered() && !self.batch_delete.contains(&id) {
+								let _ = toggle_batch_delete(&mut self.batch_delete, id);
+							}
+						}
+					}
+					// Removal fade over ~180ms: the row dissolves into the chat
+					// background while its space is held. The server echo frees
+					// the space with scroll compensation; a stale fade (failed
+					// delete) releases after a few seconds instead of hiding rows.
+					if let Some(started) = self.removing.get(&id).copied() {
+						let now = ui.input(|input| input.time);
+						let elapsed = (now - started) as f32;
+						if elapsed > crate::batch_select::REMOVAL_HOLD_SECS as f32 {
+							self.removing.remove(&id);
+						} else {
+							let t = crate::batch_select::removal_progress(elapsed);
+							if t > 0.0 {
+								ui.painter()
+									.rect_filled(rect, 0.0, colors.chat.gamma_multiply(t));
+							}
+							if t < 1.0 {
+								ui.ctx().request_repaint();
+							}
 						}
 					}
 					let mentioned = mentions_viewer(message, state);
@@ -3095,6 +3235,7 @@ impl TimelineView {
 									(editing, &mut self.edit_started),
 									deleting,
 									&mut self.batch_delete,
+									(&mut self.select_mode, &mut self.select_anchor),
 									(
 										state.can_pin(message.channel, id),
 										state.is_pinned(message.channel, id),
@@ -3407,13 +3548,24 @@ impl TimelineView {
 				now,
 			);
 		}
-		if !self.batch_delete.is_empty() || self.batch_progress.is_some() {
-			if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-				self.batch_delete.clear();
-				self.batch_delete_cancel = true;
-				self.batch_progress = None;
-			}
-			let height = 44.0;
+		let show_bar =
+			self.select_mode || !self.batch_delete.is_empty() || self.batch_progress.is_some();
+		if show_bar
+			&& ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+		{
+			self.exit_select_mode();
+			self.batch_delete_cancel = true;
+			self.batch_progress = None;
+		}
+		// Animated floating bar: height glides instead of popping rows.
+		let bar_h = crate::anim::animated_height(
+			ui.ctx(),
+			ui.id().with("select-bar-h"),
+			if show_bar { 78.0 } else { 0.0 },
+			0.18,
+		);
+		if bar_h >= 1.0 {
+			let height = bar_h;
 			let bottom_inset = if typing.is_some() {
 				crate::typing::OVERLAY_HEIGHT + 10.0
 			} else {
@@ -3427,6 +3579,26 @@ impl TimelineView {
 				egui::vec2((area.width() - 32.0).max(1.0), height),
 			);
 			let deleting = self.batch_progress;
+			let language = self.language;
+			let own = state.user.as_ref().map(|user| user.id);
+			let deletable = self
+				.batch_delete
+				.iter()
+				.filter(|id| {
+					state.timeline.get(**id).is_some_and(|message| {
+						Some(message.author.id) == own && state.can_delete(message.channel, **id)
+					})
+				})
+				.count();
+			let delete_reason =
+				crate::batch_select::delete_disabled_reason(deletable, self.batch_delete.len());
+			let attach_count: usize = self
+				.batch_delete
+				.iter()
+				.filter_map(|id| state.timeline.get(*id))
+				.map(|message| message.attachments.len())
+				.sum();
+			let download_reason = crate::batch_select::download_disabled_reason(attach_count);
 			overlay_bar(
 				ui,
 				rect,
@@ -3434,41 +3606,230 @@ impl TimelineView {
 				egui::CornerRadius::same(8),
 				|ui| {
 					ui.vertical(|ui| {
-						ui.spacing_mut().item_spacing.y = 0.0;
-						let (title, hint) = if let Some((done, total)) = deleting {
-							(format!("Deleting {done} of {total}"), "Esc stops the rest")
-						} else {
-							(
-								format!("{} of {MAX_BATCH_DELETE}", self.batch_delete.len()),
-								"Click beside a message to add it · Esc cancels",
-							)
-						};
-						ui.label(crate::design::medium(ui, &title, 13.0).color(colors.text_strong));
-						ui.label(egui::RichText::new(hint).size(11.0).color(colors.muted));
-					});
-					if let Some((done, total)) = deleting.filter(|(_, total)| *total > 0) {
-						ui.add(
-							egui::ProgressBar::new(done as f32 / total as f32)
-								.desired_width(72.0)
-								.desired_height(6.0)
-								.fill(colors.accent),
-						);
-					}
-					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-						if deleting.is_none() && ui.button("Delete selected…").clicked() {
-							self.batch_delete_requested = true;
-						}
-						if ui
-							.button(if deleting.is_some() { "Stop" } else { "Cancel" })
-							.clicked()
-						{
-							self.batch_delete.clear();
-							self.batch_delete_cancel = true;
-							self.batch_progress = None;
+						ui.horizontal(|ui| {
+							if let Some((done, total)) = deleting {
+								ui.label(
+									crate::design::medium(
+										ui,
+										&format!("Deleting {done} of {total}"),
+										13.0,
+									)
+									.color(colors.text_strong),
+								);
+								if total > 0 {
+									ui.add(
+										egui::ProgressBar::new(done as f32 / total as f32)
+											.desired_width(72.0)
+											.desired_height(6.0)
+											.fill(colors.accent),
+									);
+								}
+								ui.label(
+									egui::RichText::new(crate::i18n::text(
+										language,
+										"Esc stops the rest",
+									))
+									.size(11.0)
+									.color(colors.muted),
+								);
+							} else {
+								ui.label(
+									crate::design::medium(
+										ui,
+										&self.batch_delete.len().to_string(),
+										13.0,
+									)
+									.color(colors.text_strong),
+								);
+								ui.label(
+									crate::design::medium(
+										ui,
+										crate::i18n::text(language, "selected"),
+										13.0,
+									)
+									.color(colors.text_strong),
+								);
+								ui.label(
+									egui::RichText::new(crate::i18n::text(
+										language,
+										"Shift+click selects a range · drag paints · Esc exits",
+									))
+									.size(11.0)
+									.color(colors.muted),
+								);
+							}
+							ui.with_layout(
+								egui::Layout::right_to_left(egui::Align::Center),
+								|ui| {
+									if ui
+										.button(crate::i18n::text(
+											language,
+											if deleting.is_some() { "Stop" } else { "Cancel" },
+										))
+										.clicked()
+									{
+										self.exit_select_mode();
+										self.batch_delete_cancel = true;
+										self.batch_progress = None;
+									}
+								},
+							);
+						});
+						if deleting.is_none() {
+							ui.horizontal_wrapped(|ui| {
+								ui.spacing_mut().item_spacing.x = 6.0;
+								let delete =
+									egui::Button::new(crate::i18n::text(language, "Delete"));
+								if let Some(reason) = delete_reason {
+									ui.add_enabled(false, delete).on_disabled_hover_text(
+										crate::i18n::text(language, reason),
+									);
+								} else if ui.add_enabled(true, delete).clicked() {
+									self.batch_delete_requested = true;
+								}
+								let download =
+									egui::Button::new(crate::i18n::text(language, "Download"));
+								if let Some(reason) = download_reason {
+									ui.add_enabled(false, download).on_disabled_hover_text(
+										crate::i18n::text(language, reason),
+									);
+								} else if ui.add_enabled(true, download).clicked() {
+									let mut attachments = Vec::new();
+									for id in &self.batch_delete {
+										if let Some(message) = state.timeline.get(*id) {
+											for attachment in &message.attachments {
+												if attachments.len()
+													>= crate::batch_select::MAX_DOWNLOAD
+												{
+													break;
+												}
+												attachments.push(attachment.clone());
+											}
+										}
+									}
+									self.batch_files = attachments
+										.iter()
+										.map(|attachment| crate::batch_select::BatchFileView {
+											name: attachment.filename.clone(),
+											received: 0,
+											total: attachment.size,
+											status: crate::batch_select::BatchFileStatus::Queued,
+										})
+										.collect();
+									self.batch_download_attachments = attachments;
+									self.batch_mgr_folder = None;
+									self.batch_mgr_open = true;
+									self.batch_download_requested = true;
+								}
+								if ui.button(crate::i18n::text(language, "Copy")).clicked() {
+									ui.ctx().copy_text(selection_txt(state, &self.batch_delete));
+								}
+								if ui
+									.button(crate::i18n::text(language, "Save .txt"))
+									.clicked()
+								{
+									let text = selection_txt(state, &self.batch_delete);
+									self.save_txt_request =
+										Some(("messages.txt".to_owned(), text.into_bytes()));
+								}
+								if ui
+									.button(crate::i18n::text(language, "Select all visible"))
+									.clicked()
+								{
+									let ordered = self.last_visible.clone();
+									let _ = crate::batch_select::select_all_visible(
+										&ordered,
+										&mut self.batch_delete,
+									);
+								}
+							});
 						}
 					});
 				},
 			);
+		}
+		if self.batch_mgr_open {
+			let language = self.language;
+			let files = self.batch_files.clone();
+			let folder = self.batch_mgr_folder.clone();
+			let any_failed = files
+				.iter()
+				.any(|file| file.status == crate::batch_select::BatchFileStatus::Failed);
+			egui::Window::new(crate::i18n::text(language, "Downloads"))
+				.collapsible(false)
+				.resizable(true)
+				.show(ui.ctx(), |ui| {
+					if let Some(folder) = folder.as_deref() {
+						ui.label(folder);
+					} else {
+						ui.label(crate::i18n::text(language, "Choose a folder…"));
+					}
+					for file in &files {
+						ui.horizontal(|ui| {
+							ui.label(&file.name);
+							let status = match file.status {
+								crate::batch_select::BatchFileStatus::Queued => {
+									crate::i18n::text(language, "Queued")
+								}
+								crate::batch_select::BatchFileStatus::Active => {
+									crate::i18n::text(language, "Downloading")
+								}
+								crate::batch_select::BatchFileStatus::Done => {
+									crate::i18n::text(language, "Done")
+								}
+								crate::batch_select::BatchFileStatus::Failed => {
+									crate::i18n::text(language, "Failed")
+								}
+								crate::batch_select::BatchFileStatus::Cancelled => {
+									crate::i18n::text(language, "Cancelled")
+								}
+							};
+							ui.label(status);
+							if file.total > 0
+								&& matches!(
+									file.status,
+									crate::batch_select::BatchFileStatus::Active
+										| crate::batch_select::BatchFileStatus::Done
+								) {
+								ui.add(
+									egui::ProgressBar::new(
+										(file.received.min(file.total) as f32)
+											/ (file.total as f32),
+									)
+									.desired_width(120.0)
+									.desired_height(6.0),
+								);
+							}
+						});
+					}
+					ui.horizontal_wrapped(|ui| {
+						if ui.button(crate::i18n::text(language, "Cancel")).clicked() {
+							self.batch_mgr_cancel = true;
+						}
+						if ui
+							.add_enabled(
+								any_failed,
+								egui::Button::new(crate::i18n::text(language, "Retry")),
+							)
+							.clicked()
+						{
+							self.batch_mgr_retry = true;
+						}
+						if ui
+							.add_enabled(
+								folder.is_some(),
+								egui::Button::new(crate::i18n::text(language, "Open folder")),
+							)
+							.clicked()
+						{
+							self.batch_mgr_open_folder = true;
+						}
+						if ui.button(crate::i18n::text(language, "Close")).clicked() {
+							self.batch_mgr_dismiss = true;
+							self.batch_mgr_open = false;
+						}
+					});
+				});
 		}
 		let browsing_history = state.history_targeted
 			|| state.history_before.is_some()
@@ -4637,6 +4998,8 @@ mod tests {
 			let mut edit_started = false;
 			let mut deleting = None;
 			let mut batch_delete = BTreeSet::new();
+			let mut select_mode = false;
+			let mut select_anchor = None;
 			let mut reply = None;
 			let mut frame = |events: Vec<egui::Event>| {
 				let output = ctx.run_ui(
@@ -4659,6 +5022,7 @@ mod tests {
 							(&mut editing, &mut edit_started),
 							&mut deleting,
 							&mut batch_delete,
+							(&mut select_mode, &mut select_anchor),
 							(false, false, &mut None),
 							(own, &mut thread_request),
 							(false, &mut None),

@@ -8,7 +8,10 @@ pub fn extension_source(
 	let dialog = rfd::AsyncFileDialog::new()
 		.set_parent(parent.as_ref())
 		.set_title("Import Nivra extension")
-		.add_filter("Nivra extensions", &["nivra-extension", "serein-extension", "json"])
+		.add_filter(
+			"Nivra extensions",
+			&["nivra-extension", "serein-extension", "json"],
+		)
 		.pick_file();
 	async move {
 		let file = dialog.await?;
@@ -128,6 +131,40 @@ pub fn attachment_destination(
 		.set_parent(parent.as_ref())
 		.set_title("Save attachment")
 		.set_file_name(safe_filename(filename))
+		.save_file();
+	async move {
+		let file = dialog.await?;
+		drop(parent);
+		Some(file.path().to_owned())
+	}
+}
+
+/// Folder picked once for a sequential batch download; every file lands inside it.
+/// Construct on the native UI thread; rfd dispatches to Cocoa/Windows/the portal.
+pub fn select_folder(
+	parent: Arc<winit::window::Window>,
+) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
+	let dialog = rfd::AsyncFileDialog::new()
+		.set_parent(parent.as_ref())
+		.set_title("Choose a folder")
+		.pick_folder();
+	async move {
+		let folder = dialog.await?;
+		drop(parent);
+		Some(folder.path().to_owned())
+	}
+}
+
+/// Save dialog for generated text (selection export). Bytes are written by the caller.
+pub fn text_destination(
+	parent: Arc<winit::window::Window>,
+	filename: &str,
+) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
+	let dialog = rfd::AsyncFileDialog::new()
+		.set_parent(parent.as_ref())
+		.set_title("Save text file")
+		.set_file_name(safe_filename(filename))
+		.add_filter("Text", &["txt"])
 		.save_file();
 	async move {
 		let file = dialog.await?;

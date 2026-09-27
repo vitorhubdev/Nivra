@@ -5,6 +5,7 @@ mod account_menu;
 pub mod anim;
 mod archives;
 mod audio;
+pub mod batch_select;
 mod forwarding;
 pub use audio::{AudioCommand, AudioState, AudioUi};
 mod video;
@@ -103,12 +104,12 @@ pub mod updates;
 mod user_menu;
 mod verification;
 mod voice;
-pub use voice::voice_server_place;
 use client_core::{Command, MAX_CONTENT, MAX_DRAFT_BYTES, NavStep, State};
 use egui::{RichText, TextEdit};
 use model::{Freshness, Id};
 pub use verification::VerificationUi;
 pub use voice::StageFocus;
+pub use voice::voice_server_place;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct VoiceGain {
@@ -941,6 +942,50 @@ impl MessagingUi {
 	pub fn downloads(&mut self) -> &mut DownloadUi {
 		&mut self.timeline.download
 	}
+	/// Desktop bridge: folder-pick + sequential download request. Attachments are
+	/// bounded (at most 15) by the floating bar before they reach here.
+	pub fn take_batch_download_request(&mut self) -> Option<Vec<model::Attachment>> {
+		if self.timeline.batch_download_requested {
+			self.timeline.batch_download_requested = false;
+			Some(std::mem::take(
+				&mut self.timeline.batch_download_attachments,
+			))
+		} else {
+			None
+		}
+	}
+	/// Desktop bridge: save-selection-as-txt request (filename + bytes).
+	pub fn take_save_txt_request(&mut self) -> Option<(String, Vec<u8>)> {
+		self.timeline.save_txt_request.take()
+	}
+	/// Desktop bridge: publish the batch transfer snapshot rendered by the manager.
+	pub fn set_batch_download_view(
+		&mut self,
+		folder: Option<String>,
+		files: Vec<crate::batch_select::BatchFileView>,
+		open: bool,
+	) {
+		self.timeline.batch_mgr_folder = folder;
+		self.timeline.batch_files = files;
+		if open {
+			self.timeline.batch_mgr_open = true;
+		}
+	}
+	/// Desktop bridge: close the manager (folder pick cancelled or batch forgotten).
+	pub fn close_batch_download_view(&mut self) {
+		self.timeline.batch_mgr_open = false;
+		self.timeline.batch_files.clear();
+		self.timeline.batch_mgr_folder = None;
+	}
+	/// Desktop bridge: take manager actions (cancel, retry, open folder, dismiss).
+	pub fn take_batch_manager_flags(&mut self) -> (bool, bool, bool, bool) {
+		(
+			std::mem::take(&mut self.timeline.batch_mgr_cancel),
+			std::mem::take(&mut self.timeline.batch_mgr_retry),
+			std::mem::take(&mut self.timeline.batch_mgr_open_folder),
+			std::mem::take(&mut self.timeline.batch_mgr_dismiss),
+		)
+	}
 	pub fn audio(&mut self) -> &mut AudioUi {
 		&mut self.timeline.audio
 	}
@@ -1010,6 +1055,9 @@ impl MessagingUi {
 			self.deleting = None;
 		}
 		self.timeline.batch_delete.retain(|id| !ids.contains(id));
+		// Freed rows vanish at once; hold the viewport by their cached heights.
+		let compensation = self.timeline.take_removal_compensation(ids);
+		self.timeline.compensate_scroll(compensation);
 		let clear_batch = if let Some((batch_channel, selected)) = &mut self.deleting_batch {
 			if *batch_channel == channel {
 				selected.retain(|id| !ids.contains(id));
@@ -1243,7 +1291,9 @@ impl MessagingUi {
 		let shown_rows = (!lazy && self.hide_offline_members).then(|| {
 			let online = |member: &model::Member| member_online(state, member, guild);
 			match &thread_rows {
-				Some(rows) => visible_member_rows(rows.iter().map(|row| Some(row.0.as_ref())), online),
+				Some(rows) => {
+					visible_member_rows(rows.iter().map(|row| Some(row.0.as_ref())), online)
+				}
 				None => visible_member_rows(list.slots.iter().map(Option::as_ref), online),
 			}
 		});
@@ -1384,7 +1434,10 @@ impl MessagingUi {
 										crate::icons::Icon::Eye
 									},
 									egui::Rect::from_min_size(
-										egui::pos2(button.center().x - 6.0, button.center().y - 6.0),
+										egui::pos2(
+											button.center().x - 6.0,
+											button.center().y - 6.0,
+										),
 										egui::Vec2::splat(12.0),
 									),
 									ink,
@@ -1603,7 +1656,8 @@ impl MessagingUi {
 				let rect = ui.max_rect();
 				ui.horizontal_centered(|ui| {
 					if let Some(guild) = self.guild {
-						self.server_menu.header(ui, state, guild, title, self.language);
+						self.server_menu
+							.header(ui, state, guild, title, self.language);
 						return;
 					}
 					ui.add(
@@ -1696,7 +1750,8 @@ impl MessagingUi {
 						});
 						if response
 							.on_hover_text(crate::i18n::text(self.language, "Friends"))
-							.clicked() {
+							.clicked()
+						{
 							state.open_home();
 							self.guild = None;
 							self.search.open = false;
@@ -2136,6 +2191,20 @@ impl MessagingUi {
 									self.members_narrow_open = !self.members_narrow_open;
 								}
 							}
+							if state.selected.is_some() && !selected_voice {
+								let select_label = if self.timeline.select_mode {
+									crate::i18n::text(self.language, "Cancel")
+								} else {
+									crate::i18n::text(self.language, "Select")
+								};
+								if ui.button(select_label).clicked() {
+									if self.timeline.select_mode {
+										self.timeline.exit_select_mode();
+									} else {
+										self.timeline.enter_select_mode(None);
+									}
+								}
+							}
 							let pins_open = self.search.open && self.search.pins();
 							let pins = ui
 								.add_enabled_ui(state.can_search() || pins_open, |ui| {
@@ -2202,10 +2271,11 @@ impl MessagingUi {
 						}
 						ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
 							// Centre the name block in the fixed-height header even without a subtitle.
-							let name = channel.as_ref().map_or(
-								crate::i18n::text(self.language, "Direct Messages"),
-								|c| state.conversation_name(c),
-							);
+							let name = channel
+								.as_ref()
+								.map_or(crate::i18n::text(self.language, "Direct Messages"), |c| {
+									state.conversation_name(c)
+								});
 							let subtitle = channel
 								.as_ref()
 								.filter(|_| dm)
@@ -3343,8 +3413,11 @@ impl MessagingUi {
 			filename: filename.clone(),
 			bytes: dialog.text.clone().into_bytes(),
 		});
-		let mut names: Vec<String> =
-			self.selected_files().into_iter().map(|(name, _)| name).collect();
+		let mut names: Vec<String> = self
+			.selected_files()
+			.into_iter()
+			.map(|(name, _)| name)
+			.collect();
 		names.push(filename);
 		let refs: Vec<&str> = names.iter().map(String::as_str).collect();
 		match state.prepare_send_with_attachments(&refs) {
@@ -3562,6 +3635,11 @@ impl MessagingUi {
 			&& let Some((channel, message)) = self.batch_delete_queue.first().copied()
 		{
 			self.batch_delete_queue.remove(0);
+			// Arm the ~180ms removal fade; the echo frees the space with
+			// scroll compensation, or the fade releases on failure.
+			self.timeline
+				.removing
+				.insert(message, ui.input(|input| input.time));
 			if let Some(command) = state.prepare_delete(channel, message) {
 				commands.push(command);
 			}
@@ -3765,13 +3843,10 @@ impl MessagingUi {
 				.and_then(|id| state.channel(id))
 				.and_then(|channel| channel.guild);
 		}
-		let title = self
-			.guild
-			.and_then(|id| state.guild(id))
-			.map_or_else(
-				|| crate::i18n::text(self.language, "Direct Messages").to_owned(),
-				|g| g.name.clone(),
-			);
+		let title = self.guild.and_then(|id| state.guild(id)).map_or_else(
+			|| crate::i18n::text(self.language, "Direct Messages").to_owned(),
+			|g| g.name.clone(),
+		);
 		if self.shows_title_bar() {
 			self.title_bar(ui, state, &title);
 		}
@@ -3847,8 +3922,14 @@ impl MessagingUi {
 		if let Some((guild, channel)) = self.channel_menu.invite_requested.take() {
 			self.server_menu.open_invite(state, guild, channel);
 		}
-		self.server_menu
-			.show(&ctx, state, self.guild, &mut commands, &mut self.avatars, self.language);
+		self.server_menu.show(
+			&ctx,
+			state,
+			self.guild,
+			&mut commands,
+			&mut self.avatars,
+			self.language,
+		);
 		if let Some(guild) = self.server_menu.settings_requested.take()
 			&& let Some(command) = self.preview_server_settings(state, guild)
 		{
@@ -4941,8 +5022,14 @@ mod composer_tests {
 	#[test]
 	fn long_text_filenames_normalize_and_validate_like_the_send_path() {
 		assert_eq!(normalize_txt_filename("notes"), Some("notes.txt".into()));
-		assert_eq!(normalize_txt_filename("notes.txt"), Some("notes.txt".into()));
-		assert_eq!(normalize_txt_filename("  padded  "), Some("padded.txt".into()));
+		assert_eq!(
+			normalize_txt_filename("notes.txt"),
+			Some("notes.txt".into())
+		);
+		assert_eq!(
+			normalize_txt_filename("  padded  "),
+			Some("padded.txt".into())
+		);
 		assert_eq!(normalize_txt_filename(""), None);
 		assert_eq!(normalize_txt_filename("   "), None);
 		let max_stem = "a".repeat(252);
@@ -5030,7 +5117,14 @@ mod composer_tests {
 		assert!(labels.iter().any(|(text, _)| text == "Send as text file?"));
 		assert!(labels.iter().any(|(text, _)| text == "FILE NAME"));
 		assert!(commands.is_empty());
-		click_label(&ctx, &mut view, &mut state, &mut commands, &labels, "Cancel");
+		click_label(
+			&ctx,
+			&mut view,
+			&mut state,
+			&mut commands,
+			&labels,
+			"Cancel",
+		);
 		assert!(view.long_text_dialog.is_none());
 		assert_eq!(state.drafts.get(&Id(1)).map(String::as_str), Some("Hello"));
 		assert!(commands.is_empty());
@@ -5049,7 +5143,11 @@ mod composer_tests {
 		});
 		let mut commands = vec![];
 		let labels = render_dialog(&ctx, &mut view, &mut state, &mut commands);
-		assert!(labels.iter().any(|(text, _)| text == "That file name will not work."));
+		assert!(
+			labels
+				.iter()
+				.any(|(text, _)| text == "That file name will not work.")
+		);
 		click_label(&ctx, &mut view, &mut state, &mut commands, &labels, "Send");
 		assert!(commands.is_empty());
 		assert!(view.long_text_dialog.is_some());

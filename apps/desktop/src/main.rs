@@ -4,6 +4,7 @@ mod access_marks_demo;
 mod app_settings;
 mod audio;
 mod avatars;
+mod batch_downloads;
 mod cache;
 mod captcha;
 #[cfg(feature = "demo")]
@@ -740,6 +741,8 @@ struct Desktop {
 	rpc_invite_seen: u64,
 	pointer: pointer::Pointer,
 	downloads: downloads::Downloads,
+	batch_downloads: batch_downloads::BatchDownloads,
+	save_txt_done: Option<std::sync::mpsc::Receiver<bool>>,
 	audio: audio::Audio,
 	video: video::Video,
 	/// Offline fixture flags start (and optionally pause) the demo attachment without input.
@@ -1923,6 +1926,8 @@ impl Desktop {
 			rpc_invite_seen: 0,
 			pointer: pointer::Pointer::default(),
 			downloads: downloads::Downloads::default(),
+			batch_downloads: batch_downloads::BatchDownloads::default(),
+			save_txt_done: None,
 			audio: audio::Audio::default(),
 			video: video::Video::default(),
 			demo_video_autoplay: if std::env::args().any(|arg| arg == "--demo-video-paused") {
@@ -3137,7 +3142,8 @@ impl Desktop {
 				self.messaging.voice_camera_preview = None;
 			}
 			if matches!(control, client_core::voice::Command::Leave { .. }) {
-				self.voice.push_self_leave_cue(&mut self.messaging.notification_cues);
+				self.voice
+					.push_self_leave_cue(&mut self.messaging.notification_cues);
 				self.voice.stop();
 				self.messaging.camera_test_requested = false;
 				self.messaging.camera_test_texture = None;
@@ -4199,9 +4205,7 @@ public static class NivraShortcut {
 								p.accent_text,
 							);
 							ui.add_space(8.0);
-							ui.label(
-								ui::design::semibold(ui, "Nivra", 16.0).color(p.text_strong),
-							);
+							ui.label(ui::design::semibold(ui, "Nivra", 16.0).color(p.text_strong));
 							ui.add_space(8.0);
 							// Painted rather than framed: the pill must hug the text, not the row height.
 							let stage = ui.painter().layout_no_wrap(
@@ -5496,7 +5500,8 @@ public static class NivraShortcut {
 				}
 			}
 			if let Some(error) = voice_failure {
-				self.voice.push_self_leave_cue(&mut self.messaging.notification_cues);
+				self.voice
+					.push_self_leave_cue(&mut self.messaging.notification_cues);
 				if let Some(command) = self.voice.fail(&mut self.state, error) {
 					self.command(command);
 				}
@@ -6179,6 +6184,125 @@ impl eframe::App for Desktop {
 		};
 		self.messaging.downloads().active = self.downloads.is_active();
 		self.messaging.downloads().status = download_status;
+		// Smart-select batch transfers: publish the manager snapshot, announce
+		// completion once, and honor manager actions.
+		if let Some(done) = self
+			.save_txt_done
+			.as_ref()
+			.and_then(|done| match done.try_recv() {
+				Ok(saved) => Some(saved),
+				Err(std::sync::mpsc::TryRecvError::Empty) => None,
+				Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(false),
+			}) {
+			self.save_txt_done = None;
+			if done {
+				self.messaging.toasts.push(
+					ui::design::Level::Success,
+					ui::i18n::text(self.messaging.language, "Selection saved"),
+				);
+			}
+			ctx.request_repaint();
+		}
+		let (cancel, retry, open_folder, dismiss) = self.messaging.take_batch_manager_flags();
+		if cancel {
+			self.batch_downloads.cancel();
+		}
+		if retry {
+			self.batch_downloads.retry(self.runtime.handle(), &ctx);
+		}
+		if open_folder {
+			if let Some(folder) = self.batch_downloads.folder() {
+				batch_downloads::open_folder(&folder);
+			}
+		}
+		if dismiss {
+			self.batch_downloads.dismiss();
+		}
+		if self.batch_downloads.take_closed() {
+			self.messaging.close_batch_download_view();
+		}
+		{
+			let (folder, files, active, _) = self.batch_downloads.snapshot();
+			if active || !files.is_empty() {
+				let view = files
+					.into_iter()
+					.map(|file| ui::batch_select::BatchFileView {
+						name: file.name,
+						received: file.received,
+						total: file.total,
+						status: match file.status {
+							batch_downloads::FileStatus::Queued => {
+								ui::batch_select::BatchFileStatus::Queued
+							}
+							batch_downloads::FileStatus::Active => {
+								ui::batch_select::BatchFileStatus::Active
+							}
+							batch_downloads::FileStatus::Done => {
+								ui::batch_select::BatchFileStatus::Done
+							}
+							batch_downloads::FileStatus::Failed => {
+								ui::batch_select::BatchFileStatus::Failed
+							}
+							batch_downloads::FileStatus::Cancelled => {
+								ui::batch_select::BatchFileStatus::Cancelled
+							}
+						},
+					})
+					.collect();
+				let folder = folder.map(|folder| folder.display().to_string());
+				self.messaging.set_batch_download_view(folder, view, false);
+			}
+		}
+		if self.batch_downloads.take_finished() {
+			let (_, files, _, _) = self.batch_downloads.snapshot();
+			let cancelled = files
+				.iter()
+				.any(|file| file.status == batch_downloads::FileStatus::Cancelled);
+			let failed = files
+				.iter()
+				.any(|file| file.status == batch_downloads::FileStatus::Failed);
+			if cancelled && !failed {
+				self.messaging.toasts.push(
+					ui::design::Level::Info,
+					ui::i18n::text(self.messaging.language, "Download cancelled"),
+				);
+			} else {
+				self.messaging.toasts.push(
+					ui::design::Level::Success,
+					ui::i18n::text(self.messaging.language, "Download complete"),
+				);
+			}
+			// Reopen the manager so "Open folder" and retry stay one click away.
+			let (folder, files, _, _) = self.batch_downloads.snapshot();
+			let view = files
+				.into_iter()
+				.map(|file| ui::batch_select::BatchFileView {
+					name: file.name,
+					received: file.received,
+					total: file.total,
+					status: match file.status {
+						batch_downloads::FileStatus::Queued => {
+							ui::batch_select::BatchFileStatus::Queued
+						}
+						batch_downloads::FileStatus::Active => {
+							ui::batch_select::BatchFileStatus::Active
+						}
+						batch_downloads::FileStatus::Done => {
+							ui::batch_select::BatchFileStatus::Done
+						}
+						batch_downloads::FileStatus::Failed => {
+							ui::batch_select::BatchFileStatus::Failed
+						}
+						batch_downloads::FileStatus::Cancelled => {
+							ui::batch_select::BatchFileStatus::Cancelled
+						}
+					},
+				})
+				.collect();
+			let folder = folder.map(|folder| folder.display().to_string());
+			self.messaging.set_batch_download_view(folder, view, true);
+			ctx.request_repaint();
+		}
 		if close_requested && self.extensions.cleanup_pending() {
 			self.extension_close_pending = true;
 			ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -6623,6 +6747,40 @@ impl eframe::App for Desktop {
 					self.window.clone(),
 				) {
 				self.state.status = error;
+			}
+			// Smart-select batch: folder picked once, files download one at a time.
+			if let Some(attachments) = self.messaging.take_batch_download_request()
+				&& !self.state.demo
+				&& !self.fixture_only
+			{
+				self.batch_downloads.start(
+					attachments,
+					self.runtime.handle(),
+					&ctx,
+					self.window.clone(),
+				);
+			}
+			if let Some((filename, bytes)) = self.messaging.take_save_txt_request()
+				&& !self.fixture_only
+			{
+				let runtime = self.runtime.handle().clone();
+				let parent = self.window.clone();
+				let (send, receive) = std::sync::mpsc::sync_channel::<bool>(1);
+				self.save_txt_done = Some(receive);
+				std::thread::Builder::new()
+					.name("nivra-save-txt".into())
+					.spawn(move || {
+						runtime.block_on(async {
+							let Some(path) =
+								platform::save::text_destination(parent, &filename).await
+							else {
+								return;
+							};
+							let saved = std::fs::write(&path, &bytes).is_ok();
+							let _ = send.send(saved);
+						});
+					})
+					.ok();
 			}
 
 			if let Some(scope) = self.messaging.take_profile_picture_request() {
@@ -7098,7 +7256,10 @@ mod tests {
 		] {
 			for language in [model::Language::English, model::Language::PortugueseBrazil] {
 				let rendered = ui::i18n::text(language, key);
-				assert!(rendered.contains("Nivra"), "{language:?} dropped the name: {rendered}");
+				assert!(
+					rendered.contains("Nivra"),
+					"{language:?} dropped the name: {rendered}"
+				);
 			}
 		}
 	}

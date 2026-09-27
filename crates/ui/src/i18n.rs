@@ -29,10 +29,8 @@ pub fn store_interface_language(ctx: &egui::Context, language: Language) {
 
 /// Language for shared chrome; English when no frame stored one (tests, previews).
 pub fn interface_language(ctx: &egui::Context) -> Language {
-	ctx.data(|data| {
-		data.get_temp::<Language>(egui::Id::unique(INTERFACE_LANGUAGE_KEY))
-	})
-	.unwrap_or(Language::English)
+	ctx.data(|data| data.get_temp::<Language>(egui::Id::unique(INTERFACE_LANGUAGE_KEY)))
+		.unwrap_or(Language::English)
 }
 
 /// Keys that fell back to English on this thread since the last drain. Tests
@@ -76,9 +74,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Remove this conversation from your DM list. Messages are kept." => {
 			"Remove esta conversa da sua lista de conversas. As mensagens são mantidas."
 		}
-		"No open direct message with this user." => {
-			"Nenhuma conversa aberta com este usuário."
-		}
+		"No open direct message with this user." => "Nenhuma conversa aberta com este usuário.",
 		"Block" => "Bloquear",
 		"Unblock" => "Desbloquear",
 		"Change Nickname" => "Mudar apelido",
@@ -124,9 +120,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		}
 		"Keyboard shortcuts for Nivra." => "Atalhos de teclado do Nivra.",
 		"What Nivra keeps on this device." => "O que o Nivra mantém neste dispositivo.",
-		"Keep Nivra up to date on this device." => {
-			"Mantenha o Nivra atualizado neste dispositivo."
-		}
+		"Keep Nivra up to date on this device." => "Mantenha o Nivra atualizado neste dispositivo.",
 		"Manage community plugins." => "Gerencie plugins da comunidade.",
 		"Choose a community theme." => "Escolha um tema da comunidade.",
 		"Language" => "Idioma",
@@ -322,6 +316,37 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"You can select up to 5 messages at a time." => {
 			"Dá para selecionar até 5 mensagens por vez."
 		}
+		"Select" => "Selecionar",
+		"selected" => "selecionadas",
+		"Shift+click selects a range · drag paints · Esc exits" => {
+			"Shift+clique seleciona um intervalo · arrastar pinta · Esc sai"
+		}
+		"Esc stops the rest" => "Esc interrompe o resto",
+		"Stop" => "Parar",
+		"Delete" => "Apagar",
+		"Download" => "Baixar",
+		"Save .txt" => "Salvar .txt",
+		"Select all visible" => "Selecionar visíveis",
+		"Select messages to enable actions" => "Selecione mensagens para ativar as ações",
+		"None of the selected messages can be deleted" => {
+			"Nenhuma das mensagens selecionadas pode ser apagada"
+		}
+		"Maximum 5 messages per delete" => "Máximo de 5 mensagens por vez para apagar",
+		"No attachments in the selection" => "Sem anexos na seleção",
+		"Maximum 15 attachments per download" => "Máximo de 15 anexos por download",
+		"Downloads" => "Downloads",
+		"Choose a folder…" => "Escolha uma pasta…",
+		"Queued" => "Na fila",
+		"Downloading" => "Baixando",
+		"Done" => "Pronto",
+		"Failed" => "Falhou",
+		"Cancelled" => "Cancelado",
+		"Retry" => "Tentar de novo",
+		"Open folder" => "Abrir pasta",
+		"Selection copied" => "Seleção copiada",
+		"Selection saved" => "Seleção salva",
+		"Download complete" => "Download concluído",
+		"Download cancelled" => "Download cancelado",
 		"Delete message…" => "Apagar mensagem…",
 		"Delete message immediately" => "Apagar mensagem agora",
 		"Message history is unavailable with current permission information." => {
@@ -484,7 +509,9 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Device unavailable — choose another" => "Dispositivo indisponível — escolha outro",
 		"Looking for audio devices..." => "Procurando dispositivos de áudio...",
 		"Looking for audio devices…" => "Procurando dispositivos de áudio…",
-		"Could not start audio device discovery" => "Não foi possível procurar os dispositivos de áudio",
+		"Could not start audio device discovery" => {
+			"Não foi possível procurar os dispositivos de áudio"
+		}
 		"Audio devices loaded · headphones avoid microphone echo" => {
 			"Dispositivos de áudio carregados · fone evita eco do microfone"
 		}
@@ -518,7 +545,9 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Enter a username" => "Digite um nome de usuário",
 		"Sending…" => "Enviando…",
 		"Send Friend Request" => "Enviar pedido de amizade",
-		"Offline demo · actions are simulated." => "Demonstração offline · as ações são simuladas.",
+		"Offline demo · actions are simulated." => {
+			"Demonstração offline · as ações são simuladas."
+		}
 		"Reconnect before sending a friend request." => {
 			"Reconecte antes de enviar um pedido de amizade."
 		}
@@ -611,9 +640,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 			"Leia e responda DMs direto das conversas no jogo."
 		}
 		"Show all DMs" => "Mostrar todas as DMs",
-		"Show only DMs from people who also play the game" => {
-			"Mostrar só DMs de quem também joga"
-		}
+		"Show only DMs from people who also play the game" => "Mostrar só DMs de quem também joga",
 		"Don't show DMs" => "Não mostrar DMs",
 		"Your account uses a custom in-game DM setting. Select an option to replace it." => {
 			"Sua conta usa uma configuração personalizada de DM no jogo. Selecione uma opção para substituí-la."
@@ -671,9 +698,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 			"Busca novos pacotes e atualizações. Nada instala sozinho."
 		}
 		"Import package…" => "Importar pacote…",
-		"Open a package file from this computer." => {
-			"Abrir um arquivo de pacote deste computador."
-		}
+		"Open a package file from this computer." => "Abrir um arquivo de pacote deste computador.",
 		"No matches" => "Sem resultados",
 		"No themes yet" => "Nenhum tema ainda",
 		"No extensions yet" => "Nenhuma extensão ainda",
@@ -693,9 +718,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Back to theme editor" => "Voltar ao editor",
 		"Customize" => "Personalizar",
 		"Use theme" => "Usar tema",
-		"Apply this installed theme to the app." => {
-			"Aplica este tema instalado ao app."
-		}
+		"Apply this installed theme to the app." => "Aplica este tema instalado ao app.",
 		"Edit theme" => "Editar tema",
 		"Open tool" => "Abrir ferramenta",
 		"Disable" => "Desativar",
@@ -790,21 +813,15 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Read loaded server members, roles and server profiles" => {
 			"Ler membros, cargos e perfis dos servidores"
 		}
-		"Read the list of loaded, readable conversations" => {
-			"Ler a lista de conversas legíveis"
-		}
+		"Read the list of loaded, readable conversations" => "Ler a lista de conversas legíveis",
 		"Read loaded message replies, mentions, attachment metadata and reactions" => {
 			"Ler respostas, menções, anexos e reações"
 		}
 		"Read my loaded friends, requests, blocked and ignored users" => {
 			"Ler amigos, pedidos, bloqueados e ignorados"
 		}
-		"Read loaded messages in the active conversation" => {
-			"Ler mensagens da conversa ativa"
-		}
-		"Read loaded members of the active conversation" => {
-			"Ler membros da conversa ativa"
-		}
+		"Read loaded messages in the active conversation" => "Ler mensagens da conversa ativa",
+		"Read loaded members of the active conversation" => "Ler membros da conversa ativa",
 		"Read loaded user presence status" => "Ler status de presença",
 		"Read current call state and participant identifiers" => {
 			"Ler estado da chamada e participantes"
@@ -823,9 +840,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Back" => "Voltar",
 		"Working…" => "Trabalhando…",
 		"Theme details" => "Detalhes do tema",
-		"How your theme appears in the gallery." => {
-			"Como seu tema aparece na galeria."
-		}
+		"How your theme appears in the gallery." => "Como seu tema aparece na galeria.",
 		"Theme name" => "Nome do tema",
 		"My theme" => "Meu tema",
 		"Theme name is required." => "Nome do tema é obrigatório.",
@@ -912,9 +927,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Timestamps and supporting text" => "Horários e textos de apoio",
 		"Channel, conversation and member lists" => "Listas de canais, conversas e membros",
 		"Background behind your messages" => "Fundo atrás das suas mensagens",
-		"Use the default color for this appearance" => {
-			"Usar a cor padrão desta aparência"
-		}
+		"Use the default color for this appearance" => "Usar a cor padrão desta aparência",
 		"Use #RRGGBB or #RRGGBBAA." => "Use #RRGGBB ou #RRGGBBAA.",
 		"Horizontal" => "Horizontal",
 		"Vertical" => "Vertical",
@@ -951,9 +964,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Add a theme name and creator name before saving." => {
 			"Adicione nome do tema e do criador antes de salvar."
 		}
-		"Add a license and version before saving." => {
-			"Adicione licença e versão antes de salvar."
-		}
+		"Add a license and version before saving." => "Adicione licença e versão antes de salvar.",
 		"Check the license, version, and optional source URL." => {
 			"Verifique licença, versão e URL de origem opcional."
 		}
@@ -1189,7 +1200,9 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"App preferences were not saved. If your acceptance of the terms was not recorded, Nivra will ask again next launch." => {
 			"As preferências do aplicativo não foram salvas. Se o seu aceite dos termos não foi registrado, o Nivra vai perguntar de novo na próxima vez que abrir."
 		}
-		"Your session expired; sign in again to continue." => "Sua sessão expirou; entre de novo para continuar.",
+		"Your session expired; sign in again to continue." => {
+			"Sua sessão expirou; entre de novo para continuar."
+		}
 		"I understand — continue" => "Entendi — continuar",
 		"Zoom" => "Zoom",
 		"Scales text and controls across the app." => {
@@ -1351,9 +1364,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		}
 		"Keyboard shortcuts for Nivra." => "Atajos de teclado de Nivra.",
 		"What Nivra keeps on this device." => "Lo que Nivra guarda en este dispositivo.",
-		"Keep Nivra up to date on this device." => {
-			"Mantén Nivra actualizado en este dispositivo."
-		}
+		"Keep Nivra up to date on this device." => "Mantén Nivra actualizado en este dispositivo.",
 		"Manage community plugins." => "Administra plugins de la comunidad.",
 		"Choose a community theme." => "Elige un tema de la comunidad.",
 		"Language" => "Idioma",
@@ -1547,6 +1558,37 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"You can select up to 5 messages at a time." => {
 			"Puedes seleccionar hasta 5 mensajes a la vez."
 		}
+		"Select" => "Seleccionar",
+		"selected" => "seleccionados",
+		"Shift+click selects a range · drag paints · Esc exits" => {
+			"Mayús+clic selecciona un intervalo · arrastrar pinta · Esc sale"
+		}
+		"Esc stops the rest" => "Esc detiene el resto",
+		"Stop" => "Detener",
+		"Delete" => "Borrar",
+		"Download" => "Descargar",
+		"Save .txt" => "Guardar .txt",
+		"Select all visible" => "Seleccionar visibles",
+		"Select messages to enable actions" => "Selecciona mensajes para activar las acciones",
+		"None of the selected messages can be deleted" => {
+			"Ninguno de los mensajes seleccionados se puede borrar"
+		}
+		"Maximum 5 messages per delete" => "Máximo 5 mensajes por borrado",
+		"No attachments in the selection" => "Sin adjuntos en la selección",
+		"Maximum 15 attachments per download" => "Máximo 15 adjuntos por descarga",
+		"Downloads" => "Descargas",
+		"Choose a folder…" => "Elige una carpeta…",
+		"Queued" => "En cola",
+		"Downloading" => "Descargando",
+		"Done" => "Listo",
+		"Failed" => "Falló",
+		"Cancelled" => "Cancelado",
+		"Retry" => "Reintentar",
+		"Open folder" => "Abrir carpeta",
+		"Selection copied" => "Selección copiada",
+		"Selection saved" => "Selección guardada",
+		"Download complete" => "Descarga completa",
+		"Download cancelled" => "Descarga cancelada",
 		"Delete message…" => "Borrar mensaje…",
 		"Delete message immediately" => "Borrar mensaje ahora",
 		"Message history is unavailable with current permission information." => {
@@ -1587,7 +1629,9 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Frame rate" => "Fotogramas/s",
 		"Choose a screen or window" => "Elige una pantalla o ventana",
 		"Looking for screens and windows…" => "Buscando pantallas y ventanas…",
-		"Offline preview · no screen is captured" => "Vista previa sin conexión · no se captura ninguna pantalla",
+		"Offline preview · no screen is captured" => {
+			"Vista previa sin conexión · no se captura ninguna pantalla"
+		}
 		"In a call" => "En llamada",
 		"In a call · microphone muted" => "En llamada · micrófono silenciado",
 		"In a call · deafened" => "En llamada · audio desactivado",
@@ -1677,7 +1721,9 @@ fn spanish(key: &str) -> Option<&'static str> {
 		}
 		"Advanced input settings" => "Ajustes avanzados de entrada",
 		"Voice activity threshold" => "Umbral de actividad de voz",
-		"Only transmit sound above the threshold." => "Solo transmite sonido por encima del umbral.",
+		"Only transmit sound above the threshold." => {
+			"Solo transmite sonido por encima del umbral."
+		}
 		"Open voice activity; mute and push to talk still apply." => {
 			"Micrófono abierto; silenciar y pulsar para hablar siguen aplicando."
 		}
@@ -1709,7 +1755,9 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Device unavailable — choose another" => "Dispositivo no disponible — elige otro",
 		"Looking for audio devices..." => "Buscando dispositivos de audio...",
 		"Looking for audio devices…" => "Buscando dispositivos de audio…",
-		"Could not start audio device discovery" => "No se pudieron buscar los dispositivos de audio",
+		"Could not start audio device discovery" => {
+			"No se pudieron buscar los dispositivos de audio"
+		}
 		"Audio devices loaded · headphones avoid microphone echo" => {
 			"Dispositivos de audio cargados · los auriculares evitan el eco del micrófono"
 		}
@@ -1743,7 +1791,9 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Enter a username" => "Escribe un nombre de usuario",
 		"Sending…" => "Enviando…",
 		"Send Friend Request" => "Enviar solicitud de amistad",
-		"Offline demo · actions are simulated." => "Vista previa sin conexión · las acciones son simuladas.",
+		"Offline demo · actions are simulated." => {
+			"Vista previa sin conexión · las acciones son simuladas."
+		}
 		"Reconnect before sending a friend request." => {
 			"Reconéctate antes de enviar una solicitud de amistad."
 		}
@@ -1855,7 +1905,9 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Leaving…" => "Saliendo…",
 		"Leave Server" => "Salir del servidor",
 		"Close" => "Cerrar",
-		"Offline preview · no server changes" => "Vista previa sin conexión · sin cambios en el servidor",
+		"Offline preview · no server changes" => {
+			"Vista previa sin conexión · sin cambios en el servidor"
+		}
 		"Remove From Favorites" => "Quitar de favoritos",
 		"Add To Favorites" => "Añadir a favoritos",
 		"Favorites are saved on this device." => "Los favoritos se guardan en este dispositivo.",
@@ -1896,9 +1948,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 			"Busca paquetes y actualizaciones. Nada se instala solo."
 		}
 		"Import package…" => "Importar paquete…",
-		"Open a package file from this computer." => {
-			"Abrir un archivo de paquete de este equipo."
-		}
+		"Open a package file from this computer." => "Abrir un archivo de paquete de este equipo.",
 		"No matches" => "Sin resultados",
 		"No themes yet" => "Aún no hay temas",
 		"No extensions yet" => "Aún no hay extensiones",
@@ -1918,9 +1968,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Back to theme editor" => "Volver al editor",
 		"Customize" => "Personalizar",
 		"Use theme" => "Usar tema",
-		"Apply this installed theme to the app." => {
-			"Aplica este tema instalado a la app."
-		}
+		"Apply this installed theme to the app." => "Aplica este tema instalado a la app.",
 		"Edit theme" => "Editar tema",
 		"Open tool" => "Abrir herramienta",
 		"Disable" => "Desactivar",
@@ -1967,9 +2015,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Allow this extension to" => "Permitir que esta extensión",
 		"Enable this theme" => "Activar este tema",
 		"Enable this extension" => "Activar esta extensión",
-		"Everything it may touch is listed below." => {
-			"Todo lo que puede tocar está listado abajo."
-		}
+		"Everything it may touch is listed below." => "Todo lo que puede tocar está listado abajo.",
 		"Allow every listed permission to continue." => {
 			"Permite todos los permisos listados para continuar."
 		}
@@ -2048,9 +2094,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Back" => "Atrás",
 		"Working…" => "Trabajando…",
 		"Theme details" => "Detalles del tema",
-		"How your theme appears in the gallery." => {
-			"Cómo aparece tu tema en la galería."
-		}
+		"How your theme appears in the gallery." => "Cómo aparece tu tema en la galería.",
 		"Theme name" => "Nombre del tema",
 		"My theme" => "Mi tema",
 		"Theme name is required." => "El nombre del tema es obligatorio.",
@@ -2137,9 +2181,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Timestamps and supporting text" => "Horas y textos de apoyo",
 		"Channel, conversation and member lists" => "Listas de canales, conversaciones y miembros",
 		"Background behind your messages" => "Fondo detrás de tus mensajes",
-		"Use the default color for this appearance" => {
-			"Usar el color original de esta apariencia"
-		}
+		"Use the default color for this appearance" => "Usar el color original de esta apariencia",
 		"Use #RRGGBB or #RRGGBBAA." => "Usa #RRGGBB o #RRGGBBAA.",
 		"Horizontal" => "Horizontal",
 		"Vertical" => "Vertical",
@@ -2176,9 +2218,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Add a theme name and creator name before saving." => {
 			"Añade nombre del tema y del creador antes de guardar."
 		}
-		"Add a license and version before saving." => {
-			"Añade licencia y versión antes de guardar."
-		}
+		"Add a license and version before saving." => "Añade licencia y versión antes de guardar.",
 		"Check the license, version, and optional source URL." => {
 			"Revisa la licencia, la versión y la URL de origen opcional."
 		}
@@ -2195,9 +2235,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Reconnect to load server settings." => "Reconéctate para cargar los ajustes.",
 		"Load server settings" => "Cargar ajustes",
 		"Discard unsaved changes?" => "¿Descartar cambios sin guardar?",
-		"Your changes to this server will be lost." => {
-			"Tus cambios en este servidor se perderán."
-		}
+		"Your changes to this server will be lost." => "Tus cambios en este servidor se perderán.",
 		"Wait for the current save to finish before closing." => {
 			"Espera a que termine el guardado actual antes de cerrar."
 		}
@@ -2307,9 +2345,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 			"Los atajos del compositor solo funcionan mientras escribes."
 		}
 		"Text Formatting" => "Formato de texto",
-		"Apply or remove formatting in the composer." => {
-			"Aplica o quita formato en el compositor."
-		}
+		"Apply or remove formatting in the composer." => "Aplica o quita formato en el compositor.",
 		"Global availability" => "Disponibilidad global",
 		"Show Keyboard Shortcuts List" => "Mostrar lista de atajos",
 		"Switch Conversation" => "Cambiar de conversación",
@@ -2414,7 +2450,9 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"App preferences were not saved. If your acceptance of the terms was not recorded, Nivra will ask again next launch." => {
 			"Las preferencias de la aplicación no se guardaron. Si tu aceptación de los términos no quedó registrada, Nivra volverá a preguntar la próxima vez que se abra."
 		}
-		"Your session expired; sign in again to continue." => "Tu sesión expiró; inicia sesión de nuevo para continuar.",
+		"Your session expired; sign in again to continue." => {
+			"Tu sesión expiró; inicia sesión de nuevo para continuar."
+		}
 		"I understand — continue" => "Entendido — continuar",
 		"Zoom" => "Zoom",
 		"Scales text and controls across the app." => {
@@ -2620,6 +2658,33 @@ mod tests {
 			"Edit message",
 			"Remove from delete selection",
 			"Select for batch delete",
+			"Select",
+			"selected",
+			"Shift+click selects a range · drag paints · Esc exits",
+			"Esc stops the rest",
+			"Stop",
+			"Delete",
+			"Download",
+			"Save .txt",
+			"Select all visible",
+			"Select messages to enable actions",
+			"None of the selected messages can be deleted",
+			"Maximum 5 messages per delete",
+			"No attachments in the selection",
+			"Maximum 15 attachments per download",
+			"Downloads",
+			"Choose a folder…",
+			"Queued",
+			"Downloading",
+			"Done",
+			"Failed",
+			"Cancelled",
+			"Retry",
+			"Open folder",
+			"Selection copied",
+			"Selection saved",
+			"Download complete",
+			"Download cancelled",
 			"You can select up to 5 messages at a time.",
 			"Delete message…",
 			"Delete message immediately",

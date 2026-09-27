@@ -3,16 +3,22 @@ use super::egui;
 
 pub struct State {
 	pub hidden: bool,
+	pub hide_notice_shown: bool,
 	exiting: bool,
 	close_after_show: bool,
 	/// Compositor IPC for Wayland sessions where winit can neither hide nor minimize (Hyprland).
 	compositor: Option<platform::compositor::Hider>,
 }
 
+pub fn should_show_hide_notice(tray_available: bool, setting_enabled: bool, already_shown: bool, just_hidden: bool) -> bool {
+	tray_available && setting_enabled && just_hidden && !already_shown
+}
+
 impl Default for State {
 	fn default() -> Self {
 		Self {
 			hidden: false,
+			hide_notice_shown: false,
 			exiting: false,
 			close_after_show: false,
 			compositor: platform::compositor::Hider::detect(),
@@ -115,5 +121,19 @@ impl State {
 		if std::mem::take(&mut self.close_after_show) {
 			ctx.send_viewport_cmd(egui::ViewportCommand::Close);
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::should_show_hide_notice;
+
+	#[test]
+	fn hide_notice_only_on_first_available_hide_with_setting_on() {
+		assert!(should_show_hide_notice(true, true, false, true));
+		assert!(!should_show_hide_notice(true, true, true, true), "already shown");
+		assert!(!should_show_hide_notice(false, true, false, true), "tray unavailable");
+		assert!(!should_show_hide_notice(true, false, false, true), "setting off");
+		assert!(!should_show_hide_notice(true, true, false, false), "not hidden");
 	}
 }

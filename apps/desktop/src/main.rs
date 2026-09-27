@@ -1449,6 +1449,7 @@ impl Desktop {
 			.last()
 			.map_or(10_000, |m| m.id.0.max(10_000));
 		let mut messaging = ui::MessagingUi::default();
+		messaging.minimize_to_tray = true;
 		let preference_defaults = local_store::AppPreferences::default();
 		messaging.notifications_enabled = preference_defaults.notifications_enabled;
 		messaging.transparency = preference_defaults.transparency;
@@ -2590,7 +2591,7 @@ impl Desktop {
 		}
 		#[cfg(not(target_os = "linux"))]
 		{
-			self.tray.is_some()
+			self.tray.is_some() || platform::tray::supported()
 		}
 	}
 	fn presence_snapshot(&self) -> model::OwnPresence {
@@ -5952,6 +5953,21 @@ impl eframe::App for Desktop {
 			self.tray_available(),
 			self.window.is_visible().is_some(),
 		);
+		if tray_window::should_show_hide_notice(
+			self.tray_available(),
+			self.tray_setting.enabled,
+			self.tray_window.hide_notice_shown,
+			self.tray_window.hidden,
+		) {
+			self.tray_window.hide_notice_shown = true;
+			self.messaging.toasts.push(
+				ui::design::Level::Info,
+				ui::i18n::text(
+					self.messaging.language,
+					"Nivra keeps running in the system tray",
+				),
+			);
+		}
 		// The hide command lands after this frame, so the flag leads reported visibility.
 		// Occlusion can occur during macOS fullscreen transitions; it is not a request
 		// to stop playback (which would also restore the window out of fullscreen).

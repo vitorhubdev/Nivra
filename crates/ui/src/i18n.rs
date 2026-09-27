@@ -153,6 +153,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		}
 		"Keep Nivra in the menu bar" => "Manter o Nivra na barra de menus",
 		"Keep Nivra in the system tray" => "Manter o Nivra na bandeja do sistema",
+		"Nivra keeps running in the system tray" => "O Nivra continua na bandeja",
 		"The tray is unavailable on this platform." => {
 			"A bandeja do sistema não está disponível nesta plataforma."
 		}
@@ -1379,6 +1380,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		}
 		"Keep Nivra in the menu bar" => "Mantener Nivra en la barra de menús",
 		"Keep Nivra in the system tray" => "Mantener Nivra en la bandeja del sistema",
+		"Nivra keeps running in the system tray" => "Nivra sigue en la bandeja",
 		"The tray is unavailable on this platform." => {
 			"La bandeja del sistema no está disponible en esta plataforma."
 		}
@@ -2585,6 +2587,7 @@ mod tests {
 			"Closing the window keeps Nivra in the menu bar. Quit from its menu to exit.",
 			"Closing keeps Nivra running. Use the tray to show, minimize or quit.",
 			"Closing the window keeps Nivra in the notification area. Quit from its menu to exit.",
+			"Nivra keeps running in the system tray",
 			"Takes effect the next time Nivra starts.",
 			"Use a different account",
 			"Waiting for Discord…",

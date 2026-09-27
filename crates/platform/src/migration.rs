@@ -628,7 +628,8 @@ public static class {class} {{
         class = NEW_SHORTCUT_CLASS,
         appid = super::SERVICE,
     );
-    std::process::Command::new("powershell")
+    // Absolute System32 PowerShell + CREATE_NO_WINDOW (Hidden alone still flashes).
+    crate::processes::powershell_hidden()
         .args([
             "-NoProfile",
             "-NonInteractive",

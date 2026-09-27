@@ -4099,6 +4099,21 @@ impl Desktop {
 			}
 			static STARTED: std::sync::Once = std::sync::Once::new();
 			STARTED.call_once(|| {
+				// Skip PowerShell entirely when the link already exists (no flash on every open).
+			if std::env::var_os("APPDATA")
+					.map(std::path::PathBuf::from)
+					.map(|roaming| {
+						roaming
+							.join("Microsoft")
+							.join("Windows")
+							.join("Start Menu")
+							.join("Programs")
+							.join("Nivra.lnk")
+					})
+					.is_some_and(|p| p.is_file())
+				{
+					return;
+				}
 				let script = r#"
 $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Nivra.lnk'
 if (Test-Path -LiteralPath $shortcut) { exit 0 }
@@ -4141,7 +4156,9 @@ public static class NivraShortcut {
 '@
 [NivraShortcut]::SetAppId($shortcut)
 "#;
-				let _ = std::process::Command::new("powershell")
+				// Absolute System32 PowerShell + CREATE_NO_WINDOW (Hidden alone still flashes:
+				// the console is created before PowerShell hides itself).
+				let _ = platform::processes::powershell_hidden()
 					.args([
 						"-NoProfile",
 						"-NonInteractive",

@@ -11,6 +11,24 @@ pub fn running() -> std::io::Result<Vec<String>> {
 	native::running()
 }
 
+/// Absolute PowerShell 5.1 with no console window (no flash).
+/// All Windows `powershell` launches in apps/ and crates/ must go through here:
+/// fixed `System32` path (not PATH) + `CREATE_NO_WINDOW` (Hidden alone still flashes
+/// because the console is created before PowerShell hides itself).
+#[cfg(target_os = "windows")]
+pub fn powershell_hidden() -> std::process::Command {
+	use std::os::windows::process::CommandExt;
+	const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+	let root = std::env::var_os("SystemRoot")
+		.map(std::path::PathBuf::from)
+		.unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
+	let mut cmd = std::process::Command::new(
+		root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
+	);
+	cmd.creation_flags(CREATE_NO_WINDOW);
+	cmd
+}
+
 fn accept(path: &str, into: &mut Vec<String>) {
 	let path = path.trim();
 	if path.is_empty()

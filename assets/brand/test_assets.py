@@ -620,6 +620,22 @@ class RepositoryGuardTest(unittest.TestCase):
                     break
         self.assertEqual(found, [], 'nomes antigos fora das 5 excecoes: ' + '; '.join(found))
 
+    def test_no_direct_powershell_launch(self):
+        """PowerShell direto pisca (Hidden cria console antes de esconder).
+        Tudo em apps//crates/ deve usar processes::powershell_hidden() (absoluto +
+        CREATE_NO_WINDOW). Falhava em main.rs:4144 e migration.rs:631."""
+        bad = []
+        for base in ('apps', 'crates'):
+            for path in sorted((ROOT / base).rglob('*.rs')):
+                try:
+                    lines = path.read_text(encoding='utf-8').splitlines()
+                except (UnicodeDecodeError, OSError):
+                    continue
+                for n, line in enumerate(lines, start=1):
+                    if 'Command::new("powershell")' in line:
+                        bad.append(f"{path.relative_to(ROOT).as_posix()}:{n}")
+        self.assertEqual(bad, [], 'powershell direto sem helper (pisca): ' + '; '.join(bad))
+
 
 if __name__ == '__main__':
     unittest.main()

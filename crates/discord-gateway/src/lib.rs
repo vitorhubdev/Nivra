@@ -1423,12 +1423,17 @@ async fn run_inner(
 											let (entries, replace) = snapshot.entries();
 											notification_preferences(entries, replace)
 										});
-										emit(Event::Startup(Box::new(client_core::Startup {
-											external_stickers: matches!(ready.user.premium_type, model::Patch::Value(2 | 3)),
-											user: ready.user.into_model(), guilds, channels, permissions,
-											read_state: client_core::read_state::Event::Snapshot {entries:read_entries,version:read_version,partial},
-											notifications, session_dnd: ready.sessions.as_ref().and_then(|s| s.dnd()), warnings,
-										}.prepare()?)))?;
+											// READY carries the owner's `premium_type` exactly like USER_UPDATE,
+											// so seed the Nitro entitlement here instead of waiting for a profile
+											// change to arrive; otherwise a Nitro owner keeps the plain limit.
+											let entitlement = Event::StickerEntitlement { user: ready.user.id, premium_type: ready.user.premium_type.clone() };
+											emit(Event::Startup(Box::new(client_core::Startup {
+												external_stickers: matches!(ready.user.premium_type, model::Patch::Value(2 | 3)),
+												user: ready.user.into_model(), guilds, channels, permissions,
+												read_state: client_core::read_state::Event::Snapshot {entries:read_entries,version:read_version,partial},
+												notifications, session_dnd: ready.sessions.as_ref().and_then(|s| s.dnd()), warnings,
+											}.prepare()?)))?;
+											emit(entitlement)?;
 										// A new session does not replay settings changed while disconnected.
 										if was_ready { emit(Event::AccountSettings { status: true, folders: true })?; }
 										was_ready = true;
@@ -2403,6 +2408,9 @@ mod tests {
 							sessions.lock().unwrap().push(session.to_string());
 							return Ok(());
 						}
+						// READY also seeds the owner Nitro entitlement; it is not part of
+						// this session-transition assertion.
+						Event::StickerEntitlement { .. } => return Ok(()),
 						Event::Startup(_) => "ready",
 						Event::Resumed => "resumed",
 						Event::DirectPresence(_) => "presence",

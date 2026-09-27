@@ -4244,6 +4244,97 @@ mod tests {
 		assert_eq!(nitro.message_char_limit(), MAX_CONTENT_NITRO);
 	}
 
+	fn nitro_dm_state(premium_type: Patch<u8>) -> State {
+		let mut state = nitro_state(premium_type);
+		state.auth = auth::AuthState::Authenticated;
+		state.gateway_connected = true;
+		state.freshness = Freshness::Fresh;
+		state.channels = vec![Channel {
+			id: Id(20),
+			guild: None,
+			parent_id: None,
+			kind: 1,
+			name: "Synthetic DM".into(),
+			position: 0,
+			recipients: vec![],
+			last_message: None,
+			icon: None,
+			member_list_id: None,
+			message_count: None,
+		}];
+		state.selected = Some(Id(20));
+		let author = state.user.clone().expect("nitro owner");
+		state.timeline
+			.insert(
+				model::Message {
+					sticker_items: vec![],
+					id: Id(100),
+					channel: Id(20),
+					kind: 0,
+					author,
+					content: "Synthetic own message".into(),
+					reactions: Some(vec![]),
+					edited: false,
+					edited_at: None,
+					revision: 0,
+					nonce: None,
+					reply_to: None,
+					reply_deleted: false,
+					interaction: None,
+					forwarded: false,
+					unsupported: false,
+					components: vec![],
+					application_id: None,
+					flags: 0,
+					ephemeral: false,
+					extra_content: Default::default(),
+					embeds: vec![],
+					attachments: vec![],
+					author_nick: None,
+					author_roles: vec![],
+					mention_roles: vec![],
+					mention_everyone: false,
+					suppress_notifications: false,
+					mentions: vec![],
+					embeds_suppressed: false,
+				},
+				false,
+				false,
+			)
+			.unwrap();
+		state
+	}
+
+	#[test]
+	fn nitro_edit_uses_full_limit() {
+		let mut nitro = nitro_dm_state(Patch::Value(2));
+		assert!(nitro.prepare_edit(Id(20), Id(100), "x".repeat(3000)).is_some());
+		let mut plain = nitro_dm_state(Patch::Absent);
+		assert!(plain.prepare_edit(Id(20), Id(100), "x".repeat(3000)).is_none());
+		assert!(plain.prepare_edit(Id(20), Id(100), "x".repeat(1500)).is_some());
+	}
+
+	#[test]
+	fn message_length_counts_unicode_scalar_values() {
+		// Precomposed é is one scalar; decomposed e + combining acute is two.
+		assert_eq!("café".chars().count(), 4);
+		assert_eq!("cafe\u{301}".chars().count(), 5);
+		// ZWJ family: one grapheme but seven scalars; flag: two scalars.
+		assert_eq!("👨‍👩‍👧‍👦".chars().count(), 7);
+		assert_eq!("🇧🇷".chars().count(), 2);
+		// The send gate follows the same counting: emoji-heavy text at
+		// exactly 2000 scalar values still sends; one scalar more does not.
+		let mut state = dm_state();
+		state.drafts.insert(Id(1), "👨‍👩‍👧‍👦".repeat(285));
+		assert!(state.prepare_send().is_some());
+		state.drafts.insert(Id(1), "👨‍👩‍👧‍👦".repeat(286));
+		assert!(state.prepare_send().is_none());
+		state.drafts.insert(Id(1), "é".repeat(2000));
+		assert!(state.prepare_send().is_some());
+		state.drafts.insert(Id(1), "é".repeat(2001));
+		assert!(state.prepare_send().is_none());
+	}
+
 	fn dm_state() -> State {
 		State {
 			channels: vec![Channel {

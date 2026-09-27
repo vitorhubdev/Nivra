@@ -3249,10 +3249,12 @@ impl MessagingUi {
                                 && !application_command
                                 && self.long_text_dialog.is_none()
                                 && count_before > state.message_char_limit()
+                                && state.can_attach(channel)
                             {
                                 // Over-limit text is renamed and sent as `.txt` instead of
-                                // being cut or rejected. The dialog opens below once the
-                                // fresh buffer is in scope.
+                                // being cut or rejected, but only where the account may
+                                // attach files; the dialog opens on the next repaint once
+                                // the fresh buffer is in scope.
                                 self.long_text_send_requested = true;
                             } else if self.send_application_command(state, channel, commands)
                                 || self.handle_builtin_slash(state, channel, ctx, commands) {
@@ -5100,6 +5102,53 @@ mod composer_tests {
 		let staged = view.long_text_attachment.as_ref().expect("staged file");
 		assert_eq!(staged.filename, "notes.txt");
 		assert_eq!(staged.bytes, text.into_bytes());
+	}
+
+	#[test]
+	fn over_limit_text_offers_file_only_where_attachments_fit() {
+		let ctx = egui::Context::default();
+		// Control: DM allows attachments, so the rename dialog opens.
+		let mut state = dm_state();
+		state.drafts.insert(Id(1), "x".repeat(2500));
+		let mut view = MessagingUi::default();
+		ctx.run_ui(Default::default(), |ui| {
+			view.composer(ui, &mut state, Id(1), &ctx, &mut vec![]);
+			ctx.memory_mut(|m| m.request_focus(ui.make_persistent_id("message-input")));
+		})
+		.drop_without_applying_deltas();
+		edit_frame(&ctx, &mut view, &mut state, vec![edit_key(egui::Key::Enter)]);
+		// The rename dialog is built on the repaint that follows the Send gesture.
+		edit_frame(&ctx, &mut view, &mut state, vec![]);
+		assert!(view.long_text_dialog.is_some(), "DM offers message.txt");
+		// Gated: guild channel without attach permission never opens it.
+		let mut denied = dm_state();
+		denied.channels.push(model::Channel {
+			id: Id(20),
+			guild: Some(Id(9)),
+			parent_id: None,
+			kind: 0,
+			name: "no-attach".into(),
+			position: 1,
+			recipients: vec![],
+			last_message: None,
+			icon: None,
+			member_list_id: None,
+			message_count: None,
+		});
+		denied.selected = Some(Id(20));
+		denied.drafts.insert(Id(20), "x".repeat(2500));
+		let mut denied_view = MessagingUi::default();
+		ctx.run_ui(Default::default(), |ui| {
+			denied_view.composer(ui, &mut denied, Id(20), &ctx, &mut vec![]);
+			ctx.memory_mut(|m| m.request_focus(ui.make_persistent_id("message-input")));
+		})
+		.drop_without_applying_deltas();
+		edit_frame(&ctx, &mut denied_view, &mut denied, vec![edit_key(egui::Key::Enter)]);
+		edit_frame(&ctx, &mut denied_view, &mut denied, vec![]);
+		assert!(
+			denied_view.long_text_dialog.is_none(),
+			"no attach permission, no dialog"
+		);
 	}
 
 	#[test]

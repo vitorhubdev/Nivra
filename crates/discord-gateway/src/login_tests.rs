@@ -370,3 +370,77 @@ async fn invalid_owner_identity_or_session_never_emits_startup() {
 		.unwrap();
 	}
 }
+
+#[tokio::test]
+async fn ready_premium_type_seeds_full_nitro_limit() {
+	// Nitro reaches the client only through USER_UPDATE today; READY carries
+	// the same premium_type but never seeds it, so a Nitro owner keeps the
+	// 2000-character limit until some profile change happens to arrive.
+	timeout(Duration::from_secs(10), async {
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+		let saw_entitlement = std::sync::Arc::new(AtomicBool::new(false));
+		let server = async {
+			let (stream, _) = listener.accept().await.unwrap();
+			let mut socket = accept_async(stream).await.unwrap();
+			send(
+				&mut socket,
+				json!({"op":10,"d":{"heartbeat_interval":1000}}),
+			)
+			.await;
+			assert_eq!(packet(&mut socket).await["op"], 2);
+			send(
+				&mut socket,
+				json!({"op":0,"t":"READY","s":1,"d":{
+					"user":{"id":"1","username":"Synthetic owner","premium_type":2},
+					"session_id":"synthetic-nitro-login",
+					"resume_gateway_url":"wss://gateway.discord.gg/",
+					"guilds":[],"private_channels":[]
+				}}),
+			)
+			.await;
+			loop {
+				let heartbeat = packet(&mut socket).await;
+				assert_eq!(heartbeat["op"], 1);
+				send(&mut socket, json!({"op":11,"d":null})).await;
+				if heartbeat["d"] == 1 {
+					break;
+				}
+			}
+			socket
+				.close(Some(CloseFrame {
+					code: CloseCode::Library(4004),
+					reason: "synthetic stop".into(),
+				}))
+				.await
+				.unwrap();
+		};
+		let seen = saw_entitlement.clone();
+		let client = run_inner(
+			Arc::new(
+				SessionSecret::from_owner_input("synthetic-nitro-secret".into()).unwrap(),
+			),
+			"wss://gateway.discord.gg/".into(),
+			watch::channel(None).1,
+			mpsc::channel(1).1,
+			None,
+			|event| {
+				if let client_core::Event::StickerEntitlement { user, premium_type } = &event {
+					if user.0 == 1 && matches!(premium_type, model::Patch::Value(2)) {
+						seen.store(true, Ordering::Relaxed);
+					}
+				}
+				Ok(())
+			},
+			Some(&endpoint),
+		);
+		let ((), result) = tokio::join!(server, client);
+		assert_eq!(result, Err(Failure::Expired), "only the synthetic close may terminate login");
+		assert!(
+			saw_entitlement.load(Ordering::Relaxed),
+			"READY must seed the owner entitlement"
+		);
+	})
+	.await
+	.expect("synthetic login exceeded its bounded deadline");
+}

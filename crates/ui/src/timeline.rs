@@ -53,6 +53,10 @@ pub struct TimelineView {
 	pub(super) edit_started: bool,
 	pub(super) reply_started: bool,
 	pub(super) quick_delete: Option<(Id, Id)>,
+	/// In-place editor state; the composer tuple stays empty while this is open.
+	pub(super) inline_edit: Option<InlineEdit>,
+	/// Inline commit waiting for the command poll (`prepare_edit`).
+	pub(super) inline_commit: Option<(Id, Id, String)>,
 	/// Smart-select mode: column always reserved, boxes fade, Esc/Cancel exits.
 	pub(super) select_mode: bool,
 	pub(super) select_anchor: Option<Id>,
@@ -756,6 +760,22 @@ fn action_button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> eg
 
 const MAX_BATCH_DELETE: usize = 5;
 
+/// Live-edge follow decision: an open in-place editor freezes autoscroll so
+/// new arrivals hold the viewport instead of shifting the edited row.
+fn follow_at_bottom(at_bottom: bool, target_browsing: bool, editing: bool) -> bool {
+	at_bottom && !target_browsing && !editing
+}
+
+/// In-place message editor: the row becomes a TextEdit where the message was.
+/// Enter saves, Esc cancels, Shift+Enter breaks the line.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(super) struct InlineEdit {
+	pub channel: Id,
+	pub message: Id,
+	pub text: String,
+	pub focus_requested: bool,
+}
+
 impl TimelineView {
 	/// Enter smart-select, optionally seeding the selection. Column space is
 	/// identical in and out of mode, so rows never shift.
@@ -773,6 +793,118 @@ impl TimelineView {
 		self.select_mode = false;
 		self.select_anchor = None;
 		self.batch_delete.clear();
+	}
+	/// Open the in-place editor on this row, invalidating only its cached
+	/// height so the rest of the list never shifts.
+	pub(super) fn enter_inline_edit(&mut self, channel: Id, message: Id, text: String) {
+		self.inline_edit = Some(InlineEdit {
+			channel,
+			message,
+			text,
+			focus_requested: true,
+		});
+		self.heights.remove(&message);
+	}
+	/// Close the in-place editor without saving.
+	pub(super) fn cancel_inline_edit(&mut self) {
+		if let Some(edit) = self.inline_edit.take() {
+			self.heights.remove(&edit.message);
+		}
+	}
+	/// Close the editor after an accepted commit, dropping only its row height.
+	fn finish_inline_edit(&mut self, message: Id) {
+		if self.inline_edit.as_ref().is_some_and(|edit| edit.message == message) {
+			self.inline_edit = None;
+		}
+		self.heights.remove(&message);
+	}
+	/// Validate and emit the pending inline commit, closing the editor on success.
+	/// A rejected edit keeps the draft open with the reason on the status line.
+	pub(super) fn poll_inline_commit(&mut self, state: &mut State) -> Option<client_core::Command> {
+		let (channel, message, content) = self.inline_commit.take()?;
+		if state.freshness == model::Freshness::Fresh
+			&& let Some(command) = state.prepare_edit(channel, message, content)
+		{
+			self.finish_inline_edit(message);
+			Some(command)
+		} else {
+			state.status = "Edit kept. Wait for your current message and connection, and enter nonempty text.";
+			None
+		}
+	}
+	/// In-place editor for the row under edit: multiline TextEdit where the
+	/// message was, so entering, saving or cancelling never moves other rows.
+	/// Enter saves, Esc cancels, Shift+Enter keeps its newline.
+	pub(super) fn inline_editor(&mut self, ui: &mut egui::Ui, id: Id) -> egui::Rect {
+		// No cached height while editing: the row tracks the draft every frame.
+		self.heights.remove(&id);
+		let Some(edit) = self.inline_edit.as_mut() else {
+			return egui::Rect::NOTHING;
+		};
+	let editor_id = ui.make_persistent_id(("inline-edit", id));
+	// Consume the keys before the widget sees them. `consume_key` matches
+	// logically (extra Shift is ignored), so plain Enter is gated on the
+	// event itself: Shift+Enter falls through as a newline. The framework
+	// clears focus on Escape before widgets run, so Esc also fires when
+	// nothing holds focus; a widget holding focus keeps its own Esc.
+	let focused = ui.ctx().memory(|memory| memory.focused() == Some(editor_id));
+	let unfocused = ui.ctx().memory(|memory| memory.focused().is_none());
+	let mut commit = false;
+	let mut cancel = false;
+	if focused {
+		let plain_enter = ui.input(|input| {
+			input.events.iter().any(|event| {
+				matches!(
+					event,
+						egui::Event::Key {
+							key: egui::Key::Enter,
+							pressed: true,
+							modifiers,
+							..
+						} if !modifiers.shift
+				)
+			})
+		});
+		if plain_enter
+			&& ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+		{
+			commit = true;
+		}
+	}
+	if focused || unfocused {
+		if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+			cancel = true;
+		}
+	}
+		let response = egui::TextEdit::multiline(&mut edit.text)
+			.id(editor_id)
+			.desired_width(f32::INFINITY)
+			.desired_rows(1)
+			.show(ui)
+			.response;
+		if edit.focus_requested {
+			edit.focus_requested = false;
+			response.request_focus();
+		}
+		if response.changed() {
+			self.heights.remove(&id);
+		}
+		ui.label(
+			egui::RichText::new(crate::i18n::text(
+				self.language,
+					"Enter to save · Shift+Enter for a new line · Esc to cancel",
+				))
+				.small()
+				.color(crate::design::palette(ui).muted),
+		);
+		if cancel {
+			self.cancel_inline_edit();
+		} else if commit {
+			let text = edit.text.clone();
+			let (channel, message) = (edit.channel, edit.message);
+			self.inline_commit = Some((channel, message, text));
+		}
+		response.rect
 	}
 	/// Sum cached row heights for echoed ids, forgetting their removal fades.
 	/// Callers add the result to the scroll offset so the viewport holds still.
@@ -869,6 +1001,7 @@ fn message_actions(
 		&mut Option<Id>,
 	),
 	editing: (&mut Option<(Id, Id, String)>, &mut bool),
+	inline_edit: &mut Option<InlineEdit>,
 	deleting: &mut Option<(Id, Id)>,
 	batch_delete: &mut BTreeSet<Id>,
 	select: (&mut bool, &mut Option<Id>),
@@ -1041,7 +1174,15 @@ fn message_actions(
 				)
 				.clicked()
 		{
-			*editing = Some((message.channel, message.id, message.content.clone()));
+			// The message becomes its own editor in place; the composer
+			// tuple stays empty. Height invalidation happens on the row.
+			*editing = None;
+			*inline_edit = Some(InlineEdit {
+				channel: message.channel,
+				message: message.id,
+				text: message.content.clone(),
+				focus_requested: true,
+			});
 			*edit_started = true;
 			ui.close();
 		}
@@ -2503,6 +2644,15 @@ impl TimelineView {
 											} else {
 												None
 											};
+											// The row under edit becomes its own editor; embeds and
+											// attachments below keep flowing unchanged. Painted
+											// before the formatted borrow so only this row re-measures.
+											let editing_inline = self.inline_edit.as_ref().is_some_and(
+												|edit| edit.channel == message.channel && edit.message == id,
+											);
+											if editing_inline {
+												text_line = self.inline_editor(ui, id);
+											}
 											let formatted =
 												self.formatted.get(id, &message.content);
 											let reveal = self
@@ -2517,7 +2667,7 @@ impl TimelineView {
 											let mut media = before.1;
 											let content_shown =
 												system.as_ref().is_some_and(|s| s.content_shown);
-											if !content_shown
+											if !editing_inline && !content_shown
 												&& !(self.hide_media_links
 													&& crate::embeds::standalone_media_links(
 														message,
@@ -3279,8 +3429,9 @@ impl TimelineView {
 										can_mark_unread.then_some(&mut self.mark_unread),
 										&mut selected_reply,
 									),
-									(editing, &mut self.edit_started),
-									deleting,
+								(editing, &mut self.edit_started),
+								&mut self.inline_edit,
+								deleting,
 								&mut self.batch_delete,
 								(&mut self.select_mode, &mut self.select_anchor),
 								&mut self.save_txt_request,
@@ -3457,7 +3608,8 @@ impl TimelineView {
 			}
 		}
 		let was_following = self.following;
-		self.following = at_bottom && !self.target_browsing;
+		self.following =
+			follow_at_bottom(at_bottom, self.target_browsing, self.inline_edit.is_some());
 		if self.following
 			&& self.at_current_latest
 			&& !state.history_targeted
@@ -5049,6 +5201,7 @@ mod tests {
 			let mut thread_request = None;
 			let mut editing = None;
 			let mut edit_started = false;
+			let mut inline_edit = None;
 			let mut deleting = None;
 			let mut batch_delete = BTreeSet::new();
 			let mut select_mode = false;
@@ -5074,6 +5227,7 @@ mod tests {
 							(own, true, true, can_delete),
 							(None, None, &mut reply),
 							(&mut editing, &mut edit_started),
+							&mut inline_edit,
 							&mut deleting,
 							&mut batch_delete,
 							(&mut select_mode, &mut select_anchor),
@@ -5147,15 +5301,200 @@ mod tests {
 				(!own && can_delete).then_some((message.channel, message.id))
 			);
 			if own {
+				assert!(editing.is_none(), "composer stays out of inline edits");
 				assert_eq!(
-					editing,
-					Some((message.channel, message.id, message.content.clone()))
+					inline_edit,
+					Some(InlineEdit {
+						channel: message.channel,
+						message: message.id,
+						text: message.content.clone(),
+						focus_requested: true,
+					})
 				);
 				assert!(edit_started);
 			} else {
 				assert!(editing.is_none() && !edit_started);
+			assert!(inline_edit.is_none());
 			}
 		}
+	}
+
+	#[test]
+	fn inline_edit_invalidates_only_its_row() {
+		let mut view = TimelineView::default();
+		for id in [1u64, 2, 3] {
+			view.heights.insert(Id(id), (1, 20.0));
+		}
+		view.enter_inline_edit(Id(7), Id(2), "hi".into());
+		assert_eq!(
+			view.inline_edit,
+			Some(InlineEdit {
+				channel: Id(7),
+				message: Id(2),
+				text: "hi".into(),
+				focus_requested: true,
+			})
+		);
+		assert!(view.heights.contains_key(&Id(1)));
+		assert!(!view.heights.contains_key(&Id(2)));
+		assert!(view.heights.contains_key(&Id(3)));
+	}
+
+	#[test]
+	fn inline_cancel_clears_and_invalidates() {
+		let mut view = TimelineView::default();
+		for id in [1u64, 2, 3] {
+			view.heights.insert(Id(id), (1, 20.0));
+		}
+		view.enter_inline_edit(Id(7), Id(2), "hi".into());
+		view.cancel_inline_edit();
+		assert!(view.inline_edit.is_none());
+		assert!(view.heights.contains_key(&Id(1)));
+		assert!(!view.heights.contains_key(&Id(2)));
+		assert!(view.heights.contains_key(&Id(3)));
+	}
+
+	#[test]
+	fn inline_follow_freezes_while_editing() {
+		assert!(follow_at_bottom(true, false, false));
+		assert!(!follow_at_bottom(true, false, true));
+		assert!(!follow_at_bottom(false, false, false));
+		assert!(!follow_at_bottom(true, true, false));
+	}
+
+	#[test]
+	fn inline_editor_saves_on_enter_cancels_on_esc() {
+		fn frame(view: &mut TimelineView, ctx: &egui::Context, events: Vec<egui::Event>) {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(400.0, 100.0),
+					)),
+					events,
+					..Default::default()
+				},
+				|ui| {
+					view.inline_editor(ui, Id(1));
+				},
+			);
+			output.drop_without_applying_deltas();
+		}
+		fn key(key: egui::Key, shift: bool) -> egui::Event {
+			egui::Event::Key {
+				key,
+				physical_key: None,
+				pressed: true,
+				repeat: false,
+				modifiers: egui::Modifiers {
+					shift,
+					..Default::default()
+				},
+			}
+		}
+		// Enter saves the draft text.
+		let ctx = egui::Context::default();
+		let mut view = TimelineView::default();
+		view.language = model::Language::English;
+		view.enter_inline_edit(Id(7), Id(1), "hello".into());
+		frame(&mut view, &ctx, vec![]);
+		assert!(view.inline_edit.as_ref().is_some_and(|edit| !edit.focus_requested));
+		assert!(
+			ctx.memory(|memory| memory.focused()).is_some(),
+			"editor takes focus"
+		);
+		frame(&mut view, &ctx, vec![key(egui::Key::Enter, false)]);
+		assert_eq!(
+			view.inline_commit,
+			Some((Id(7), Id(1), "hello".into())),
+			"Enter saves"
+		);
+		// Shift+Enter breaks the line instead. Fresh context per section:
+		// production has one editor per context, never three sharing an id.
+		let shift_ctx = egui::Context::default();
+		let mut shifted = TimelineView::default();
+		shifted.language = model::Language::English;
+		shifted.enter_inline_edit(Id(7), Id(1), "hello".into());
+		frame(&mut shifted, &shift_ctx, vec![]);
+		frame(&mut shifted, &shift_ctx, vec![key(egui::Key::Enter, true)]);
+		assert!(shifted.inline_commit.is_none(), "Shift+Enter must not save");
+		assert!(
+			shifted.inline_edit.as_ref().is_some_and(|edit| edit.text.contains('\n')),
+			"Shift+Enter breaks the line"
+		);
+		// Esc cancels without queuing a commit.
+		let esc_ctx = egui::Context::default();
+		let mut cancelled = TimelineView::default();
+		cancelled.language = model::Language::English;
+		cancelled.enter_inline_edit(Id(7), Id(1), "hello".into());
+		frame(&mut cancelled, &esc_ctx, vec![]);
+		frame(&mut cancelled, &esc_ctx, vec![key(egui::Key::Escape, false)]);
+		assert!(cancelled.inline_edit.is_none(), "Esc cancels");
+		assert!(cancelled.inline_commit.is_none());
+		// Focus survives a quiet repaint: arrivals must not steal it.
+		let focus_ctx = egui::Context::default();
+		let mut focus_view = TimelineView::default();
+		focus_view.language = model::Language::English;
+		focus_view.enter_inline_edit(Id(7), Id(1), "hello".into());
+		frame(&mut focus_view, &focus_ctx, vec![]);
+		let focused = focus_ctx.memory(|memory| memory.focused());
+		assert!(focused.is_some());
+		frame(&mut focus_view, &focus_ctx, vec![]);
+		assert_eq!(focus_ctx.memory(|memory| memory.focused()), focused);
+	}
+
+	#[test]
+	fn inline_commit_emits_edit_and_closes_on_success() {
+		let mut state = State::default();
+		state.auth = client_core::auth::AuthState::Authenticated;
+		state.gateway_connected = true;
+		state.freshness = model::Freshness::Fresh;
+		let author = model::User {
+			id: Id(9),
+			name: "Me".into(),
+			avatar: None,
+			webhook: false,
+			kind: Default::default(),
+			discriminator: 0,
+			primary_guild: None,
+		};
+		state.user = Some(author.clone());
+		state.channels = vec![model::Channel {
+			icon: None,
+			last_message: None,
+			id: Id(20),
+			guild: None,
+			parent_id: None,
+			position: 0,
+			name: "dm".into(),
+			kind: 1,
+			recipients: vec![author.clone()],
+			member_list_id: None,
+			message_count: None,
+		}];
+		let mut message = text_message(1);
+		message.author = author;
+		message.channel = Id(20);
+		state.timeline.insert(message, false, false).unwrap();
+		let mut view = TimelineView::default();
+		view.enter_inline_edit(Id(20), Id(1), "edited".into());
+		view.inline_commit = Some((Id(20), Id(1), "edited".into()));
+		let command = view.poll_inline_commit(&mut state);
+		assert!(
+			matches!(command, Some(client_core::Command::Edit { channel: Id(20), message: Id(1), .. })),
+			"commit emits one edit command"
+		);
+		assert!(view.inline_edit.is_none(), "accepted edits close immediately");
+	}
+
+	#[test]
+	fn inline_commit_keeps_the_draft_when_rejected() {
+		let mut state = State::default();
+		let mut view = TimelineView::default();
+		view.enter_inline_edit(Id(20), Id(1), "edited".into());
+		view.inline_commit = Some((Id(20), Id(1), "edited".into()));
+		assert!(view.poll_inline_commit(&mut state).is_none());
+		assert!(view.inline_edit.is_some(), "rejected edits keep the draft open");
 	}
 
 	#[test]

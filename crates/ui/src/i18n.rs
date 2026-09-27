@@ -311,6 +311,9 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Unpin message" => "Desafixar mensagem",
 		"Pin message" => "Fixar mensagem",
 		"Edit message" => "Editar mensagem",
+		"Enter to save · Shift+Enter for a new line · Esc to cancel" => {
+			"Enter salva · Shift+Enter quebra linha · Esc cancela"
+		},
 		"Remove from delete selection" => "Tirar da seleção",
 		"Select for batch delete" => "Selecionar para apagar",
 		"You can select up to 5 messages at a time." => {
@@ -1553,6 +1556,9 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Unpin message" => "Desfijar mensaje",
 		"Pin message" => "Fijar mensaje",
 		"Edit message" => "Editar mensaje",
+		"Enter to save · Shift+Enter for a new line · Esc to cancel" => {
+			"Enter guarda · Mayús+Enter salta de línea · Esc cancela"
+		},
 		"Remove from delete selection" => "Quitar de la selección",
 		"Select for batch delete" => "Seleccionar para borrar",
 		"You can select up to 5 messages at a time." => {
@@ -2656,6 +2662,7 @@ mod tests {
 			"Unpin message",
 			"Pin message",
 			"Edit message",
+			"Enter to save · Shift+Enter for a new line · Esc to cancel",
 			"Remove from delete selection",
 			"Select for batch delete",
 			"Select",

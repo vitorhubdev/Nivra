@@ -4336,6 +4336,10 @@ impl MessagingUi {
 						{
 							commands.push(command);
 						}
+						// In-place edit commit: same validation as the composer path.
+						if let Some(command) = self.timeline.poll_inline_commit(state) {
+							commands.push(command);
+						}
 						if self.timeline.batch_delete_requested {
 							self.timeline.batch_delete_requested = false;
 							if let Some(channel) = state.selected {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
-// Serein modifications to hpke-rs, 2026.
-// Serein security backport: use RustCrypto SHAKE256 instead of the vulnerable
+// Nivra modifications to hpke-rs, 2026.
+// Nivra security backport: use RustCrypto SHAKE256 instead of the vulnerable
 // libcrux-sha3 dependency pinned by this HPKE release. Same standard XOF output.
 pub(super) fn shake256<const BYTES: usize>(input: &[u8]) -> [u8; BYTES] {
 	use sha3::digest::{ExtendableOutput, Update, XofReader};
@@ -12,7 +12,7 @@ pub(super) fn shake256<const BYTES: usize>(input: &[u8]) -> [u8; BYTES] {
 }
 
 #[test]
-fn serein_shake256_security_backport() {
+fn nivra_shake256_security_backport() {
 	let expected = [
 		70, 185, 221, 43, 11, 168, 141, 19, 35, 59, 63, 235, 116, 62, 235, 36, 63, 205, 82, 234,
 		98, 184, 27, 130, 181, 12, 39, 100, 110, 213, 118, 47, 215, 93, 196, 221, 216, 192, 242, 0,

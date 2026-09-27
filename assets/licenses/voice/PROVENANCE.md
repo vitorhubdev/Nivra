@@ -7,7 +7,7 @@ registry archive SHA-256 `d74371848b22e989f829cc1621d2ebd74960711557d8b45cfe740f
 SHA-256 `20278f4e2697210305f0a25ef5f3b73fecce789096c0ae55287684ea9282cfcb`.
 The library is dynamically linked against the system's libpulse; no PulseAudio server
 or native library is bundled. The resolved WinAPI 0.3.9 and architecture support crates
-are Windows-only declarations of libpulse-sys and are not selected by Serein's Linux
+are Windows-only declarations of libpulse-sys and are not selected by Nivra's Linux
 runtime or macOS development use of these bindings.
 
 Collected September 10, 2026. Except for the separately identified canonical MPL text below, files are unmodified source license/notices, copied from the exact resolved crates.io releases or fetched from the commit recorded in the release's `.cargo_vcs_info.json`. Registry source links identify the shipped source archive; SHA-256 values below verify the copied text. All files are flat for distribution staging.

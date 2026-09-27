@@ -184,7 +184,7 @@ def main():
     scalable.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(master, scalable / "nivra.svg")
     # The symbolic icon is the mark centred on a 1024 canvas with the historic
-    # symbolic margin: the old serein-symbolic kept ~18% padding each side
+    # symbolic margin: the old nivra-symbolic kept ~18% padding each side
     # (bbox 187.56..833.39 x 173.37..826.30, i.e. 645.83 x 652.93 in a 1024 canvas).
     # The mark itself stays tight for the atlas; only the symbolic gets the margin.
     # Scale the mark's N to fit inside that bbox, centred in the canvas.
@@ -200,9 +200,9 @@ def main():
     ys = nums[1::2]
     xmin, xmax = min(xs), max(xs)
     ymin, ymax = min(ys), max(ys)
-    # Historic serein-symbolic bbox size; the N keeps its aspect, centred.
-    SEREIN_W, SEREIN_H = 833.39 - 187.56, 826.30 - 173.37
-    sym_scale = min(SEREIN_W / (xmax - xmin), SEREIN_H / (ymax - ymin))
+    # Historic nivra-symbolic bbox size; the N keeps its aspect, centred.
+    NIVRA_W, NIVRA_H = 833.39 - 187.56, 826.30 - 173.37
+    sym_scale = min(NIVRA_W / (xmax - xmin), NIVRA_H / (ymax - ymin))
     sym_tx = 512.0 - (xmin + xmax) * 0.5 * sym_scale
     sym_ty = 512.0 - (ymin + ymax) * 0.5 * sym_scale
     it = iter(nums)

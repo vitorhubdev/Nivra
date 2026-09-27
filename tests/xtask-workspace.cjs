@@ -10,7 +10,7 @@ const binary = path.resolve(process.env.CARGO_TARGET_DIR || path.join(repo, 'tar
   'debug', process.platform === 'win32' ? 'xtask.exe' : 'xtask');
 assert.ok(fs.existsSync(binary), 'Build xtask first (cargo xtask check)');
 const parent = fs.realpathSync(os.tmpdir());
-const fixture = fs.mkdtempSync(path.join(parent, 'serein-xtask-workspace-'));
+const fixture = fs.mkdtempSync(path.join(parent, 'nivra-xtask-workspace-'));
 function run(program, args, cwd) {
   const result = spawnSync(program, args, {
     cwd, encoding: 'utf8', windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024,
@@ -24,7 +24,7 @@ try {
   fs.mkdirSync(path.join(fixture, 'src'));
   fs.mkdirSync(path.join(fixture, 'apps/desktop/src'), { recursive: true });
   fs.writeFileSync(path.join(fixture, 'Cargo.toml'),
-    '[workspace]\n[package]\nname="serein-xtask-fixture"\nversion="0.0.0"\nedition="2021"\nlicense="MIT"\n');
+    '[workspace]\n[package]\nname="nivra-xtask-fixture"\nversion="0.0.0"\nedition="2021"\nlicense="MIT"\n');
   fs.writeFileSync(path.join(fixture, 'src/lib.rs'), '');
   fs.writeFileSync(path.join(fixture, 'apps/desktop/src/main.rs'), '// Missing persistence controls\n');
   const lock = run('cargo', ['generate-lockfile', '--offline'], fixture);

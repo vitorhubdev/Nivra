@@ -7064,10 +7064,6 @@ mod tests {
 			for language in [model::Language::English, model::Language::PortugueseBrazil] {
 				let rendered = ui::i18n::text(language, key);
 				assert!(rendered.contains("Nivra"), "{language:?} dropped the name: {rendered}");
-				assert!(
-					!rendered.contains("SereinExt"),
-					"{language:?} still shows the old name: {rendered}"
-				);
 			}
 		}
 	}

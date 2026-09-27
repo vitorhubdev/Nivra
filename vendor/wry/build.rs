@@ -10,7 +10,7 @@ fn main() {
 	let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 	assert!(
 		matches!(target_os.as_str(), "windows" | "macos"),
-		"Serein's scoped Wry fork supports Windows/macOS only; Linux uses GTK4/WebKit6"
+		"Nivra's scoped Wry fork supports Windows/macOS only; Linux uses GTK4/WebKit6"
 	);
 	if target_os == "macos" || target_os == "ios" {
 		println!("cargo:rustc-link-lib=framework=WebKit");

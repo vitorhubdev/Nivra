@@ -49,7 +49,7 @@ From the RFC:
 This crate does not implement the cryptographic primitives itself.
 Instead it expects an implementation of the [HpkeCrypto] trait.
 
-This Serein vendor patch retains only the RustCrypto backend declaration; see
+This Nivra vendor patch retains only the RustCrypto backend declaration; see
 [NIVRA-PATCH.md](NIVRA-PATCH.md). Upstream also offers a libcrux backend.
 
 - [RustCrypto backend]: a backend using well established crypto implementations

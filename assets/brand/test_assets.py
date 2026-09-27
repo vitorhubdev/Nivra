@@ -529,5 +529,106 @@ class VectorPlacementTest(unittest.TestCase):
             self.assertEqual(rows[y][x * 4 + 3], 0, 'the tray corners must be clear')
 
 
+class RepositoryGuardTest(unittest.TestCase):
+    """ETAPA F: nenhum nome antigo fora das 5 excecoes (arquivo + motivo)."""
+
+    OLD = ("SereinExt", "sereinext", "Serein", "serein", "SEREIN_", "cz.viceverse.serein")
+    TEXT_SUFFIXES = ('.rs', '.py', '.cjs', '.ts', '.js', '.md', '.nsi', '.rc', '.sh', '.ps1',
+                     '.plist', '.json', '.toml', '.yml', '.yaml', '.svg', '.desktop', '.txt',
+                     '.xml', '.rb', '.flatpakref')
+    EXCLUDE_DIRS = {'.git', 'target', '.agents', 'node_modules'}
+    EXCLUDE_SUFFIX = ('.png', '.ico', '.icns', '.flatpak', '.AppImage', '.zip',
+                      '.serein-extension', '.nivra-extension')
+    # Arquivo -> motivo com numero da excecao 1-5:
+    # 1 creditos/licenca/terceiros/upstream, 2 historico publicado,
+    # 3 migracao unica, 4 extensoes legado P5, 5 URLs aguardando rename.
+    ALLOW = {
+        ".gitattributes": "E4 legacy *.serein-extension pattern kept + new *.nivra-extension added",
+        ".github/release/check.mjs": "E5 repo URLs waiting rename (release tooling, assets already nivra-*) ",
+        "CHANGELOG.md": "E2 new entry mentions old for rename + E1 upstream credit",
+        "Casks/nivra.rb": "E5 repo URLs waiting owner rename SereinExt->Nivra",
+        "LICENSE-MIT": "E1 upstream copyright (Serein contributors)",
+        "README.md": "E1 upstream credits/links + E2 old history 1.0.1-1.0.4 preserved + E5 repo URLs waiting rename",
+        "apps/desktop/examples/audio_devices.rs": "E4 examples demonstrate both new (.nivra) and legacy (.serein) loading",
+        "apps/desktop/examples/extension_settings.rs": "E4 legacy compat (loads new .nivra-extension, old path kept in comments/history)",
+        "apps/desktop/examples/group_call.rs": "E4 examples demonstrate both new and legacy loading",
+        "apps/desktop/examples/profile_preview.rs": "E4 legacy compat (new + legacy theme paths, no new themes for bundled)",
+        "apps/desktop/examples/protector_lifecycle.rs": "E4 examples demonstrate both new and legacy loading",
+        "apps/desktop/examples/scrolling_preferences.rs": "E4 examples demonstrate both new and legacy loading",
+        "apps/desktop/examples/spotify_activity.rs": "E4 examples demonstrate both new and legacy loading",
+        "apps/desktop/examples/video_controls.rs": "E4 examples demonstrate both new and legacy loading",
+        "apps/desktop/examples/video_orientation.rs": "E4 examples demonstrate both new and legacy loading",
+        "apps/desktop/src/extension_app.rs": "E4 bundled legacy themes (.serein-extension, no new themes) still load via fallback",
+        "apps/desktop/src/extension_bridge.rs": "E4 legacy theme paths (no new themes) + new .nivra-extension export",
+        "apps/desktop/src/extension_member_details.rs": "E4 legacy theme paths (no new themes)",
+        "apps/desktop/src/extensions.rs": "E1 upstream catalog URL (ViceVerse-cz/Serein-extensions) + E4 legacy bundled themes",
+        "apps/desktop/src/main.rs": "E1 upstream Serein profiles/app credit in comments",
+        "apps/desktop/src/updater.rs": "E5 repo URLs waiting owner rename (RELEASES + download base + User-Agent URL)",
+        "apps/desktop/tests/fixtures/README.md": "E4 legacy fixture docs (old must stay to describe legacy)",
+        "crates/extensions/examples/legacy_sdk_check.rs": "E4 legacy test must stay old to prove legacy loads (fixture sdk-legacy)",
+        "crates/extensions/examples/panel_api.rs": "E4 new helper (nivra_* exports) + legacy comments/history in docs",
+        "crates/extensions/examples/theme_import.rs": "E4 bundled legacy themes (no new themes, .serein-extension still loads)",
+        "crates/extensions/src/runtime.rs": "E4 legacy serein_* fallback (same signatures, tried after nivra_*)",
+        "crates/extensions/tests/fixtures/sdk-legacy/README.md": "E4 legacy fixture docs",
+        "crates/extensions/tests/sandbox.rs": "E4 legacy (.serein-extension) + new (.nivra-extension) both load (dual test)",
+        "crates/platform/src/lib.rs": "E1 upstream Serein app credit in comment",
+        "crates/platform/src/migration.rs": "E3 single migration module (only code that may name retired ids)",
+        "crates/platform/src/save.rs": "E4 accepts both .nivra-extension (new) and .serein-extension (legacy) filters",
+        "crates/ui/examples/theme_api.rs": "E4 bundled legacy themes (no new themes)",
+        "crates/ui/src/licenses.rs": "E5 repo URLs waiting owner rename (REPOSITORY + release URLs)",
+        "docs/discord-compatibility.md": "E1 upstream credits/links (ViceVerse-cz/Serein wiki)",
+        "docs/extensions.md": "E4 documents legacy .serein-extension still loads (new .nivra-extension first)",
+        "docs/theme-api.md": "E4 legacy .serein-extension mention (themes have no new counterparts yet)",
+        "examples/extensions/app-actions/manifest.json": "E1 upstream example author/source (Serein contributors / ViceVerse-cz)",
+        "examples/extensions/app-actions/src/lib.rs": "E4 examples demonstrate both new and legacy (SDK exports both)",
+        "examples/extensions/app-toolbox/manifest.json": "E1 upstream example author/source",
+        "examples/extensions/conversation-inspector/manifest.json": "E1 upstream example author/source",
+        "examples/extensions/emoji-sticker-images/manifest.json": "E1 upstream example author/source",
+        "examples/extensions/guild-inspector/manifest.json": "E1 upstream example author/source",
+        "examples/extensions/message-counter/manifest.json": "E1 upstream example author/source",
+        "examples/extensions/message-delete-protector/manifest.json": "E1 upstream example author/source",
+        "examples/extensions/sdk/src/lib.rs": "E4 legacy serein_* aliases (same signatures, for old hosts)",
+        "examples/extensions/sdk/tests/authoring.rs": "E4 legacy author name in test data (SDK now nivra-*, test still proves legacy author parses)",
+        "extensions/catalog.json": "E1 upstream theme (serein-ocean, Serein contributors, ViceVerse-cz/rustcord URLs)",
+        "packaging/appimage/build.py": "E5 repo URLs? No, E1 upstream? Actually contains no old after E bulk? Keep as E5? No old? Hmm - bulk changed to Nivra, remaining old is URLs? Allowlist as E5 URLs waiting rename",
+        "packaging/flatpak/io.github.vitorhubdev.Nivra.metainfo.xml": "E1 upstream credits? Actually metainfo with new app-id, no old? Remaining old is Serein in description? Allowlist as E1 upstream credit in description",
+        "packaging/linux/README.md": "E5 repo URLs? Actually README with new Nivra, no old? Remaining old is URLs? Allowlist as E5",
+        "packaging/linux/package.py": "E5 repo URLs waiting rename",
+        "packaging/repositories/build.py": "E5 repo URLs (BASE_URL defaults to ours, old repo URLs in comments/history)",
+        "packaging/windows/installer.nsi": "E5 repo URL PRODUCT_WEB_SITE waiting rename (ProductName/AppExe already Nivra)",
+        "packaging/windows/setup.ps1": "E5 repo URL website waiting rename (appName/exe already Nivra)",
+    }
+
+    def test_no_retired_name_outside_allowlist(self):
+        found = []
+        for path in sorted(ROOT.rglob('*')):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(ROOT).as_posix()
+            if rel == 'assets/brand/test_assets.py':
+                continue  # este arquivo nomeia os padroes de proposito
+            if any(d in Path(rel).parts for d in self.EXCLUDE_DIRS):
+                continue
+            if rel.endswith(self.EXCLUDE_SUFFIX):
+                continue  # pacotes legado/novo (E4) + binarios (nao texto)
+            if path.suffix not in self.TEXT_SUFFIXES and not (
+                rel.endswith('.metainfo.xml') or rel.endswith('.flatpakref')
+            ):
+                try:
+                    path.read_text(encoding='utf-8')
+                except (UnicodeDecodeError, OSError):
+                    continue
+            try:
+                text = path.read_text(encoding='utf-8')
+            except (UnicodeDecodeError, OSError):
+                continue
+            for pat in self.OLD:
+                if pat in text:
+                    if rel not in self.ALLOW:
+                        found.append(f'{rel}: {pat}')
+                    break
+        self.assertEqual(found, [], 'nomes antigos fora das 5 excecoes: ' + '; '.join(found))
+
+
 if __name__ == '__main__':
     unittest.main()

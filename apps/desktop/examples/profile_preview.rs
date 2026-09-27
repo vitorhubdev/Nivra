@@ -206,7 +206,7 @@ fn extension_fixture(
 	let bytes: &[u8] = match id {
 		"serein-ocean" => include_bytes!("../../../extensions/ocean.serein-extension"),
 		"message-delete-protector" => include_bytes!(
-			"../../../examples/extensions/packages/message-delete-protector.serein-extension"
+			"../../../examples/extensions/packages/message-delete-protector.nivra-extension"
 		),
 		"serein-midnight" => include_bytes!("../../../extensions/midnight.serein-extension"),
 		"serein-rose" => include_bytes!("../../../extensions/rose.serein-extension"),
@@ -217,7 +217,7 @@ fn extension_fixture(
 		"obsidian-theme" => include_bytes!("../../../extensions/obsidian.serein-extension"),
 		"teal-theme" => include_bytes!("../../../extensions/teal.serein-extension"),
 		"emoji-sticker-images" => include_bytes!(
-			"../../../examples/extensions/packages/emoji-sticker-images.serein-extension"
+			"../../../examples/extensions/packages/emoji-sticker-images.nivra-extension"
 		),
 		_ => return Err("Unknown fixture extension".into()),
 	};

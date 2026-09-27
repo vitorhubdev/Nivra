@@ -191,9 +191,9 @@ Platform-specific runtime/build requirements remain documented under [Platform S
 | Official Discord (Electron) | Nivra (Native Rust) |
 | :---: | :---: |
 | **RAM: ~1,178.4 MB across 7 processes** | **RAM: 129.7 MB single process** |
-| <img src="docs/screenshots/perf-discord-ram.png" alt="Discord RAM Usage" width="450" /> | <img src="docs/screenshots/perf-serein-ram.png" alt="Serein RAM Usage" width="450" /> |
+| <img src="docs/screenshots/perf-discord-ram.png" alt="Discord RAM Usage" width="450" /> | <img src="docs/screenshots/perf-nivra-ram.png" alt="Nivra RAM Usage" width="450" /> |
 | **CPU: 22.8% total** | **CPU: 8.1% total** |
-| <img src="docs/screenshots/perf-discord-cpu.png" alt="Discord CPU Usage" width="450" /> | <img src="docs/screenshots/perf-serein-cpu.png" alt="Serein CPU Usage" width="450" /> |
+| <img src="docs/screenshots/perf-discord-cpu.png" alt="Discord CPU Usage" width="450" /> | <img src="docs/screenshots/perf-nivra-cpu.png" alt="Nivra CPU Usage" width="450" /> |
 
 ---
 

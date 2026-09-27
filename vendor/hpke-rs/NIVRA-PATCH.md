@@ -8,4 +8,4 @@ This removes RUSTSEC-2026-0207, RUSTSEC-2026-0208 and RUSTSEC-2026-0212 from the
 
 Remove this patch when compatible upstream HPKE/OpenMLS releases eliminate the old dependency. Retained upstream source is MPL-2.0; the modified files remain MPL-2.0 and must be offered in source form with binary distributions. Original crate Cargo.lock, publish helper and CI configuration are omitted; workspace Cargo.lock controls resolution. Cargo.toml.orig and .cargo_vcs_info.json retain upstream provenance.
 
-Validation: `cargo test -p discord-voice --lib serein_shake256_security_backport` (compiles the exact vendored adapter via a test-only path module), plus workspace DAVE/MLS group creation and bidirectional encrypted Opus transport. This is not an independent cryptographic audit.
+Validation: `cargo test -p discord-voice --lib nivra_shake256_security_backport` (compiles the exact vendored adapter via a test-only path module), plus workspace DAVE/MLS group creation and bidirectional encrypted Opus transport. This is not an independent cryptographic audit.

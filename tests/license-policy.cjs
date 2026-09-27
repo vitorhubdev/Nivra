@@ -8,7 +8,7 @@ const { spawnSync } = require('node:child_process');
 const config = path.resolve(__dirname, '..', 'deny.toml');
 assert.ok(fs.existsSync(config), 'Repository deny.toml must exist');
 const tempParent = fs.realpathSync(os.tmpdir());
-const fixtureRoot = fs.mkdtempSync(path.join(tempParent, 'serein-license-policy-'));
+const fixtureRoot = fs.mkdtempSync(path.join(tempParent, 'nivra-license-policy-'));
 
 function cargo(args, cwd) {
   const result = spawnSync('cargo', args, {
@@ -82,6 +82,6 @@ ${license === null ? '' : `license = "${license}"\n`}`);
 } finally {
   const resolved = fs.realpathSync(fixtureRoot);
   assert.equal(path.dirname(resolved), tempParent, 'Cleanup must stay inside the temporary parent');
-  assert.ok(path.basename(resolved).startsWith('serein-license-policy-'), 'Cleanup must target this fixture directory');
+  assert.ok(path.basename(resolved).startsWith('nivra-license-policy-'), 'Cleanup must target this fixture directory');
   fs.rmSync(resolved, { recursive: true, force: true });
 }

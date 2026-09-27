@@ -41,11 +41,6 @@ fringe. The masters here were therefore rebuilt rather than cut:
 opaque centre, and no more than 2% of the antialiased rim darker than a quarter of the
 plate median luminance. A naive cut of the same master fails that last check at 43.8%.
 
-## Previous mark
-
-The `serein-*` files are the upstream Serein artwork. They are kept until the packaging and
-interface wiring lands, and are not referenced by the current mark.
-
 ## Palette
 
 Plate gradient `#F0C4FE` → `#8B44F4` → `#3E27ED` → `#0A6BFD` → `#9BDCFE`; the glass N runs

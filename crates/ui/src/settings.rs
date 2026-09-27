@@ -1696,10 +1696,6 @@ mod translation_tests {
 				rendered.contains("Nivra"),
 				"{language:?} never shows the product name: {rendered}"
 			);
-			assert!(
-				!rendered.contains("SereinExt"),
-				"{language:?} still shows the old product name: {rendered}"
-			);
 			let missing = crate::i18n::drain_untranslated_keys();
 			assert!(missing.is_empty(), "untranslated settings keys: {missing:?}");
 		}

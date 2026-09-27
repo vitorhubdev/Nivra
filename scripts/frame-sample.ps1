@@ -11,7 +11,7 @@ Five alternating before/after pairs are recommended. Debug and release are separ
 Callback wall-time buckets cover Desktop logic through UI, not tessellation or presentation.
 Results are JSON on stdout. A disturbed/unfocused run returns valid=false and must be discarded.
 .EXAMPLE
-powershell -NoProfile -File scripts/frame-sample.ps1 -Executable E:\build\debug\serein.exe -Revision abc123 -Profile debug
+powershell -NoProfile -File scripts/frame-sample.ps1 -Executable E:\build\debug\nivra.exe -Revision abc123 -Profile debug
 #>
 [CmdletBinding()]
 param(
@@ -27,7 +27,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $resolvedExecutable = (Resolve-Path -LiteralPath $Executable).ProviderPath
 if (-not [IO.File]::Exists($resolvedExecutable) -or [IO.Path]::GetExtension($resolvedExecutable) -ne '.exe') {
-    throw 'Executable must be the exact prebuilt serein.exe path (built with --features demo).'
+    throw 'Executable must be the exact prebuilt nivra.exe path (built with --features demo).'
 }
 $executableHash = (Get-FileHash -LiteralPath $resolvedExecutable -Algorithm SHA256).Hash
 $startInfo = New-Object Diagnostics.ProcessStartInfo
@@ -64,15 +64,15 @@ try {
             if ($line.Length -gt 4096 -or $outputLines -gt 128) {
                 throw 'Unexpectedly large diagnostic output; refusing the sample.'
             }
-            if ($line.StartsWith('{') -and $line.Contains('"serein_frame_sample"')) {
+            if ($line.StartsWith('{') -and $line.Contains('"nivra_frame_sample"')) {
                 $record = $line | ConvertFrom-Json
-                if ($record.serein_frame_sample -eq 'start') {
+                if ($record.nivra_frame_sample -eq 'start') {
                     if ($null -ne $sampleClock) { throw 'Duplicate sample-start marker.' }
                     $startRecord = $record
                     $sampleProcess.Refresh()
                     $cpuStart = $sampleProcess.TotalProcessorTime.TotalSeconds
                     $sampleClock = [Diagnostics.Stopwatch]::StartNew()
-                } elseif ($record.serein_frame_sample -eq 'complete') {
+                } elseif ($record.nivra_frame_sample -eq 'complete') {
                     if ($null -eq $sampleClock) { throw 'Sample-complete marker without a start marker.' }
                     $summary = $record
                 }

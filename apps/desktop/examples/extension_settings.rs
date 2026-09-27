@@ -16,7 +16,7 @@ fn main() {
 	let mut messaging = ui::MessagingUi::default();
 	let packages: [&[u8]; 2] = [
 		include_bytes!(
-			"../../../examples/extensions/packages/message-delete-protector.serein-extension"
+			"../../../examples/extensions/packages/message-delete-protector.nivra-extension"
 		),
 		include_bytes!("../../../extensions/ocean.serein-extension"),
 	];

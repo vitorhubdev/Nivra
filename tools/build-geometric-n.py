@@ -6,7 +6,7 @@ from pathlib import Path
 from shapely.geometry import box, Polygon
 from shapely.ops import unary_union
 
-ROOT = Path("C:/Users/jzv/Desktop/SereinExt-visual")
+ROOT = Path("C:/Users/jzv/Desktop/Nivra-visual")
 BRAND = ROOT / "assets" / "brand"
 
 W,H,SW = 556,600,152
@@ -58,11 +58,11 @@ icon_ty = (1024 - H)/2
 print(f"icon tx {icon_tx} ty {icon_ty}")
 icon_d = shifted_d(icon_tx, icon_ty)
 
-# symbolic: fit inside serein bbox 187.56..833.39 x 173.37..826.30 (w645.83 h652.93), preserve aspect
+# symbolic: fit inside nivra bbox 187.56..833.39 x 173.37..826.30 (w645.83 h652.93), preserve aspect
 sx0,sy0,sx1,sy1 = 187.56,173.37,833.39,826.30
 sw, sh = sx1-sx0, sy1-sy0
 scale = min(sw/W, sh/H)
-print(f"serein bbox w {sw:.2f} h {sh:.2f} scale {scale:.5f}")
+print(f"nivra bbox w {sw:.2f} h {sh:.2f} scale {scale:.5f}")
 nw, nh = W*scale, H*scale
 sym_tx = (1024 - nw)/2
 sym_ty = (1024 - nh)/2
@@ -130,7 +130,7 @@ mark_svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{MARK_SIDE:.2f}" h
 (BRAND / "nivra-mark.svg").write_text(mark_svg, encoding="utf-8", newline="\n")
 print("wrote nivra-mark.svg")
 
-# symbolic (packaging) with serein-like margin
+# symbolic (packaging) with nivra-like margin
 sym_svg = f'''<?xml version='1.0' encoding='UTF-8'?>
 <svg xmlns='http://www.w3.org/2000/svg' width='1024' height='1024' viewBox='0 0 1024 1024' fill='none'>
   <title>Nivra symbolic icon</title>

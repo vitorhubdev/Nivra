@@ -8,7 +8,7 @@ These supplements are bundled without dependency selection or coverage checks; t
 is not an assertion that every listed package belongs in every binary.
 
 The `.crate` files are unmodified corresponding MPL component sources. They can be extracted
-with `tar`; their original license terms remain separate from Serein. Existing Symphonia
+with `tar`; their original license terms remain separate from Nivra. Existing Symphonia
 archives under `assets/licenses/audio/source` and modified `vendor/hpke-rs` are reused.
 The canonical MPL text already retained for hpke-rs is also used for its two registry providers,
 whose exact upstream release tree omits a standalone license file.

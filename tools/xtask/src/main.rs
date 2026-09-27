@@ -224,7 +224,7 @@ fn package_windows(root: &std::path::Path) -> Result<(), String> {
 		println!(
 			"Windows installer created: {}",
 			installer_dir
-				.join(format!("serein-{version}-setup.exe"))
+				.join(format!("nivra-{version}-setup.exe"))
 				.display()
 		);
 	} else {
@@ -256,25 +256,25 @@ fn package() -> Result<(), String> {
 		"--release",
 		"--locked",
 		"-p",
-		"serein",
+		"nivra",
 		"--no-default-features",
 	];
 	run(&arguments)?;
 	let root = PathBuf::from("dist");
 	std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
 	let exe = if cfg!(windows) {
-		"serein.exe"
+		"nivra.exe"
 	} else {
-		"serein"
+		"nivra"
 	};
 	let destination = if cfg!(target_os = "macos") {
-		let app = root.join("Serein.app/Contents");
+		let app = root.join("Nivra.app/Contents");
 		std::fs::create_dir_all(app.join("MacOS")).map_err(|e| e.to_string())?;
 		std::fs::copy("packaging/macos/Info.plist", app.join("Info.plist"))
 			.map_err(|e| e.to_string())?;
 		app.join("MacOS").join(exe)
 	} else if cfg!(windows) {
-		root.join("SereinExt.exe")
+		root.join("Nivra.exe")
 	} else {
 		root.join(exe)
 	};
@@ -312,7 +312,7 @@ fn package() -> Result<(), String> {
 		std::fs::copy(file, root.join(file)).map_err(|e| e.to_string())?;
 	}
 	let resources = if cfg!(target_os = "macos") {
-		root.join("Serein.app/Contents/Resources")
+		root.join("Nivra.app/Contents/Resources")
 	} else {
 		root.clone()
 	};
@@ -399,7 +399,7 @@ fn package() -> Result<(), String> {
 	if cfg!(target_os = "macos") {
 		// Seal only after every bundle resource has been staged. Ad-hoc signing
 		// needs no identity and makes no Developer ID or notarization claim.
-		let bundle = root.join("Serein.app");
+		let bundle = root.join("Nivra.app");
 		let bundle = bundle.to_str().ok_or("Invalid bundle path")?;
 		// An ad-hoc signature's identity is its own hash, so it changes with every build and
 		// macOS keychain grants ("Always Allow") never survive one. A locally configured
@@ -479,7 +479,7 @@ fn main() -> ExitCode {
 					])
 				})
 				.and_then(|_| run(&["test", "--workspace", "--locked"]))
-				.and_then(|_| run(&["check", "-p", "serein", "--no-default-features", "--locked"]))
+				.and_then(|_| run(&["check", "-p", "nivra", "--no-default-features", "--locked"]))
 				.and_then(|_| policy()),
 			"policy" => policy(),
 			"licenses" => licenses(),

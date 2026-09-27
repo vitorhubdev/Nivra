@@ -203,7 +203,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "serein-fuzz"
+name = "nivra-fuzz"
 version = "0.0.0"
 dependencies = [
  "client-core",

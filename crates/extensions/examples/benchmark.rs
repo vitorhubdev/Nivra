@@ -38,7 +38,7 @@ fn main() {
 	measure(
 		"message-delete-protector",
 		include_bytes!(
-			"../../../examples/extensions/packages/message-delete-protector.serein-extension"
+			"../../../examples/extensions/packages/message-delete-protector.nivra-extension"
 		),
 		Invocation {
 			action: "activate".into(),

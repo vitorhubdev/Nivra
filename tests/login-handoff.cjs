@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
-const source = fs.readFileSync('crates/platform/src/login-handoff.js', 'utf8').replace('__SEREIN_LOGIN_CAPABILITY__', 'SYNTHETIC_CAPABILITY:');
+const source = fs.readFileSync('crates/platform/src/login-handoff.js', 'utf8').replace('__NIVRA_LOGIN_CAPABILITY__', 'SYNTHETIC_CAPABILITY:');
 function setup(origin = 'https://discord.com') {
   const messages = [];
   class XHR { open() {} setRequestHeader() {} }
@@ -43,9 +43,9 @@ console.log('Authentication handoff: origin, byte cap, one-shot and fetch/XHR ch
 // Its bridge sends only a boolean; native code queries the bounded main-frame slot.
 const linuxCapability = 'a'.repeat(64) + ':';
 const linuxBridge = fs.readFileSync('crates/platform/src/login-linux-bridge.js', 'utf8')
-  .replace('__SEREIN_LOGIN_CAPABILITY__', linuxCapability);
+  .replace('__NIVRA_LOGIN_CAPABILITY__', linuxCapability);
 const linuxHandoff = fs.readFileSync('crates/platform/src/login-handoff.js', 'utf8')
-  .replace('__SEREIN_LOGIN_CAPABILITY__', linuxCapability);
+  .replace('__NIVRA_LOGIN_CAPABILITY__', linuxCapability);
 function linuxSetup({ origin = 'https://discord.com', frame = false } = {}) {
   const messages = [];
   let now = 0;
@@ -53,7 +53,7 @@ function linuxSetup({ origin = 'https://discord.com', frame = false } = {}) {
   const context = {
     location: { origin, href: origin + '/login' }, XMLHttpRequest: XHR,
     Headers, Request, URL, WeakMap, Date: { now: () => now },
-    webkit: { messageHandlers: { sereinLogin: { postMessage: value => messages.push(value) } } },
+    webkit: { messageHandlers: { nivraLogin: { postMessage: value => messages.push(value) } } },
     fetch: () => Promise.resolve(),
   };
   context.window = context; context.top = frame ? {} : context;
@@ -61,7 +61,7 @@ function linuxSetup({ origin = 'https://discord.com', frame = false } = {}) {
   vm.runInContext(linuxBridge, context);
   vm.runInContext(linuxHandoff, context);
   return { context, messages, expire: () => now = 600001,
-    take: () => context['__serein_login_take_' + linuxCapability.slice(0, -1)]() };
+    take: () => context['__nivra_login_take_' + linuxCapability.slice(0, -1)]() };
 }
 {
   const { context, messages, take } = linuxSetup();
@@ -75,7 +75,7 @@ function linuxSetup({ origin = 'https://discord.com', frame = false } = {}) {
   vm.runInContext('window.ipc = {}; window.ipc.postMessage = () => {}', context);
   assert.equal(context.ipc, ipc);
   assert.equal(Object.getOwnPropertyDescriptor(context, 'ipc').configurable, false);
-  assert.equal(Object.getOwnPropertyDescriptor(context, '__serein_login_take_' + linuxCapability.slice(0, -1)).writable, false);
+  assert.equal(Object.getOwnPropertyDescriptor(context, '__nivra_login_take_' + linuxCapability.slice(0, -1)).writable, false);
   context.fetch('/api/v10/users/@me', { headers: { authorization: 'SYNTHETIC_LINUX_SESSION' } });
   assert.deepEqual(messages, [true]);
   assert.equal(take(), linuxCapability + 'SYNTHETIC_LINUX_SESSION');

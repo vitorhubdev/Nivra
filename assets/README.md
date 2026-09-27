@@ -18,7 +18,7 @@ Downloaded September 10, 2026 from pinned upstream sources:
 - [Inter 3.19](https://github.com/rsms/inter/releases/tag/v3.19) static TrueType instances `Inter-Regular.ttf`, `Inter-Medium.ttf`, `Inter-SemiBold.ttf`, taken from the `Inter Hinted for Windows/Desktop/` directory of the official `Inter-3.19.zip` release archive (SHA-256 `150ab6230d1762a57bebf35dfc04d606ff91598a31d785f7f100356ecdcc0032`), re-fetched September 15, 2026. The archive's `LICENSE.txt` is byte-identical to the bundled `fonts/Inter-OFL.txt`. SHA-256: Regular `529be850e06f62f8904f22bda77e45bde4834498fdbec4ff4201fa3177447a3a`, Medium `6df88fcb83ac96582350f801355c6eff55f15710093e9627fb431caa40521151`, SemiBold `2de533bda937a063c595b07c6bd9b70c8c5087d0649a1c8330f7ac11fcc05602`.
 
   These are the hinted TrueType builds. Upstream also ships CFF outlines. egui paints
-  grayscale coverage, not DirectWrite ClearType. Serein leaves the TrueType interpreter
+  grayscale coverage, not DirectWrite ClearType. Nivra leaves the TrueType interpreter
   off and keeps sub-pixel binning on. Dark mode remaps coverage with
   `FontColorTransferFunction::Gamma(0.5)`. Light mode leaves the transfer function off.
   Inter faces set `FontTweak.hinting` to `Some(false)`. The files stay the hinted

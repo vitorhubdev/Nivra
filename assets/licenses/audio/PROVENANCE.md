@@ -4,7 +4,7 @@ Collected September 11–12, 2026 from the exact crates.io archives resolved in 
 All desktop packages include this directory at `licenses/audio`. The ten unmodified
 Symphonia 0.6.1 source archives in `source/` provide corresponding MPL-2.0 source to
 recipients; extract with `tar -xf <archive>.crate`. They retain their original licenses,
-copyrights and source notices. Serein does not modify or relicense those components.
+copyrights and source notices. Nivra does not modify or relicense those components.
 
 Archive URL pattern: `https://static.crates.io/crates/<crate>/<crate>-0.6.1.crate`.
 SHA-256 checksums match Cargo.lock:

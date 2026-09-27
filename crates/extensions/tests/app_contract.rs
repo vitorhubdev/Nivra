@@ -109,7 +109,7 @@ fn test_manifest(capabilities: Vec<Capability>) -> Manifest {
 		id: "app-check".into(),
 		name: "App contract".into(),
 		version: "1.0.0".into(),
-		author: "Serein".into(),
+		author: "Nivra".into(),
 		license: "MIT".into(),
 		source: "https://example.org/source".into(),
 		kind: ExtensionKind::Plugin,

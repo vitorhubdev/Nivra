@@ -23,7 +23,7 @@ struct Bundled {
 
 include!(concat!(env!("OUT_DIR"), "/license_bundle.rs"));
 
-const REPOSITORY: &str = "https://github.com/vitorhubdev/SereinExt";
+const REPOSITORY: &str = "https://github.com/vitorhubdev/Nivra";
 
 /// Static lead-in of the line naming where MPL-2.0 source is published.
 pub const MPL_SOURCE_PREFIX: &str =
@@ -94,7 +94,7 @@ pub fn text(id: &str) -> String {
 /// Name of the release asset carrying the MPL-2.0 sources for this version.
 pub fn source_archive_name() -> String {
 	format!(
-		"SereinExt-{}-third-party-sources.zip",
+		"Nivra-{}-third-party-sources.zip",
 		env!("CARGO_PKG_VERSION")
 	)
 }
@@ -491,11 +491,11 @@ mod tests {
 		let version = env!("CARGO_PKG_VERSION");
 		assert_eq!(
 			source_archive_name(),
-			format!("SereinExt-{version}-third-party-sources.zip")
+			format!("Nivra-{version}-third-party-sources.zip")
 		);
 		assert_eq!(
 			release_page(),
-			format!("https://github.com/vitorhubdev/SereinExt/releases/tag/v{version}")
+			format!("https://github.com/vitorhubdev/Nivra/releases/tag/v{version}")
 		);
 	}
 }

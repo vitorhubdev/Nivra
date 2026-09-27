@@ -7,7 +7,7 @@ The [AppImage](../appimage/README.md) supports in-app updates on Linux x86_64 wi
 the documented host GTK4/WebKit6 runtime; its release build targets Ubuntu 24.04
 for glibc 2.39 compatibility.
 Download the file labelled for your distribution from
-[Releases](https://github.com/ViceVerse-cz/Serein/releases), then use its actual filename:
+[Releases](https://github.com/vitorhubdev/Nivra/releases), then use its actual filename:
 
 ```sh
 sudo apt install ./nivra-*.deb                     # Ubuntu 26.04

@@ -131,7 +131,7 @@ def package(root, application_version):
         debian.mkdir(exist_ok=True)
         (debian / "control").write_text(
             "Source: nivra\nSection: net\nPriority: optional\n"
-            "Maintainer: Serein contributors <noreply@github.com>\n\n"
+            "Maintainer: Nivra contributors <noreply@github.com>\n\n"
             "Package: nivra\nArchitecture: any\nDescription: Unofficial native Discord client\n",
             encoding="utf-8")
         (stage / "DEBIAN").mkdir()
@@ -148,8 +148,8 @@ def package(root, application_version):
         control.write_text(
             f"Package: nivra\nVersion: {version}\nArchitecture: {architecture}\n"
             "Section: net\nPriority: optional\n"
-            "Maintainer: Serein contributors <noreply@github.com>\n"
-            "Homepage: https://github.com/ViceVerse-cz/rustcord\n"
+            "Maintainer: Nivra contributors <noreply@github.com>\n"
+            "Homepage: https://github.com/vitorhubdev/Nivra\n"
             f"Installed-Size: {installed_kib}\nDepends: {depends}\n"
             "Recommends: gnome-keyring, xdg-desktop-portal-gnome | xdg-desktop-portal-kde | xdg-desktop-portal-wlr, "
             "gstreamer1.0-plugins-bad, gstreamer1.0-gl, gstreamer1.0-libav\n"
@@ -249,7 +249,7 @@ def rpm_package(temporary, stage, application_version, distro):
         "%global _build_id_links none\n"
         f"Name: nivra\nVersion: {version}\nRelease: {release}\n"
         "Summary: Unofficial native Discord client\nLicense: MIT OR Apache-2.0\n"
-        "URL: https://github.com/ViceVerse-cz/Serein\n"
+        "URL: https://github.com/vitorhubdev/Nivra\n"
         + "\n".join(f"Requires: {item}" for item in requires)
         + f"\nRecommends: gnome-keyring, {plugins}\n"
         "\n%description\nNative Rust client for existing Discord accounts, including voice.\n"
@@ -312,7 +312,7 @@ def arch_package(temporary, stage, application_version, libraries):
     (temporary / "PKGBUILD").write_text(
         f"pkgname=nivra\npkgver='{version}'\npkgrel=1\n"
         "pkgdesc='Unofficial native Discord client'\n"
-        f"arch=('{platform.machine()}')\nurl='https://github.com/ViceVerse-cz/Serein'\n"
+        f"arch=('{platform.machine()}')\nurl='https://github.com/vitorhubdev/Nivra'\n"
         "license=('MIT' 'Apache-2.0')\noptions=('!strip' '!debug' '!lto')\n"
         + "depends=(" + " ".join(f"'{item}'" for item in sorted(depends)) + ")\n"
         "optdepends=('gnome-keyring: Secret Service credential provider' "

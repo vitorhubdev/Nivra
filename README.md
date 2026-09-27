@@ -1,7 +1,7 @@
 # Nivra
 
 <p align="center">
-  <a href="https://github.com/vitorhubdev/SereinExt">
+  <a href="https://github.com/vitorhubdev/Nivra">
     <img src="docs/preview.png" alt="Nivra — independent fork of Serein" width="900" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
   </a>
 </p>
@@ -106,7 +106,7 @@ The source is still being validated before a binary GitHub Release is published.
 </p>
 
 <p align="center">
-  <a href="https://github.com/vitorhubdev/SereinExt/tags"><img src="https://img.shields.io/github/v/tag/vitorhubdev/SereinExt?label=tag&color=blue" alt="SereinExt tag" /></a>
+  <a href="https://github.com/vitorhubdev/Nivra/tags"><img src="https://img.shields.io/github/v/tag/vitorhubdev/Nivra?label=tag&color=blue" alt="SereinExt tag" /></a>
   <a href="Cargo.toml"><img src="https://img.shields.io/badge/rust-1.98.1_pinned-blue.svg?logo=rust" alt="Rust 1.98.1 Pinned" /></a>
   <a href="crates/ui"><img src="https://img.shields.io/badge/ui-egui%20%2F%20wgpu-orange.svg" alt="UI egui/wgpu" /></a>
   <a href="docs/platform-support.md"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg" alt="Platform Support" /></a>
@@ -127,17 +127,17 @@ SereinExt is currently **source/tag first**. Until this repository publishes its
 
 ### Current source
 
-- Repository: [`vitorhubdev/SereinExt`](https://github.com/vitorhubdev/SereinExt)
+- Repository: [`vitorhubdev/Nivra`](https://github.com/vitorhubdev/Nivra)
 - Development branch: `main`
 - Workspace version: `1.0.4`
-- Version history: [Tags](https://github.com/vitorhubdev/SereinExt/tags)
+- Version history: [Tags](https://github.com/vitorhubdev/Nivra/tags)
 
 ### Build from source
 
 The workspace pins Rust **1.98** and uses the same native platform dependencies documented in this repository.
 
 ```sh
-git clone https://github.com/vitorhubdev/SereinExt.git
+git clone https://github.com/vitorhubdev/Nivra.git
 cd SereinExt
 cargo build --locked --release -p nivra
 ```

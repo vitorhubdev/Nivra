@@ -22,8 +22,8 @@ def update_metadata(version, release_tag):
         raise ValueError("AppImage release tag must match the application version")
     name = f"nivra-{release_tag or version}-Linux-X64.AppImage"
     channel = "latest-pre" if "-" in version.split("+", 1)[0] else "latest"
-    information = f"gh-releases-zsync|ViceVerse-cz|Nivra|{channel}|nivra-*-Linux-X64.AppImage.zsync"
-    url = f"https://github.com/ViceVerse-cz/Serein/releases/download/v{version}/nivra-v{version}-Linux-X64.AppImage"
+    information = f"gh-releases-zsync|vitorhubdev|Nivra|{channel}|nivra-*-Linux-X64.AppImage.zsync"
+    url = f"https://github.com/vitorhubdev/Nivra/releases/download/v{version}/nivra-v{version}-Linux-X64.AppImage"
     return name, information, url
 
 

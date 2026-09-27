@@ -11,7 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $appName = 'Nivra'
 $publisher = 'vitorhubdev'
-$website = 'https://github.com/vitorhubdev/SereinExt'
+$website = 'https://github.com/vitorhubdev/Nivra'
 $installDir = Join-Path $env:LOCALAPPDATA "Programs\$appName"
 $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$appName"
 $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) "$appName.lnk"

@@ -13,7 +13,7 @@ SetCompressor /SOLID lzma
 
 !define PRODUCT_NAME "Nivra"
 !define PRODUCT_PUBLISHER "vitorhubdev"
-!define PRODUCT_WEB_SITE "https://github.com/vitorhubdev/SereinExt"
+!define PRODUCT_WEB_SITE "https://github.com/vitorhubdev/Nivra"
 !define APP_EXE "Nivra.exe"
 
 !ifndef VERSION

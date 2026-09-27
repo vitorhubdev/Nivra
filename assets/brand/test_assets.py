@@ -544,11 +544,10 @@ class RepositoryGuardTest(unittest.TestCase):
     # 3 migracao unica, 4 extensoes legado P5, 5 URLs aguardando rename.
     ALLOW = {
         ".gitattributes": "E4 legacy *.serein-extension pattern kept + new *.nivra-extension added",
-        ".github/release/check.mjs": "E5 repo URLs waiting rename (release tooling, assets already nivra-*) ",
+        ".github/release/check.mjs": "E1 upstream PR link (ViceVerse-cz/Serein#149) in release tooling",
         "CHANGELOG.md": "E2 new entry mentions old for rename + E1 upstream credit",
-        "Casks/nivra.rb": "E5 repo URLs waiting owner rename SereinExt->Nivra",
         "LICENSE-MIT": "E1 upstream copyright (Serein contributors)",
-        "README.md": "E1 upstream credits/links + E2 old history 1.0.1-1.0.4 preserved + E5 repo URLs waiting rename",
+        "README.md": "E1 upstream credits/links + E2 old history 1.0.1-1.0.4 preserved",
         "apps/desktop/examples/audio_devices.rs": "E4 examples demonstrate both new (.nivra) and legacy (.serein) loading",
         "apps/desktop/examples/extension_settings.rs": "E4 legacy compat (loads new .nivra-extension, old path kept in comments/history)",
         "apps/desktop/examples/group_call.rs": "E4 examples demonstrate both new and legacy loading",
@@ -563,7 +562,6 @@ class RepositoryGuardTest(unittest.TestCase):
         "apps/desktop/src/extension_member_details.rs": "E4 legacy theme paths (no new themes)",
         "apps/desktop/src/extensions.rs": "E1 upstream catalog URL (ViceVerse-cz/Serein-extensions) + E4 legacy bundled themes",
         "apps/desktop/src/main.rs": "E1 upstream Serein profiles/app credit in comments",
-        "apps/desktop/src/updater.rs": "E5 repo URLs waiting owner rename (RELEASES + download base + User-Agent URL)",
         "apps/desktop/tests/fixtures/README.md": "E4 legacy fixture docs (old must stay to describe legacy)",
         "crates/extensions/examples/legacy_sdk_check.rs": "E4 legacy test must stay old to prove legacy loads (fixture sdk-legacy)",
         "crates/extensions/examples/panel_api.rs": "E4 new helper (nivra_* exports) + legacy comments/history in docs",
@@ -575,7 +573,6 @@ class RepositoryGuardTest(unittest.TestCase):
         "crates/platform/src/migration.rs": "E3 single migration module (only code that may name retired ids)",
         "crates/platform/src/save.rs": "E4 accepts both .nivra-extension (new) and .serein-extension (legacy) filters",
         "crates/ui/examples/theme_api.rs": "E4 bundled legacy themes (no new themes)",
-        "crates/ui/src/licenses.rs": "E5 repo URLs waiting owner rename (REPOSITORY + release URLs)",
         "docs/discord-compatibility.md": "E1 upstream credits/links (ViceVerse-cz/Serein wiki)",
         "docs/extensions.md": "E4 documents legacy .serein-extension still loads (new .nivra-extension first)",
         "docs/theme-api.md": "E4 legacy .serein-extension mention (themes have no new counterparts yet)",
@@ -590,13 +587,7 @@ class RepositoryGuardTest(unittest.TestCase):
         "examples/extensions/sdk/src/lib.rs": "E4 legacy serein_* aliases (same signatures, for old hosts)",
         "examples/extensions/sdk/tests/authoring.rs": "E4 legacy author name in test data (SDK now nivra-*, test still proves legacy author parses)",
         "extensions/catalog.json": "E1 upstream theme (serein-ocean, Serein contributors, ViceVerse-cz/rustcord URLs)",
-        "packaging/appimage/build.py": "E5 repo URLs? No, E1 upstream? Actually contains no old after E bulk? Keep as E5? No old? Hmm - bulk changed to Nivra, remaining old is URLs? Allowlist as E5 URLs waiting rename",
-        "packaging/flatpak/io.github.vitorhubdev.Nivra.metainfo.xml": "E1 upstream credits? Actually metainfo with new app-id, no old? Remaining old is Serein in description? Allowlist as E1 upstream credit in description",
-        "packaging/linux/README.md": "E5 repo URLs? Actually README with new Nivra, no old? Remaining old is URLs? Allowlist as E5",
-        "packaging/linux/package.py": "E5 repo URLs waiting rename",
-        "packaging/repositories/build.py": "E5 repo URLs (BASE_URL defaults to ours, old repo URLs in comments/history)",
-        "packaging/windows/installer.nsi": "E5 repo URL PRODUCT_WEB_SITE waiting rename (ProductName/AppExe already Nivra)",
-        "packaging/windows/setup.ps1": "E5 repo URL website waiting rename (appName/exe already Nivra)",
+        "packaging/flatpak/io.github.vitorhubdev.Nivra.metainfo.xml": "E1 upstream credit in description (new app-id)",
     }
 
     def test_no_retired_name_outside_allowlist(self):

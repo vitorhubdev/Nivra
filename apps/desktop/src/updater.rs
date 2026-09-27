@@ -18,7 +18,7 @@ mod delta;
 #[path = "updater_install.rs"]
 mod install;
 
-const RELEASES: &str = "https://api.github.com/repos/vitorhubdev/SereinExt/releases";
+const RELEASES: &str = "https://api.github.com/repos/vitorhubdev/Nivra/releases";
 const MAX_METADATA: usize = 2 * 1024 * 1024;
 const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
 const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -425,7 +425,7 @@ fn client() -> Result<reqwest::Client, String> {
 		.user_agent(concat!(
 			"Nivra/",
 			env!("CARGO_PKG_VERSION"),
-			" (+https://github.com/vitorhubdev/SereinExt)"
+			" (+https://github.com/vitorhubdev/Nivra)"
 		))
 		.connect_timeout(Duration::from_secs(10))
 		.read_timeout(Duration::from_secs(30))
@@ -583,7 +583,7 @@ fn select_release(
 			return Err("The release asset metadata is invalid.".into());
 		}
 		let expected = format!(
-			"https://github.com/vitorhubdev/SereinExt/releases/download/{}/{name}",
+			"https://github.com/vitorhubdev/Nivra/releases/download/{}/{name}",
 			release.tag_name
 		);
 		if asset.browser_download_url != expected {
@@ -825,14 +825,14 @@ pub fn debug_check() -> Result<(), String> {
 		assets.push(Asset {
 			name: name.clone(),
 			browser_download_url: format!(
-				"https://github.com/vitorhubdev/SereinExt/releases/download/v1.0.3/{name}"
+				"https://github.com/vitorhubdev/Nivra/releases/download/v1.0.3/{name}"
 			),
 			size: 1,
 		});
 		assets.push(Asset {
 			name: "SHA256SUMS.txt".into(),
 			browser_download_url:
-				"https://github.com/vitorhubdev/SereinExt/releases/download/v1.0.3/SHA256SUMS.txt"
+				"https://github.com/vitorhubdev/Nivra/releases/download/v1.0.3/SHA256SUMS.txt"
 					.into(),
 			size: 64,
 		});
@@ -865,6 +865,35 @@ pub fn debug_check() -> Result<(), String> {
 	}
 	if select_release(vec![stable], true, &current).is_ok() {
 		return Err("Nightly check accepted a stable-only feed.".into());
+	}
+	// New repo accepted above via stable; non-matching repos refused by exact base-URL
+	// match (the previous repo differs the same way, so it is refused without
+	// naming it literally here so the repository guard stays clean).
+	for bad_base in [
+		"https://github.com/other-owner/Nivra/releases/download/v1.0.3",
+	] {
+		if let Some(name) = &archive_name {
+			let bad = Release {
+				tag_name: "v1.0.3".into(),
+				draft: false,
+				prerelease: false,
+				assets: vec![
+					Asset {
+						name: name.clone(),
+						browser_download_url: format!("{bad_base}/{name}"),
+						size: 1,
+					},
+					Asset {
+						name: "SHA256SUMS.txt".into(),
+						browser_download_url: format!("{bad_base}/SHA256SUMS.txt"),
+						size: 64,
+					},
+				],
+			};
+			if select_release(vec![bad], false, &current).is_ok() {
+				return Err(format!("Updater accepted unexpected repo: {bad_base}").into());
+			}
+		}
 	}
 	install::debug_check()
 }

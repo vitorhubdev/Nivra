@@ -5488,6 +5488,7 @@ public static class NivraShortcut {
 						.state
 						.voice
 						.active
+						.as_ref()
 						.is_none_or(|call| call.channel != target.channel)
 						&& let Some(command) = self.state.start_call_with_mute(
 							target.channel,

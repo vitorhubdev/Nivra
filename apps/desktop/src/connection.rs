@@ -140,16 +140,16 @@ impl Connection {
                 let dm_channels=Arc::new(Mutex::new(BTreeSet::new()));
                 let gateway_channels=dm_channels.clone();
                 let (voice_online,mut voice_availability)=watch::channel(false);
-                let gateway_api=api.clone();let gateway_emit=emit.clone();let terminal_send=finished.clone();
+                let gateway_api=api.clone();let gateway_api_events=gateway_api.clone();let gateway_emit=emit.clone();let terminal_send=finished.clone();
                 let gateway_wake=wake.clone();
                 let activity_wake=wake.clone();
                 let mut gateway_task=AbortTask(tokio::spawn(async move {
                     let error=discord_gateway::run_with_activity_and_reconnect(secret,gateway,member_receive,voice_receive,(activity_receive,presence_receive,member_query_receive,spotify_receive),move |observation| {
                         if activity_observed.send_if_modified(|current| { if *current == observation { false } else { *current = observation; true } }) { activity_wake.request_repaint(); }
                         Ok(())
-                    },|event|{
-                        if let Event::Interaction(client_core::interactions::Event::Session(session)) = event { return gateway_api.interaction_session(Some(session)); }
-                        if matches!(&event,Event::Disconnected|Event::Resync) { gateway_api.interaction_session(None)?; }
+                    }, gateway_reconnect_skip, move |event| {
+                        if let Event::Interaction(client_core::interactions::Event::Session(session)) = event { return gateway_api_events.interaction_session(Some(session)); }
+                        if matches!(&event,Event::Disconnected|Event::Resync) { gateway_api_events.interaction_session(None)?; }
                         if let Some((ready_user,_,channels))=event.ready_navigation() {
                             if ready_user.id!=user.id {return Err(Failure::InvalidCredential);}
                             *gateway_channels.lock().map_err(|_|Failure::Protocol)?=channels.iter().filter(|c|private_call(c)).map(|c|c.id).collect();
@@ -166,7 +166,7 @@ impl Connection {
                         if event.ready_navigation().is_some() || matches!(&event,Event::Resumed) {let _=voice_online.send(true);}
                         if matches!(&event,Event::Disconnected|Event::Resync) {let _=voice_online.send(false);}
                         gateway_emit(event)
-                    }, gateway_reconnect_skip).await.err().unwrap_or(Failure::Network).protocol_at("Gateway connection: unsupported handshake or event");
+                    }).await.err().unwrap_or(Failure::Network).protocol_at("Gateway connection: unsupported handshake or event");
                     gateway_api.stop();let _=terminal_send.send(Some(error));gateway_wake.request_repaint();
                 }));
                 // Keep hangup/mute controls responsive while an HTTP message write is awaiting Discord.

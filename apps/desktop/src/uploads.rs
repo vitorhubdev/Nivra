@@ -36,6 +36,8 @@ const SHARE_BYTES: usize = 8 * 1024 * 1024;
 const EMOJI_EDGE: u32 = 48;
 const STICKER_EDGE: u32 = 160;
 const ARTWORK_FRAMES: usize = 240;
+const FILE_TOO_LARGE: &str =
+	"This file exceeds the upload limit here; compress it or share a link";
 
 fn apng_delay(delay: image::Delay) -> (u16, u16) {
 	let (numerator, denominator) = delay.numer_denom_ms();
@@ -309,7 +311,6 @@ struct Uploading {
 	cancel: watch::Sender<bool>,
 	cancelling: bool,
 }
-#[derive(Default)]
 pub struct Uploads {
 	auto_image: bool,
 	scope: Option<(u64, Id)>,
@@ -324,8 +325,29 @@ pub struct Uploads {
 	last: Option<Status>,
 	/// One problem, announced once. Drained by the caller into a toast.
 	notice: Option<&'static str>,
+	/// Per-file ceiling for the active conversation (account vs server boost).
+	file_limit: u64,
+}
+impl Default for Uploads {
+	fn default() -> Self {
+		Self {
+			auto_image: false,
+			scope: None,
+			selected: Vec::new(),
+			next_key: 0,
+			previewing: Vec::new(),
+			choosing: None,
+			uploading: None,
+			last: None,
+			notice: None,
+			file_limit: client_core::upload_limit::account_upload_bytes(None),
+		}
+	}
 }
 impl Uploads {
+	pub fn set_file_limit(&mut self, limit: u64) {
+		self.file_limit = limit.max(1);
+	}
 	/// A picker click authorizes one image send after preparation.
 	#[allow(clippy::too_many_arguments)]
 	pub fn start_image_share(
@@ -501,6 +523,7 @@ impl Uploads {
 	) {
 		let cancelled = Arc::new(AtomicBool::new(false));
 		let flag = cancelled.clone();
+		let file_limit = self.file_limit;
 		let (send, result) = mpsc::sync_channel(1);
 		let context = context.clone();
 		runtime.spawn(async move {
@@ -516,14 +539,10 @@ impl Uploads {
 					return Err("Attach up to 10 files per message");
 				}
 				let mut selected = Vec::with_capacity(paths.len());
-				let mut total = 0;
 				for path in paths {
 					let source = Source::inspect(path).await?;
-					total += source.size();
-					if total > discord_api::upload::MAX_TOTAL_BYTES {
-						return Err(
-							"Attachments must total at most 500 MB; account limits may be lower",
-						);
+					if source.size() > file_limit {
+						return Err(FILE_TOO_LARGE);
 					}
 					let thumbnail = preview(&source).await;
 					selected.push((source, thumbnail));
@@ -653,11 +672,9 @@ impl Uploads {
 			.iter()
 			.map(|chosen| &chosen.source)
 			.chain(sources)
-			.map(Source::size)
-			.sum::<u64>()
-			> discord_api::upload::MAX_TOTAL_BYTES
+			.any(|source| source.size() > self.file_limit)
 		{
-			return Err("Attachments must total at most 500 MB; account limits may be lower");
+			return Err(FILE_TOO_LARGE);
 		}
 		Ok(())
 	}

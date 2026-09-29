@@ -193,6 +193,8 @@ struct Guild<'a> {
 	#[serde(default)]
 	icon: Option<String>,
 	#[serde(default)]
+	premium_tier: u8,
+	#[serde(default)]
 	name: String,
 	#[serde(default, deserialize_with = "crate::threads::list")]
 	channels: Vec<ChannelDto>,
@@ -231,6 +233,7 @@ impl<'de> Deserialize<'de> for Guilds {
 						emojis: optional(guild.emojis, &mut unavailable),
 						properties: guild.properties,
 						icon: guild.icon,
+						premium_tier: guild.premium_tier.min(3),
 						name: guild.name,
 						channels: guild.channels,
 						stickers: optional::<crate::stickers::Catalog>(

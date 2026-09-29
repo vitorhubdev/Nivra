@@ -102,6 +102,7 @@ mod tests {
 				icon: None,
 				stickers: None,
 				emojis: None,
+				premium_tier: 0,
 			}],
 			channels: vec![parent, thread],
 			archived_thread: Some(Id(14)),

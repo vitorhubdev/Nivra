@@ -6828,6 +6828,7 @@ mod tests {
 					id: Id(id),
 					name: format!("Server {id}"),
 					icon: None,
+				premium_tier: 0
 				})
 				.collect(),
 			channels,

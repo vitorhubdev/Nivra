@@ -1502,7 +1502,7 @@ impl Desktop {
 			);
 			messaging.toasts.push(
 				ui::design::Level::Warning,
-				"Attachments must total at most 500 MB; account limits may be lower",
+				"This file exceeds the upload limit here; compress it or share a link",
 			);
 			messaging
 				.toasts
@@ -6100,6 +6100,10 @@ impl eframe::App for Desktop {
 		}
 		if !can_attach {
 			self.uploads.cancel();
+		}
+		if let Some(channel) = self.state.selected {
+			self.uploads
+				.set_file_limit(self.state.attachment_upload_limit(channel).bytes);
 		}
 		self.uploads.poll(
 			self.state.generation,

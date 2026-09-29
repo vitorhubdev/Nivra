@@ -2104,6 +2104,7 @@ mod tests {
 			name: "Synthetic".into(),
 			icon: None,
 			emojis: None,
+		premium_tier: 0
 		}];
 		state.channels = (0..20)
 			.map(|index| {
@@ -2300,6 +2301,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
+			premium_tier: 0
 			}],
 			channels: vec![channel(9, 13, 0, None)],
 			demo: true,
@@ -2478,6 +2480,7 @@ mod tests {
 				name: "Synthetic guild".into(),
 				icon: None,
 				emojis: None,
+			premium_tier: 0
 			}],
 			channels,
 			demo: true,

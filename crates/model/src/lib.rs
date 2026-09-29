@@ -260,7 +260,22 @@ pub struct Guild {
 	pub id: Id,
 	pub name: String,
 	pub icon: Option<String>,
+	/// Server boost level (`premium_tier` on the wire); 0–3.
+	pub premium_tier: u8,
 }
+impl Default for Guild {
+	fn default() -> Self {
+		Self {
+			stickers: None,
+			emojis: None,
+			id: Id(0),
+			name: String::new(),
+			icon: None,
+			premium_tier: 0,
+		}
+	}
+}
+
 impl Guild {
 	pub fn bytes(&self) -> usize {
 		std::mem::size_of::<Self>()
@@ -281,6 +296,7 @@ pub struct GuildPatch {
 	pub id: Id,
 	pub name: Patch<String>,
 	pub icon: Patch<String>,
+	pub premium_tier: Patch<u8>,
 }
 #[derive(Clone, PartialEq, Eq)]
 pub struct Channel {

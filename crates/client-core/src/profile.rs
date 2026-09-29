@@ -773,6 +773,7 @@ mod tests {
 				id: Id(9),
 				name: "Synthetic".into(),
 				icon: None,
+			premium_tier: 0
 			}],
 			..State::default()
 		};
@@ -914,6 +915,7 @@ mod tests {
 				id: Id(9),
 				name: "Synthetic".into(),
 				icon: None,
+			premium_tier: 0
 			}],
 			channels: vec![channel(2), channel(3)],
 			selected: Some(Id(2)),

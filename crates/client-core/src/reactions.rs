@@ -1295,6 +1295,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
+			premium_tier: 0
 			}],
 			channels: vec![Channel {
 				id: Id(10),

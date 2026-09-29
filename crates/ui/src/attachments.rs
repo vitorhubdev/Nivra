@@ -2,11 +2,13 @@
 #[cfg(test)]
 mod context_tests;
 use crate::{
-	avatars::{Avatars, Quality, Surface},
+	anim, avatars::{Avatars, Quality, Surface},
 	design,
+	i18n::{self, interface_language},
 	icons::{self, Icon},
 	markdown::external_url,
 };
+use client_core::upload_limit::{UploadLimit, UploadLimitSource};
 use egui::{Color32, Rect, RichText, Sense, Stroke, StrokeKind};
 use model::{Attachment, Id, Message};
 
@@ -108,6 +110,79 @@ pub fn format_size(bytes: u64) -> String {
 		format!("{value:.0} {}", UNITS[unit])
 	} else {
 		format!("{value:.2} {}", UNITS[unit])
+	}
+}
+
+/// Animated bar for staged attachments: largest file vs the effective per-file ceiling.
+pub fn pending_upload_meter(
+	ui: &mut egui::Ui,
+	largest_bytes: u64,
+	limit: UploadLimit,
+	over_limit: bool,
+) {
+	let colors = design::palette(ui);
+	let language = interface_language(ui.ctx());
+	let t = |english: &'static str| i18n::text(language, english);
+	let target = if limit.bytes == 0 {
+		1.0
+	} else {
+		(largest_bytes as f32 / limit.bytes as f32).clamp(0.0, 1.0)
+	};
+	let fill = anim::bool_alpha(
+		ui.ctx(),
+		ui.make_persistent_id("upload-meter"),
+		true,
+		0.18,
+	) * target;
+	let height = if over_limit { 40.0 } else { 28.0 };
+	let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
+	let track = egui::Rect::from_min_size(
+		rect.min + egui::vec2(0.0, 18.0),
+		egui::vec2(rect.width(), 6.0),
+	);
+	ui.painter()
+		.rect_filled(track, 3.0, colors.border);
+	let fill_color = if over_limit {
+		colors.danger
+	} else {
+		colors.accent
+	};
+	if fill > 0.0 {
+		let filled = egui::Rect::from_min_size(
+			track.min,
+			egui::vec2(track.width() * fill, track.height()),
+		);
+		ui.painter().rect_filled(filled, 3.0, fill_color);
+	}
+	let reason = match limit.source {
+		UploadLimitSource::Account => t("Limit from your account"),
+		UploadLimitSource::ServerBoost => t("Limit from server boost"),
+	};
+	let label = format!(
+		"{} / {} · {}",
+		format_size(largest_bytes),
+		format_size(limit.bytes),
+		reason
+	);
+	ui.painter().text(
+		rect.left_top(),
+		egui::Align2::LEFT_TOP,
+		label,
+		egui::FontId::proportional(12.0),
+		if over_limit {
+			colors.danger
+		} else {
+			colors.muted
+		},
+	);
+	if over_limit {
+		ui.painter().text(
+			rect.left_top() + egui::vec2(0.0, 14.0),
+			egui::Align2::LEFT_TOP,
+			t("This file exceeds the upload limit here; compress it or share a link"),
+			egui::FontId::proportional(11.0),
+			colors.danger,
+		);
 	}
 }
 

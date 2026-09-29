@@ -2111,6 +2111,7 @@ mod tests {
 			id: model::Id(10),
 			name: "Synthetic server".into(),
 			icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+		premium_tier: 0
 		};
 		let mut output = ctx.run_ui(Default::default(), |ui| {
 			preview.show_guild_sized(ui, &guild, true, true, 48.0);

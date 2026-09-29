@@ -2898,6 +2898,9 @@ impl MessagingUi {
 			&& !self.upload_busy
 			&& self.attachment_files.len() < 10;
 		let application_command = !editing_here && self.slash_commands.active.is_some();
+		let attachment_sizes: Vec<u64> = self.selected_files().iter().map(|(_, b)| *b).collect();
+		let attachments_within_limit =
+			state.attachment_sizes_allowed(channel, &attachment_sizes);
 		let can_send = if let Some((edit_channel, message)) = editing_key {
 			state.freshness == Freshness::Fresh
 				&& state.can_edit(edit_channel, message)
@@ -2909,7 +2912,10 @@ impl MessagingUi {
 				&& (self.attachment.is_none() || state.can_attach(channel))
 				&& !self.upload_busy
 				&& !(state.demo && self.attachment.is_some())
-				&& (count_before > 0 || self.attachment.is_some())
+				&& (count_before > 0
+					|| self.attachment.is_some()
+					|| !self.attachment_files.is_empty())
+				&& attachments_within_limit
 		};
 		if cap_top.is_some() {
 			// The cap and the input form one block: undo the automatic vertical item gap.
@@ -2930,8 +2936,10 @@ impl MessagingUi {
                     egui::pos2(ui.max_rect().left() - 10.0, cap_top.unwrap_or(ui.max_rect().top() - 6.0)),
                     egui::pos2(ui.max_rect().right() + 10.0, ui.max_rect().top()),
                 );
-                if !editing_here && self.attachment.is_some() {
-                    self.attachment_tray(ui);
+                if !editing_here
+                    && (!self.attachment_files.is_empty() || self.attachment.is_some())
+                {
+                    self.attachment_tray(ui, state, channel);
                 }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
@@ -2944,7 +2952,10 @@ impl MessagingUi {
                                 icons::button(ui, icons::Icon::Attach, 28.0, "Attach files")
                             })
                             .inner
-                            .on_hover_text("Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files and 500 MB total; account limits may be lower. Send starts the upload."))
+                            .on_hover_text(crate::i18n::text(
+                                self.language,
+                                "Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files; each file must fit your upload limit. Send starts the upload.",
+                            )))
                     };
                     if !editing_here { self.extensions.composer_menu(ui, state); }
                     if attach.is_some_and(|attach| attach.clicked()) {
@@ -2962,7 +2973,7 @@ impl MessagingUi {
                                 )
                             })
                             .inner;
-                        let send = enter || send_button.clicked();
+                        let send = can_send && (enter || send_button.clicked());
                         let limit = state.message_char_limit();
                         if count_before + 200 >= limit {
                             ui.label(
@@ -3564,11 +3575,17 @@ impl MessagingUi {
 	}
 
 	/// Selected-file cards above the composer input, in the style of Discord's upload tray.
-	fn attachment_tray(&mut self, ui: &mut egui::Ui) {
+	fn attachment_tray(&mut self, ui: &mut egui::Ui, state: &State, channel: Id) {
 		let colors = design::palette(ui);
 		let textures = self.attachment_textures(ui.ctx());
 		ui.add_space(4.0);
 		let files = self.selected_files();
+		let sizes: Vec<u64> = files.iter().map(|(_, bytes)| *bytes).collect();
+		let limit = state.attachment_upload_limit(channel);
+		let largest = sizes.iter().copied().max().unwrap_or(0);
+		let over_limit = !state.attachment_sizes_allowed(channel, &sizes);
+		attachments::pending_upload_meter(ui, largest, limit, over_limit);
+		ui.add_space(4.0);
 		egui::ScrollArea::horizontal()
 			.id_salt("pending-attachments")
 			.show(ui, |ui| {
@@ -5738,6 +5755,7 @@ mod composer_tests {
 			name: "Synthetic invited server".into(),
 			icon: None,
 			emojis: None,
+		premium_tier: 0
 		});
 		let mut channel = state.channels[0].clone();
 		channel.id = Id(12);
@@ -5874,6 +5892,7 @@ mod composer_tests {
 				name: "Linked server".into(),
 				icon: None,
 				emojis: None,
+			premium_tier: 0
 			});
 			state
 				.permissions
@@ -8332,6 +8351,84 @@ mod composer_tests {
 				);
 			}
 		}
+	}
+
+	#[test]
+	fn oversize_attachment_blocks_composer_send() {
+		use client_core::upload_limit;
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		let channel = state.selected.unwrap();
+		state.drafts.remove(&channel);
+		let over = upload_limit::account_upload_bytes(None) + 1;
+		let mut messaging = MessagingUi {
+			attachment: Some(("large.bin".into(), over)),
+			..Default::default()
+		};
+		let mut commands = Vec::new();
+		let mut editor = egui::Id::NULL;
+		ctx.run_ui(Default::default(), |ui| {
+			editor = ui.make_persistent_id("message-input");
+			messaging.composer(ui, &mut state, channel, &ctx, &mut commands);
+		})
+		.drop_without_applying_deltas();
+		ctx.memory_mut(|m| m.request_focus(editor));
+		ctx.run_ui(
+			egui::RawInput {
+				events: vec![egui::Event::Key {
+					key: egui::Key::Enter,
+					physical_key: None,
+					pressed: true,
+					repeat: false,
+					modifiers: egui::Modifiers::NONE,
+				}],
+				..Default::default()
+			},
+			|ui| messaging.composer(ui, &mut state, channel, &ctx, &mut commands),
+		)
+		.drop_without_applying_deltas();
+		assert!(commands.is_empty(), "Send must stay disabled above the upload limit");
+		assert!(messaging.attachment.is_some());
+	}
+
+	#[test]
+	fn attachment_under_limit_still_sends() {
+		use client_core::upload_limit;
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		let channel = state.selected.unwrap();
+		state.drafts.remove(&channel);
+		let within = upload_limit::account_upload_bytes(None);
+		let mut messaging = MessagingUi {
+			attachment: Some(("small.bin".into(), within)),
+			..Default::default()
+		};
+		let mut commands = Vec::new();
+		let mut editor = egui::Id::NULL;
+		ctx.run_ui(Default::default(), |ui| {
+			editor = ui.make_persistent_id("message-input");
+			messaging.composer(ui, &mut state, channel, &ctx, &mut commands);
+		})
+		.drop_without_applying_deltas();
+		ctx.memory_mut(|m| m.request_focus(editor));
+		ctx.run_ui(
+			egui::RawInput {
+				events: vec![egui::Event::Key {
+					key: egui::Key::Enter,
+					physical_key: None,
+					pressed: true,
+					repeat: false,
+					modifiers: egui::Modifiers::NONE,
+				}],
+				..Default::default()
+			},
+			|ui| messaging.composer(ui, &mut state, channel, &ctx, &mut commands),
+		)
+		.drop_without_applying_deltas();
+		assert_eq!(commands.len(), 1);
+		assert!(matches!(&commands[0], Command::Send { .. }));
 	}
 
 	#[test]

@@ -911,6 +911,7 @@ mod tests {
 					name: "Synthetic server".into(),
 					icon: None,
 					emojis: None,
+				premium_tier: 0
 				})
 				.collect(),
 			guild_folders: Some(settings),

@@ -445,6 +445,8 @@ pub struct GuildDto {
 	#[serde(default)]
 	pub icon: Option<String>,
 	#[serde(default)]
+	pub premium_tier: u8,
+	#[serde(default)]
 	pub name: String,
 	#[serde(default)]
 	pub channels: Vec<ChannelDto>,
@@ -463,6 +465,8 @@ pub struct GuildProperties {
 	pub name: Patch<String>,
 	#[serde(default)]
 	pub icon: Patch<String>,
+	#[serde(default)]
+	pub premium_tier: Patch<u8>,
 }
 #[derive(Deserialize)]
 pub struct GuildPatchDto {
@@ -476,6 +480,7 @@ impl GuildPatchDto {
 			id: self.id,
 			name: self.properties.name,
 			icon: self.properties.icon,
+			premium_tier: self.properties.premium_tier,
 		}
 	}
 }
@@ -562,6 +567,9 @@ impl Ready {
 						Patch::Null => g.icon = None,
 						Patch::Absent => {}
 					}
+					if let Patch::Value(tier) = properties.premium_tier {
+						g.premium_tier = tier.min(3);
+					}
 				}
 				let everyone = g
 					.roles
@@ -611,6 +619,7 @@ impl Ready {
 					id: g.id,
 					name: g.name.chars().take(128).collect(),
 					icon: g.icon.filter(|hash| model::valid_avatar_hash(hash)),
+					premium_tier: g.premium_tier.min(3),
 				})
 			})
 			.collect::<Result<Vec<_>, DecodeError>>()?;

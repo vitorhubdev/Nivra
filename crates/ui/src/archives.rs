@@ -405,6 +405,7 @@ mod tests {
 					name: "Synthetic".into(),
 					icon: None,
 					emojis: None,
+				premium_tier: 0
 				}],
 				channels: vec![channel(7, 15, None)],
 				..State::default()

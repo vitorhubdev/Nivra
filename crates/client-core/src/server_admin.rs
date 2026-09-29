@@ -1011,6 +1011,7 @@ mod member_kick_tests {
 				icon: None,
 				emojis: None,
 				stickers: None,
+			premium_tier: 0
 			}],
 			..Default::default()
 		};
@@ -1129,6 +1130,7 @@ mod voice_move_tests {
 				icon: None,
 				emojis: None,
 				stickers: None,
+			premium_tier: 0
 			}],
 			channels: [source, target]
 				.into_iter()
@@ -1254,6 +1256,7 @@ mod invite_tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
+			premium_tier: 0
 			}],
 			..Default::default()
 		};
@@ -1424,6 +1427,7 @@ mod sticker_tests {
 				icon: None,
 				emojis: None,
 				stickers: None,
+			premium_tier: 0
 			}],
 			..Default::default()
 		};

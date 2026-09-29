@@ -1286,6 +1286,14 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"App icon badges are not available on this platform yet." => {
 			"Emblemas no ícone do app ainda não estão disponíveis nesta plataforma."
 		}
+		"Limit from your account" => "Limite da sua conta",
+		"Limit from server boost" => "Limite do boost do servidor",
+		"This file exceeds the upload limit here; compress it or share a link" => {
+			"Este arquivo excede o limite de envio aqui; comprima ou envie um link"
+		}
+		"Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files; each file must fit your upload limit. Send starts the upload." => {
+			"Escolha, solte ou cole arquivos (Ctrl/Cmd/Option+V). Até 10 arquivos; cada um deve caber no seu limite de envio. Enviar inicia o upload."
+		}
 		_ => return None,
 	})
 }
@@ -2539,6 +2547,14 @@ fn spanish(key: &str) -> Option<&'static str> {
 		}
 		"App icon badges are not available on this platform yet." => {
 			"Las insignias del icono de la app aún no están disponibles en esta plataforma."
+		}
+		"Limit from your account" => "Límite de tu cuenta",
+		"Limit from server boost" => "Límite del boost del servidor",
+		"This file exceeds the upload limit here; compress it or share a link" => {
+			"Este archivo supera el límite de subida aquí; comprímelo o comparte un enlace"
+		}
+		"Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files; each file must fit your upload limit. Send starts the upload." => {
+			"Elige, suelta o pega archivos (Ctrl/Cmd+Option+V). Hasta 10 archivos; cada uno debe caber en tu límite de subida. Enviar inicia la subida."
 		}
 		_ => return None,
 	})

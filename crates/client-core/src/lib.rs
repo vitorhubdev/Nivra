@@ -44,6 +44,7 @@ mod trail;
 #[doc(hidden)]
 pub use trail::Trail;
 pub mod typing;
+pub mod upload_limit;
 pub mod user_actions;
 mod verification;
 mod view_revisions;
@@ -624,6 +625,8 @@ pub struct State {
 	/// Full Nitro on the owner account, from the entitlement event. Only full
 	/// Nitro raises the message length; Basic and Classic keep 2000 characters.
 	pub nitro_full: bool,
+	/// Discord `premium_type` for the signed-in user when known (`2` = full Nitro).
+	pub premium_type: Option<u8>,
 	pub interactions: interactions::Interactions,
 	pub application_commands: application_commands::Catalog,
 	pub messaging_permissions: messaging_permissions::Settings,
@@ -836,6 +839,7 @@ impl Default for State {
 		Self {
 			stickers: Default::default(),
 			nitro_full: false,
+			premium_type: None,
 			interactions: Default::default(),
 			application_commands: Default::default(),
 			messaging_permissions: Default::default(),
@@ -1578,6 +1582,17 @@ impl State {
 		} else {
 			MAX_CONTENT
 		}
+	}
+	pub fn attachment_upload_limit(&self, channel: Id) -> upload_limit::UploadLimit {
+		let guild_tier = self
+			.channel(channel)
+			.and_then(|c| c.guild)
+			.and_then(|guild| self.guild(guild))
+			.map_or(0, |g| g.premium_tier);
+		upload_limit::upload_limit(self.premium_type, guild_tier)
+	}
+	pub fn attachment_sizes_allowed(&self, channel: Id, sizes: &[u64]) -> bool {
+		!upload_limit::exceeds_limit(self.attachment_upload_limit(channel), sizes)
 	}
 	pub fn prepare_send(&mut self) -> Option<Command> {
 		self.prepare_send_with_attachment(None)
@@ -2444,6 +2459,11 @@ impl State {
 				{
 					self.stickers.external_allowed = matches!(premium_type, Patch::Value(2 | 3));
 					self.nitro_full = matches!(premium_type, Patch::Value(2));
+					self.premium_type = match premium_type {
+						Patch::Value(value) => Some(value),
+						Patch::Null => Some(0),
+						Patch::Absent => self.premium_type,
+					};
 				}
 				Ok(())
 			}
@@ -2608,6 +2628,11 @@ impl State {
 					match patch.icon {
 						Patch::Value(icon) => guild.icon = valid_avatar_hash(&icon).then_some(icon),
 						Patch::Null => guild.icon = None,
+						Patch::Absent => {}
+					}
+					match patch.premium_tier {
+						Patch::Value(tier) => guild.premium_tier = tier.min(3),
+						Patch::Null => guild.premium_tier = 0,
 						Patch::Absent => {}
 					}
 					if self.navigation_bytes() + self.permissions.bytes()
@@ -3967,6 +3992,7 @@ mod tests {
 			name: "Synthetic".into(),
 			icon: None,
 			emojis: None,
+		premium_tier: 0
 		};
 		let mut state = State {
 			guilds: vec![guild(1)],
@@ -4006,6 +4032,7 @@ mod tests {
 					name: "Synthetic".into(),
 					icon: None,
 					emojis: None,
+				premium_tier: 0
 				})
 				.collect(),
 			..State::default()
@@ -4383,6 +4410,7 @@ mod tests {
 					name: "Synthetic".into(),
 					icon: None,
 					emojis: None,
+				premium_tier: 0
 				})
 				.collect(),
 			channels: [(10, 1, 0), (11, 1, 0), (12, 1, 2), (20, 2, 0), (30, 0, 1)]
@@ -4800,6 +4828,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
+			premium_tier: 0
 			}],
 			..State::default()
 		};
@@ -4870,6 +4899,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: Some(vec![emoji.clone()]),
+			premium_tier: 0
 			})
 			.collect();
 		for guild in &mut guilds {
@@ -4911,6 +4941,7 @@ mod tests {
 				id: Id(2),
 				name: "Synthetic server".into(),
 				icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+			premium_tier: 0
 			}],
 			..State::default()
 		};
@@ -4921,6 +4952,7 @@ mod tests {
 				id: Id(2),
 				name: Patch::Value("Renamed".into()),
 				icon: Patch::Absent,
+				premium_tier: Patch::Absent,
 			}),
 		);
 		assert_eq!(state.guilds[0].name, "Renamed");
@@ -4931,6 +4963,7 @@ mod tests {
 				id: Id(2),
 				name: Patch::Absent,
 				icon: Patch::Value("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into()),
+				premium_tier: Patch::Absent,
 			}),
 		);
 		assert_ne!(state.guilds[0].icon_key(), key);
@@ -4941,6 +4974,7 @@ mod tests {
 				id: Id(2),
 				name: Patch::Absent,
 				icon: Patch::Null,
+				premium_tier: Patch::Absent,
 			}),
 		);
 		assert!(state.guilds[0].icon_key().is_none());
@@ -4950,6 +4984,7 @@ mod tests {
 				id: Id(2),
 				name: Patch::Value("x".repeat(1024)),
 				icon: Patch::Value("../../invalid".into()),
+				premium_tier: Patch::Absent,
 			}),
 		);
 		assert_eq!(state.guilds[0].name.len(), 128);
@@ -4960,6 +4995,7 @@ mod tests {
 				id: Id(3),
 				name: Patch::Value("Unknown".into()),
 				icon: Patch::Absent,
+				premium_tier: Patch::Absent,
 			}),
 		);
 		assert_eq!(state.guilds.len(), 1);
@@ -4969,6 +5005,7 @@ mod tests {
 				id: Id(2),
 				name: Patch::Value("Late event".into()),
 				icon: Patch::Absent,
+				premium_tier: Patch::Absent,
 			}),
 		});
 		assert_eq!(state.guilds[0].name.len(), 128);
@@ -4984,6 +5021,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
+			premium_tier: 0
 			}],
 			..State::default()
 		};
@@ -5414,6 +5452,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
+			premium_tier: 0
 			}],
 			selected: Some(Id(1)),
 			auth: auth::AuthState::Authenticated,
@@ -5551,6 +5590,7 @@ mod tests {
 			name: "Synthetic".into(),
 			icon: None,
 			emojis: None,
+		premium_tier: 0
 		};
 		let user = message(1).author;
 		let mut state = State {

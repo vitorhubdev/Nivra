@@ -293,6 +293,7 @@ pub fn demo_state() -> State {
 				icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
 				id: Id(10),
 				name: "Synthetic workspace".into(),
+				premium_tier: 0,
 			}],
 			channels: vec![
 				Channel {
@@ -956,6 +957,7 @@ pub fn seed_demo_folder_mosaic(state: &mut State) {
 			id: Id(id),
 			name: name.into(),
 			icon: Some(hash.into()),
+			premium_tier: 0,
 		});
 	}
 	state.guild_folders = Some(model::guild_folders::Settings {

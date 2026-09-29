@@ -888,6 +888,7 @@ mod tests {
 							})
 							.collect(),
 					),
+					premium_tier: 0,
 				})
 				.collect(),
 			..State::default()
@@ -978,6 +979,7 @@ mod tests {
 					name: "Synthetic guild".into(),
 					icon: None,
 					emojis: None,
+				premium_tier: 0
 				});
 				state
 					.permissions
@@ -1211,6 +1213,7 @@ mod tests {
 					roles: Some(vec![Id(1)]),
 				},
 			]),
+			premium_tier: 0,
 		}];
 		let state = State {
 			guilds,

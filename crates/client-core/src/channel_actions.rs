@@ -1035,6 +1035,7 @@ mod tests {
 				name: "Synthetic guild".into(),
 				icon: None,
 				emojis: None,
+			premium_tier: 0
 			}],
 			channels: vec![model::Channel {
 				id: Id(3),

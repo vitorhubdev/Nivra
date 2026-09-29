@@ -2084,6 +2084,7 @@ mod tests {
 							})
 							.collect(),
 					),
+					premium_tier: 0,
 				})
 				.collect();
 			state.invalidate_navigation();
@@ -2198,6 +2199,7 @@ mod tests {
 				id: guild,
 				name: model::Patch::Value("Needle server".into()),
 				icon: model::Patch::Absent,
+				premium_tier: model::Patch::Absent,
 			}),
 		);
 		assert!(cache.update(&state, None, "  NEEDLE  "));
@@ -2808,6 +2810,7 @@ mod tests {
 						})
 						.collect(),
 				),
+				premium_tier: 0,
 			}],
 			channels: vec![model::Channel {
 				id: Id(2),

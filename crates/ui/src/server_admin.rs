@@ -196,7 +196,10 @@ impl Admin {
 		if let Some(error) = state.server_admin.error.or(self.error) {
 			design::notice(ui, design::Level::Error, error);
 			if ui
-				.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "Reload")))
+				.add_enabled(
+					!state.server_admin.pending,
+					egui::Button::new(crate::tr_ui!(ui, "Reload")),
+				)
 				.clicked() && let Some(command) = state.request_server_admin(
 				guild,
 				if members {
@@ -244,7 +247,13 @@ impl Admin {
 			if ui
 				.add_enabled_ui(
 					!self.preparing() && self.uploads.is_empty() && !state.server_admin.pending,
-					|ui| design::button(ui, crate::tr_ui!(ui, "Upload Emoji"), design::ButtonKind::Primary),
+					|ui| {
+						design::button(
+							ui,
+							crate::tr_ui!(ui, "Upload Emoji"),
+							design::ButtonKind::Primary,
+						)
+					},
 				)
 				.inner
 				.clicked()
@@ -263,7 +272,11 @@ impl Admin {
 				.corner_radius(8)
 				.inner_margin(12)
 				.show(ui, |ui| {
-					ui.label(design::semibold(ui, crate::tr_ui!(ui, "Review uploads"), 16.0));
+					ui.label(design::semibold(
+						ui,
+						crate::tr_ui!(ui, "Review uploads"),
+						16.0,
+					));
 					let mut remove = None;
 					for (index, upload) in self.uploads.iter_mut().enumerate() {
 						ui.push_id(index, |ui| {
@@ -278,14 +291,20 @@ impl Admin {
 										.desired_width((ui.available_width() - 130.0).max(60.0))
 										.char_limit(32),
 								)
-								.on_hover_text(crate::tr_ui!(ui, "Emoji name: 2–32 letters, numbers, or underscores"));
+								.on_hover_text(crate::tr_ui!(
+									ui,
+									"Emoji name: 2–32 letters, numbers, or underscores"
+								));
 								ui.weak(if upload.animated {
 									"Animated"
 								} else {
 									"Static"
 								});
 								if ui
-									.add_enabled(!self.uploading, egui::Button::new(crate::tr_ui!(ui, "Remove")))
+									.add_enabled(
+										!self.uploading,
+										egui::Button::new(crate::tr_ui!(ui, "Remove")),
+									)
 									.clicked()
 								{
 									remove = Some(index);
@@ -318,7 +337,10 @@ impl Admin {
 							self.uploading = true;
 						}
 						if ui
-							.add_enabled(!self.uploading, egui::Button::new(crate::tr_ui!(ui, "Cancel")))
+							.add_enabled(
+								!self.uploading,
+								egui::Button::new(crate::tr_ui!(ui, "Cancel")),
+							)
 							.clicked()
 						{
 							self.uploads.clear();
@@ -356,7 +378,11 @@ impl Admin {
 			if count == 0 {
 				ui.add_space(8.0);
 				ui.vertical_centered(|ui| {
-					ui.label(RichText::new(crate::tr_ui!(ui, "NONE")).size(18.0).color(colors.muted));
+					ui.label(
+						RichText::new(crate::tr_ui!(ui, "NONE"))
+							.size(18.0)
+							.color(colors.muted),
+					);
 				});
 			} else {
 				egui::Frame::new()
@@ -432,8 +458,11 @@ impl Admin {
 											}
 											if ui
 												.button(
-													RichText::new(crate::tr_ui!(ui, "Delete Emoji"))
-														.color(colors.danger),
+													RichText::new(crate::tr_ui!(
+														ui,
+														"Delete Emoji"
+													))
+													.color(colors.danger),
 												)
 												.clicked()
 											{
@@ -463,7 +492,11 @@ impl Admin {
 		commands: &mut Vec<Command>,
 	) {
 		let colors = design::palette(ui);
-		ui.label(design::semibold(ui, crate::tr_ui!(ui, "Server Members"), 22.0));
+		ui.label(design::semibold(
+			ui,
+			crate::tr_ui!(ui, "Server Members"),
+			22.0,
+		));
 		ui.add_space(20.0);
 		let mut action = None;
 		if let Some(mut enabled) = state
@@ -478,7 +511,11 @@ impl Admin {
 			});
 			ui.add_space(24.0);
 		}
-		ui.label(design::semibold(ui, crate::tr_ui!(ui, "Recent Members"), 15.0));
+		ui.label(design::semibold(
+			ui,
+			crate::tr_ui!(ui, "Recent Members"),
+			15.0,
+		));
 		let search_width = (ui.available_width() - 44.0).clamp(100.0, 260.0);
 		ui.horizontal_wrapped(|ui| {
 			ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -531,7 +568,9 @@ impl Admin {
 				&& ui
 					.add_enabled(
 						!state.server_admin.pending,
-						egui::Button::new(RichText::new(crate::tr_ui!(ui, "Prune")).color(colors.danger)),
+						egui::Button::new(
+							RichText::new(crate::tr_ui!(ui, "Prune")).color(colors.danger),
+						),
 					)
 					.clicked()
 			{
@@ -755,7 +794,10 @@ impl Admin {
 				));
 				if self.query.after.is_some()
 					&& ui
-						.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "First page")))
+						.add_enabled(
+							!state.server_admin.pending,
+							egui::Button::new(crate::tr_ui!(ui, "First page")),
+						)
 						.clicked()
 				{
 					self.query.after = None;
@@ -763,7 +805,10 @@ impl Admin {
 				}
 				if let Some(cursor) = members.next
 					&& ui
-						.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "Next page")))
+						.add_enabled(
+							!state.server_admin.pending,
+							egui::Button::new(crate::tr_ui!(ui, "Next page")),
+						)
 						.clicked()
 				{
 					self.query.after = Some(cursor);
@@ -1035,7 +1080,10 @@ impl Admin {
 								.char_limit(32),
 						)
 						.labelled_by(label.id);
-						crate::dialog::hint(ui, crate::tr_ui!(ui, "Leave blank to use their username."));
+						crate::dialog::hint(
+							ui,
+							crate::tr_ui!(ui, "Leave blank to use their username."),
+						);
 					}
 					Dialog::Prune { days, counted } => {
 						crate::dialog::label(ui, crate::tr_ui!(ui, "Inactive for"));
@@ -1081,7 +1129,9 @@ impl Admin {
 								&& state.can_edit_guild_emoji(guild, *id)
 								&& model::server_admin::valid_emoji_name(name),
 							|ui| {
-								if crate::dialog::action(ui, crate::tr_ui!(ui, "Save"), kind).clicked() {
+								if crate::dialog::action(ui, crate::tr_ui!(ui, "Save"), kind)
+									.clicked()
+								{
 									action = Some(Action::RenameEmoji {
 										id: *id,
 										name: name.clone(),
@@ -1092,7 +1142,9 @@ impl Admin {
 					}
 					Dialog::Delete { id, .. } => {
 						ui.add_enabled_ui(ready && state.can_edit_guild_emoji(guild, *id), |ui| {
-							if crate::dialog::action(ui, crate::tr_ui!(ui, "Delete Emoji"), kind).clicked() {
+							if crate::dialog::action(ui, crate::tr_ui!(ui, "Delete Emoji"), kind)
+								.clicked()
+							{
 								action = Some(Action::DeleteEmoji { id: *id });
 							}
 						});
@@ -1103,7 +1155,9 @@ impl Admin {
 								&& state.can_edit_guild_nickname(guild, *user)
 								&& !name.chars().any(char::is_control),
 							|ui| {
-								if crate::dialog::action(ui, crate::tr_ui!(ui, "Save"), kind).clicked() {
+								if crate::dialog::action(ui, crate::tr_ui!(ui, "Save"), kind)
+									.clicked()
+								{
 									action = Some(Action::SetNickname {
 										user: *user,
 										nick: name.clone(),
@@ -1116,7 +1170,9 @@ impl Admin {
 						ui.add_enabled_ui(
 							ready && state.can_kick_guild_member(guild, *user),
 							|ui| {
-								if crate::dialog::action(ui, crate::tr_ui!(ui, "Kick Member"), kind).clicked() {
+								if crate::dialog::action(ui, crate::tr_ui!(ui, "Kick Member"), kind)
+									.clicked()
+								{
 									action = Some(Action::Kick { user: *user });
 								}
 							},
@@ -1130,7 +1186,13 @@ impl Admin {
 						ui.add_enabled_ui(
 							previewed && count > 0 && state.can_prune_guild(guild),
 							|ui| {
-								if crate::dialog::action(ui, crate::tr_ui!(ui, "Prune Members"), kind).clicked() {
+								if crate::dialog::action(
+									ui,
+									crate::tr_ui!(ui, "Prune Members"),
+									kind,
+								)
+								.clicked()
+								{
 									action = Some(Action::Prune {
 										days: *days,
 										execute: true,
@@ -1140,8 +1202,12 @@ impl Admin {
 							},
 						);
 						ui.add_enabled_ui(ready && state.can_prune_guild(guild), |ui| {
-							if crate::dialog::action(ui, crate::tr_ui!(ui, "Preview"), crate::dialog::Action::Outline)
-								.clicked()
+							if crate::dialog::action(
+								ui,
+								crate::tr_ui!(ui, "Preview"),
+								crate::dialog::Action::Outline,
+							)
+							.clicked()
 							{
 								*counted = Some(*days);
 								action = Some(Action::Prune {
@@ -1153,8 +1219,12 @@ impl Admin {
 					}
 				}
 				ui.add_enabled_ui(!state.server_admin.saving, |ui| {
-					close |= crate::dialog::action(ui, crate::tr_ui!(ui, "Cancel"), crate::dialog::Action::Neutral)
-						.clicked();
+					close |= crate::dialog::action(
+						ui,
+						crate::tr_ui!(ui, "Cancel"),
+						crate::dialog::Action::Neutral,
+					)
+					.clicked();
 				});
 			});
 		});

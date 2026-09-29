@@ -807,7 +807,10 @@ mod tests {
 
 	/// Two stacked message bodies, each with its own surface like timeline rows.
 	fn show_two(ui: &mut egui::Ui) {
-		for (salt, text) in [("one", "first message body"), ("two", "second message body")] {
+		for (salt, text) in [
+			("one", "first message body"),
+			("two", "second message body"),
+		] {
 			let mut surface = Surface::new(ui, salt);
 			ui.allocate_ui_with_layout(
 				egui::vec2(ui.available_width(), 0.0),
@@ -876,13 +879,9 @@ mod tests {
 		super::install(&ctx);
 		assert_eq!(super::selected_text(&ctx), "");
 		assert_eq!(super::take_save_txt(&ctx), None);
-		ctx.plugin::<Pointer>()
-			.lock()
-			.cached = "hello".to_owned();
+		ctx.plugin::<Pointer>().lock().cached = "hello".to_owned();
 		assert_eq!(super::selected_text(&ctx), "hello");
-		ctx.plugin::<Pointer>()
-			.lock()
-			.save_txt = Some(b"hello".to_vec());
+		ctx.plugin::<Pointer>().lock().save_txt = Some(b"hello".to_vec());
 		assert_eq!(super::take_save_txt(&ctx), Some(b"hello".to_vec()));
 		assert_eq!(super::take_save_txt(&ctx), None);
 	}

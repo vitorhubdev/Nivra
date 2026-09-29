@@ -262,11 +262,7 @@ fn package() -> Result<(), String> {
 	run(&arguments)?;
 	let root = PathBuf::from("dist");
 	std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-	let exe = if cfg!(windows) {
-		"nivra.exe"
-	} else {
-		"nivra"
-	};
+	let exe = if cfg!(windows) { "nivra.exe" } else { "nivra" };
 	let destination = if cfg!(target_os = "macos") {
 		let app = root.join("Nivra.app/Contents");
 		std::fs::create_dir_all(app.join("MacOS")).map_err(|e| e.to_string())?;

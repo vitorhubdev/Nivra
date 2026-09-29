@@ -3,6 +3,7 @@ use super::egui;
 
 pub struct State {
 	pub hidden: bool,
+	#[allow(dead_code)] // Read by desktop tray path; tray-debug includes this file without it.
 	pub hide_notice_shown: bool,
 	exiting: bool,
 	close_after_show: bool,
@@ -10,7 +11,13 @@ pub struct State {
 	compositor: Option<platform::compositor::Hider>,
 }
 
-pub fn should_show_hide_notice(tray_available: bool, setting_enabled: bool, already_shown: bool, just_hidden: bool) -> bool {
+#[allow(dead_code)] // Used by desktop; tray-debug includes this file without calling it.
+pub fn should_show_hide_notice(
+	tray_available: bool,
+	setting_enabled: bool,
+	already_shown: bool,
+	just_hidden: bool,
+) -> bool {
 	tray_available && setting_enabled && just_hidden && !already_shown
 }
 
@@ -131,9 +138,21 @@ mod tests {
 	#[test]
 	fn hide_notice_only_on_first_available_hide_with_setting_on() {
 		assert!(should_show_hide_notice(true, true, false, true));
-		assert!(!should_show_hide_notice(true, true, true, true), "already shown");
-		assert!(!should_show_hide_notice(false, true, false, true), "tray unavailable");
-		assert!(!should_show_hide_notice(true, false, false, true), "setting off");
-		assert!(!should_show_hide_notice(true, true, false, false), "not hidden");
+		assert!(
+			!should_show_hide_notice(true, true, true, true),
+			"already shown"
+		);
+		assert!(
+			!should_show_hide_notice(false, true, false, true),
+			"tray unavailable"
+		);
+		assert!(
+			!should_show_hide_notice(true, false, false, true),
+			"setting off"
+		);
+		assert!(
+			!should_show_hide_notice(true, true, false, false),
+			"not hidden"
+		);
 	}
 }

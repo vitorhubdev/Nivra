@@ -381,7 +381,9 @@ impl ExtensionUi {
 								egui::Label::new(
 									design::semibold(
 										ui,
-										gallery.as_deref().unwrap_or(t("Changes are not saved yet")),
+										gallery
+											.as_deref()
+											.unwrap_or(t("Changes are not saved yet")),
 										14.0,
 									)
 									.color(colors.text_strong),
@@ -447,11 +449,7 @@ impl ExtensionUi {
 			self.theme_editor = Some(editor);
 		}
 	}
-	pub(crate) fn theme_editor_toolbar(
-		&mut self,
-		ui: &mut egui::Ui,
-		language: Language,
-	) {
+	pub(crate) fn theme_editor_toolbar(&mut self, ui: &mut egui::Ui, language: Language) {
 		let Some(mut editor) = self.theme_editor.take() else {
 			return;
 		};
@@ -1087,7 +1085,9 @@ impl ExtensionUi {
 				egui::vec2(92.0, height),
 				colors,
 			)
-			.on_hover_text(t("Look for new packages and updates. Nothing installs on its own."))
+			.on_hover_text(t(
+				"Look for new packages and updates. Nothing installs on its own.",
+			))
 			.clicked()
 			{
 				self.previews.clear();
@@ -1264,15 +1264,15 @@ impl ExtensionUi {
 													ui.set_min_height(body_height - 24.0);
 													ui.spacing_mut().item_spacing =
 														egui::vec2(6.0, 6.0);
-									self.card_body(
-										ui,
-										&colors,
-										&entry,
-										&mut enable,
-										&mut disable,
-										&mut invoke,
-										language,
-									);
+													self.card_body(
+														ui,
+														&colors,
+														&entry,
+														&mut enable,
+														&mut disable,
+														&mut invoke,
+														language,
+													);
 												});
 										});
 								},
@@ -1339,7 +1339,9 @@ impl ExtensionUi {
 						ui.add_space(3.0);
 						ui.label(
 							egui::RichText::new(if query.is_empty() {
-								t("Refresh the catalog or import a creator's package to get started.")
+								t(
+									"Refresh the catalog or import a creator's package to get started.",
+								)
 							} else {
 								t("Try a different name or creator.")
 							})
@@ -1372,6 +1374,7 @@ impl ExtensionUi {
 		}
 		self.consent_modal(ui.ctx(), &colors, language);
 	}
+	#[allow(clippy::too_many_arguments)] // Card renders all extension surfaces.
 	fn card_body(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -1410,9 +1413,9 @@ impl ExtensionUi {
 								)
 								.frame(false),
 							)
-							.on_hover_text(
-								t("Review the new release before it replaces this version."),
-							)
+							.on_hover_text(t(
+								"Review the new release before it replaces this version.",
+							))
 							.clicked();
 					}
 					ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -1749,12 +1752,7 @@ impl ExtensionUi {
 			}
 		});
 	}
-	fn consent_modal(
-		&mut self,
-		ctx: &egui::Context,
-		colors: &design::Palette,
-		language: Language,
-	) {
+	fn consent_modal(&mut self, ctx: &egui::Context, colors: &design::Palette, language: Language) {
 		let t = |english: &'static str| crate::i18n::text(language, english);
 		let Some(mut consent) = self.consent.take() else {
 			return;
@@ -1899,9 +1897,9 @@ impl ExtensionUi {
 									colors.warning,
 								);
 								ui.label(
-									egui::RichText::new(
-										t("Unreviewed package — its source has not been reviewed for the catalog."),
-									)
+									egui::RichText::new(t(
+										"Unreviewed package — its source has not been reviewed for the catalog.",
+									))
 									.size(12.5)
 									.color(colors.text),
 								);
@@ -1929,16 +1927,20 @@ impl ExtensionUi {
 									colors.positive,
 								);
 								ui.label(
-									egui::RichText::new(
-										t("No access to conversations or composer text."),
-									)
+									egui::RichText::new(t(
+										"No access to conversations or composer text.",
+									))
 									.size(13.0)
 									.color(colors.text),
 								);
 							});
 						});
 				} else {
-					ui.label(design::eyebrow(ui, t("Allow this extension to"), colors.muted));
+					ui.label(design::eyebrow(
+						ui,
+						t("Allow this extension to"),
+						colors.muted,
+					));
 					ui.spacing_mut().item_spacing.y = 8.0;
 					for capability in &consent.entry.manifest.capabilities {
 						let mut granted = consent.grants.contains(capability);
@@ -1962,7 +1964,8 @@ impl ExtensionUi {
 									egui::Stroke::new(1.0, colors.muted);
 								ui.checkbox(
 									&mut granted,
-									egui::RichText::new(t(capability_label(*capability))).size(13.5),
+									egui::RichText::new(t(capability_label(*capability)))
+										.size(13.5),
 								)
 								.changed()
 							})
@@ -1977,9 +1980,9 @@ impl ExtensionUi {
 					}
 				}
 				ui.label(
-					egui::RichText::new(
-						t("Disabling removes the extension and its local data. Re-enabling starts fresh."),
-					)
+					egui::RichText::new(t(
+						"Disabling removes the extension and its local data. Re-enabling starts fresh.",
+					))
 					.size(12.0)
 					.color(colors.muted),
 				);
@@ -2010,12 +2013,8 @@ impl ExtensionUi {
 					);
 					close = true;
 				}
-				close |= crate::dialog::action(
-					ui,
-					t("Cancel"),
-					crate::dialog::Action::Neutral,
-				)
-				.clicked();
+				close |= crate::dialog::action(ui, t("Cancel"), crate::dialog::Action::Neutral)
+					.clicked();
 			});
 		});
 		if !close && !response.close {
@@ -2173,9 +2172,8 @@ impl ExtensionUi {
 							}
 						});
 					}
-					close |=
-						crate::dialog::action(ui, tr("Close"), crate::dialog::Action::Neutral)
-							.clicked();
+					close |= crate::dialog::action(ui, tr("Close"), crate::dialog::Action::Neutral)
+						.clicked();
 				});
 			});
 		if let Some(action) = action {
@@ -2825,7 +2823,10 @@ mod tests {
 		);
 		output.textures_delta.clear();
 		let missing = crate::i18n::drain_untranslated_keys();
-		assert!(missing.is_empty(), "untranslated extensions keys: {missing:?}");
+		assert!(
+			missing.is_empty(),
+			"untranslated extensions keys: {missing:?}"
+		);
 	}
 
 	#[test]
@@ -2884,7 +2885,10 @@ mod tests {
 		);
 		output.textures_delta.clear();
 		let missing = crate::i18n::drain_untranslated_keys();
-		assert!(missing.is_empty(), "untranslated extension composer/result keys: {missing:?}");
+		assert!(
+			missing.is_empty(),
+			"untranslated extension composer/result keys: {missing:?}"
+		);
 	}
 
 	#[test]

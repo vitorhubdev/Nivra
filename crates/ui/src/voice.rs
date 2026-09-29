@@ -937,7 +937,7 @@ impl MessagingUi {
 			return false;
 		}
 		let screen = ctx.content_rect();
-		let id = egui::Id::new("voice-stream-fullscreen");
+		let id = egui::Id::unique("voice-stream-fullscreen");
 		let modal = egui::Modal::new(id)
 			.area(
 				egui::Modal::default_area(id)
@@ -3334,7 +3334,7 @@ impl MessagingUi {
 		// Hold the last green through sub-second flaps: device reopens flip
 		// the phase for a frame or two, and the header must not blink. Only
 		// a sustained disconnect turns it yellow. Failed stays red at once.
-		let unconnected_id = ui.id().with("call-panel-unconnected-since");
+		let unconnected_id = ui.scope_id().with("call-panel-unconnected-since");
 		if connected || phase == Phase::Failed {
 			ui.ctx()
 				.data_mut(|data| data.remove::<std::time::Instant>(unconnected_id));
@@ -3802,7 +3802,7 @@ fn noise_level_row(
 	let badge_height = badge.as_ref().map_or(0.0, |pill| pill.size().y + 4.0);
 	let text_height = title.size().y
 		+ detail.as_ref().map_or(0.0, |d| d.size().y + 3.0)
-		+ badge_below.then_some(3.0 + badge_height).unwrap_or(0.0);
+		+ if badge_below { 3.0 + badge_height } else { 0.0 };
 	let padding = if compact { 7.0 } else { 10.0 };
 	let (rect, response) = ui.allocate_exact_size(
 		egui::vec2(width, text_height.max(glyph) + padding * 2.0),
@@ -4329,7 +4329,7 @@ fn speaking_avatar(
 ) {
 	let (_visibility, radius_offset, opacity) = crate::anim::speaking_ring(
 		ui.ctx(),
-		egui::Id::new(("speaking-ring", user.0)),
+		egui::Id::unique(("speaking-ring", user.0)),
 		active,
 		level,
 	);
@@ -5392,8 +5392,10 @@ mod tests {
 		// the radio side and looks broken.
 		let ctx = egui::Context::default();
 		design::apply(&ctx);
-		let mut view = MessagingUi::default();
-		view.language = model::Language::PortugueseBrazil;
+		let mut view = MessagingUi {
+			language: model::Language::PortugueseBrazil,
+			..Default::default()
+		};
 		let mut output = ctx.run_ui(
 			egui::RawInput {
 				screen_rect: Some(egui::Rect::from_min_size(

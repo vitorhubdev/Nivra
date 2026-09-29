@@ -75,6 +75,7 @@ impl Mixer {
 			speaker.level = 0;
 		}
 	}
+	#[allow(dead_code)] // Nivra speaking-ring migration; speaking_levels is the live path.
 	pub fn speaking(&self) -> impl Iterator<Item = u64> + '_ {
 		self.speakers
 			.iter()

@@ -85,6 +85,7 @@ const PLAY_BEHIND: u64 = 2;
 /// frame from `PLAY_BEHIND` positions back, and a cover RNNoise runs on every frame
 /// so it is warm and sample-aligned when the model has no answer for the play frame.
 /// Answers arriving after their frame played are discarded.
+#[allow(clippy::type_complexity)] // Audio frames carry fixed 480-sample buffers.
 struct Deep {
 	requests: mpsc::SyncSender<(u64, [f32; 480])>,
 	responses: mpsc::Receiver<(u64, Option<([f32; 480], Duration)>)>,
@@ -110,6 +111,7 @@ impl Deep {
 		)
 	}
 
+	#[allow(clippy::type_complexity)] // Audio frames carry fixed 480-sample buffers.
 	fn start_with<M, L, P>(
 		loader: L,
 		mut process_frame: P,
@@ -487,10 +489,7 @@ mod tests {
 		);
 	}
 
-	fn fake_deep(
-		stall_once: bool,
-		reported: Duration,
-	) -> Deep {
+	fn fake_deep(stall_once: bool, reported: Duration) -> Deep {
 		let stalled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 		let mut cover = noise_state();
 		Deep::start_with(
@@ -498,16 +497,12 @@ mod tests {
 			move |_: &mut (), chunk: [f32; 480]| {
 				// One real stall exercises the non-blocking path; the reported time
 				// simulates what a slow machine accounts per frame.
-				if stall_once
-					&& !stalled.swap(true, std::sync::atomic::Ordering::SeqCst)
-				{
+				if stall_once && !stalled.swap(true, std::sync::atomic::Ordering::SeqCst) {
 					std::thread::sleep(Duration::from_millis(25));
 				}
 				Some((chunk, reported))
 			},
-			Box::new(
-				move |output: &mut [f32; 480]| rnnoise_frame(&mut cover, output),
-			),
+			Box::new(move |output: &mut [f32; 480]| rnnoise_frame(&mut cover, output)),
 		)
 		.expect("fake model thread starts")
 	}
@@ -578,6 +573,7 @@ mod tests {
 	}
 
 	#[test]
+	#[allow(clippy::type_complexity)] // Test cover uses the fixed 480-sample frame.
 	fn deep_fixed_delay_never_skips_or_repeats() {
 		const FRAMES: usize = 24;
 		let mut dsp = Echo::new();
@@ -676,10 +672,7 @@ mod tests {
 		}
 		// Average model inference time from the load counters, not wall pacing.
 		let deep = dsp.deep.as_ref().expect("model still active");
-		assert!(
-			deep.load.frames > 0,
-			"paced frames reach the model"
-		);
+		assert!(deep.load.frames > 0, "paced frames reach the model");
 		let per_frame = deep.load.busy / deep.load.frames;
 		println!("DeepFilterNet ready after {load_time:?}, {per_frame:?} per 10 ms frame");
 		assert!(

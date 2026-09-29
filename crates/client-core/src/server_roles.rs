@@ -278,7 +278,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			..State::default()
 		};
@@ -488,7 +488,8 @@ mod tests {
 				)),
 			}),
 		});
-		assert!(!state.can_open_member_settings(guild));
+		// Members stays open via MANAGE_ROLES (any-of gate); stale catalog still forces refresh.
+		assert!(state.can_open_member_settings(guild));
 		assert!(state.server_admin.needs_refresh);
 		assert!(!state.can_edit_guild_role(guild, Id(4)));
 		state.apply(Envelope {
@@ -628,7 +629,7 @@ mod tests {
 			.iter_mut()
 			.find(|role| role.id == Id(3))
 			.unwrap()
-			.bits &= !p::MANAGE_GUILD;
+			.bits &= !(p::MANAGE_GUILD | p::MANAGE_ROLES);
 		state.permissions.clear_cache();
 		state.apply(Envelope {
 			generation: state.generation,

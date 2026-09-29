@@ -375,15 +375,21 @@ impl RolesUi {
 	) {
 		let colors = design::palette(ui);
 		ui.label(design::semibold(ui, crate::tr_ui!(ui, "Roles"), 22.0));
-		ui.label(crate::tr_ui!(ui, "Use roles to group your server members and assign permissions."));
+		ui.label(crate::tr_ui!(
+			ui,
+			"Use roles to group your server members and assign permissions."
+		));
 		ui.add_space(20.0);
 		let width = ui.available_width();
 		if ui
 			.add_sized(
 				[width, 76.0],
 				egui::Button::new(
-					RichText::new(crate::tr_ui!(ui, "Default Permissions\n@everyone · applies to all server members"))
-						.size(16.0),
+					RichText::new(crate::tr_ui!(
+						ui,
+						"Default Permissions\n@everyone · applies to all server members"
+					))
+					.size(16.0),
 				)
 				.right_text("›")
 				.fill(colors.raised)
@@ -406,7 +412,13 @@ impl RolesUi {
 				&& ui
 					.add_enabled_ui(
 						!state.server_admin.pending && !state.server_admin.needs_refresh,
-						|ui| design::button(ui, crate::tr_ui!(ui, "Create Role"), design::ButtonKind::Primary),
+						|ui| {
+							design::button(
+								ui,
+								crate::tr_ui!(ui, "Create Role"),
+								design::ButtonKind::Primary,
+							)
+						},
 					)
 					.inner
 					.clicked()
@@ -433,7 +445,12 @@ impl RolesUi {
 		let count = catalog.items.iter().filter(|role| role.id != guild).count();
 		ui.horizontal(|ui| {
 			fixed_label(ui, &format!("ROLES — {count}"), width * 0.52, true);
-			fixed_label(ui, crate::tr_ui!(ui, "MEMBERS"), (width * 0.48 - 108.0).max(48.0), true);
+			fixed_label(
+				ui,
+				crate::tr_ui!(ui, "MEMBERS"),
+				(width * 0.48 - 108.0).max(48.0),
+				true,
+			);
 		});
 		ui.separator();
 		let mut action = None;
@@ -529,7 +546,10 @@ impl RolesUi {
 							}
 							if state.can_delete_guild_role(guild, role.id)
 								&& ui
-									.button(RichText::new(crate::tr_ui!(ui, "Delete Role")).color(colors.danger))
+									.button(
+										RichText::new(crate::tr_ui!(ui, "Delete Role"))
+											.color(colors.danger),
+									)
 									.clicked()
 							{
 								self.delete = Some(role.id);
@@ -618,7 +638,9 @@ impl RolesUi {
 				let button = icons::button(ui, icons::Icon::More, 28.0, "Role actions");
 				egui::Popup::menu(&button).show(|ui| {
 					if ui
-						.button(RichText::new(crate::tr_ui!(ui, "Delete Role")).color(colors.danger))
+						.button(
+							RichText::new(crate::tr_ui!(ui, "Delete Role")).color(colors.danger),
+						)
 						.clicked()
 					{
 						self.delete = Some(role);
@@ -630,9 +652,19 @@ impl RolesUi {
 		ui.add_space(22.0);
 		ui.horizontal_wrapped(|ui| {
 			if role != guild {
-				tab_button(ui, &mut self.tab, Tab::Display, crate::tr_ui!(ui, "Display"));
+				tab_button(
+					ui,
+					&mut self.tab,
+					Tab::Display,
+					crate::tr_ui!(ui, "Display"),
+				);
 			}
-			tab_button(ui, &mut self.tab, Tab::Permissions, crate::tr_ui!(ui, "Permissions"));
+			tab_button(
+				ui,
+				&mut self.tab,
+				Tab::Permissions,
+				crate::tr_ui!(ui, "Permissions"),
+			);
 			if role != guild && state.can_open_member_settings(guild) {
 				tab_button(
 					ui,
@@ -758,13 +790,20 @@ impl RolesUi {
 											rgb(sample.primary),
 										);
 										ui.add(
-											egui::Label::new(design::semibold(ui, crate::tr_ui!(ui, "Preview"), 14.0))
-												.truncate(),
+											egui::Label::new(design::semibold(
+												ui,
+												crate::tr_ui!(ui, "Preview"),
+												14.0,
+											))
+											.truncate(),
 										);
 									});
 									ui.add(
-										egui::Label::new(RichText::new(crate::tr_ui!(ui, "Sample message")).small())
-											.truncate(),
+										egui::Label::new(
+											RichText::new(crate::tr_ui!(ui, "Sample message"))
+												.small(),
+										)
+										.truncate(),
 									);
 									ui.add_space(8.0);
 									ui.add(egui::Label::new(name).truncate());
@@ -811,7 +850,10 @@ impl RolesUi {
 			}
 		});
 		section(ui, crate::tr_ui!(ui, "Role color"));
-		ui.weak(crate::tr_ui!(ui, "Members use the color of their highest role on the roles list."));
+		ui.weak(crate::tr_ui!(
+			ui,
+			"Members use the color of their highest role on the roles list."
+		));
 		let palette = [
 			0x1abc9c, 0x2ecc71, 0x3498db, 0x9b59b6, 0xe91e63, 0xf1c40f, 0xe67e22, 0xe74c3c,
 			0x95a5a6, 0x607d8b, 0x11806a, 0x1f8b4c, 0x206694, 0x71368a, 0xad1457, 0xc27c0e,
@@ -833,7 +875,10 @@ impl RolesUi {
 							colors.text,
 						);
 					}
-					if response.on_hover_text(crate::tr_ui!(ui, "Default role color")).clicked() {
+					if response
+						.on_hover_text(crate::tr_ui!(ui, "Default role color"))
+						.clicked()
+					{
 						draft.colors.primary = 0;
 					}
 					let mut color = [
@@ -985,7 +1030,10 @@ impl RolesUi {
 									);
 								}
 							});
-							ui.label(crate::tr_ui!(ui, "This is how members with this role appear."));
+							ui.label(crate::tr_ui!(
+								ui,
+								"This is how members with this role appear."
+							));
 						});
 					});
 				});
@@ -1150,7 +1198,10 @@ impl RolesUi {
 				ui.weak(format!("Showing {} members", members.items.len()));
 				if self.member_query.after.is_some()
 					&& ui
-						.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "First page")))
+						.add_enabled(
+							!state.server_admin.pending,
+							egui::Button::new(crate::tr_ui!(ui, "First page")),
+						)
 						.clicked()
 				{
 					self.member_query.after = None;
@@ -1158,7 +1209,10 @@ impl RolesUi {
 				}
 				if let Some(next) = members.next
 					&& ui
-						.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "Next page")))
+						.add_enabled(
+							!state.server_admin.pending,
+							egui::Button::new(crate::tr_ui!(ui, "Next page")),
+						)
 						.clicked()
 				{
 					self.member_query.after = Some(next);

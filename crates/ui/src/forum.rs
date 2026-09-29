@@ -57,6 +57,7 @@ enum Open {
 }
 
 impl ForumUi {
+	#[allow(clippy::too_many_arguments)] // Forum view carries all channel inputs.
 	pub fn show(
 		&mut self,
 		ui: &mut egui::Ui,

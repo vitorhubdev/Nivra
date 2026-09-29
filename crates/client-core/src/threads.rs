@@ -159,7 +159,7 @@ mod tests {
 					id: Id(1),
 					name: "One".into(),
 					icon: None,
-				premium_tier: 0
+					premium_tier: 0,
 				},
 				Guild {
 					stickers: None,
@@ -167,7 +167,7 @@ mod tests {
 					id: Id(2),
 					name: "Two".into(),
 					icon: None,
-				premium_tier: 0
+					premium_tier: 0,
 				},
 			],
 			channels: vec![
@@ -437,7 +437,7 @@ mod tests {
 					id: Id(1),
 					name: "One".into(),
 					icon: None,
-				premium_tier: 0
+					premium_tier: 0,
 				}],
 				channels: original.clone(),
 				selected: Some(Id(100)),
@@ -488,7 +488,7 @@ mod tests {
 						name: "Synthetic".into(),
 						icon: None,
 						emojis: None,
-					premium_tier: 0
+						premium_tier: 0,
 					})
 					.collect(),
 				channels: original.clone(),

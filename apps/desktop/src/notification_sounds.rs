@@ -120,6 +120,7 @@ impl Drop for Sounds {
 }
 
 /// Every notification cue, in the order the settings screen lists them.
+#[allow(dead_code)] // Exercised by the decode-budget test.
 const ALL_SOUNDS: [Sound; 12] = [
 	Sound::Message,
 	Sound::CurrentChannel,
@@ -341,7 +342,8 @@ mod tests {
 				pcm.len()
 			);
 			assert!(
-				pcm.iter().any(|frame| frame[0].abs() > 0.001 || frame[1].abs() > 0.001),
+				pcm.iter()
+					.any(|frame| frame[0].abs() > 0.001 || frame[1].abs() > 0.001),
 				"{sound:?} decoded to silence"
 			);
 		}

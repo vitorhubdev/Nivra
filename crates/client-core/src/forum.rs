@@ -488,7 +488,7 @@ mod tests {
 				id: Id(1),
 				name: "Synthetic".into(),
 				icon: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			channels: vec![
 				channel(10, None, 0),

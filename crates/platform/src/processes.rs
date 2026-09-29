@@ -22,9 +22,8 @@ pub fn powershell_hidden() -> std::process::Command {
 	let root = std::env::var_os("SystemRoot")
 		.map(std::path::PathBuf::from)
 		.unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
-	let mut cmd = std::process::Command::new(
-		root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
-	);
+	let mut cmd =
+		std::process::Command::new(root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe"));
 	cmd.creation_flags(CREATE_NO_WINDOW);
 	cmd
 }

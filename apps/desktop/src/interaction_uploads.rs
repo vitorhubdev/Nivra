@@ -124,9 +124,7 @@ impl Desktop {
 		if !allowed
 			|| sources.is_empty()
 			|| sources.len() > 10
-			|| sources
-				.iter()
-				.any(|source| source.size() > max_file_bytes)
+			|| sources.iter().any(|source| source.size() > max_file_bytes)
 			|| self.connection.is_none()
 		{
 			self.state.command_rejected(command);

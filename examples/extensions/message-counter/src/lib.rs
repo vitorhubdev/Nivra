@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use nivra_extension_sdk::{Element, EventInvocation, MessageEventKind, Output};
+use serde::{Deserialize, Serialize};
 
 // Store only bounded counters, never message content or identifiers.
 #[derive(Default, Deserialize, Serialize)]

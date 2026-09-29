@@ -49,6 +49,7 @@ impl Default for Controls {
 		}
 	}
 }
+#[allow(clippy::large_enum_variant)] // Ready carries the full connection context.
 pub enum Status {
 	Connecting,
 	Discovering,

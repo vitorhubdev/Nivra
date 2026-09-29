@@ -38,7 +38,7 @@ fn youtube_thumb(value: &str) -> Option<model::EmbedMedia> {
 pub fn request_web_media(ctx: &egui::Context, url: &str, persist: bool) {
 	ctx.data_mut(|data| {
 		data.insert_temp(
-			egui::Id::new(WEB_MEDIA_REQUEST),
+			egui::Id::unique(WEB_MEDIA_REQUEST),
 			WebMediaRequest {
 				url: url.to_owned(),
 				persist,
@@ -48,7 +48,7 @@ pub fn request_web_media(ctx: &egui::Context, url: &str, persist: bool) {
 }
 
 pub fn take_web_media_request(ctx: &egui::Context) -> Option<WebMediaRequest> {
-	ctx.data_mut(|data| data.remove_temp(egui::Id::new(WEB_MEDIA_REQUEST)))
+	ctx.data_mut(|data| data.remove_temp(egui::Id::unique(WEB_MEDIA_REQUEST)))
 }
 
 pub fn has_spoilers(message: &Message) -> bool {

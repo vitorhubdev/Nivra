@@ -1906,9 +1906,11 @@ mod tests {
 		assert!(!legacy.hide_offline_members);
 		assert!(!legacy.hide_bot_dms);
 		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
-		let mut value = AppPreferences::default();
-		value.hide_offline_members = true;
-		value.hide_bot_dms = true;
+		let value = AppPreferences {
+			hide_offline_members: true,
+			hide_bot_dms: true,
+			..Default::default()
+		};
 		store.save_app_preferences(&value).unwrap();
 		let loaded = store.app_preferences().unwrap();
 		assert!(loaded.hide_offline_members);
@@ -1999,7 +2001,12 @@ mod tests {
 		value.voice_auto_rejoin_short_disconnect = true;
 		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
 		store.save_app_preferences(&value).unwrap();
-		assert!(store.app_preferences().unwrap().voice_auto_rejoin_short_disconnect);
+		assert!(
+			store
+				.app_preferences()
+				.unwrap()
+				.voice_auto_rejoin_short_disconnect
+		);
 	}
 
 	#[test]

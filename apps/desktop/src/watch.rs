@@ -328,7 +328,10 @@ impl Watch {
 						Status::TransportReady | Status::Securing => "Securing the stream…",
 						Status::WaitingForPeer => "Waiting for the streamer…",
 						Status::Ready { .. } => "Stream secured · waiting for video",
-						Status::RemoteAudio | Status::Speaking(_) | Status::CameraAvailable(_) | Status::Ping(_) => {
+						Status::RemoteAudio
+						| Status::Speaking(_)
+						| Status::CameraAvailable(_)
+						| Status::Ping(_) => {
 							return Ok(());
 						}
 					};

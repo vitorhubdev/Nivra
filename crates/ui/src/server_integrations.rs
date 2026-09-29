@@ -224,7 +224,10 @@ impl IntegrationsUi {
 			design::notice(ui, design::Level::Error, error);
 		}
 		if state.server_admin.needs_refresh {
-			ui.weak(crate::tr_ui!(ui, "Reload integrations before making more changes. Your draft will be kept."));
+			ui.weak(crate::tr_ui!(
+				ui,
+				"Reload integrations before making more changes. Your draft will be kept."
+			));
 		}
 		if state.server_admin.pending {
 			ui.horizontal(|ui| {
@@ -339,7 +342,10 @@ impl IntegrationsUi {
 				ui.weak(crate::tr_ui!(ui, "No integrations in this server."));
 			}
 			if integrations.len() == model::server_integrations::MAX_INTEGRATIONS {
-				ui.weak(crate::tr_ui!(ui, "Showing the first 50 integrations returned by Discord."));
+				ui.weak(crate::tr_ui!(
+					ui,
+					"Showing the first 50 integrations returned by Discord."
+				));
 			}
 			let height = design::list_height(ui, 0.0);
 			egui::ScrollArea::vertical()
@@ -415,7 +421,12 @@ impl IntegrationsUi {
 											});
 										},
 									);
-									if ui.add(egui::Button::new(crate::tr_ui!(ui, "Manage >")).frame(false)).clicked()
+									if ui
+										.add(
+											egui::Button::new(crate::tr_ui!(ui, "Manage >"))
+												.frame(false),
+										)
+										.clicked()
 									{
 										self.page = Page::App(integration.id);
 									}
@@ -436,10 +447,16 @@ impl IntegrationsUi {
 	) {
 		let follows = self.page == Page::Follows;
 		if follows {
-			ui.label(crate::tr_ui!(ui, "Posts from these followed channels are delivered to your server."));
+			ui.label(crate::tr_ui!(
+				ui,
+				"Posts from these followed channels are delivered to your server."
+			));
 			ui.hyperlink_to("Learn more about following channels", FOLLOW_HELP);
 		} else {
-			ui.label(crate::tr_ui!(ui, "Send updates from your apps and services to a channel in this server."));
+			ui.label(crate::tr_ui!(
+				ui,
+				"Send updates from your apps and services to a channel in this server."
+			));
 			if let Some(channel) = self.channel.and_then(|id| state.channel(id)) {
 				ui.label(format!("Posting to #{}", channel.name));
 			}
@@ -509,7 +526,10 @@ impl IntegrationsUi {
 									&& webhook.channel.is_some_and(|id| {
 										state.can_manage_webhook_channel(guild, id)
 									}) && ui
-									.add_enabled(writable(state), egui::Button::new(crate::tr_ui!(ui, "Edit")))
+									.add_enabled(
+										writable(state),
+										egui::Button::new(crate::tr_ui!(ui, "Edit")),
+									)
 									.clicked()
 								{
 									let draft = Draft {
@@ -591,7 +611,10 @@ impl IntegrationsUi {
 			.as_ref()
 			.and_then(|items| items.iter().find(|i| i.id == id))
 		else {
-			ui.weak(crate::tr_ui!(ui, "This integration is no longer available."));
+			ui.weak(crate::tr_ui!(
+				ui,
+				"This integration is no longer available."
+			));
 			return;
 		};
 		ui.horizontal(|ui| {
@@ -641,7 +664,8 @@ impl IntegrationsUi {
 				.add_enabled(
 					writable(state),
 					egui::Button::new(
-						RichText::new(crate::tr_ui!(ui, "Remove Integration")).color(design::palette(ui).danger),
+						RichText::new(crate::tr_ui!(ui, "Remove Integration"))
+							.color(design::palette(ui).danger),
 					),
 				)
 				.clicked()

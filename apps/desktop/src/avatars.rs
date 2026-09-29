@@ -206,11 +206,8 @@ impl AvatarWorker {
 		account: Id,
 		ctx: egui::Context,
 	) -> Result<Self, &'static str> {
-		let root = dirs::data_local_dir().map(|root| {
-			root.join("nivra")
-				.join("avatars")
-				.join(account.to_string())
-		});
+		let root = dirs::data_local_dir()
+			.map(|root| root.join("nivra").join("avatars").join(account.to_string()));
 		Self::start_at(runtime, root, ctx)
 	}
 	fn start_at(

@@ -26,6 +26,7 @@ fn ready() -> Event {
 			name: "Synthetic".into(),
 			icon: None,
 			emojis: None,
+			premium_tier: 0,
 		}],
 		channels: (20..23)
 			.map(|id| Channel {

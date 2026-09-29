@@ -68,12 +68,13 @@ fn gateway_dot_center(output: &egui::FullOutput) -> Option<egui::Pos2> {
 }
 
 fn connected_gateway_state() -> State {
-	let mut state = State::default();
-	state.gateway_connected = true;
-	state.gateway_ping_ms = Some(42);
-	state.gateway_host = "gateway.discord.gg".into();
-	state.gateway_connected_since = Some(Instant::now() - Duration::from_secs(90));
-	state
+	State {
+		gateway_connected: true,
+		gateway_ping_ms: Some(42),
+		gateway_host: "gateway.discord.gg".into(),
+		gateway_connected_since: Some(Instant::now() - Duration::from_secs(90)),
+		..Default::default()
+	}
 }
 
 fn pointer(pos: egui::Pos2, button: PointerButton, pressed: bool) -> Vec<InputEvent> {
@@ -159,6 +160,7 @@ fn palette(ctx: &egui::Context) -> design::Palette {
 }
 
 #[test]
+#[allow(clippy::field_reassign_with_default)] // Test stages gateway states.
 fn gateway_status_dot_color_respects_latency_bands() {
 	let ctx = egui::Context::default();
 	let colors = palette(&ctx);

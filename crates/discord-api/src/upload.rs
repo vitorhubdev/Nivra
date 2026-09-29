@@ -283,7 +283,7 @@ impl DiscordApi {
 			progress.send_replace(Status::Failed(failure.label()));
 			return target.failed(channel, failure);
 		}
-		let limit = max_file_bytes.max(1).min(MAX_BYTES);
+		let limit = max_file_bytes.clamp(1, MAX_BYTES);
 		if sources.is_empty()
 			|| sources.len() > MAX_FILES
 			|| sources.iter().any(|source| source.size() > limit)
@@ -802,7 +802,8 @@ mod tests {
 		let limit = 10 * 1024 * 1024;
 		assert_eq!(
 			failed(
-				api.upload_message(command(), source, limit, progress, cancelled).await
+				api.upload_message(command(), source, limit, progress, cancelled)
+					.await
 			),
 			Failure::ProtocolAt(
 				"This file exceeds the upload limit here; compress it or share a link"

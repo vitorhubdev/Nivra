@@ -166,9 +166,7 @@ pub fn normalize(value: &str) -> Option<String> {
 		}
 		"vimeo.com" => {
 			let id = path_segments(url.path)
-				.find(|part| {
-					!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
-				})?;
+				.find(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))?;
 			if id.is_empty() {
 				return None;
 			}

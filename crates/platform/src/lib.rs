@@ -36,6 +36,9 @@ pub use login_linux::LoginView;
 
 /// Logical height of the native header the desktop app draws above the login webview.
 pub const LOGIN_HEADER_HEIGHT: f32 = 56.0;
+/// Application identity referenced only by the Linux login helper and the
+/// Windows notification shortcut (macOS builds never reference it).
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const SERVICE: &str = "io.github.vitorhubdev.Nivra";
 /// Nivra must not share saved Discord sessions with the upstream Serein app.
 const CREDENTIAL_SERVICE: &str = "io.github.vitorhubdev.Nivra";

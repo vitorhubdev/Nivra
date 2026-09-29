@@ -210,8 +210,10 @@ mod tests {
 
 	#[test]
 	fn first_launch_follows_the_system_until_the_owner_picks_a_language() {
-		let mut settings = Settings::default();
-		settings.loaded = true;
+		let mut settings = Settings {
+			loaded: true,
+			..Default::default()
+		};
 		let mut ui = ui::MessagingUi::default();
 		settings.apply(&mut ui);
 		assert_eq!(ui.language, system_language());

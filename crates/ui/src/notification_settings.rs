@@ -160,8 +160,11 @@ impl Navigation {
 		if tab != Tab::Overview {
 			ui.add_space(12.0);
 		}
-		let heading =
-			ui.label(design::eyebrow(ui, tab.label(language), design::palette(ui).muted));
+		let heading = ui.label(design::eyebrow(
+			ui,
+			tab.label(language),
+			design::palette(ui).muted,
+		));
 		if heading.rect.top() <= ui.clip_rect().top() + 28.0 {
 			self.active = tab;
 		}
@@ -177,7 +180,10 @@ impl MessagingUi {
 			ui.horizontal_wrapped(|ui| {
 				for tab in Tab::ALL {
 					if ui
-						.selectable_label(self.settings.notifications.active == tab, tab.label(self.language))
+						.selectable_label(
+							self.settings.notifications.active == tab,
+							tab.label(self.language),
+						)
 						.clicked()
 					{
 						self.settings.notifications.jump = Some(tab);
@@ -186,7 +192,9 @@ impl MessagingUi {
 			});
 		}
 		let language = self.language;
-		self.settings.notifications.heading(ui, Tab::Overview, language);
+		self.settings
+			.notifications
+			.heading(ui, Tab::Overview, language);
 		design::card(ui, |ui| {
 			design::switch(
 				ui,
@@ -201,7 +209,9 @@ impl MessagingUi {
 				design::hint(ui, self.notification_status);
 			}
 		});
-		self.settings.notifications.heading(ui, Tab::Sounds, language);
+		self.settings
+			.notifications
+			.heading(ui, Tab::Sounds, language);
 		design::card(ui, |ui| {
 			design::slider_row(
 				ui,
@@ -232,10 +242,7 @@ impl MessagingUi {
 					Sound::Message,
 				),
 				(
-					crate::i18n::text(
-						language,
-						"New Message in the channel I'm currently reading",
-					),
+					crate::i18n::text(language, "New Message in the channel I'm currently reading"),
 					&mut self.notification_options.current_channel,
 					Sound::CurrentChannel,
 				),
@@ -295,8 +302,7 @@ impl MessagingUi {
 					design::card_divider(ui);
 				}
 				design::switch(ui, label, None, value);
-				if design::text_action(ui, crate::i18n::text(language, "Preview Sound")).clicked()
-				{
+				if design::text_action(ui, crate::i18n::text(language, "Preview Sound")).clicked() {
 					self.notification_preview = Some(sound);
 				}
 			}
@@ -327,7 +333,9 @@ impl MessagingUi {
 				self.open_voice_settings();
 			}
 		});
-		self.settings.notifications.heading(ui, Tab::Badges, language);
+		self.settings
+			.notifications
+			.heading(ui, Tab::Badges, language);
 		design::card(ui, |ui| {
 			ui.add_enabled_ui(cfg!(target_os = "windows"), |ui| {
 				design::switch(

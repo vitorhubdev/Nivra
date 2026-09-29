@@ -1011,7 +1011,7 @@ mod member_kick_tests {
 				icon: None,
 				emojis: None,
 				stickers: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			..Default::default()
 		};
@@ -1130,7 +1130,7 @@ mod voice_move_tests {
 				icon: None,
 				emojis: None,
 				stickers: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			channels: [source, target]
 				.into_iter()
@@ -1170,6 +1170,16 @@ mod voice_move_tests {
 				}]),
 			},
 		);
+		for id in [source, target] {
+			state.permissions.channels.insert(
+				id,
+				p::Channel {
+					id,
+					guild,
+					overwrites: Some(vec![]),
+				},
+			);
+		}
 		state.voice.roster.push(RosterEntry {
 			guild,
 			channel: source,
@@ -1256,7 +1266,7 @@ mod invite_tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			..Default::default()
 		};
@@ -1427,7 +1437,7 @@ mod sticker_tests {
 				icon: None,
 				emojis: None,
 				stickers: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			..Default::default()
 		};

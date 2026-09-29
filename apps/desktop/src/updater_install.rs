@@ -26,10 +26,7 @@ const WINDOWS_FILES: &[&str] = &[
 ];
 
 fn windows_executable(name: Option<&std::ffi::OsStr>) -> bool {
-	matches!(
-		name.and_then(|name| name.to_str()),
-		Some("Nivra.exe")
-	)
+	matches!(name.and_then(|name| name.to_str()), Some("Nivra.exe"))
 }
 
 pub(super) fn flatpak_session() -> bool {
@@ -141,10 +138,7 @@ fn installation() -> Result<PathBuf, String> {
 			);
 		}
 		let appdir = PathBuf::from(std::env::var_os("APPDIR").ok_or("Missing AppImage mount.")?);
-		if fs::canonicalize(appdir.join("usr/bin/nivra"))
-			.ok()
-			.as_ref() != Some(&exe)
-		{
+		if fs::canonicalize(appdir.join("usr/bin/nivra")).ok().as_ref() != Some(&exe) {
 			return Err("Run Nivra from its AppImage to install updates.".into());
 		}
 		let image = PathBuf::from(std::env::var_os("APPIMAGE").ok_or("Missing AppImage path.")?);
@@ -193,8 +187,7 @@ fn installation() -> Result<PathBuf, String> {
 			.ok_or("Cannot locate the installed application folder.")?;
 		if !windows_executable(exe.file_name()) {
 			return Err(
-				"Run Nivra.exe to install updates; source builds cannot replace themselves."
-					.into(),
+				"Run Nivra.exe to install updates; source builds cannot replace themselves.".into(),
 			);
 		}
 		Ok(root.to_owned())
@@ -648,15 +641,11 @@ pub(super) fn unpack(
 		}
 	}
 	if cfg!(target_os = "macos") {
-		if !destination
-			.join("Nivra.app/Contents/MacOS/nivra")
-			.is_file()
-		{
+		if !destination.join("Nivra.app/Contents/MacOS/nivra").is_file() {
 			return Err("The update does not contain Nivra.app.".into());
 		}
 		verify_mac(&destination.join("Nivra.app"), installed)?;
-	} else if !destination.join("Nivra.exe").is_file()
-	{
+	} else if !destination.join("Nivra.exe").is_file() {
 		return Err("The update is missing Nivra.exe.".into());
 	}
 	fs::remove_file(directory.join("package.zip"))

@@ -350,11 +350,13 @@ impl MessagingUi {
 					] {
 						if ui
 							.add(
-								egui::Button::new(RichText::new(t(title)).color(if tab == Tab::Add {
-									colors.accent_text
-								} else {
-									colors.text
-								}))
+								egui::Button::new(RichText::new(t(title)).color(
+									if tab == Tab::Add {
+										colors.accent_text
+									} else {
+										colors.text
+									},
+								))
 								.selected(self.friends.tab == tab)
 								.fill(if tab == Tab::Add {
 									colors.accent

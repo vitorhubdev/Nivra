@@ -5482,25 +5482,23 @@ public static class NivraShortcut {
 			{
 				self.state.capture_auto_rejoin();
 			}
-			if resumed {
-				if let Some(target) = self.state.take_auto_rejoin_if_recent() {
-					if self
-						.state
-						.voice
-						.active
-						.as_ref()
-						.is_none_or(|call| call.channel != target.channel)
-						&& let Some(command) = self.state.start_call_with_mute(
-							target.channel,
-							false,
-							target.muted,
-							target.deafened,
-						) {
-						self.command(command);
-					}
-					self.messaging.voice_muted = target.muted;
-					self.messaging.voice_deafened = target.deafened;
+			if resumed && let Some(target) = self.state.take_auto_rejoin_if_recent() {
+				if self
+					.state
+					.voice
+					.active
+					.as_ref()
+					.is_none_or(|call| call.channel != target.channel)
+					&& let Some(command) = self.state.start_call_with_mute(
+						target.channel,
+						false,
+						target.muted,
+						target.deafened,
+					) {
+					self.command(command);
 				}
+				self.messaging.voice_muted = target.muted;
+				self.messaging.voice_deafened = target.deafened;
 			}
 			self.extensions.data_changed(data_changes);
 			self.extensions.cancel_stale_message_events(&self.state);
@@ -6263,10 +6261,8 @@ impl eframe::App for Desktop {
 		if retry {
 			self.batch_downloads.retry(self.runtime.handle(), &ctx);
 		}
-		if open_folder {
-			if let Some(folder) = self.batch_downloads.folder() {
-				batch_downloads::open_folder(&folder);
-			}
+		if open_folder && let Some(folder) = self.batch_downloads.folder() {
+			batch_downloads::open_folder(&folder);
 		}
 		if dismiss {
 			self.batch_downloads.dismiss();

@@ -106,7 +106,12 @@ impl ChannelMenu {
 				&& !state.channel_action_pending()
 				&& state.can_view(channel.id);
 			let mut intent = None;
-			if row(ui, t("Mark As Read"), state.can_mark_channel_read(channel.id), false)
+			if row(
+				ui,
+				t("Mark As Read"),
+				state.can_mark_channel_read(channel.id),
+				false,
+			)
 			.clicked()
 			{
 				intent = Some(Intent::Read);
@@ -866,16 +871,14 @@ impl Dialog {
 				this.permissions
 					.show(ui, state, &channel, &mut this.draft.overwrites)
 			}
-			Page::Integrations => this
-				.integrations
-				.show(
-					ui,
-					state,
-					this.guild,
-					avatars,
-					commands,
-					crate::i18n::interface_language(ui.ctx()),
-				),
+			Page::Integrations => this.integrations.show(
+				ui,
+				state,
+				this.guild,
+				avatars,
+				commands,
+				crate::i18n::interface_language(ui.ctx()),
+			),
 			Page::Overview => {
 				design::section(ui, "Overview", None);
 				ui.add_enabled_ui(can_delete, |ui| this.overview(ui, &channel));

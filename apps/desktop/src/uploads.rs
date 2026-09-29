@@ -1108,6 +1108,7 @@ mod tests {
 			uploading: None,
 			last: None,
 			notice: None,
+			file_limit: client_core::upload_limit::account_upload_bytes(None),
 		};
 		uploads.poll(2, Some(Id(2)), true, &context);
 		assert!(cancelled.load(Ordering::Acquire));

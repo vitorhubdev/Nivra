@@ -85,7 +85,11 @@ impl AuditLogUi {
 			if !available {
 				ui.disable();
 			}
-			ui.label(design::medium(ui, crate::tr_ui!(ui, "Filter by User"), 14.0));
+			ui.label(design::medium(
+				ui,
+				crate::tr_ui!(ui, "Filter by User"),
+				14.0,
+			));
 			let selected = query
 				.user
 				.map(|id| user_name(state.server_admin.audit_log.as_ref(), id))
@@ -120,7 +124,11 @@ impl AuditLogUi {
 			if !available {
 				ui.disable();
 			}
-			ui.label(design::medium(ui, crate::tr_ui!(ui, "Filter by Action"), 14.0));
+			ui.label(design::medium(
+				ui,
+				crate::tr_ui!(ui, "Filter by Action"),
+				14.0,
+			));
 			let selected = query
 				.action
 				.map(|action| action_text(action).to_owned())
@@ -146,7 +154,10 @@ impl AuditLogUi {
 		};
 		ui.horizontal(|ui| {
 			if ui
-				.add_enabled(available, egui::Button::new(crate::tr_ui!(ui, "Reload")).frame(false))
+				.add_enabled(
+					available,
+					egui::Button::new(crate::tr_ui!(ui, "Reload")).frame(false),
+				)
 				.clicked()
 			{
 				requested = Some(query.clone());
@@ -170,7 +181,10 @@ impl AuditLogUi {
 			}
 			if page.entries.is_empty() && !state.server_admin.pending {
 				ui.add_space(24.0);
-				ui.weak(crate::tr_ui!(ui, "No audit log entries match these filters."));
+				ui.weak(crate::tr_ui!(
+					ui,
+					"No audit log entries match these filters."
+				));
 			}
 			// The list is the page's only scroller: it takes the remaining height and keeps
 			// the paging controls pinned below it.
@@ -187,7 +201,8 @@ impl AuditLogUi {
 				&& ui
 					.add_enabled(
 						available,
-						egui::Button::new(crate::tr_ui!(ui, "Load More")).min_size(Vec2::new(120.0, 36.0)),
+						egui::Button::new(crate::tr_ui!(ui, "Load More"))
+							.min_size(Vec2::new(120.0, 36.0)),
 					)
 					.clicked()
 			{
@@ -459,7 +474,10 @@ fn details(ui: &mut egui::Ui, entry: &Entry, state: &State) {
 		line(ui, format!("Reason: {reason}"));
 	}
 	if index == 1 {
-		ui.weak(crate::tr_ui!(ui, "No additional details were provided for this event."));
+		ui.weak(crate::tr_ui!(
+			ui,
+			"No additional details were provided for this event."
+		));
 	}
 }
 fn change_text(change: &Change, state: &State) -> String {

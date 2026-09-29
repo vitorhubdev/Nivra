@@ -139,6 +139,7 @@ impl DownloadQueue {
 			cancelled: false,
 		}
 	}
+	#[allow(clippy::should_implement_trait)] // Queue cursor, not an iterator.
 	pub fn next(&mut self) -> Option<u64> {
 		if self.cancelled {
 			return None;

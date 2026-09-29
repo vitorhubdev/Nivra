@@ -869,9 +869,7 @@ pub fn debug_check() -> Result<(), String> {
 	// New repo accepted above via stable; non-matching repos refused by exact base-URL
 	// match (the previous repo differs the same way, so it is refused without
 	// naming it literally here so the repository guard stays clean).
-	for bad_base in [
-		"https://github.com/other-owner/Nivra/releases/download/v1.0.3",
-	] {
+	for bad_base in ["https://github.com/other-owner/Nivra/releases/download/v1.0.3"] {
 		if let Some(name) = &archive_name {
 			let bad = Release {
 				tag_name: "v1.0.3".into(),

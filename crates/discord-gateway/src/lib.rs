@@ -986,6 +986,7 @@ struct ActivityInput<'a> {
 	own_presence: watch::Receiver<model::OwnPresence>,
 	observe: &'a (dyn Fn(ActivityObservation) -> Result<(), Failure> + Sync),
 }
+#[allow(clippy::too_many_arguments, clippy::type_complexity)] // Reconnect wiring carries all gateway inputs.
 pub async fn run_with_activity_and_reconnect(
 	secret: Arc<SessionSecret>,
 	initial_url: String,
@@ -1021,6 +1022,7 @@ pub async fn run_with_activity_and_reconnect(
 	.await
 }
 
+#[allow(clippy::too_many_arguments)] // Inner gateway loop carries all runtime inputs.
 async fn run_inner(
 	secret: Arc<SessionSecret>,
 	initial_url: String,
@@ -2603,6 +2605,10 @@ mod tests {
 						// READY also seeds the owner Nitro entitlement; it is not part of
 						// this session-transition assertion.
 						Event::StickerEntitlement { .. } => return Ok(()),
+						// Heartbeat acks and the active gateway host are transport
+						// details of the drop/resume race; they carry no
+						// session-transition signal for this assertion.
+						Event::GatewayPing(_) | Event::GatewayHost(_) => return Ok(()),
 						Event::Startup(_) => "ready",
 						Event::Resumed => "resumed",
 						Event::DirectPresence(_) => "presence",

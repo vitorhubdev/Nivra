@@ -361,7 +361,7 @@ mod tests {
 			icon: None,
 			emojis: None,
 			stickers: None,
-		premium_tier: 0
+			premium_tier: 0,
 		});
 		let role = |id, bits| p::Role {
 			id: Id(id),
@@ -653,7 +653,7 @@ mod tests {
 			icon: None,
 			emojis: None,
 			stickers: None,
-		premium_tier: 0
+			premium_tier: 0,
 		});
 		use model::permissions as p;
 		state

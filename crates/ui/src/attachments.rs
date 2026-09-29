@@ -2,7 +2,8 @@
 #[cfg(test)]
 mod context_tests;
 use crate::{
-	anim, avatars::{Avatars, Quality, Surface},
+	anim,
+	avatars::{Avatars, Quality, Surface},
 	design,
 	i18n::{self, interface_language},
 	icons::{self, Icon},
@@ -128,30 +129,24 @@ pub fn pending_upload_meter(
 	} else {
 		(largest_bytes as f32 / limit.bytes as f32).clamp(0.0, 1.0)
 	};
-	let fill = anim::bool_alpha(
-		ui.ctx(),
-		ui.make_persistent_id("upload-meter"),
-		true,
-		0.18,
-	) * target;
+	let fill =
+		anim::bool_alpha(ui.ctx(), ui.make_persistent_id("upload-meter"), true, 0.18) * target;
 	let height = if over_limit { 40.0 } else { 28.0 };
-	let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
+	let (rect, _) =
+		ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
 	let track = egui::Rect::from_min_size(
 		rect.min + egui::vec2(0.0, 18.0),
 		egui::vec2(rect.width(), 6.0),
 	);
-	ui.painter()
-		.rect_filled(track, 3.0, colors.border);
+	ui.painter().rect_filled(track, 3.0, colors.border);
 	let fill_color = if over_limit {
 		colors.danger
 	} else {
 		colors.accent
 	};
 	if fill > 0.0 {
-		let filled = egui::Rect::from_min_size(
-			track.min,
-			egui::vec2(track.width() * fill, track.height()),
-		);
+		let filled =
+			egui::Rect::from_min_size(track.min, egui::vec2(track.width() * fill, track.height()));
 		ui.painter().rect_filled(filled, 3.0, fill_color);
 	}
 	let reason = match limit.source {

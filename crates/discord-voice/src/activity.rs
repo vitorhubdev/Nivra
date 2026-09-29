@@ -98,6 +98,6 @@ mod tests {
 		assert!(smooth_level(0.0, 40) < 40);
 		assert!(smooth_level(960.0, 0) > 0);
 		assert!(smooth_level(960.0, 200) >= 200);
-		assert!(smooth_level(960.0, 255) <= 255);
+		assert_eq!(smooth_level(960.0, 255), 255);
 	}
 }

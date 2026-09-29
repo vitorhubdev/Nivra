@@ -533,6 +533,8 @@ pub struct MessagingUi {
 	pub voice_server_place: String,
 	/// Latest media activity, capped at 64 IDs (512 bytes) by the voice host.
 	pub voice_speaking: Vec<Id>,
+	/// Smoothed speaking energy keyed by participant, from the voice host.
+	pub voice_speaking_levels: std::collections::HashMap<Id, u8>,
 	pub notifications_enabled: bool,
 	pub notification_options: model::notification_preferences::Device,
 	/// Automatic live-client cues, at most four, so a join and a leave in one update both play.
@@ -1178,6 +1180,92 @@ impl MessagingUi {
 			self.edit_sent = false;
 		}
 	}
+
+	const GATEWAY_PING_GOOD_MS: u32 = 150;
+
+	pub(crate) fn gateway_status_dot_color(
+		colors: &design::Palette,
+		state: &State,
+	) -> egui::Color32 {
+		if state.gateway_reconnect.is_some() {
+			return colors.warning;
+		}
+		if !state.gateway_connected {
+			return colors.danger;
+		}
+		match state.gateway_ping_ms {
+			Some(ms) if ms < Self::GATEWAY_PING_GOOD_MS => colors.positive,
+			Some(_) => colors.warning,
+			None => colors.positive,
+		}
+	}
+
+	pub(crate) fn format_gateway_connected_duration(since: std::time::Instant) -> String {
+		let seconds = since.elapsed().as_secs();
+		if seconds < 60 {
+			format!("{seconds}s")
+		} else if seconds < 3600 {
+			format!("{}m {}s", seconds / 60, seconds % 60)
+		} else {
+			format!("{}h {}m", seconds / 3600, (seconds / 60) % 60)
+		}
+	}
+
+	fn title_bar_gateway_status(&mut self, ui: &mut egui::Ui, state: &State) {
+		let colors = design::palette(ui);
+		let dot_color = Self::gateway_status_dot_color(&colors, state);
+		let (dot_rect, dot_response) =
+			ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
+		ui.painter()
+			.circle_filled(dot_rect.center(), 3.0, dot_color);
+		let language = self.language;
+		let ping = state.gateway_ping_ms;
+		let host = state.gateway_host.clone();
+		let since = state.gateway_connected_since;
+		let connected = state.gateway_connected;
+		let reconnecting = !connected || state.gateway_reconnect.is_some();
+		let mut reconnect = false;
+		dot_response.on_hover_ui(|ui| {
+			ui.spacing_mut().item_spacing.y = 4.0;
+			let ping_label = if let Some(ms) = ping {
+				format!("{} {ms} ms", crate::i18n::text(language, "Ping"))
+			} else if connected {
+				format!("{} …", crate::i18n::text(language, "Ping"))
+			} else {
+				format!("{} —", crate::i18n::text(language, "Ping"))
+			};
+			ui.label(design::semibold(ui, ping_label, 13.0));
+			if !host.is_empty() {
+				ui.label(
+					RichText::new(host)
+						.size(12.0)
+						.color(design::palette(ui).muted),
+				);
+			}
+			if let Some(since) = since {
+				let duration = Self::format_gateway_connected_duration(since);
+				ui.label(
+					RichText::new(format!(
+						"{} {duration}",
+						crate::i18n::text(language, "Connected for")
+					))
+					.size(12.0)
+					.color(design::palette(ui).muted),
+				);
+			}
+			if reconnecting
+				&& ui
+					.button(crate::i18n::text(language, "Reconnect now"))
+					.clicked()
+			{
+				reconnect = true;
+			}
+		});
+		if reconnect {
+			self.gateway_reconnect_skip_requested = true;
+		}
+	}
+
 	/// Window title strip: traffic-light inset, centred context title and session state.
 	fn title_bar(&mut self, ui: &mut egui::Ui, state: &State, title: &str) {
 		let colors = design::palette(ui);
@@ -1268,6 +1356,9 @@ impl MessagingUi {
 							}
 						} else {
 							design::build_badge(ui, self.build);
+						}
+						if !state.demo {
+							self.title_bar_gateway_status(ui, state);
 						}
 						if state.demo && !self.updates.available && !self.updates.ready {
 							egui::Frame::new()
@@ -2364,22 +2455,23 @@ impl MessagingUi {
 									((ui.available_height() - name_height - subtitle_height) / 2.0)
 										.max(0.0),
 								);
-							ui.spacing_mut().item_spacing.y = 1.0;
-							// Chrome never joins text selection: a drag past the
-							// viewport keeps its range inside the messages.
-							crate::select::chrome_label(
-								ui,
-								design::semibold(ui, name, 16.0).color(colors.text_strong),
-							);
+								ui.spacing_mut().item_spacing.y = 1.0;
+								// Chrome never joins text selection: a drag past the
+								// viewport keeps its range inside the messages.
+								crate::select::chrome_label(
+									ui,
+									design::semibold(ui, name, 16.0).color(colors.text_strong),
+								);
 								{
-								if let Some(text) = subtitle {
-									crate::select::chrome_label(
-										ui,
-										RichText::new(&text).size(12.0).color(colors.muted),
-									)
-									.on_hover_text(text);
+									if let Some(text) = subtitle {
+										crate::select::chrome_label(
+											ui,
+											RichText::new(&text).size(12.0).color(colors.muted),
+										)
+										.on_hover_text(text);
+									}
 								}
-							}});
+							});
 							let in_call = state.voice.active.as_ref().is_some_and(|call| {
 								Some(call.channel) == state.selected
 									&& matches!(
@@ -2902,8 +2994,7 @@ impl MessagingUi {
 			&& self.attachment_files.len() < 10;
 		let application_command = !editing_here && self.slash_commands.active.is_some();
 		let attachment_sizes: Vec<u64> = self.selected_files().iter().map(|(_, b)| *b).collect();
-		let attachments_within_limit =
-			state.attachment_sizes_allowed(channel, &attachment_sizes);
+		let attachments_within_limit = state.attachment_sizes_allowed(channel, &attachment_sizes);
 		let can_send = if let Some((edit_channel, message)) = editing_key {
 			state.freshness == Freshness::Fresh
 				&& state.can_edit(edit_channel, message)
@@ -5265,7 +5356,12 @@ mod composer_tests {
 			ctx.memory_mut(|m| m.request_focus(ui.make_persistent_id("message-input")));
 		})
 		.drop_without_applying_deltas();
-		edit_frame(&ctx, &mut view, &mut state, vec![edit_key(egui::Key::Enter)]);
+		edit_frame(
+			&ctx,
+			&mut view,
+			&mut state,
+			vec![edit_key(egui::Key::Enter)],
+		);
 		// The rename dialog is built on the repaint that follows the Send gesture.
 		edit_frame(&ctx, &mut view, &mut state, vec![]);
 		assert!(view.long_text_dialog.is_some(), "DM offers message.txt");
@@ -5292,7 +5388,12 @@ mod composer_tests {
 			ctx.memory_mut(|m| m.request_focus(ui.make_persistent_id("message-input")));
 		})
 		.drop_without_applying_deltas();
-		edit_frame(&ctx, &mut denied_view, &mut denied, vec![edit_key(egui::Key::Enter)]);
+		edit_frame(
+			&ctx,
+			&mut denied_view,
+			&mut denied,
+			vec![edit_key(egui::Key::Enter)],
+		);
 		edit_frame(&ctx, &mut denied_view, &mut denied, vec![]);
 		assert!(
 			denied_view.long_text_dialog.is_none(),
@@ -5761,7 +5862,7 @@ mod composer_tests {
 			name: "Synthetic invited server".into(),
 			icon: None,
 			emojis: None,
-		premium_tier: 0
+			premium_tier: 0,
 		});
 		let mut channel = state.channels[0].clone();
 		channel.id = Id(12);
@@ -5898,7 +5999,7 @@ mod composer_tests {
 				name: "Linked server".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			});
 			state
 				.permissions
@@ -8394,7 +8495,10 @@ mod composer_tests {
 			|ui| messaging.composer(ui, &mut state, channel, &ctx, &mut commands),
 		)
 		.drop_without_applying_deltas();
-		assert!(commands.is_empty(), "Send must stay disabled above the upload limit");
+		assert!(
+			commands.is_empty(),
+			"Send must stay disabled above the upload limit"
+		);
 		assert!(messaging.attachment.is_some());
 	}
 

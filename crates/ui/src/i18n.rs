@@ -329,7 +329,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Edit message" => "Editar mensagem",
 		"Enter to save · Shift+Enter for a new line · Esc to cancel" => {
 			"Enter salva · Shift+Enter quebra linha · Esc cancela"
-		},
+		}
 		"Remove from delete selection" => "Tirar da seleção",
 		"Select for batch delete" => "Selecionar para apagar",
 		"You can select up to 5 messages at a time." => {
@@ -384,6 +384,8 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Reconnecting" => "Reconectando",
 		"attempt" => "tentativa",
 		"Reconnect now" => "Reconectar agora",
+		"Ping" => "Ping",
+		"Connected for" => "Conectado há",
 		"Connection recovery" => "Recuperação de conexão",
 		"Rejoin calls after brief disconnects" => "Reentrar na chamada após quedas breves",
 		"Automatically returns to the same call when Discord reconnects within 15 seconds." => {
@@ -1328,15 +1330,21 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		}
 		"+" => "+",
 		"< Integrations" => "< Integrations",
-		"Add custom emoji that anyone can use in this server. Animated GIF emoji may be used by members with Discord Nitro." => "Adicione emoji personalizados que qualquer pessoa possa usar neste servidor. Membros com Discord Nitro podem usar emoji GIF animados.",
-		"Add custom stickers for members to use in this server. Artwork is cropped and resized to 320 × 320 pixels before upload." => "Adicione figurinhas personalizadas para os membros usarem neste servidor. A arte é recortada e redimensionada para 320 × 320 pixels antes do envio.",
+		"Add custom emoji that anyone can use in this server. Animated GIF emoji may be used by members with Discord Nitro." => {
+			"Adicione emoji personalizados que qualquer pessoa possa usar neste servidor. Membros com Discord Nitro podem usar emoji GIF animados."
+		}
+		"Add custom stickers for members to use in this server. Artwork is cropped and resized to 320 × 320 pixels before upload." => {
+			"Adicione figurinhas personalizadas para os membros usarem neste servidor. A arte é recortada e redimensionada para 320 × 320 pixels antes do envio."
+		}
 		"All Actions" => "Todas as ações",
 		"All Users" => "Todos os usuários",
 		"Bots and Apps" => "Bots e apps",
 		"Copy invite link" => "Copy invite link",
 		"Create Invite Link" => "Criar link de convite",
 		"Create Role" => "Criar cargo",
-		"Create an invite link to welcome people to this server." => "Crie um link de convite para receber pessoas neste servidor.",
+		"Create an invite link to welcome people to this server." => {
+			"Crie um link de convite para receber pessoas neste servidor."
+		}
 		"Custom role color" => "Custom role color",
 		"Default Permissions\n@everyone · applies to all server members" => {
 			"Permissões padrão\n@everyone · se aplica a todos os membros do servidor"
@@ -1347,10 +1355,14 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Delete Sticker" => "Delete Sticker",
 		"Description (optional)" => "Description (optional)",
 		"Discard Changes" => "Descartar alterações",
-		"Drag and drop up to 10 images onto this page, or choose files. Review their names before uploading." => "Arraste e solte até 10 imagens nesta página ou escolha arquivos. Revise os nomes antes de enviar.",
+		"Drag and drop up to 10 images onto this page, or choose files. Review their names before uploading." => {
+			"Arraste e solte até 10 imagens nesta página ou escolha arquivos. Revise os nomes antes de enviar."
+		}
 		"Edit" => "Edit",
 		"Emoji name" => "Emoji name",
-		"Emoji name: 2–32 letters, numbers, or underscores" => "Emoji name: 2–32 letters, numbers, or underscores",
+		"Emoji name: 2–32 letters, numbers, or underscores" => {
+			"Emoji name: 2–32 letters, numbers, or underscores"
+		}
 		"Filter by Action" => "Filtrar por ação",
 		"Filter by User" => "Filtrar por usuário",
 		"First page" => "Primeira página",
@@ -1365,17 +1377,25 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"MEMBERS" => "MEMBROS",
 		"Manage >" => "Manage >",
 		"Member details" => "Member details",
-		"Members use the color of their highest role on the roles list." => "Members use the color of their highest role on the roles list.",
+		"Members use the color of their highest role on the roles list." => {
+			"Members use the color of their highest role on the roles list."
+		}
 		"NONE" => "NENHUM",
 		"Next page" => "Próxima página",
 		"No active invite links" => "Nenhum link de convite ativo",
-		"No additional details were provided for this event." => "Nenhum detalhe adicional foi fornecido para este evento.",
-		"No audit log entries match these filters." => "Nenhuma entrada do registro de auditoria corresponde a estes filtros.",
+		"No additional details were provided for this event." => {
+			"Nenhum detalhe adicional foi fornecido para este evento."
+		}
+		"No audit log entries match these filters." => {
+			"Nenhuma entrada do registro de auditoria corresponde a estes filtros."
+		}
 		"No custom stickers yet." => "Nenhuma figurinha personalizada ainda.",
 		"No integrations in this server." => "Nenhuma integração neste servidor.",
 		"No members match this search." => "No members match this search.",
 		"Permissions" => "Permissões",
-		"Posts from these followed channels are delivered to your server." => "Posts from these followed channels are delivered to your server.",
+		"Posts from these followed channels are delivered to your server." => {
+			"Posts from these followed channels are delivered to your server."
+		}
 		"Preparing emoji images..." => "Preparing emoji images...",
 		"Preparing sticker artwork…" => "Preparing sticker artwork…",
 		"Prune" => "Prune",
@@ -1386,7 +1406,9 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Reload Invites" => "Recarregar convites",
 		"Reload Roles" => "Recarregar cargos",
 		"Reload integrations" => "Recarregar integrações",
-		"Reload integrations before making more changes. Your draft will be kept." => "Reload integrations before making more changes. Your draft will be kept.",
+		"Reload integrations before making more changes. Your draft will be kept." => {
+			"Reload integrations before making more changes. Your draft will be kept."
+		}
 		"Remove Integration" => "Remove Integration",
 		"Review sticker" => "Review sticker",
 		"Review uploads" => "Review uploads",
@@ -1401,19 +1423,31 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Search members" => "Buscar membros",
 		"Search permissions" => "Buscar permissões",
 		"Second gradient color" => "Second gradient color",
-		"Send updates from your apps and services to a channel in this server." => "Send updates from your apps and services to a channel in this server.",
+		"Send updates from your apps and services to a channel in this server." => {
+			"Send updates from your apps and services to a channel in this server."
+		}
 		"Server Members" => "Membros do servidor",
-		"Showing the first 50 integrations returned by Discord." => "Showing the first 50 integrations returned by Discord.",
-		"Static PNG, JPEG and WebP artwork is supported up to 8 MB. The prepared PNG must fit within Discord's 512 KB limit." => "Arte PNG, JPEG e WebP estática é aceita até 8 MB. O PNG preparado deve caber no limite de 512 KB do Discord.",
-		"The audit log reached its local entry or memory limit. Adjust the filters to find other events." => "O registro de auditoria atingiu o limite local de entradas ou memória. Ajuste os filtros para encontrar outros eventos.",
+		"Showing the first 50 integrations returned by Discord." => {
+			"Showing the first 50 integrations returned by Discord."
+		}
+		"Static PNG, JPEG and WebP artwork is supported up to 8 MB. The prepared PNG must fit within Discord's 512 KB limit." => {
+			"Arte PNG, JPEG e WebP estática é aceita até 8 MB. O PNG preparado deve caber no limite de 512 KB do Discord."
+		}
+		"The audit log reached its local entry or memory limit. Adjust the filters to find other events." => {
+			"O registro de auditoria atingiu o limite local de entradas ou memória. Ajuste os filtros para encontrar outros eventos."
+		}
 		"This integration is no longer available." => "This integration is no longer available.",
-		"This is how members with this role appear." => "This is how members with this role appear.",
+		"This is how members with this role appear." => {
+			"This is how members with this role appear."
+		}
 		"Unknown" => "Unknown",
 		"Upload" => "Upload",
 		"Upload Emoji" => "Enviar emoji",
 		"Upload Sticker" => "Enviar figurinha",
 		"Uploaded By" => "Uploaded By",
-		"Use roles to group your server members and assign permissions." => "Use cargos para agrupar membros do servidor e atribuir permissões.",
+		"Use roles to group your server members and assign permissions." => {
+			"Use cargos para agrupar membros do servidor e atribuir permissões."
+		}
 		"Use their username" => "Use their username",
 		"Your stickers" => "Suas figurinhas",
 		"←  BACK" => "←  VOLTAR",
@@ -1698,7 +1732,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Edit message" => "Editar mensaje",
 		"Enter to save · Shift+Enter for a new line · Esc to cancel" => {
 			"Enter guarda · Mayús+Enter salta de línea · Esc cancela"
-		},
+		}
 		"Remove from delete selection" => "Quitar de la selección",
 		"Select for batch delete" => "Seleccionar para borrar",
 		"You can select up to 5 messages at a time." => {
@@ -1753,6 +1787,8 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Reconnecting" => "Reconectando",
 		"attempt" => "intento",
 		"Reconnect now" => "Reconectar ahora",
+		"Ping" => "Ping",
+		"Connected for" => "Conectado durante",
 		"Connection recovery" => "Recuperación de conexión",
 		"Rejoin calls after brief disconnects" => "Reunirse a la llamada tras cortes breves",
 		"Automatically returns to the same call when Discord reconnects within 15 seconds." => {
@@ -2705,15 +2741,21 @@ fn spanish(key: &str) -> Option<&'static str> {
 		}
 		"+" => "+",
 		"< Integrations" => "< Integrations",
-		"Add custom emoji that anyone can use in this server. Animated GIF emoji may be used by members with Discord Nitro." => "Add custom emoji that anyone can use in this server. Animated GIF emoji may be used by members with Discord Nitro.",
-		"Add custom stickers for members to use in this server. Artwork is cropped and resized to 320 × 320 pixels before upload." => "Add custom stickers for members to use in this server. Artwork is cropped and resized to 320 × 320 pixels before upload.",
+		"Add custom emoji that anyone can use in this server. Animated GIF emoji may be used by members with Discord Nitro." => {
+			"Add custom emoji that anyone can use in this server. Animated GIF emoji may be used by members with Discord Nitro."
+		}
+		"Add custom stickers for members to use in this server. Artwork is cropped and resized to 320 × 320 pixels before upload." => {
+			"Add custom stickers for members to use in this server. Artwork is cropped and resized to 320 × 320 pixels before upload."
+		}
 		"All Actions" => "Todas las acciones",
 		"All Users" => "Todos los usuarios",
 		"Bots and Apps" => "Bots and Apps",
 		"Copy invite link" => "Copy invite link",
 		"Create Invite Link" => "Create Invite Link",
 		"Create Role" => "Crear rol",
-		"Create an invite link to welcome people to this server." => "Create an invite link to welcome people to this server.",
+		"Create an invite link to welcome people to this server." => {
+			"Create an invite link to welcome people to this server."
+		}
 		"Custom role color" => "Custom role color",
 		"Default Permissions\n@everyone · applies to all server members" => {
 			"Permisos predeterminados\n@everyone · se aplica a todos los miembros del servidor"
@@ -2724,10 +2766,14 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Delete Sticker" => "Delete Sticker",
 		"Description (optional)" => "Description (optional)",
 		"Discard Changes" => "Descartar cambios",
-		"Drag and drop up to 10 images onto this page, or choose files. Review their names before uploading." => "Drag and drop up to 10 images onto this page, or choose files. Review their names before uploading.",
+		"Drag and drop up to 10 images onto this page, or choose files. Review their names before uploading." => {
+			"Drag and drop up to 10 images onto this page, or choose files. Review their names before uploading."
+		}
 		"Edit" => "Edit",
 		"Emoji name" => "Emoji name",
-		"Emoji name: 2–32 letters, numbers, or underscores" => "Emoji name: 2–32 letters, numbers, or underscores",
+		"Emoji name: 2–32 letters, numbers, or underscores" => {
+			"Emoji name: 2–32 letters, numbers, or underscores"
+		}
 		"Filter by Action" => "Filtrar por acción",
 		"Filter by User" => "Filtrar por usuario",
 		"First page" => "First page",
@@ -2742,17 +2788,23 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"MEMBERS" => "MIEMBROS",
 		"Manage >" => "Manage >",
 		"Member details" => "Member details",
-		"Members use the color of their highest role on the roles list." => "Members use the color of their highest role on the roles list.",
+		"Members use the color of their highest role on the roles list." => {
+			"Members use the color of their highest role on the roles list."
+		}
 		"NONE" => "NONE",
 		"Next page" => "Next page",
 		"No active invite links" => "No active invite links",
-		"No additional details were provided for this event." => "No additional details were provided for this event.",
+		"No additional details were provided for this event." => {
+			"No additional details were provided for this event."
+		}
 		"No audit log entries match these filters." => "No audit log entries match these filters.",
 		"No custom stickers yet." => "No custom stickers yet.",
 		"No integrations in this server." => "No integrations in this server.",
 		"No members match this search." => "No members match this search.",
 		"Permissions" => "Permissions",
-		"Posts from these followed channels are delivered to your server." => "Posts from these followed channels are delivered to your server.",
+		"Posts from these followed channels are delivered to your server." => {
+			"Posts from these followed channels are delivered to your server."
+		}
 		"Preparing emoji images..." => "Preparing emoji images...",
 		"Preparing sticker artwork…" => "Preparing sticker artwork…",
 		"Prune" => "Prune",
@@ -2763,7 +2815,9 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Reload Invites" => "Recargar invitaciones",
 		"Reload Roles" => "Recargar roles",
 		"Reload integrations" => "Reload integrations",
-		"Reload integrations before making more changes. Your draft will be kept." => "Reload integrations before making more changes. Your draft will be kept.",
+		"Reload integrations before making more changes. Your draft will be kept." => {
+			"Reload integrations before making more changes. Your draft will be kept."
+		}
 		"Remove Integration" => "Remove Integration",
 		"Review sticker" => "Review sticker",
 		"Review uploads" => "Review uploads",
@@ -2778,19 +2832,31 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Search members" => "Search members",
 		"Search permissions" => "Search permissions",
 		"Second gradient color" => "Second gradient color",
-		"Send updates from your apps and services to a channel in this server." => "Send updates from your apps and services to a channel in this server.",
+		"Send updates from your apps and services to a channel in this server." => {
+			"Send updates from your apps and services to a channel in this server."
+		}
 		"Server Members" => "Server Members",
-		"Showing the first 50 integrations returned by Discord." => "Showing the first 50 integrations returned by Discord.",
-		"Static PNG, JPEG and WebP artwork is supported up to 8 MB. The prepared PNG must fit within Discord's 512 KB limit." => "Static PNG, JPEG and WebP artwork is supported up to 8 MB. The prepared PNG must fit within Discord's 512 KB limit.",
-		"The audit log reached its local entry or memory limit. Adjust the filters to find other events." => "The audit log reached its local entry or memory limit. Adjust the filters to find other events.",
+		"Showing the first 50 integrations returned by Discord." => {
+			"Showing the first 50 integrations returned by Discord."
+		}
+		"Static PNG, JPEG and WebP artwork is supported up to 8 MB. The prepared PNG must fit within Discord's 512 KB limit." => {
+			"Static PNG, JPEG and WebP artwork is supported up to 8 MB. The prepared PNG must fit within Discord's 512 KB limit."
+		}
+		"The audit log reached its local entry or memory limit. Adjust the filters to find other events." => {
+			"The audit log reached its local entry or memory limit. Adjust the filters to find other events."
+		}
 		"This integration is no longer available." => "This integration is no longer available.",
-		"This is how members with this role appear." => "This is how members with this role appear.",
+		"This is how members with this role appear." => {
+			"This is how members with this role appear."
+		}
 		"Unknown" => "Unknown",
 		"Upload" => "Upload",
 		"Upload Emoji" => "Subir emoji",
 		"Upload Sticker" => "Subir sticker",
 		"Uploaded By" => "Uploaded By",
-		"Use roles to group your server members and assign permissions." => "Usa roles para agrupar miembros del servidor y asignar permisos.",
+		"Use roles to group your server members and assign permissions." => {
+			"Usa roles para agrupar miembros del servidor y asignar permisos."
+		}
 		"Use their username" => "Use their username",
 		"Your stickers" => "Your stickers",
 		"←  BACK" => "←  BACK",
@@ -2973,6 +3039,8 @@ mod tests {
 			"Reconnecting",
 			"attempt",
 			"Reconnect now",
+			"Ping",
+			"Connected for",
 			"Connection recovery",
 			"Rejoin calls after brief disconnects",
 			"Automatically returns to the same call when Discord reconnects within 15 seconds.",

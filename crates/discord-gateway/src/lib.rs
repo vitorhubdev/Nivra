@@ -21,7 +21,7 @@ use futures_util::{SinkExt, StreamExt};
 use model::{Freshness, Id, Member, MemberList};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tokio::{
-	sync::{mpsc, watch, Notify},
+	sync::{Notify, mpsc, watch},
 	time::{Instant, interval_at, sleep, timeout},
 };
 use tokio_tungstenite::{
@@ -143,9 +143,15 @@ impl Heartbeat {
 	fn sent(&mut self, now: Instant) {
 		self.awaiting_since.get_or_insert(now);
 	}
-	fn ack(&mut self) {
-		self.awaiting_since = None;
+	fn ack(&mut self, now: Instant) -> Option<u32> {
+		let sent = self.awaiting_since.take()?;
+		Some(now.duration_since(sent).as_millis().min(u32::MAX as u128) as u32)
 	}
+}
+fn gateway_host(url: &str) -> Option<String> {
+	url::Url::parse(url)
+		.ok()
+		.and_then(|parsed| parsed.host_str().map(str::to_owned))
 }
 fn next_attempt(attempt: u32, ready_for: Option<Duration>) -> u32 {
 	// Reset backoff only after a stable connection; cap it during prolonged outages.
@@ -1055,8 +1061,7 @@ async fn run_inner(
 	);
 	let mut gateway_diagnostics = Diagnostics::new(
 		"gateway",
-		std::env::var_os("NIVRA_GATEWAY_DIAGNOSTICS").as_deref()
-			== Some(std::ffi::OsStr::new("1")),
+		std::env::var_os("NIVRA_GATEWAY_DIAGNOSTICS").as_deref() == Some(std::ffi::OsStr::new("1")),
 	);
 	let mut state = ResumeState::default();
 	let mut was_ready = false;
@@ -1099,6 +1104,7 @@ async fn run_inner(
 			wait_reconnect(Duration::from_millis(retry_ms), &reconnect_skip).await;
 		}
 		let url = state.url.as_deref().unwrap_or(&initial_url);
+		let connected_url = url.to_owned();
 		// Compiled out of shipped builds. Tests replace only dialing, never URL validation.
 		#[cfg(test)]
 		let url = test_endpoint.unwrap_or(url);
@@ -1448,7 +1454,11 @@ async fn run_inner(
 							{ continue; }
 							if let Some(sequence) = packet.s { state.sequence = Some(sequence); }
 							match packet.op {
-								11 => heartbeat.ack(),
+								11 => {
+									if let Some(ms) = heartbeat.ack(Instant::now()) {
+										emit(Event::GatewayPing(ms))?;
+									}
+								}
 								1 => {
 									let packet = serde_json::json!({"op":1,"d":state.sequence}).to_string();
 									if !matches!(timeout(Duration::from_secs(5), socket.send(Frame::Text(packet.into()))).await, Ok(Ok(()))) { break; }
@@ -1573,6 +1583,13 @@ async fn run_inner(
 										}
 										if !participants.is_empty() { emit(Event::Voice(client_core::voice::Event::Snapshot { partial: false, guild: None, participants }))?; }
 										ready_at = Some(Instant::now());
+										if let Some(host) = state
+											.url
+											.as_deref()
+											.and_then(gateway_host)
+										{
+											emit(Event::GatewayHost(host))?;
+										}
 									}
 									"GUILD_MEMBERS_CHUNK" => {
 										if let Some(event) = queries.chunk(packet.d.get().as_bytes()) { emit(event)?; }
@@ -1610,6 +1627,9 @@ async fn run_inner(
 										emit(Event::Interaction(client_core::interactions::Event::Session(state.session.clone().ok_or(Failure::Protocol)?)))?;
 										emit(Event::Resumed)?;
 										ready_at = Some(Instant::now());
+										if let Some(host) = gateway_host(&connected_url) {
+											emit(Event::GatewayHost(host))?;
+										}
 									}
 									"CALL_CREATE" | "CALL_UPDATE" | "CALL_DELETE" | "VOICE_STATE_UPDATE" | "VOICE_SERVER_UPDATE" | "STREAM_CREATE" | "STREAM_SERVER_UPDATE" | "STREAM_DELETE" => calls.dispatch(packet.t.as_deref().unwrap_or(""),packet.d.get().as_bytes(),owner_id,&emit)?,
 									"THREAD_MEMBER_LIST_UPDATE" => {
@@ -2790,14 +2810,7 @@ mod tests {
 			}
 			Ok(())
 		};
-		emit_gateway_loss(
-			true,
-			Some(Instant::now()),
-			&mut outage,
-			&emit,
-			2,
-		)
-		.unwrap();
+		emit_gateway_loss(true, Some(Instant::now()), &mut outage, &emit, 2).unwrap();
 		let events = events.into_inner().unwrap();
 		assert_eq!(events, ["disconnected", "reconnect-2"]);
 	}
@@ -2808,6 +2821,18 @@ mod tests {
 			assert!(jitter_ms(max) < max);
 		}
 	}
+	#[test]
+	fn heartbeat_rtt_uses_fake_clock() {
+		let mut heartbeat = Heartbeat::default();
+		let origin = Instant::now();
+		heartbeat.sent(origin);
+		assert_eq!(
+			heartbeat.ack(origin + Duration::from_millis(128)),
+			Some(128)
+		);
+		assert_eq!(heartbeat.ack(origin + Duration::from_millis(200)), None);
+	}
+
 	#[test]
 	fn heartbeat_resume_and_origin_boundaries() {
 		let mut heartbeat = Heartbeat::default();
@@ -2821,7 +2846,8 @@ mod tests {
 				.is_ok()
 		);
 		assert!(heartbeat.tick(now + interval, interval).is_err());
-		heartbeat.ack();
+		assert_eq!(heartbeat.ack(now + Duration::from_millis(37)), Some(37));
+		assert_eq!(heartbeat.ack(now), None);
 		assert!(heartbeat.tick(now + interval, interval).is_ok());
 		assert_eq!(next_attempt(5, Some(Duration::from_secs(1))), 6);
 		assert_eq!(next_attempt(5, Some(Duration::from_secs(60))), 1);

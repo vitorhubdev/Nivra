@@ -581,6 +581,8 @@ pub enum Event {
 	},
 	Failure(auth::Failure),
 	Disconnected,
+	GatewayPing(u32),
+	GatewayHost(String),
 	Reconnecting {
 		attempt: u32,
 		retry_in_ms: u64,
@@ -724,6 +726,12 @@ pub struct State {
 	pub history_pending: bool,
 	pub older_exhausted: bool,
 	pub gateway_connected: bool,
+	/// Latest gateway heartbeat round trip, when connected.
+	pub gateway_ping_ms: Option<u32>,
+	/// Hostname of the active gateway WebSocket endpoint.
+	pub gateway_host: String,
+	/// When the current gateway session became ready.
+	pub gateway_connected_since: Option<std::time::Instant>,
 	/// Active gateway backoff, set by [`Event::Reconnecting`].
 	pub gateway_reconnect: Option<GatewayReconnect>,
 	/// When the gateway socket last dropped while connected.
@@ -963,6 +971,9 @@ impl Default for State {
 			history_pending: false,
 			older_exhausted: false,
 			gateway_connected: false,
+			gateway_ping_ms: None,
+			gateway_host: String::new(),
+			gateway_connected_since: None,
 			gateway_reconnect: None,
 			gateway_disconnected_at: None,
 			auto_rejoin: None,
@@ -3086,6 +3097,7 @@ impl State {
 				self.gateway_connected = true;
 				self.gateway_reconnect = None;
 				self.gateway_disconnected_at = None;
+				self.gateway_connected_since = Some(std::time::Instant::now());
 				self.status = if unavailable {
 					"Conversation no longer available in navigation"
 				} else {
@@ -3412,6 +3424,16 @@ impl State {
 				self.fail(f);
 				Ok(())
 			}
+			Event::GatewayPing(ms) => {
+				self.gateway_ping_ms = Some(ms);
+				Ok(())
+			}
+			Event::GatewayHost(host) => {
+				if host.len() <= 256 && host.chars().all(|c| !c.is_control()) {
+					self.gateway_host = host;
+				}
+				Ok(())
+			}
 			Event::Disconnected => {
 				self.member_search = Default::default();
 				self.cancel_message_actions();
@@ -3429,16 +3451,24 @@ impl State {
 				// roster and known DM calls all stay. Only a fresh READY invalidates the voice state.
 				self.voice.incoming = None;
 				self.gateway_connected = false;
+				self.gateway_ping_ms = None;
+				self.gateway_connected_since = None;
 				self.gateway_reconnect = None;
-				self.gateway_disconnected_at.get_or_insert(std::time::Instant::now());
+				self.gateway_disconnected_at
+					.get_or_insert(std::time::Instant::now());
 				self.cancel_history();
 				self.freshness = Freshness::Stale;
 				self.status = "Reconnecting…";
 				Ok(())
 			}
-			Event::Reconnecting { attempt, retry_in_ms } => {
+			Event::Reconnecting {
+				attempt,
+				retry_in_ms,
+			} => {
 				self.gateway_connected = false;
-				self.gateway_disconnected_at.get_or_insert(std::time::Instant::now());
+				self.gateway_ping_ms = None;
+				self.gateway_disconnected_at
+					.get_or_insert(std::time::Instant::now());
 				self.gateway_reconnect = Some(GatewayReconnect {
 					attempt,
 					retry_in_ms,
@@ -3452,6 +3482,7 @@ impl State {
 				self.gateway_connected = true;
 				self.gateway_reconnect = None;
 				self.gateway_disconnected_at = None;
+				self.gateway_connected_since = Some(std::time::Instant::now());
 				self.cancel_history();
 				self.freshness = Freshness::Stale;
 				self.status = "";
@@ -4067,7 +4098,7 @@ mod tests {
 			name: "Synthetic".into(),
 			icon: None,
 			emojis: None,
-		premium_tier: 0
+			premium_tier: 0,
 		};
 		let mut state = State {
 			guilds: vec![guild(1)],
@@ -4107,7 +4138,7 @@ mod tests {
 					name: "Synthetic".into(),
 					icon: None,
 					emojis: None,
-				premium_tier: 0
+					premium_tier: 0,
 				})
 				.collect(),
 			..State::default()
@@ -4366,7 +4397,8 @@ mod tests {
 		}];
 		state.selected = Some(Id(20));
 		let author = state.user.clone().expect("nitro owner");
-		state.timeline
+		state
+			.timeline
 			.insert(
 				model::Message {
 					sticker_items: vec![],
@@ -4410,10 +4442,22 @@ mod tests {
 	#[test]
 	fn nitro_edit_uses_full_limit() {
 		let mut nitro = nitro_dm_state(Patch::Value(2));
-		assert!(nitro.prepare_edit(Id(20), Id(100), "x".repeat(3000)).is_some());
+		assert!(
+			nitro
+				.prepare_edit(Id(20), Id(100), "x".repeat(3000))
+				.is_some()
+		);
 		let mut plain = nitro_dm_state(Patch::Absent);
-		assert!(plain.prepare_edit(Id(20), Id(100), "x".repeat(3000)).is_none());
-		assert!(plain.prepare_edit(Id(20), Id(100), "x".repeat(1500)).is_some());
+		assert!(
+			plain
+				.prepare_edit(Id(20), Id(100), "x".repeat(3000))
+				.is_none()
+		);
+		assert!(
+			plain
+				.prepare_edit(Id(20), Id(100), "x".repeat(1500))
+				.is_some()
+		);
 	}
 
 	#[test]
@@ -4485,7 +4529,7 @@ mod tests {
 					name: "Synthetic".into(),
 					icon: None,
 					emojis: None,
-				premium_tier: 0
+					premium_tier: 0,
 				})
 				.collect(),
 			channels: [(10, 1, 0), (11, 1, 0), (12, 1, 2), (20, 2, 0), (30, 0, 1)]
@@ -4903,7 +4947,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			..State::default()
 		};
@@ -4974,7 +5018,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: Some(vec![emoji.clone()]),
-			premium_tier: 0
+				premium_tier: 0,
 			})
 			.collect();
 		for guild in &mut guilds {
@@ -5016,7 +5060,7 @@ mod tests {
 				id: Id(2),
 				name: "Synthetic server".into(),
 				icon: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			..State::default()
 		};
@@ -5096,7 +5140,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			..State::default()
 		};
@@ -5527,7 +5571,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			selected: Some(Id(1)),
 			auth: auth::AuthState::Authenticated,
@@ -5665,7 +5709,7 @@ mod tests {
 			name: "Synthetic".into(),
 			icon: None,
 			emojis: None,
-		premium_tier: 0
+			premium_tier: 0,
 		};
 		let user = message(1).author;
 		let mut state = State {
@@ -5873,6 +5917,23 @@ mod tests {
 			State::default().history(None),
 			Command::CancelSearch
 		));
+	}
+
+	#[test]
+	fn gateway_ping_host_and_connected_since_are_tracked() {
+		let mut state = State::default();
+		apply(&mut state, Event::GatewayPing(64));
+		apply(
+			&mut state,
+			Event::GatewayHost("gateway-us-east1.discord.gg".into()),
+		);
+		assert_eq!(state.gateway_ping_ms, Some(64));
+		assert_eq!(state.gateway_host, "gateway-us-east1.discord.gg");
+		apply(&mut state, Event::Resumed);
+		assert!(state.gateway_connected_since.is_some());
+		apply(&mut state, Event::Disconnected);
+		assert!(state.gateway_ping_ms.is_none());
+		assert!(state.gateway_connected_since.is_none());
 	}
 
 	#[test]

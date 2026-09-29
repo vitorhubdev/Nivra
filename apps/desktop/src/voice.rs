@@ -85,7 +85,7 @@ struct Live {
 	events: mpsc::Receiver<Notice>,
 	// Terminal errors must survive a full progress queue; retain the first safe reason.
 	failure: Arc<OnceLock<&'static str>>,
-	speakers: watch::Receiver<[u64; 64]>,
+	speakers: watch::Receiver<discord_voice::SpeakingState>,
 	task: JoinHandle<()>,
 	devices: Devices,
 	device_deadline: Option<Instant>,
@@ -263,7 +263,7 @@ impl Voice {
 		if let Some(live) = self.live.take() {
 			live.audio.set_ready(false);
 			live.task.abort();
-		self.retiring = Some(live.audio.shutdown());
+			self.retiring = Some(live.audio.shutdown());
 		}
 	}
 	pub fn joined(&self) -> bool {
@@ -461,6 +461,7 @@ impl Voice {
 		self.poll_mic_preview(state, ui, ctx);
 		self.poll_camera_test(state, ui, ctx);
 		ui.voice_speaking.clear();
+		ui.voice_speaking_levels.clear();
 		ui.voice_microphone_unavailable = false;
 		self.poll_camera_devices(state.demo, ui, ctx);
 		if ui.voice_refresh_devices {
@@ -796,18 +797,21 @@ impl Voice {
 			&& !call.server_deafened
 		{
 			let controls = *live.controls.borrow();
-			ui.voice_speaking.extend(
-				live.speakers
-					.borrow()
-					.iter()
-					.copied()
-					.filter(|user| {
+			let snapshot = *live.speakers.borrow();
+			for (user, level) in
+				snapshot
+					.users
+					.into_iter()
+					.zip(snapshot.levels)
+					.filter(|(user, _)| {
 						*user != 0
 							&& !(controls.muted
 								&& state.user.as_ref().is_some_and(|own| own.id.0 == *user))
-					})
-					.map(Id),
-			);
+					}) {
+				let id = Id(user);
+				ui.voice_speaking.push(id);
+				ui.voice_speaking_levels.insert(id, level);
+			}
 		}
 		let command = if let Some(error) = failure {
 			if self.push_self_leave_cue(&mut ui.notification_cues) {
@@ -1192,7 +1196,7 @@ impl Voice {
 		let (send, events) = mpsc::sync_channel(8);
 		let failure = Arc::new(OnceLock::new());
 		let audio_failure = failure.clone();
-		let (speaking, speakers) = watch::channel([0; 64]);
+		let (speaking, speakers) = watch::channel(discord_voice::SpeakingState::default());
 		let audio_send = send.clone();
 		let wake = ctx.clone();
 		let devices = Devices {
@@ -1298,8 +1302,8 @@ impl Voice {
 							return Ok(());
 						}
 						Status::RemoteAudio => Notice::RemoteAudio,
-						Status::Speaking(users) => {
-							speaking.send_replace(*users);
+						Status::Speaking(snapshot) => {
+							speaking.send_replace(snapshot);
 							status_wake.request_repaint();
 							return Ok(());
 						}
@@ -1529,10 +1533,19 @@ mod tests {
 		let owner = participant(1);
 		let peer = participant(2);
 		let fresh = CallCues::default();
-		assert!(fresh.self_leave().is_none(), "never joined means no leave sound");
+		assert!(
+			fresh.self_leave().is_none(),
+			"never joined means no leave sound"
+		);
 		let mut cues = CallCues::default();
-		assert!(cues.poll(false, true, owner.user, &[owner, peer]).is_empty());
-		assert!(cues.self_leave().is_none(), "not yet joined means no leave sound");
+		assert!(
+			cues.poll(false, true, owner.user, &[owner, peer])
+				.is_empty()
+		);
+		assert!(
+			cues.self_leave().is_none(),
+			"not yet joined means no leave sound"
+		);
 		assert_eq!(
 			cues.poll(true, true, owner.user, &[owner, peer]),
 			vec![Sound::UserJoin]

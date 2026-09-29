@@ -17,6 +17,7 @@ fn main() {
 		.retain(|p| p.user == own);
 	let mut view = ui::MessagingUi::default();
 	view.voice_speaking.push(own);
+	view.voice_speaking_levels.insert(own, 200);
 	for (phase, muted, deafened, expected) in [
 		(Phase::Waiting, false, false, true),
 		(Phase::Connected, false, false, true),

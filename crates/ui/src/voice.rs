@@ -446,9 +446,9 @@ impl MessagingUi {
 				);
 				inner.spacing_mut().item_spacing.x = 6.0;
 				let avatar = match user {
-					Some(user) => {
-						self.avatars.show_plain_quiet(&mut inner, user, 28.0, state.demo)
-					}
+					Some(user) => self
+						.avatars
+						.show_plain_quiet(&mut inner, user, 28.0, state.demo),
 					None => {
 						let (r, response) = inner
 							.allocate_exact_size(egui::Vec2::splat(28.0), egui::Sense::hover());
@@ -456,9 +456,20 @@ impl MessagingUi {
 						response
 					}
 				};
-				if self.is_speaking(state, entry.channel, &entry.participant) {
-					speaking_avatar(&inner, &avatar, name);
-				}
+				let speaking = self.is_speaking(state, entry.channel, &entry.participant);
+				let level = self
+					.voice_speaking_levels
+					.get(&entry.participant.user)
+					.copied()
+					.unwrap_or(0);
+				speaking_avatar(
+					&inner,
+					&avatar,
+					name,
+					entry.participant.user,
+					speaking,
+					level,
+				);
 				let locally_muted = self.voice_user_locally_muted(entry.participant.user);
 				inner.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					if entry.participant.deafened {
@@ -1204,11 +1215,16 @@ impl MessagingUi {
 				egui::Color32::WHITE,
 			);
 		}
-		if silenced.is_none() && speaking {
+		let level = self
+			.voice_speaking_levels
+			.get(&entry.participant.user)
+			.copied()
+			.unwrap_or(0);
+		if silenced.is_none() {
 			if video.is_none() && frameless {
-				speaking_avatar(ui, &avatar, name);
+				speaking_avatar(ui, &avatar, name, entry.participant.user, speaking, level);
 			}
-			if !frameless {
+			if !frameless && speaking {
 				ui.painter().rect_stroke(
 					rect.shrink(1.0),
 					8,
@@ -1858,13 +1874,14 @@ impl MessagingUi {
 		if active
 			&& !input && let Some(code) = &self.voice_privacy_code
 		{
-			egui::CollapsingHeader::new(crate::i18n::text(self.language, "Voice privacy code")).show(ui, |ui| {
-				ui.add(
-					egui::Label::new(RichText::new(code).monospace())
-						.selectable(true)
-						.wrap(),
-				);
-			});
+			egui::CollapsingHeader::new(crate::i18n::text(self.language, "Voice privacy code"))
+				.show(ui, |ui| {
+					ui.add(
+						egui::Label::new(RichText::new(code).monospace())
+							.selectable(true)
+							.wrap(),
+					);
+				});
 		}
 	}
 
@@ -2018,20 +2035,20 @@ impl MessagingUi {
 		if active && let Some(code) = &self.voice_privacy_code {
 			egui::CollapsingHeader::new(crate::i18n::text(self.language, "Voice privacy code"))
 				.show(ui, |ui| {
-				ui.add(
-					egui::Label::new(RichText::new(code).monospace())
-						.selectable(true)
-						.wrap(),
-				);
-				ui.label(
-					RichText::new(crate::i18n::text(
-						self.language,
-						"Compare with the other participants. This code changes with the encrypted call group.",
-					))
-					.size(12.0)
-					.color(colors.muted),
-				);
-			});
+					ui.add(
+						egui::Label::new(RichText::new(code).monospace())
+							.selectable(true)
+							.wrap(),
+					);
+					ui.label(
+						RichText::new(crate::i18n::text(
+							self.language,
+							"Compare with the other participants. This code changes with the encrypted call group.",
+						))
+						.size(12.0)
+						.color(colors.muted),
+					);
+				});
 		}
 		if !compact {
 			design::hint(
@@ -2229,7 +2246,7 @@ impl MessagingUi {
 					&mut self.voice_input,
 					self.language,
 				)
-					.labelled_by(label.id);
+				.labelled_by(label.id);
 			} else {
 				device_combo(
 					ui,
@@ -2498,11 +2515,7 @@ impl MessagingUi {
 								.width(ui.available_width().min(160.0))
 								.show_ui(ui, |ui| {
 									for (index, label) in labels.iter().enumerate() {
-										ui.selectable_value(
-											&mut strength,
-											index as u8,
-											t(label),
-										);
+										ui.selectable_value(&mut strength, index as u8, t(label));
 									}
 								});
 						},
@@ -2948,7 +2961,8 @@ impl MessagingUi {
 			reconnect.attempt
 		);
 		let retry = std::time::Duration::from_millis(reconnect.retry_in_ms.max(1));
-		let progress = (reconnect.since.elapsed().as_secs_f32() / retry.as_secs_f32()).clamp(0.0, 1.0);
+		let progress =
+			(reconnect.since.elapsed().as_secs_f32() / retry.as_secs_f32()).clamp(0.0, 1.0);
 		egui::Panel::top("gateway-reconnect")
 			.show_separator_line(false)
 			.frame(
@@ -2981,10 +2995,7 @@ impl MessagingUi {
 		let previous = enabled;
 		design::switch(
 			ui,
-			crate::i18n::text(
-				self.language,
-				"Rejoin calls after brief disconnects",
-			),
+			crate::i18n::text(self.language, "Rejoin calls after brief disconnects"),
 			Some(crate::i18n::text(
 				self.language,
 				"Automatically returns to the same call when Discord reconnects within 15 seconds.",
@@ -3009,7 +3020,9 @@ impl MessagingUi {
 			"voice-auto-rejoin",
 			t("Rejoin calls after brief disconnects"),
 			t("This can put you back on voice without an extra tap after short outages."),
-			t("Only enable this if you are comfortable rejoining voice automatically on this device."),
+			t(
+				"Only enable this if you are comfortable rejoining voice automatically on this device.",
+			),
 		)
 		.confirm_labels(t("Continue"), t("Enable auto-rejoin"))
 		.show(ctx)
@@ -3783,14 +3796,10 @@ fn noise_level_row(
 	let pill_width = badge.as_ref().map_or(0.0, |pill| pill.size().x + 12.0);
 	let inline_end = text_left
 		+ title.size().x
-		+ 8.0
-		+ engine.as_ref().map_or(0.0, |engine| engine.size().x + 8.0)
+		+ 8.0 + engine.as_ref().map_or(0.0, |engine| engine.size().x + 8.0)
 		+ pill_width;
-	let badge_below =
-		compact && badge.is_some() && inline_end > width - 62.0 - 4.0;
-	let badge_height = badge
-		.as_ref()
-		.map_or(0.0, |pill| pill.size().y + 4.0);
+	let badge_below = compact && badge.is_some() && inline_end > width - 62.0 - 4.0;
+	let badge_height = badge.as_ref().map_or(0.0, |pill| pill.size().y + 4.0);
 	let text_height = title.size().y
 		+ detail.as_ref().map_or(0.0, |d| d.size().y + 3.0)
 		+ badge_below.then_some(3.0 + badge_height).unwrap_or(0.0);
@@ -3868,10 +3877,7 @@ fn noise_level_row(
 		let size = badge.size();
 		let pill = if badge_below {
 			egui::Rect::from_min_size(
-				egui::pos2(
-					rect.left() + text_left,
-					top + title_height + 3.0,
-				),
+				egui::pos2(rect.left() + text_left, top + title_height + 3.0),
 				size + egui::vec2(12.0, 4.0),
 			)
 		} else {
@@ -4313,16 +4319,35 @@ fn voice_channel_hover_text(name: &str, marks: &str, connected: bool) -> String 
 	text
 }
 
-fn speaking_avatar(ui: &egui::Ui, avatar: &egui::Response, name: &str) {
+fn speaking_avatar(
+	ui: &egui::Ui,
+	avatar: &egui::Response,
+	name: &str,
+	user: Id,
+	active: bool,
+	level: u8,
+) {
+	let (_visibility, radius_offset, opacity) = crate::anim::speaking_ring(
+		ui.ctx(),
+		egui::Id::new(("speaking-ring", user.0)),
+		active,
+		level,
+	);
+	if opacity <= 0.0 {
+		return;
+	}
 	let colors = design::palette(ui);
+	let base = avatar.rect.width() * 0.5;
 	ui.painter().circle_stroke(
 		avatar.rect.center(),
-		avatar.rect.width() * 0.5 + 2.0,
-		egui::Stroke::new(2.0, colors.positive),
+		base + radius_offset,
+		egui::Stroke::new(2.0, colors.positive.gamma_multiply(opacity)),
 	);
-	let label = format!("{name}{VOICE_STATUS_SEP}Speaking");
-	avatar.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, &label));
-	avatar.clone().on_hover_text(label);
+	if active {
+		let label = format!("{name}{VOICE_STATUS_SEP}Speaking");
+		avatar.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, &label));
+		avatar.clone().on_hover_text(label);
+	}
 }
 
 fn call_failure(ui: &mut egui::Ui, error: Option<&str>, color: egui::Color32) {
@@ -5100,9 +5125,7 @@ mod tests {
 				},
 				|ui| {
 					ui.set_width(360.0);
-					if let Some(response) =
-						view.voice_participant(ui, state, &entry, false)
-					{
+					if let Some(response) = view.voice_participant(ui, state, &entry, false) {
 						row = response.rect;
 					}
 				},
@@ -5143,7 +5166,9 @@ mod tests {
 		// Open with right-click: the menu shows its volume section.
 		let labels = open_menu(&mut view, &state);
 		assert!(
-			labels.iter().any(|(text, _)| text == "Mute" || text == "Unmute"),
+			labels
+				.iter()
+				.any(|(text, _)| text == "Mute" || text == "Unmute"),
 			"right-click opens the participant menu: {labels:?}"
 		);
 		assert!(
@@ -5158,10 +5183,7 @@ mod tests {
 				.find(|(id, _)| *id == user)
 				.map(|(_, volume)| *volume)
 		};
-		let drag = |view: &mut MessagingUi,
-		            state: &State,
-		            from: egui::Pos2,
-		            to: egui::Pos2| {
+		let drag = |view: &mut MessagingUi, state: &State, from: egui::Pos2, to: egui::Pos2| {
 			frame(view, state, press(from));
 			frame(view, state, vec![egui::Event::PointerMoved(to)]);
 			frame(view, state, release(to))
@@ -5182,7 +5204,12 @@ mod tests {
 			after.iter().any(|(text, _)| text == "User volume"),
 			"clicking inside keeps the menu open: {after:?}"
 		);
-		let (_, _) = drag(&mut view, &state, egui::pos2(85.0, 120.0), egui::pos2(95.0, 120.0));
+		let (_, _) = drag(
+			&mut view,
+			&state,
+			egui::pos2(85.0, 120.0),
+			egui::pos2(95.0, 120.0),
+		);
 		let (output, _) = frame(&mut view, &state, vec![]);
 		let dragged = mixed(&view);
 		assert!(
@@ -5281,19 +5308,13 @@ mod tests {
 		let ctx = egui::Context::default();
 		design::apply(&ctx);
 		let mut state = test_support::voice_demo_state();
-		state.voice.roster[1]
-			.member
-			.as_mut()
-			.unwrap()
-			.nick = Some("Robin".into());
+		state.voice.roster[1].member.as_mut().unwrap().nick = Some("Robin".into());
 		let entry = state.voice.roster[1].clone();
 		let mut view = MessagingUi::default();
 		let mut now = 0.0;
 		// Tooltips only appear over a still pointer, so the move happens
 		// once and later frames carry no pointer events at all.
-		let mut hover = |view: &mut MessagingUi,
-		                 state: &State,
-		                 pos: Option<egui::Pos2>| {
+		let mut hover = |view: &mut MessagingUi, state: &State, pos: Option<egui::Pos2>| {
 			now += 0.3;
 			let mut row = egui::Rect::NOTHING;
 			let mut output = ctx.run_ui(
@@ -5308,9 +5329,7 @@ mod tests {
 				},
 				|ui| {
 					ui.set_width(360.0);
-					if let Some(response) =
-						view.voice_participant(ui, state, &entry, false)
-					{
+					if let Some(response) = view.voice_participant(ui, state, &entry, false) {
 						row = response.rect;
 					}
 				},
@@ -5359,7 +5378,10 @@ mod tests {
 		let (output, _) = hover(&mut view, &state, None);
 		panic!(
 			"name hover shows {combined:?}: {:?}",
-			texts(&output).iter().map(|(text, _)| text).collect::<Vec<_>>()
+			texts(&output)
+				.iter()
+				.map(|(text, _)| text)
+				.collect::<Vec<_>>()
 		);
 	}
 
@@ -5410,7 +5432,7 @@ mod tests {
 				.unwrap();
 			assert!(
 				end < meter_left,
-			 "{name} paints past the meter at {meter_left}: ends at {end}"
+				"{name} paints past the meter at {meter_left}: ends at {end}"
 			);
 		}
 	}
@@ -5462,7 +5484,7 @@ mod tests {
 		assert_eq!(
 			titles,
 			["Voice Connected", "Voice Connected", "Connecting…"],
-		 "200 ms holds green, 800 ms turns yellow: {titles:?}"
+			"200 ms holds green, 800 ms turns yellow: {titles:?}"
 		);
 	}
 
@@ -5487,7 +5509,10 @@ mod tests {
 				},
 			);
 			output.textures_delta.clear();
-			texts(&output).into_iter().map(|(text, _)| text).collect::<Vec<_>>()
+			texts(&output)
+				.into_iter()
+				.map(|(text, _)| text)
+				.collect::<Vec<_>>()
 		};
 		let measured = tip(Some(42));
 		assert!(
@@ -6144,7 +6169,8 @@ mod tests {
 			..Default::default()
 		};
 		ctx.run_ui(raw(), |ui| {
-			gain_controls(ui, &mut messaging.voice_gain, model::Language::English)[0].request_focus();
+			gain_controls(ui, &mut messaging.voice_gain, model::Language::English)[0]
+				.request_focus();
 		})
 		.drop_without_applying_deltas();
 		let mut input = raw();

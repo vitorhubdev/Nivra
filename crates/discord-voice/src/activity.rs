@@ -57,3 +57,47 @@ pub(crate) fn hold_at(energy: f32, previous: u8, threshold: i16) -> u8 {
 		previous.saturating_sub(1)
 	}
 }
+
+/// Display energy for a 20 ms mix window, clamped to `0..=255`.
+pub(crate) fn energy_u8(energy: f32) -> u8 {
+	if !energy.is_finite() || energy <= 0.0 {
+		return 0;
+	}
+	let rms = (energy / 960.0).sqrt().clamp(0.0, 1.0);
+	(rms * 255.0).round() as u8
+}
+
+/// Attack/release smoothing for speaking rings; no heap or locks.
+pub(crate) fn smooth_level(energy: f32, previous: u8) -> u8 {
+	let target = energy_u8(energy);
+	if target > previous {
+		let step = ((target - previous) as u16).div_ceil(6);
+		previous.saturating_add(step as u8).min(target)
+	} else if target < previous {
+		let step = ((previous - target) as u16).div_ceil(11);
+		previous.saturating_sub(step as u8).max(target)
+	} else {
+		previous
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn energy_u8_maps_quiet_and_loud_frames() {
+		assert_eq!(energy_u8(0.0), 0);
+		assert_eq!(energy_u8(f32::NAN), 0);
+		assert!(energy_u8(960.0 * 0.01) > 0);
+		assert_eq!(energy_u8(960.0), 255);
+	}
+
+	#[test]
+	fn smooth_level_stays_in_range_and_moves_toward_target() {
+		assert!(smooth_level(0.0, 40) < 40);
+		assert!(smooth_level(960.0, 0) > 0);
+		assert!(smooth_level(960.0, 200) >= 200);
+		assert!(smooth_level(960.0, 255) <= 255);
+	}
+}

@@ -389,7 +389,8 @@ async fn run_inner(
 	let mut capture_enabled = false;
 	let mut capture_reset = true;
 	let mut local_activity = 0;
-	let mut last_speakers = [0; 64];
+	let mut local_level = 0u8;
+	let mut last_speakers = crate::SpeakingState::default();
 	let mut speakers_at = Instant::now();
 	loop {
 		tokio::select! {
@@ -467,9 +468,24 @@ async fn run_inner(
 				} else {
 					capture_pacer.next(&capture,enabled && !control.muted && !control.deafened,stalled)
 				};
-				local_activity=if (enabled || waiting) && !control.muted && !control.deafened && !stalled {
-					crate::activity::hold_at(latest.as_ref().map_or(0.0, |frame| frame.iter().filter(|s| s.is_finite()).map(|s| s*s).sum()),local_activity,control.activity_threshold_db)
-				} else {0};
+				let frame_energy = latest.as_ref().map_or(0.0, |frame| {
+					frame
+						.iter()
+						.filter(|s| s.is_finite())
+						.map(|s| s * s)
+						.sum()
+				});
+				local_activity = if (enabled || waiting) && !control.muted && !control.deafened && !stalled
+				{
+					crate::activity::hold_at(frame_energy, local_activity, control.activity_threshold_db)
+				} else {
+					0
+				};
+				local_level = if local_activity > 0 {
+					crate::activity::smooth_level(frame_energy, local_level)
+				} else {
+					crate::activity::smooth_level(0.0, local_level)
+				};
 				let active=enabled && !control.muted && !control.deafened && latest.is_some();
 				if active && !speaking {json_send(&mut ws,json!({"op":5,"d":{"speaking":1,"delay":0,"ssrc":ssrc}})).await?;speaking=true;}
 				if !active && speaking && silence==0 {silence=5;}
@@ -507,12 +523,22 @@ async fn run_inner(
 				} else {mixer.clear();if let Some(aux)=&stream_audio {let _=stream_playout.next(aux,0,false,false);}}
 				metrics.poll(false, drops, stalled, 0);
 				if now >= speakers_at {
-					let mut users=[0;64];
-					users[0]=if local_activity>0 {credentials.user.0} else {0};
-					for (slot,user) in users[1..].iter_mut().zip(mixer.speaking()) {*slot=user;}
-					if users != last_speakers {
-						emit(Status::Speaking(Box::new(users))).map_err(|_|"Call interface closed")?;
-						last_speakers=users;
+					let mut snapshot = crate::SpeakingState::default();
+					if local_activity > 0 {
+						snapshot.users[0] = credentials.user.0;
+						snapshot.levels[0] = local_level;
+					}
+					for (index, (user, level)) in mixer.speaking_levels().enumerate() {
+						let slot = index + 1;
+						if slot >= snapshot.users.len() {
+							break;
+						}
+						snapshot.users[slot] = user;
+						snapshot.levels[slot] = level;
+					}
+					if snapshot != last_speakers {
+						emit(Status::Speaking(snapshot)).map_err(|_|"Call interface closed")?;
+						last_speakers = snapshot;
 					}
 					speakers_at=now+Duration::from_millis(100);
 				}

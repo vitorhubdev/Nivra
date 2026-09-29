@@ -62,8 +62,23 @@ pub enum Status {
 	/// Voice-server heartbeat round trip, in milliseconds.
 	Ping(u32),
 	RemoteAudio,
-	/// Latest active user IDs, zero-padded to the 64-participant limit.
-	Speaking(Box<[u64; 64]>),
+	/// Latest active user IDs and smoothed energy levels, zero-padded to 64 slots.
+	Speaking(SpeakingState),
+}
+
+/// Parallel user IDs and `0..=255` energy levels indexed by voice slot.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SpeakingState {
+	pub users: [u64; 64],
+	pub levels: [u8; 64],
+}
+impl Default for SpeakingState {
+	fn default() -> Self {
+		Self {
+			users: [0; 64],
+			levels: [0; 64],
+		}
+	}
 }
 
 #[cfg(test)]

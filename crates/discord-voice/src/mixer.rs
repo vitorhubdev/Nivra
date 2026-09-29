@@ -11,6 +11,7 @@ struct Speaker {
 	offset: usize,
 	length: usize,
 	activity: u8,
+	level: u8,
 }
 #[derive(Default)]
 pub(crate) struct Mixer {
@@ -46,6 +47,7 @@ impl Mixer {
 			offset: 0,
 			length: 0,
 			activity: 0,
+			level: 0,
 		});
 		Ok(())
 	}
@@ -70,6 +72,7 @@ impl Mixer {
 			speaker.offset = 0;
 			speaker.length = 0;
 			speaker.activity = 0;
+			speaker.level = 0;
 		}
 	}
 	pub fn speaking(&self) -> impl Iterator<Item = u64> + '_ {
@@ -77,6 +80,12 @@ impl Mixer {
 			.iter()
 			.filter(|s| s.activity > 0)
 			.map(|s| s.user)
+	}
+	pub fn speaking_levels(&self) -> impl Iterator<Item = (u64, u8)> + '_ {
+		self.speakers
+			.iter()
+			.filter(|s| s.activity > 0)
+			.map(|s| (s.user, s.level))
 	}
 	/// Mix one 20ms frame, preserving up to 120ms packets without bursting playback queues.
 	pub fn pop(&mut self) -> (Option<Frame>, bool) {
@@ -143,6 +152,7 @@ impl Mixer {
 				active |= count != 0;
 			}
 			speaker.activity = crate::activity::hold(energy, speaker.activity);
+			speaker.level = crate::activity::smooth_level(energy, speaker.level);
 		}
 		// ponytail: hard limiting bounds simultaneous speakers; add a soft limiter if clipping is audible.
 		output
@@ -163,6 +173,37 @@ mod tests {
 		let length = encoder.encode_float(&pcm, &mut encoded).unwrap();
 		encoded[..length].to_vec()
 	}
+	#[test]
+	fn pop_mix_path_uses_stack_buffers_only() {
+		// The 20 ms `pop_with_volumes` path never allocates or locks: fixed `[f32; 960]`
+		// output and in-place speaker PCM only. `announce`/`push` may allocate during setup.
+		let mut mixer = Mixer::default();
+		mixer.announce(1, 11).unwrap();
+		if let Some(speaker) = mixer.speakers.first_mut() {
+			speaker.pcm.fill(0.2);
+			speaker.offset = 0;
+			speaker.length = 960;
+		}
+		for _ in 0..32 {
+			let _ = mixer.pop_with_volumes(&[]);
+		}
+	}
+
+	#[test]
+	fn speaking_levels_follow_pcm_energy() {
+		let mut mixer = Mixer::default();
+		mixer.announce(1, 11).unwrap();
+		if let Some(speaker) = mixer.speakers.first_mut() {
+			speaker.pcm.fill(0.5);
+			speaker.offset = 0;
+			speaker.length = 960;
+			speaker.activity = 10;
+		}
+		let _ = mixer.pop_with_volumes(&[]);
+		let level = mixer.speaking_levels().next().expect("speaker").1;
+		assert!(level > 0);
+	}
+
 	#[test]
 	fn per_user_volume_is_independent_live_and_limited() {
 		let mut mixer = Mixer::default();

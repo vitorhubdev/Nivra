@@ -3,6 +3,10 @@
 use crate::Frame;
 use crate::diagnostics::{Metrics, Scope, Stage};
 mod echo;
+mod follow;
+use follow::{
+	DefaultFollowGrace, EndpointsMigration, HostEndpoints, OpenedEndpoints, endpoints_migration,
+};
 use model::voice_settings::{NoiseSuppression, Processing, VoiceProcessing};
 #[cfg(target_os = "macos")]
 mod permission_macos;
@@ -196,6 +200,7 @@ impl Audio {
 				// ending the call; only a persistent failure is reported.
 				let mut recovery_since: Option<Instant> = None;
 				let mut next_default_check = Instant::now();
+				let mut default_follow_grace = DefaultFollowGrace::default();
 				let mut next_input_retry = Instant::now() + Duration::from_secs(2);
 				'audio: while !worker_gate.stopped.load(Ordering::Acquire) {
 					let revision = worker_gate.revision.load(Ordering::Acquire);
@@ -203,6 +208,7 @@ impl Audio {
 					if last_selection.as_ref() != Some(&current) {
 						last_selection = Some(current.clone());
 						recovery_since = None;
+						default_follow_grace.reset();
 					}
 					if streams.is_some()
 						&& opened_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(5))
@@ -219,10 +225,22 @@ impl Audio {
 						&& Instant::now() >= next_default_check
 					{
 						next_default_check = Instant::now() + Duration::from_secs(1);
-						if active.default_changed(&current) {
-							worker_gate.revision.fetch_add(1, Ordering::AcqRel);
-							streams = None;
-							continue;
+						let now = Instant::now();
+						match active.migrate_endpoints(&current) {
+							EndpointsMigration::None => default_follow_grace.reset(),
+							EndpointsMigration::Immediate => {
+								default_follow_grace.reset();
+								worker_gate.revision.fetch_add(1, Ordering::AcqRel);
+								streams = None;
+								continue;
+							}
+							EndpointsMigration::DefaultFollow => {
+								if default_follow_grace.poll(true, now) {
+									worker_gate.revision.fetch_add(1, Ordering::AcqRel);
+									streams = None;
+									continue;
+								}
+							}
 						}
 					}
 					if !worker_gate.ready.load(Ordering::Acquire) {
@@ -594,9 +612,7 @@ impl Streams {
 		}
 		Err(last_error)
 	}
-	/// True when a followed system default changes, or an explicitly selected device
-	/// becomes available again after we temporarily fell back to a default device.
-	fn default_changed(&self, settings: &Devices) -> bool {
+	fn host_endpoints(settings: &Devices) -> HostEndpoints {
 		let host = cpal::default_host();
 		let id = |device: Option<cpal::Device>| {
 			device.and_then(|d| d.id().ok()).map(|id| id.to_string())
@@ -606,15 +622,22 @@ impl Streams {
 			let parsed = value.parse().ok()?;
 			id(host.device_by_id(&parsed))
 		};
-		let output_changed = match settings.output.as_ref() {
-			Some(value) => selected(Some(value)).is_some_and(|id| Some(id) != self.output_id),
-			None => self.output_id.is_some() && id(host.default_output_device()) != self.output_id,
-		};
-		let input_changed = match settings.input.as_ref() {
-			Some(value) => selected(Some(value)).is_some_and(|id| Some(id) != self.input_id),
-			None => self.input_id.is_some() && id(host.default_input_device()) != self.input_id,
-		};
-		output_changed || input_changed
+		HostEndpoints {
+			default_input: id(host.default_input_device()),
+			default_output: id(host.default_output_device()),
+			selected_input: selected(settings.input.as_ref()),
+			selected_output: selected(settings.output.as_ref()),
+		}
+	}
+	fn migrate_endpoints(&self, settings: &Devices) -> EndpointsMigration {
+		endpoints_migration(
+			settings,
+			&OpenedEndpoints {
+				input: self.input_id.clone(),
+				output: self.output_id.clone(),
+			},
+			&Self::host_endpoints(settings),
+		)
 	}
 	fn open(settings: &Devices, gate: Arc<Gate>, revision: u64) -> Result<Self, &'static str> {
 		if gate.stopped.load(Ordering::Acquire)

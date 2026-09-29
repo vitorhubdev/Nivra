@@ -2957,7 +2957,7 @@ impl MessagingUi {
                                 "Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files; each file must fit your upload limit. Send starts the upload.",
                             )))
                     };
-                    if !editing_here { self.extensions.composer_menu(ui, state); }
+                    if !editing_here { self.extensions.composer_menu(ui, state, self.language); }
                     if attach.is_some_and(|attach| attach.clicked()) {
                         self.attach_requested = true;
                     }
@@ -3852,6 +3852,7 @@ impl MessagingUi {
 			state,
 			&mut self.draft_changes,
 			self.editing.is_some(),
+			self.language,
 		) && let Err(error) = self.apply_extension_effect(&ctx, state, effect, &mut commands)
 		{
 			self.extensions.report_error(error);

@@ -168,7 +168,9 @@ impl IntegrationsUi {
 		guild: Id,
 		avatars: &mut Avatars,
 		commands: &mut Vec<Command>,
+		language: model::Language,
 	) {
+		crate::i18n::store_interface_language(ui.ctx(), language);
 		let previous_page = self.page;
 		let mut action = None;
 		ui.set_max_width(ui.available_width().min(720.0));
@@ -177,7 +179,7 @@ impl IntegrationsUi {
 				if ui
 					.add_enabled(
 						!self.has_changes(),
-						egui::Button::new("< Integrations").frame(false),
+						egui::Button::new(crate::tr_ui!(ui, "< Integrations")).frame(false),
 					)
 					.clicked()
 				{
@@ -209,9 +211,9 @@ impl IntegrationsUi {
 			if ui
 				.add_enabled(
 					!state.server_admin.pending && !self.submitted && !self.deleting,
-					egui::Button::new("Reload").frame(false),
+					egui::Button::new(crate::tr_ui!(ui, "Reload")).frame(false),
 				)
-				.on_hover_text("Reload integrations")
+				.on_hover_text(crate::tr_ui!(ui, "Reload integrations"))
 				.clicked()
 			{
 				action = Some(self.load_action(state, guild));
@@ -222,7 +224,7 @@ impl IntegrationsUi {
 			design::notice(ui, design::Level::Error, error);
 		}
 		if state.server_admin.needs_refresh {
-			ui.weak("Reload integrations before making more changes. Your draft will be kept.");
+			ui.weak(crate::tr_ui!(ui, "Reload integrations before making more changes. Your draft will be kept."));
 		}
 		if state.server_admin.pending {
 			ui.horizontal(|ui| {
@@ -331,13 +333,13 @@ impl IntegrationsUi {
 			&& state.can_manage_guild(guild)
 			&& let Some(integrations) = &snapshot.integrations
 		{
-			ui.label(design::medium(ui, "Bots and Apps", 15.0));
+			ui.label(design::medium(ui, crate::tr_ui!(ui, "Bots and Apps"), 15.0));
 			ui.add_space(12.0);
 			if integrations.is_empty() {
-				ui.weak("No integrations in this server.");
+				ui.weak(crate::tr_ui!(ui, "No integrations in this server."));
 			}
 			if integrations.len() == model::server_integrations::MAX_INTEGRATIONS {
-				ui.weak("Showing the first 50 integrations returned by Discord.");
+				ui.weak(crate::tr_ui!(ui, "Showing the first 50 integrations returned by Discord."));
 			}
 			let height = design::list_height(ui, 0.0);
 			egui::ScrollArea::vertical()
@@ -413,7 +415,7 @@ impl IntegrationsUi {
 											});
 										},
 									);
-									if ui.add(egui::Button::new("Manage >").frame(false)).clicked()
+									if ui.add(egui::Button::new(crate::tr_ui!(ui, "Manage >")).frame(false)).clicked()
 									{
 										self.page = Page::App(integration.id);
 									}
@@ -434,10 +436,10 @@ impl IntegrationsUi {
 	) {
 		let follows = self.page == Page::Follows;
 		if follows {
-			ui.label("Posts from these followed channels are delivered to your server.");
+			ui.label(crate::tr_ui!(ui, "Posts from these followed channels are delivered to your server."));
 			ui.hyperlink_to("Learn more about following channels", FOLLOW_HELP);
 		} else {
-			ui.label("Send updates from your apps and services to a channel in this server.");
+			ui.label(crate::tr_ui!(ui, "Send updates from your apps and services to a channel in this server."));
 			if let Some(channel) = self.channel.and_then(|id| state.channel(id)) {
 				ui.label(format!("Posting to #{}", channel.name));
 			}
@@ -507,7 +509,7 @@ impl IntegrationsUi {
 									&& webhook.channel.is_some_and(|id| {
 										state.can_manage_webhook_channel(guild, id)
 									}) && ui
-									.add_enabled(writable(state), egui::Button::new("Edit"))
+									.add_enabled(writable(state), egui::Button::new(crate::tr_ui!(ui, "Edit")))
 									.clicked()
 								{
 									let draft = Draft {
@@ -589,7 +591,7 @@ impl IntegrationsUi {
 			.as_ref()
 			.and_then(|items| items.iter().find(|i| i.id == id))
 		else {
-			ui.weak("This integration is no longer available.");
+			ui.weak(crate::tr_ui!(ui, "This integration is no longer available."));
 			return;
 		};
 		ui.horizontal(|ui| {
@@ -639,7 +641,7 @@ impl IntegrationsUi {
 				.add_enabled(
 					writable(state),
 					egui::Button::new(
-						RichText::new("Remove Integration").color(design::palette(ui).danger),
+						RichText::new(crate::tr_ui!(ui, "Remove Integration")).color(design::palette(ui).danger),
 					),
 				)
 				.clicked()
@@ -1053,7 +1055,14 @@ mod tests {
 								..Default::default()
 							},
 							|ui| {
-								view.show(ui, state, guild, &mut avatars, &mut commands);
+								view.show(
+									ui,
+									state,
+									guild,
+									&mut avatars,
+									&mut commands,
+									model::Language::English,
+								);
 								assert!(
 									ui.min_rect().right() <= width + 1.0,
 									"overflow at {width}: {:?}",
@@ -1117,7 +1126,14 @@ mod tests {
 				});
 				for expected in [1, 0] {
 					let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-						view.show(ui, &mut state, guild, &mut avatars, &mut commands)
+						view.show(
+							ui,
+							&mut state,
+							guild,
+							&mut avatars,
+							&mut commands,
+							model::Language::English,
+						)
 					});
 					assert_eq!(output.platform_output.commands.iter().filter(|c| matches!(c, egui::OutputCommand::CopyText(text) if text == "https://discord.com/api/webhooks/900/SYNTHETIC_TOKEN")).count(), expected);
 					output.drop_without_applying_deltas();

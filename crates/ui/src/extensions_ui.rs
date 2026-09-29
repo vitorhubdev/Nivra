@@ -907,7 +907,13 @@ impl ExtensionUi {
 			},
 		);
 	}
-	pub(crate) fn composer_menu(&mut self, ui: &mut egui::Ui, state: &State) {
+	pub(crate) fn composer_menu(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &State,
+		language: model::Language,
+	) {
+		let tr = |english: &'static str| crate::i18n::text(language, english);
 		if !self.entries.iter().any(|entry| {
 			entry.enabled
 				&& entry
@@ -919,7 +925,7 @@ impl ExtensionUi {
 			return;
 		}
 		let mut selected = None;
-		ui.menu_button("Tools", |ui| {
+		ui.menu_button(tr("Tools"), |ui| {
 			for entry in self.entries.iter().filter(|entry| entry.enabled) {
 				for action in
 					entry.manifest.actions.iter().filter(|action| {
@@ -2059,19 +2065,24 @@ impl ExtensionUi {
 		state: &mut State,
 		changes: &mut Vec<Id>,
 		editing: bool,
+		language: model::Language,
 	) -> Option<crate::extension_app::ConfirmedEffect> {
+		let tr = |english: &'static str| crate::i18n::text(language, english);
 		if let Some(message) = self.error.take() {
 			let mut dismissed = false;
-			let response = crate::dialog::Dialog::new("extension-error", "Extension error")
+			let response = crate::dialog::Dialog::new("extension-error", tr("Extension error"))
 				.width(400.0)
 				.show(ctx, |d| {
 					d.content(|ui| {
 						crate::dialog::notice(ui, crate::dialog::Level::Error, &message);
 					});
 					d.footer(|ui| {
-						dismissed =
-							crate::dialog::action(ui, "Dismiss", crate::dialog::Action::Primary)
-								.clicked();
+						dismissed = crate::dialog::action(
+							ui,
+							tr("Dismiss"),
+							crate::dialog::Action::Primary,
+						)
+						.clicked();
 					});
 				});
 			if !dismissed && !response.close {
@@ -2090,16 +2101,18 @@ impl ExtensionUi {
 			.entries
 			.iter()
 			.find(|entry| entry.manifest.id == result.id)
-			.map_or("Extension tool", |entry| entry.manifest.name.as_str())
+			.map_or(tr("Extension tool"), |entry| entry.manifest.name.as_str())
 			.to_owned();
 		let mut close = false;
 		let response = crate::dialog::Dialog::new("extension-result", title)
-			.subtitle("Review the result. App actions and draft changes need your approval.")
+			.subtitle(tr(
+				"Review the result. App actions and draft changes need your approval.",
+			))
 			.width(520.0)
 			.show(ctx, |d| {
 				d.scroll(240.0, |ui| {
 					if let Some(replacement) = &result.output.replacement {
-						crate::dialog::label(ui, "Proposed composer text");
+						crate::dialog::label(ui, tr("Proposed composer text"));
 						let colors = crate::design::palette(ui);
 						egui::Frame::new()
 							.fill(colors.base)
@@ -2113,7 +2126,7 @@ impl ExtensionUi {
 						ui.add_space(10.0);
 					}
 					if let Some(effect) = result.output.effects.first() {
-						crate::dialog::label(ui, "Proposed app action");
+						crate::dialog::label(ui, tr("Proposed app action"));
 						ui.add(
 							egui::Label::new(crate::extension_app::effect_description(effect))
 								.wrap(),
@@ -2142,7 +2155,7 @@ impl ExtensionUi {
 						ui.add_enabled_ui(!editing && result.context.draft.is_some(), |ui| {
 							if crate::dialog::action(
 								ui,
-								"Apply to Draft",
+								tr("Apply to Draft"),
 								crate::dialog::Action::Primary,
 							)
 							.clicked()
@@ -2160,8 +2173,9 @@ impl ExtensionUi {
 							}
 						});
 					}
-					close |= crate::dialog::action(ui, "Close", crate::dialog::Action::Neutral)
-						.clicked();
+					close |=
+						crate::dialog::action(ui, tr("Close"), crate::dialog::Action::Neutral)
+							.clicked();
 				});
 			});
 		if let Some(action) = action {
@@ -2812,6 +2826,65 @@ mod tests {
 		output.textures_delta.clear();
 		let missing = crate::i18n::drain_untranslated_keys();
 		assert!(missing.is_empty(), "untranslated extensions keys: {missing:?}");
+	}
+
+	#[test]
+	fn extension_composer_menu_and_result_render_fully_translated_in_portuguese() {
+		let ctx = egui::Context::default();
+		let _ = crate::i18n::drain_untranslated_keys();
+		let language = model::Language::PortugueseBrazil;
+		crate::i18n::store_interface_language(&ctx, language);
+		let mut shop = ExtensionUi::default();
+		let mut plugin = entry();
+		plugin.enabled = true;
+		plugin.manifest.actions.push(extensions::Action {
+			id: "run".into(),
+			label: "Synthetic action".into(),
+			surface: Surface::Composer,
+		});
+		shop.set_entries(vec![plugin]);
+		let state = test_support::demo_state();
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(640.0, 400.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				shop.composer_menu(ui, &state, language);
+			},
+		);
+		output.textures_delta.clear();
+		let mut state = test_support::demo_state();
+		shop.present_output(
+			"synthetic.plugin".into(),
+			Invocation::default(),
+			ExtensionContext::capture(&state, true),
+			Output {
+				replacement: Some("Synthetic proposal".into()),
+				..Default::default()
+			},
+			&state,
+		);
+		let mut changes = vec![];
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(900.0, 700.0),
+				)),
+				focused: true,
+				..Default::default()
+			},
+			|ui| {
+				let _ = shop.show_result(ui.ctx(), &mut state, &mut changes, false, language);
+			},
+		);
+		output.textures_delta.clear();
+		let missing = crate::i18n::drain_untranslated_keys();
+		assert!(missing.is_empty(), "untranslated extension composer/result keys: {missing:?}");
 	}
 
 	#[test]

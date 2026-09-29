@@ -33,7 +33,9 @@ impl AuditLogUi {
 		guild: Id,
 		avatars: &mut Avatars,
 		commands: &mut Vec<Command>,
+		language: model::Language,
 	) {
+		crate::i18n::store_interface_language(ui.ctx(), language);
 		let available = !state.server_admin.pending && !state.server_settings.saving;
 		let mut query = self.query.clone();
 		query.before = None;
@@ -83,7 +85,7 @@ impl AuditLogUi {
 			if !available {
 				ui.disable();
 			}
-			ui.label(design::medium(ui, "Filter by User", 14.0));
+			ui.label(design::medium(ui, crate::tr_ui!(ui, "Filter by User"), 14.0));
 			let selected = query
 				.user
 				.map(|id| user_name(state.server_admin.audit_log.as_ref(), id))
@@ -93,7 +95,7 @@ impl AuditLogUi {
 				.width(picker_width)
 				.truncate()
 				.show_ui(ui, |ui| {
-					ui.selectable_value(&mut query.user, None, "All Users");
+					ui.selectable_value(&mut query.user, None, crate::tr_ui!(ui, "All Users"));
 					if let Some(page) = &state.server_admin.audit_log {
 						for user in page.users.iter().filter(|user| {
 							page.entries
@@ -118,7 +120,7 @@ impl AuditLogUi {
 			if !available {
 				ui.disable();
 			}
-			ui.label(design::medium(ui, "Filter by Action", 14.0));
+			ui.label(design::medium(ui, crate::tr_ui!(ui, "Filter by Action"), 14.0));
 			let selected = query
 				.action
 				.map(|action| action_text(action).to_owned())
@@ -128,7 +130,7 @@ impl AuditLogUi {
 				.width(picker_width)
 				.truncate()
 				.show_ui(ui, |ui| {
-					ui.selectable_value(&mut query.action, None, "All Actions");
+					ui.selectable_value(&mut query.action, None, crate::tr_ui!(ui, "All Actions"));
 					for &(action, label) in ACTIONS {
 						ui.selectable_value(&mut query.action, Some(action), label);
 					}
@@ -144,14 +146,14 @@ impl AuditLogUi {
 		};
 		ui.horizontal(|ui| {
 			if ui
-				.add_enabled(available, egui::Button::new("Reload").frame(false))
+				.add_enabled(available, egui::Button::new(crate::tr_ui!(ui, "Reload")).frame(false))
 				.clicked()
 			{
 				requested = Some(query.clone());
 			}
 			if state.server_admin.pending {
 				ui.spinner();
-				ui.weak("Loading audit log…");
+				ui.weak(crate::tr_ui!(ui, "Loading audit log…"));
 			}
 		});
 		if let Some(error) = state.server_admin.error {
@@ -168,7 +170,7 @@ impl AuditLogUi {
 			}
 			if page.entries.is_empty() && !state.server_admin.pending {
 				ui.add_space(24.0);
-				ui.weak("No audit log entries match these filters.");
+				ui.weak(crate::tr_ui!(ui, "No audit log entries match these filters."));
 			}
 			// The list is the page's only scroller: it takes the remaining height and keeps
 			// the paging controls pinned below it.
@@ -179,13 +181,13 @@ impl AuditLogUi {
 				ui.add_space(12.0);
 			}
 			if state.server_admin.audit_limit_reached {
-				ui.weak("The audit log reached its local entry or memory limit. Adjust the filters to find other events.");
+				ui.weak(crate::tr_ui!(ui, "The audit log reached its local entry or memory limit. Adjust the filters to find other events."));
 			} else if page.has_more
 				&& let Some(last) = page.entries.last()
 				&& ui
 					.add_enabled(
 						available,
-						egui::Button::new("Load More").min_size(Vec2::new(120.0, 36.0)),
+						egui::Button::new(crate::tr_ui!(ui, "Load More")).min_size(Vec2::new(120.0, 36.0)),
 					)
 					.clicked()
 			{
@@ -457,7 +459,7 @@ fn details(ui: &mut egui::Ui, entry: &Entry, state: &State) {
 		line(ui, format!("Reason: {reason}"));
 	}
 	if index == 1 {
-		ui.weak("No additional details were provided for this event.");
+		ui.weak(crate::tr_ui!(ui, "No additional details were provided for this event."));
 	}
 }
 fn change_text(change: &Change, state: &State) -> String {
@@ -652,6 +654,7 @@ mod tests {
 						guild,
 						&mut Avatars::default(),
 						&mut commands,
+						model::Language::English,
 					);
 					assert!(commands.is_empty());
 					assert!(

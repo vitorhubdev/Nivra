@@ -238,7 +238,7 @@ impl RolesUi {
 			if ui
 				.add_sized(
 					[width - 36.0, 32.0],
-					egui::Button::new("←  BACK").frame(false),
+					egui::Button::new(crate::tr_ui!(ui, "←  BACK")).frame(false),
 				)
 				.clicked()
 			{
@@ -250,9 +250,9 @@ impl RolesUi {
 						!state.server_admin.pending
 							&& !state.server_admin.needs_refresh
 							&& !self.has_changes(),
-						egui::Button::new("+"),
+						egui::Button::new(crate::tr_ui!(ui, "+")),
 					)
-					.on_hover_text("Create Role")
+					.on_hover_text(crate::tr_ui!(ui, "Create Role"))
 					.clicked()
 			{
 				self.creating = Self::dispatch(
@@ -322,7 +322,9 @@ impl RolesUi {
 		guild: Id,
 		avatars: &mut Avatars,
 		commands: &mut Vec<Command>,
+		language: model::Language,
 	) {
+		crate::i18n::store_interface_language(ui.ctx(), language);
 		self.sync(state, guild);
 		ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 		if let Some(error) = state.server_admin.error.or(self.error) {
@@ -330,7 +332,7 @@ impl RolesUi {
 			if ui
 				.add_enabled(
 					!state.server_admin.pending,
-					egui::Button::new("Reload Roles"),
+					egui::Button::new(crate::tr_ui!(ui, "Reload Roles")),
 				)
 				.clicked()
 			{
@@ -372,15 +374,15 @@ impl RolesUi {
 		commands: &mut Vec<Command>,
 	) {
 		let colors = design::palette(ui);
-		ui.label(design::semibold(ui, "Roles", 22.0));
-		ui.label("Use roles to group your server members and assign permissions.");
+		ui.label(design::semibold(ui, crate::tr_ui!(ui, "Roles"), 22.0));
+		ui.label(crate::tr_ui!(ui, "Use roles to group your server members and assign permissions."));
 		ui.add_space(20.0);
 		let width = ui.available_width();
 		if ui
 			.add_sized(
 				[width, 76.0],
 				egui::Button::new(
-					RichText::new("Default Permissions\n@everyone · applies to all server members")
+					RichText::new(crate::tr_ui!(ui, "Default Permissions\n@everyone · applies to all server members"))
 						.size(16.0),
 				)
 				.right_text("›")
@@ -395,7 +397,7 @@ impl RolesUi {
 		ui.horizontal(|ui| {
 			ui.add(
 				egui::TextEdit::singleline(&mut self.search)
-					.hint_text("Search Roles")
+					.hint_text(crate::tr_ui!(ui, "Search Roles"))
 					.char_limit(100)
 					.desired_width((width - 128.0).max(60.0))
 					.margin(egui::vec2(12.0, 10.0)),
@@ -404,7 +406,7 @@ impl RolesUi {
 				&& ui
 					.add_enabled_ui(
 						!state.server_admin.pending && !state.server_admin.needs_refresh,
-						|ui| design::button(ui, "Create Role", design::ButtonKind::Primary),
+						|ui| design::button(ui, crate::tr_ui!(ui, "Create Role"), design::ButtonKind::Primary),
 					)
 					.inner
 					.clicked()
@@ -431,7 +433,7 @@ impl RolesUi {
 		let count = catalog.items.iter().filter(|role| role.id != guild).count();
 		ui.horizontal(|ui| {
 			fixed_label(ui, &format!("ROLES — {count}"), width * 0.52, true);
-			fixed_label(ui, "MEMBERS", (width * 0.48 - 108.0).max(48.0), true);
+			fixed_label(ui, crate::tr_ui!(ui, "MEMBERS"), (width * 0.48 - 108.0).max(48.0), true);
 		});
 		ui.separator();
 		let mut action = None;
@@ -527,7 +529,7 @@ impl RolesUi {
 							}
 							if state.can_delete_guild_role(guild, role.id)
 								&& ui
-									.button(RichText::new("Delete Role").color(colors.danger))
+									.button(RichText::new(crate::tr_ui!(ui, "Delete Role")).color(colors.danger))
 									.clicked()
 							{
 								self.delete = Some(role.id);
@@ -616,7 +618,7 @@ impl RolesUi {
 				let button = icons::button(ui, icons::Icon::More, 28.0, "Role actions");
 				egui::Popup::menu(&button).show(|ui| {
 					if ui
-						.button(RichText::new("Delete Role").color(colors.danger))
+						.button(RichText::new(crate::tr_ui!(ui, "Delete Role")).color(colors.danger))
 						.clicked()
 					{
 						self.delete = Some(role);
@@ -628,9 +630,9 @@ impl RolesUi {
 		ui.add_space(22.0);
 		ui.horizontal_wrapped(|ui| {
 			if role != guild {
-				tab_button(ui, &mut self.tab, Tab::Display, "Display");
+				tab_button(ui, &mut self.tab, Tab::Display, crate::tr_ui!(ui, "Display"));
 			}
-			tab_button(ui, &mut self.tab, Tab::Permissions, "Permissions");
+			tab_button(ui, &mut self.tab, Tab::Permissions, crate::tr_ui!(ui, "Permissions"));
 			if role != guild && state.can_open_member_settings(guild) {
 				tab_button(
 					ui,
@@ -689,7 +691,7 @@ impl RolesUi {
 			egui::TextEdit::singleline(&mut draft.name).char_limit(100),
 		)
 		.labelled_by(label.id);
-		section(ui, "Role Style");
+		section(ui, crate::tr_ui!(ui, "Role Style"));
 		let enhanced = state.can_use_enhanced_role_colors(guild);
 		let style = if draft.colors.tertiary.is_some() {
 			2
@@ -756,12 +758,12 @@ impl RolesUi {
 											rgb(sample.primary),
 										);
 										ui.add(
-											egui::Label::new(design::semibold(ui, "Preview", 14.0))
+											egui::Label::new(design::semibold(ui, crate::tr_ui!(ui, "Preview"), 14.0))
 												.truncate(),
 										);
 									});
 									ui.add(
-										egui::Label::new(RichText::new("Sample message").small())
+										egui::Label::new(RichText::new(crate::tr_ui!(ui, "Sample message")).small())
 											.truncate(),
 									);
 									ui.add_space(8.0);
@@ -808,8 +810,8 @@ impl RolesUi {
 				}
 			}
 		});
-		section(ui, "Role color");
-		ui.weak("Members use the color of their highest role on the roles list.");
+		section(ui, crate::tr_ui!(ui, "Role color"));
+		ui.weak(crate::tr_ui!(ui, "Members use the color of their highest role on the roles list."));
 		let palette = [
 			0x1abc9c, 0x2ecc71, 0x3498db, 0x9b59b6, 0xe91e63, 0xf1c40f, 0xe67e22, 0xe74c3c,
 			0x95a5a6, 0x607d8b, 0x11806a, 0x1f8b4c, 0x206694, 0x71368a, 0xad1457, 0xc27c0e,
@@ -831,7 +833,7 @@ impl RolesUi {
 							colors.text,
 						);
 					}
-					if response.on_hover_text("Default role color").clicked() {
+					if response.on_hover_text(crate::tr_ui!(ui, "Default role color")).clicked() {
 						draft.colors.primary = 0;
 					}
 					let mut color = [
@@ -840,7 +842,7 @@ impl RolesUi {
 						draft.colors.primary as u8,
 					];
 					if design::color_edit(ui, &mut color)
-						.on_hover_text("Custom role color")
+						.on_hover_text(crate::tr_ui!(ui, "Custom role color"))
 						.changed()
 					{
 						draft.colors.primary = (u32::from(color[0]) << 16)
@@ -879,7 +881,7 @@ impl RolesUi {
 			&& let Some(secondary) = &mut draft.colors.secondary
 		{
 			ui.horizontal(|ui| {
-				ui.label("Second gradient color");
+				ui.label(crate::tr_ui!(ui, "Second gradient color"));
 				let mut color = [
 					(*secondary >> 16) as u8,
 					(*secondary >> 8) as u8,
@@ -893,7 +895,7 @@ impl RolesUi {
 			});
 		}
 		if state.can_edit_role_icon(guild, draft.id) {
-			section(ui, "Role icon");
+			section(ui, crate::tr_ui!(ui, "Role icon"));
 			ui.weak(
 				"Upload an image under 256 KiB or choose a Unicode emoji. We recommend at least 64×64 pixels.",
 			);
@@ -983,7 +985,7 @@ impl RolesUi {
 									);
 								}
 							});
-							ui.label("This is how members with this role appear.");
+							ui.label(crate::tr_ui!(ui, "This is how members with this role appear."));
 						});
 					});
 				});
@@ -1054,7 +1056,7 @@ impl RolesUi {
 			if ui
 				.add(
 					egui::TextEdit::singleline(&mut self.member_query.search)
-						.hint_text("Search members")
+						.hint_text(crate::tr_ui!(ui, "Search members"))
 						.char_limit(100)
 						.desired_width(220.0),
 				)
@@ -1148,7 +1150,7 @@ impl RolesUi {
 				ui.weak(format!("Showing {} members", members.items.len()));
 				if self.member_query.after.is_some()
 					&& ui
-						.add_enabled(!state.server_admin.pending, egui::Button::new("First page"))
+						.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "First page")))
 						.clicked()
 				{
 					self.member_query.after = None;
@@ -1156,7 +1158,7 @@ impl RolesUi {
 				}
 				if let Some(next) = members.next
 					&& ui
-						.add_enabled(!state.server_admin.pending, egui::Button::new("Next page"))
+						.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "Next page")))
 						.clicked()
 				{
 					self.member_query.after = Some(next);
@@ -1184,8 +1186,8 @@ impl RolesUi {
 				"Your unsaved changes to this role will be lost.",
 			)
 			.danger()
-			.confirm_label("Discard Changes")
-			.cancel_label("Keep Editing")
+			.confirm_label(crate::tr_ctx!(ctx, "Discard Changes"))
+			.cancel_label(crate::tr_ctx!(ctx, "Keep Editing"))
 			.enabled(!state.server_admin.saving)
 			.show(ctx)
 			{
@@ -1210,7 +1212,7 @@ impl RolesUi {
 				format!("Members will lose every permission {name} grants. This cannot be undone."),
 			)
 			.danger()
-			.confirm_label("Delete Role")
+			.confirm_label(crate::tr_ctx!(ctx, "Delete Role"))
 			.enabled(
 				!state.server_admin.pending
 					&& !state.server_admin.needs_refresh
@@ -1347,7 +1349,7 @@ fn permissions(
 	ui.add(
 		egui::TextEdit::singleline(search)
 			.char_limit(64)
-			.hint_text("Search permissions")
+			.hint_text(crate::tr_ui!(ui, "Search permissions"))
 			.desired_width(f32::INFINITY),
 	);
 	let query = search.to_lowercase();
@@ -1515,7 +1517,14 @@ mod tests {
 				if save {
 					editor.save_bar(ui, state, guild, commands);
 				} else {
-					editor.show(ui, state, guild, &mut Avatars::default(), commands);
+					editor.show(
+						ui,
+						state,
+						guild,
+						&mut Avatars::default(),
+						commands,
+						model::Language::English,
+					);
 				}
 			},
 		);

@@ -868,7 +868,14 @@ impl Dialog {
 			}
 			Page::Integrations => this
 				.integrations
-				.show(ui, state, this.guild, avatars, commands),
+				.show(
+					ui,
+					state,
+					this.guild,
+					avatars,
+					commands,
+					crate::i18n::interface_language(ui.ctx()),
+				),
 			Page::Overview => {
 				design::section(ui, "Overview", None);
 				ui.add_enabled_ui(can_delete, |ui| this.overview(ui, &channel));

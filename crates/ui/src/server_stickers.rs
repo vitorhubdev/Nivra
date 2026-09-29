@@ -108,7 +108,9 @@ impl StickersUi {
 		guild: Id,
 		avatars: &mut Avatars,
 		commands: &mut Vec<Command>,
+		language: model::Language,
 	) {
+		crate::i18n::store_interface_language(ui.ctx(), language);
 		if self.submitted_upload && !state.server_admin.pending {
 			self.submitted_upload = false;
 			if state.server_admin.error.is_none() {
@@ -127,13 +129,13 @@ impl StickersUi {
 			self.request_started = false;
 		}
 
-		ui.label(design::semibold(ui, "Stickers", 22.0));
-		ui.label("Add custom stickers for members to use in this server. Artwork is cropped and resized to 320 × 320 pixels before upload.");
+		ui.label(design::semibold(ui, crate::tr_ui!(ui, "Stickers"), 22.0));
+		ui.label(crate::tr_ui!(ui, "Add custom stickers for members to use in this server. Artwork is cropped and resized to 320 × 320 pixels before upload."));
 		ui.add_space(14.0);
 		if let Some(error) = state.server_admin.error.or(self.error) {
 			design::notice(ui, design::Level::Error, error);
 			if ui
-				.add_enabled(!state.server_admin.pending, egui::Button::new("Reload"))
+				.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "Reload")))
 				.clicked() && let Some(command) =
 				state.request_server_admin(guild, Action::LoadStickers)
 			{
@@ -156,17 +158,17 @@ impl StickersUi {
 			if ui
 				.add_enabled_ui(
 					!self.choosing && self.upload.is_none() && !state.server_admin.pending,
-					|ui| design::button(ui, "Upload Sticker", design::ButtonKind::Primary),
+					|ui| design::button(ui, crate::tr_ui!(ui, "Upload Sticker"), design::ButtonKind::Primary),
 				)
 				.inner
 				.clicked()
 			{
 				self.choose();
 			}
-			ui.small("Static PNG, JPEG and WebP artwork is supported up to 8 MB. The prepared PNG must fit within Discord's 512 KB limit.");
+			ui.small(crate::tr_ui!(ui, "Static PNG, JPEG and WebP artwork is supported up to 8 MB. The prepared PNG must fit within Discord's 512 KB limit."));
 		}
 		if self.choosing {
-			ui.weak("Preparing sticker artwork…");
+			ui.weak(crate::tr_ui!(ui, "Preparing sticker artwork…"));
 		}
 		if let Some(upload) = &mut self.upload {
 			let colors = design::palette(ui);
@@ -176,24 +178,24 @@ impl StickersUi {
 				.corner_radius(10)
 				.inner_margin(14)
 				.show(ui, |ui| {
-					ui.label(design::semibold(ui, "Review sticker", 16.0));
+					ui.label(design::semibold(ui, crate::tr_ui!(ui, "Review sticker"), 16.0));
 					ui.horizontal(|ui| {
 						ui.add(egui::Image::from_texture(&upload.texture).fit_to_exact_size(egui::Vec2::splat(96.0)));
 						ui.vertical(|ui| {
-							crate::dialog::label(ui, "Name");
+							crate::dialog::label(ui, crate::tr_ui!(ui, "Name"));
 							ui.add(egui::TextEdit::singleline(&mut upload.name).char_limit(30));
-							crate::dialog::label(ui, "Related emoji");
-							ui.add(egui::TextEdit::singleline(&mut upload.tags).hint_text("For example: 🐀").char_limit(200));
+							crate::dialog::label(ui, crate::tr_ui!(ui, "Related emoji"));
+							ui.add(egui::TextEdit::singleline(&mut upload.tags).hint_text(crate::tr_ui!(ui, "For example: 🐀")).char_limit(200));
 						});
 					});
-					crate::dialog::label(ui, "Description (optional)");
+					crate::dialog::label(ui, crate::tr_ui!(ui, "Description (optional)"));
 					ui.add(egui::TextEdit::singleline(&mut upload.description).char_limit(100));
 					let valid = valid_fields(&upload.name, &upload.description, &upload.tags);
 					if !valid {
 						design::notice(ui, design::Level::Error, "Use a 2–30 character name, an optional description up to 100 characters, and at least one related emoji.");
 					}
 					ui.horizontal(|ui| {
-						if ui.add_enabled(valid && !state.server_admin.pending, egui::Button::new("Upload")).clicked()
+						if ui.add_enabled(valid && !state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "Upload"))).clicked()
 							&& let Some(command) = state.request_server_admin(guild, Action::CreateSticker {
 								name: upload.name.trim().to_owned(),
 								description: upload.description.trim().to_owned(),
@@ -206,7 +208,7 @@ impl StickersUi {
 							self.submitted_upload = true;
 							commands.push(command);
 						}
-						if ui.add_enabled(!state.server_admin.pending, egui::Button::new("Cancel")).clicked() {
+						if ui.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "Cancel"))).clicked() {
 							cancel_upload = true;
 						}
 					});
@@ -224,7 +226,7 @@ impl StickersUi {
 		};
 		let count = catalog.items.len();
 		ui.horizontal(|ui| {
-			ui.label(design::semibold(ui, "Your stickers", 18.0));
+			ui.label(design::semibold(ui, crate::tr_ui!(ui, "Your stickers"), 18.0));
 			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 				ui.weak(catalog.limit.map_or_else(
 					|| format!("{count} stickers"),
@@ -234,7 +236,7 @@ impl StickersUi {
 		});
 		ui.add_space(10.0);
 		if catalog.items.is_empty() {
-			ui.vertical_centered(|ui| ui.weak("No custom stickers yet."));
+			ui.vertical_centered(|ui| ui.weak(crate::tr_ui!(ui, "No custom stickers yet.")));
 		} else {
 			let available = ui.available_width();
 			let columns = ((available / 190.0).floor() as usize).clamp(1, 4);
@@ -295,7 +297,7 @@ impl StickersUi {
 												}
 												if ui
 													.button(
-														RichText::new("Delete Sticker")
+														RichText::new(crate::tr_ui!(ui, "Delete Sticker"))
 															.color(design::palette(ui).danger),
 													)
 													.clicked()
@@ -357,11 +359,11 @@ impl StickersUi {
 					tags,
 					..
 				} => {
-					crate::dialog::label(ui, "Name");
+					crate::dialog::label(ui, crate::tr_ui!(ui, "Name"));
 					ui.add(egui::TextEdit::singleline(name).char_limit(30));
-					crate::dialog::label(ui, "Description (optional)");
+					crate::dialog::label(ui, crate::tr_ui!(ui, "Description (optional)"));
 					ui.add(egui::TextEdit::singleline(description).char_limit(100));
-					crate::dialog::label(ui, "Related emoji");
+					crate::dialog::label(ui, crate::tr_ui!(ui, "Related emoji"));
 					ui.add(egui::TextEdit::singleline(tags).char_limit(200));
 				}
 				Dialog::Delete { .. } => {}
@@ -378,7 +380,7 @@ impl StickersUi {
 							!state.server_admin.pending
 								&& state.can_edit_guild_sticker(guild, *id)
 								&& valid_fields(name, description, tags),
-							egui::Button::new("Save"),
+							egui::Button::new(crate::tr_ui!(ui, "Save")),
 						)
 						.clicked()
 					{
@@ -394,7 +396,7 @@ impl StickersUi {
 					if ui
 						.add_enabled(
 							!state.server_admin.pending && state.can_edit_guild_sticker(guild, *id),
-							egui::Button::new("Delete Sticker"),
+							egui::Button::new(crate::tr_ui!(ui, "Delete Sticker")),
 						)
 						.clicked()
 					{

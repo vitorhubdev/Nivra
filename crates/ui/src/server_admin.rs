@@ -144,7 +144,9 @@ impl Admin {
 		avatars: &mut Avatars,
 		profile: &mut crate::profiles::ProfileSession,
 		commands: &mut Vec<Command>,
+		language: model::Language,
 	) {
+		crate::i18n::store_interface_language(ui.ctx(), language);
 		ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 		if self.submitted_upload && !state.server_admin.pending {
 			self.submitted_upload = false;
@@ -194,7 +196,7 @@ impl Admin {
 		if let Some(error) = state.server_admin.error.or(self.error) {
 			design::notice(ui, design::Level::Error, error);
 			if ui
-				.add_enabled(!state.server_admin.pending, egui::Button::new("Reload"))
+				.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "Reload")))
 				.clicked() && let Some(command) = state.request_server_admin(
 				guild,
 				if members {
@@ -235,14 +237,14 @@ impl Admin {
 		profile: &mut crate::profiles::ProfileSession,
 	) {
 		let colors = design::palette(ui);
-		ui.label(design::semibold(ui, "Emoji", 22.0));
-		ui.label("Add custom emoji that anyone can use in this server. Animated GIF emoji may be used by members with Discord Nitro.");
+		ui.label(design::semibold(ui, crate::tr_ui!(ui, "Emoji"), 22.0));
+		ui.label(crate::tr_ui!(ui, "Add custom emoji that anyone can use in this server. Animated GIF emoji may be used by members with Discord Nitro."));
 		ui.add_space(14.0);
 		if state.can_create_guild_emoji(guild) {
 			if ui
 				.add_enabled_ui(
 					!self.preparing() && self.uploads.is_empty() && !state.server_admin.pending,
-					|ui| design::button(ui, "Upload Emoji", design::ButtonKind::Primary),
+					|ui| design::button(ui, crate::tr_ui!(ui, "Upload Emoji"), design::ButtonKind::Primary),
 				)
 				.inner
 				.clicked()
@@ -250,10 +252,10 @@ impl Admin {
 				self.queue_files(Vec::new());
 			}
 			ui.add_space(18.0);
-			ui.small("Drag and drop up to 10 images onto this page, or choose files. Review their names before uploading.");
+			ui.small(crate::tr_ui!(ui, "Drag and drop up to 10 images onto this page, or choose files. Review their names before uploading."));
 		}
 		if self.preparing {
-			ui.weak("Preparing emoji images...");
+			ui.weak(crate::tr_ui!(ui, "Preparing emoji images..."));
 		}
 		if !self.uploads.is_empty() {
 			egui::Frame::new()
@@ -261,7 +263,7 @@ impl Admin {
 				.corner_radius(8)
 				.inner_margin(12)
 				.show(ui, |ui| {
-					ui.label(design::semibold(ui, "Review uploads", 16.0));
+					ui.label(design::semibold(ui, crate::tr_ui!(ui, "Review uploads"), 16.0));
 					let mut remove = None;
 					for (index, upload) in self.uploads.iter_mut().enumerate() {
 						ui.push_id(index, |ui| {
@@ -276,14 +278,14 @@ impl Admin {
 										.desired_width((ui.available_width() - 130.0).max(60.0))
 										.char_limit(32),
 								)
-								.on_hover_text("Emoji name: 2–32 letters, numbers, or underscores");
+								.on_hover_text(crate::tr_ui!(ui, "Emoji name: 2–32 letters, numbers, or underscores"));
 								ui.weak(if upload.animated {
 									"Animated"
 								} else {
 									"Static"
 								});
 								if ui
-									.add_enabled(!self.uploading, egui::Button::new("Remove"))
+									.add_enabled(!self.uploading, egui::Button::new(crate::tr_ui!(ui, "Remove")))
 									.clicked()
 								{
 									remove = Some(index);
@@ -309,14 +311,14 @@ impl Admin {
 						if ui
 							.add_enabled(
 								valid && !self.uploading && !state.server_admin.pending,
-								egui::Button::new("Upload"),
+								egui::Button::new(crate::tr_ui!(ui, "Upload")),
 							)
 							.clicked()
 						{
 							self.uploading = true;
 						}
 						if ui
-							.add_enabled(!self.uploading, egui::Button::new("Cancel"))
+							.add_enabled(!self.uploading, egui::Button::new(crate::tr_ui!(ui, "Cancel")))
 							.clicked()
 						{
 							self.uploads.clear();
@@ -354,7 +356,7 @@ impl Admin {
 			if count == 0 {
 				ui.add_space(8.0);
 				ui.vertical_centered(|ui| {
-					ui.label(RichText::new("NONE").size(18.0).color(colors.muted));
+					ui.label(RichText::new(crate::tr_ui!(ui, "NONE")).size(18.0).color(colors.muted));
 				});
 			} else {
 				egui::Frame::new()
@@ -366,9 +368,9 @@ impl Admin {
 						let name_width = ((width - 116.0) * 0.47).max(60.0);
 						let by_width = (width - name_width - 116.0).max(40.0);
 						ui.horizontal(|ui| {
-							cell_text(ui, "Image", 44.0, true);
-							cell_text(ui, "Name", name_width, true);
-							cell_text(ui, "Uploaded By", by_width, true);
+							cell_text(ui, crate::tr_ui!(ui, "Image"), 44.0, true);
+							cell_text(ui, crate::tr_ui!(ui, "Name"), name_width, true);
+							cell_text(ui, crate::tr_ui!(ui, "Uploaded By"), by_width, true);
 						});
 						ui.separator();
 						for row in catalog
@@ -409,7 +411,7 @@ impl Admin {
 												profile.person_click(ui, &avatar, None, user);
 												ui.add(egui::Label::new(&user.name).truncate());
 											} else {
-												ui.weak("Unknown");
+												ui.weak(crate::tr_ui!(ui, "Unknown"));
 											}
 										},
 									);
@@ -430,7 +432,7 @@ impl Admin {
 											}
 											if ui
 												.button(
-													RichText::new("Delete Emoji")
+													RichText::new(crate::tr_ui!(ui, "Delete Emoji"))
 														.color(colors.danger),
 												)
 												.clicked()
@@ -461,7 +463,7 @@ impl Admin {
 		commands: &mut Vec<Command>,
 	) {
 		let colors = design::palette(ui);
-		ui.label(design::semibold(ui, "Server Members", 22.0));
+		ui.label(design::semibold(ui, crate::tr_ui!(ui, "Server Members"), 22.0));
 		ui.add_space(20.0);
 		let mut action = None;
 		if let Some(mut enabled) = state
@@ -476,7 +478,7 @@ impl Admin {
 			});
 			ui.add_space(24.0);
 		}
-		ui.label(design::semibold(ui, "Recent Members", 15.0));
+		ui.label(design::semibold(ui, crate::tr_ui!(ui, "Recent Members"), 15.0));
 		let search_width = (ui.available_width() - 44.0).clamp(100.0, 260.0);
 		ui.horizontal_wrapped(|ui| {
 			ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -492,7 +494,7 @@ impl Admin {
 								egui::TextEdit::singleline(&mut self.query.search)
 									.frame(egui::Frame::NONE)
 									.font(egui::FontId::proportional(13.0))
-									.hint_text("Search by username or ID")
+									.hint_text(crate::tr_ui!(ui, "Search by username or ID"))
 									.desired_width(search_width)
 									.char_limit(100),
 							)
@@ -529,7 +531,7 @@ impl Admin {
 				&& ui
 					.add_enabled(
 						!state.server_admin.pending,
-						egui::Button::new(RichText::new("Prune").color(colors.danger)),
+						egui::Button::new(RichText::new(crate::tr_ui!(ui, "Prune")).color(colors.danger)),
 					)
 					.clicked()
 			{
@@ -753,7 +755,7 @@ impl Admin {
 				));
 				if self.query.after.is_some()
 					&& ui
-						.add_enabled(!state.server_admin.pending, egui::Button::new("First page"))
+						.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "First page")))
 						.clicked()
 				{
 					self.query.after = None;
@@ -761,7 +763,7 @@ impl Admin {
 				}
 				if let Some(cursor) = members.next
 					&& ui
-						.add_enabled(!state.server_admin.pending, egui::Button::new("Next page"))
+						.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "Next page")))
 						.clicked()
 				{
 					self.query.after = Some(cursor);
@@ -769,7 +771,7 @@ impl Admin {
 				}
 			});
 			if members.items.is_empty() {
-				ui.weak("No members match this search.");
+				ui.weak(crate::tr_ui!(ui, "No members match this search."));
 			}
 		}
 		if let Some(action) = action
@@ -840,7 +842,7 @@ impl Admin {
 			if !signals.is_empty() {
 				ui.label(signals);
 			}
-			egui::CollapsingHeader::new("Member details").show(ui, |ui| {
+			egui::CollapsingHeader::new(crate::tr_ui!(ui, "Member details")).show(ui, |ui| {
 				ui.label(format!(
 					"Joined Discord: {}",
 					date(Some(i128::from(
@@ -929,7 +931,7 @@ impl Admin {
 			.any(|role| state.can_edit_member_role(guild, member.user.id, role.role.id))
 		{
 			ui.separator();
-			ui.menu_button("Roles", |ui| {
+			ui.menu_button(crate::tr_ui!(ui, "Roles"), |ui| {
 				for role in roles
 					.iter()
 					.filter(|role| state.can_edit_member_role(guild, member.user.id, role.role.id))
@@ -1019,24 +1021,24 @@ impl Admin {
 				ui.spacing_mut().item_spacing.y = 10.0;
 				match dialog {
 					Dialog::Rename { name, .. } => {
-						let label = crate::dialog::label(ui, "Emoji name");
+						let label = crate::dialog::label(ui, crate::tr_ui!(ui, "Emoji name"));
 						crate::dialog::input(ui, egui::TextEdit::singleline(name).char_limit(32))
 							.labelled_by(label.id);
 					}
 					Dialog::Delete { .. } | Dialog::Kick { .. } => {}
 					Dialog::Nickname { name, .. } => {
-						let label = crate::dialog::label(ui, "Nickname");
+						let label = crate::dialog::label(ui, crate::tr_ui!(ui, "Nickname"));
 						crate::dialog::input(
 							ui,
 							egui::TextEdit::singleline(name)
-								.hint_text("Use their username")
+								.hint_text(crate::tr_ui!(ui, "Use their username"))
 								.char_limit(32),
 						)
 						.labelled_by(label.id);
-						crate::dialog::hint(ui, "Leave blank to use their username.");
+						crate::dialog::hint(ui, crate::tr_ui!(ui, "Leave blank to use their username."));
 					}
 					Dialog::Prune { days, counted } => {
-						crate::dialog::label(ui, "Inactive for");
+						crate::dialog::label(ui, crate::tr_ui!(ui, "Inactive for"));
 						let before = *days;
 						egui::ComboBox::from_id_salt("prune-days")
 							.selected_text(format!("{days} days"))
@@ -1079,7 +1081,7 @@ impl Admin {
 								&& state.can_edit_guild_emoji(guild, *id)
 								&& model::server_admin::valid_emoji_name(name),
 							|ui| {
-								if crate::dialog::action(ui, "Save", kind).clicked() {
+								if crate::dialog::action(ui, crate::tr_ui!(ui, "Save"), kind).clicked() {
 									action = Some(Action::RenameEmoji {
 										id: *id,
 										name: name.clone(),
@@ -1090,7 +1092,7 @@ impl Admin {
 					}
 					Dialog::Delete { id, .. } => {
 						ui.add_enabled_ui(ready && state.can_edit_guild_emoji(guild, *id), |ui| {
-							if crate::dialog::action(ui, "Delete Emoji", kind).clicked() {
+							if crate::dialog::action(ui, crate::tr_ui!(ui, "Delete Emoji"), kind).clicked() {
 								action = Some(Action::DeleteEmoji { id: *id });
 							}
 						});
@@ -1101,7 +1103,7 @@ impl Admin {
 								&& state.can_edit_guild_nickname(guild, *user)
 								&& !name.chars().any(char::is_control),
 							|ui| {
-								if crate::dialog::action(ui, "Save", kind).clicked() {
+								if crate::dialog::action(ui, crate::tr_ui!(ui, "Save"), kind).clicked() {
 									action = Some(Action::SetNickname {
 										user: *user,
 										nick: name.clone(),
@@ -1114,7 +1116,7 @@ impl Admin {
 						ui.add_enabled_ui(
 							ready && state.can_kick_guild_member(guild, *user),
 							|ui| {
-								if crate::dialog::action(ui, "Kick Member", kind).clicked() {
+								if crate::dialog::action(ui, crate::tr_ui!(ui, "Kick Member"), kind).clicked() {
 									action = Some(Action::Kick { user: *user });
 								}
 							},
@@ -1128,7 +1130,7 @@ impl Admin {
 						ui.add_enabled_ui(
 							previewed && count > 0 && state.can_prune_guild(guild),
 							|ui| {
-								if crate::dialog::action(ui, "Prune Members", kind).clicked() {
+								if crate::dialog::action(ui, crate::tr_ui!(ui, "Prune Members"), kind).clicked() {
 									action = Some(Action::Prune {
 										days: *days,
 										execute: true,
@@ -1138,7 +1140,7 @@ impl Admin {
 							},
 						);
 						ui.add_enabled_ui(ready && state.can_prune_guild(guild), |ui| {
-							if crate::dialog::action(ui, "Preview", crate::dialog::Action::Outline)
+							if crate::dialog::action(ui, crate::tr_ui!(ui, "Preview"), crate::dialog::Action::Outline)
 								.clicked()
 							{
 								*counted = Some(*days);
@@ -1151,7 +1153,7 @@ impl Admin {
 					}
 				}
 				ui.add_enabled_ui(!state.server_admin.saving, |ui| {
-					close |= crate::dialog::action(ui, "Cancel", crate::dialog::Action::Neutral)
+					close |= crate::dialog::action(ui, crate::tr_ui!(ui, "Cancel"), crate::dialog::Action::Neutral)
 						.clicked();
 				});
 			});

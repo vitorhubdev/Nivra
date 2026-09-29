@@ -821,23 +821,28 @@ impl Editor {
 	) {
 		match self.page {
 			Page::AuditLog => {
-				self.audit_log.show(ui, state, guild, avatars, commands);
+				self.audit_log
+					.show(ui, state, guild, avatars, commands, language);
 				return;
 			}
 			Page::Integrations => {
-				self.integrations.show(ui, state, guild, avatars, commands);
+				self.integrations
+					.show(ui, state, guild, avatars, commands, language);
 				return;
 			}
 			Page::Invites => {
-				self.invites.show(ui, state, guild, avatars, commands);
+				self.invites
+					.show(ui, state, guild, avatars, commands, language);
 				return;
 			}
 			Page::Roles => {
-				self.roles.show(ui, state, guild, avatars, commands);
+				self.roles
+					.show(ui, state, guild, avatars, commands, language);
 				return;
 			}
 			Page::Stickers => {
-				self.stickers.show(ui, state, guild, avatars, commands);
+				self.stickers
+					.show(ui, state, guild, avatars, commands, language);
 				return;
 			}
 			Page::Emoji | Page::Members => {
@@ -849,6 +854,7 @@ impl Editor {
 					avatars,
 					profile,
 					commands,
+					language,
 				);
 				return;
 			}
@@ -1512,6 +1518,112 @@ mod tests {
 		}
 		let missing = crate::i18n::drain_untranslated_keys();
 		assert!(missing.is_empty(), "untranslated server keys: {missing:?}");
+	}
+
+	fn admin_fixture(page: Page) -> (egui::Context, State, Editor, Avatars) {
+		let ctx = egui::Context::default();
+		design::apply(&ctx);
+		let mut state = test_support::demo_state();
+		state.auth = client_core::auth::AuthState::Authenticated;
+		state.gateway_connected = true;
+		let guild = state.guilds[0].id;
+		state.permissions.guilds.insert(
+			guild,
+			model::permissions::Guild {
+				id: guild,
+				owner: state.user.as_ref().map(|user| user.id),
+				roles: Some(vec![]),
+				member: Some(model::permissions::Member {
+					roles: vec![],
+					timeout_until: None,
+				}),
+			},
+		);
+		state.permissions.clear_cache();
+		state.server_admin.guild = Some(guild);
+		state.server_admin.roles = Some(model::server_roles::Catalog {
+			guild,
+			items: vec![model::server_roles::Role {
+				id: guild,
+				name: "@everyone".into(),
+				..Default::default()
+			}],
+			features: vec![],
+		});
+		state.server_admin.emojis = Some(model::server_admin::Emojis::default());
+		state.server_admin.stickers = Some(model::server_admin::Stickers::default());
+		state.server_admin.invites = Some(model::server_invites::Snapshot {
+			guild,
+			items: vec![],
+			features: vec![],
+		});
+		state.server_admin.integrations = Some(model::server_integrations::Snapshot {
+			guild,
+			channel: None,
+			integrations: Some(vec![]),
+			webhooks: Some(vec![]),
+		});
+		state.server_admin.audit_log = Some(model::server_audit_log::Page {
+			guild,
+			users: vec![],
+			has_more: false,
+			entries: vec![],
+		});
+		state.server_settings.guild = Some(guild);
+		state.server_settings.snapshot = Some(Settings {
+			guild,
+			name: "Synthetic server".into(),
+			..Default::default()
+		});
+		let editor = Editor {
+			scope: Some((state.generation, guild)),
+			page,
+			draft: state.server_settings.snapshot.clone(),
+			baseline: state.server_settings.snapshot.clone(),
+			..Default::default()
+		};
+		(ctx, state, editor, Avatars::default())
+	}
+
+	#[test]
+	fn server_subeditors_render_fully_translated_in_portuguese() {
+		let _ = crate::i18n::drain_untranslated_keys();
+		for page in [
+			Page::Roles,
+			Page::Emoji,
+			Page::Members,
+			Page::Stickers,
+			Page::Invites,
+			Page::Integrations,
+			Page::AuditLog,
+		] {
+			let (ctx, mut state, mut editor, mut avatars) = admin_fixture(page);
+			let mut profile = crate::profiles::ProfileSession::default();
+			let mut commands = vec![];
+			let mut output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 1800.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					ui.set_width(860.0);
+					editor.show(
+						&ctx,
+						&mut state,
+						&mut avatars,
+						&mut profile,
+						&mut commands,
+						model::Language::PortugueseBrazil,
+					);
+				},
+			);
+			output.textures_delta.clear();
+		}
+		let missing = crate::i18n::drain_untranslated_keys();
+		assert!(missing.is_empty(), "untranslated server subeditor keys: {missing:?}");
 	}
 
 	#[test]

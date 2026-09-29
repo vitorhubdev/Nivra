@@ -5,4 +5,19 @@ ignore = [
     # workspace has no direct dependency on it and no path to update it independently.
     # Re-check when the egui pin moves.
     "RUSTSEC-2026-0192",
+    # tract-nnef has a medium advisory (model-parser code). It arrives transitively
+    # through DeepFilterNet (pinned git rev) -> tract-onnx -> tract-nnef; the tract
+    # 0.19 line is dictated by that rev, so there is no path to update it independently.
+    # The workspace only feeds it the bundled DeepFilterNet model. Re-check when the
+    # DeepFilterNet rev moves.
+    "RUSTSEC-2026-0217",
+    # paste is unmaintained (informational, compile-time macro only). It arrives
+    # transitively through tract-linalg 0.19 (see above); no independent update path.
+    # Re-check together with the tract line.
+    "RUSTSEC-2024-0436",
+    # memmap2 0.5.10 has an unsoundness advisory. Cargo resolves a single memmap2 for
+    # the workspace and tract 0.19 requires the 0.5 line, so it cannot move to 0.9
+    # independently while the pinned DeepFilterNet rev dictates tract 0.19.
+    # Re-check together with the tract line.
+    "RUSTSEC-2026-0186",
 ]

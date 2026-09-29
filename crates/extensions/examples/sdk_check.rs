@@ -499,7 +499,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		(
 			"message-delete-protector",
 			include_bytes!(
-				"../../../examples/extensions/packages/message-delete-protector.nivra-extension"
+				"../../../examples/extensions/packages/message-delete-protector.serein-extension"
 			)
 			.as_slice(),
 			include_str!("../../../examples/extensions/message-delete-protector/manifest.json"),
@@ -526,6 +526,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		check(&format!("{name}/committed"), committed, &expected);
 		let rebuilt = rebuilt(manifest, &wasm_dir.join(wasm_file))?;
 		// The shipped legacy protector returns true; its current source uses no-op activation.
+		// Keep the committed check pinned to the legacy artifact so the guard keeps testing it.
 		let expected = if name == "message-delete-protector" {
 			Output::default()
 		} else {

@@ -2605,6 +2605,10 @@ mod tests {
 						// READY also seeds the owner Nitro entitlement; it is not part of
 						// this session-transition assertion.
 						Event::StickerEntitlement { .. } => return Ok(()),
+						// Heartbeat acks and the active gateway host are transport
+						// details of the drop/resume race; they carry no
+						// session-transition signal for this assertion.
+						Event::GatewayPing(_) | Event::GatewayHost(_) => return Ok(()),
 						Event::Startup(_) => "ready",
 						Event::Resumed => "resumed",
 						Event::DirectPresence(_) => "presence",

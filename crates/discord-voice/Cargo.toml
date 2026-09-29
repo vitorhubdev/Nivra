@@ -25,6 +25,9 @@ rtrb = "=0.4.0"
 cpal = { version = "=0.18.2", default-features = false }
 sonora = { version = "=0.2.0", default-features = false }
 nnnoiseless = { version = "=0.5.2", default-features = false }
+# tract 0.19 (via DeepFilterNet) cannot assemble its ARM64 kernels with MSVC,
+# so Maximum suppression is unavailable on Windows ARM64 (RNNoise applies).
+[target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
 deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "978576aa8400552a4ce9730838c635aa30db5e61", default-features = false, features = ["tract", "default-model"] }
 ndarray = { version = "=0.15.6", default-features = false, features = ["std"] }
 openh264 = "=0.9.8"

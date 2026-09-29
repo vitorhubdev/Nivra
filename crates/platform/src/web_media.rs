@@ -72,7 +72,8 @@ impl WebMediaView {
 		if persist_on {
 			use wry::WebViewBuilderExtDarwin;
 			// WKWebView has no data_directory; this is the 0.57 replacement API.
-			builder = builder.with_data_store_identifier(*b"nivra-web-media");
+			// The identifier is a fixed 16-byte data-store tag.
+			builder = builder.with_data_store_identifier(*b"nivra-web-media1");
 		}
 		let view = builder
 			.with_bounds(bounds(&parent))
@@ -266,7 +267,6 @@ impl Drop for WebMediaView {
 		self.view.terminate_web_process();
 		self.window.set_child(None::<&gtk4::Widget>);
 		self.window.destroy();
-		use webkit6::prelude::*;
 		self.display.flush();
 	}
 }

@@ -47,6 +47,7 @@ impl Load {
 	}
 }
 
+#[cfg(not(all(target_os = "windows", target_arch = "aarch64")))]
 fn deep_model() -> Option<df::tract::DfTract> {
 	let params = df::tract::DfParams::default();
 	let runtime = df::tract::RuntimeParams::default_with_ch(1);
@@ -54,6 +55,7 @@ fn deep_model() -> Option<df::tract::DfTract> {
 	(model.hop_size == 480 && model.sr == 48_000).then_some(model)
 }
 
+#[cfg(not(all(target_os = "windows", target_arch = "aarch64")))]
 fn deep_frame(model: &mut df::tract::DfTract, chunk: [f32; 480]) -> Option<[f32; 480]> {
 	let mut output = [0.0f32; 480];
 	let input = ndarray::ArrayView2::from_shape((1, 480), &chunk[..]).ok()?;
@@ -99,6 +101,13 @@ struct Deep {
 	cover_history: std::collections::VecDeque<(u64, [f32; 480])>,
 }
 impl Deep {
+	// tract 0.19 cannot assemble its ARM64 kernels with MSVC, so Maximum
+	// suppression is unavailable on Windows ARM64; the RNNoise cover applies.
+	#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+	fn start() -> Option<Self> {
+		None
+	}
+	#[cfg(not(all(target_os = "windows", target_arch = "aarch64")))]
 	fn start() -> Option<Self> {
 		let mut cover = noise_state();
 		Self::start_with(
@@ -620,6 +629,8 @@ mod tests {
 		);
 	}
 
+	// Requires the DeepFilterNet model, unavailable on Windows ARM64 (see Deep::start).
+	#[cfg(not(all(target_os = "windows", target_arch = "aarch64")))]
 	#[test]
 	fn deep_filter_denoises_and_falls_back_to_rnnoise() {
 		let mut seed = 0x2545_f491_u32;

@@ -1,5 +1,6 @@
 //! Offline Linux tray check. Run with `dbus-run-session -- cargo run --locked -p tray-debug`.
 #[cfg(target_os = "linux")]
+#[allow(dead_code)] // Harness exercises Event/Tray; the icon renderer ships in the desktop.
 #[path = "../../../crates/platform/src/tray.rs"]
 mod tray;
 

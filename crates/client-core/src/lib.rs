@@ -581,6 +581,10 @@ pub enum Event {
 	},
 	Failure(auth::Failure),
 	Disconnected,
+	Reconnecting {
+		attempt: u32,
+		retry_in_ms: u64,
+	},
 	Resumed,
 	Resync,
 	Unavailable(Id),
@@ -720,10 +724,50 @@ pub struct State {
 	pub history_pending: bool,
 	pub older_exhausted: bool,
 	pub gateway_connected: bool,
+	/// Active gateway backoff, set by [`Event::Reconnecting`].
+	pub gateway_reconnect: Option<GatewayReconnect>,
+	/// When the gateway socket last dropped while connected.
+	pub gateway_disconnected_at: Option<std::time::Instant>,
+	/// Call to restore after a short gateway outage when auto-rejoin is enabled.
+	pub auto_rejoin: Option<AutoRejoinCall>,
 	pub revision: u64,
 	pub demo: bool,
 	#[doc(hidden)]
 	pub trail: Trail,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatewayReconnect {
+	pub attempt: u32,
+	pub retry_in_ms: u64,
+	pub since: std::time::Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AutoRejoinCall {
+	pub channel: Id,
+	pub guild: Option<Id>,
+	pub muted: bool,
+	pub deafened: bool,
+	pub disconnected_at: std::time::Instant,
+}
+
+impl AutoRejoinCall {
+	pub const WINDOW: std::time::Duration = std::time::Duration::from_secs(15);
+
+	pub fn capture_from(state: &State) -> Option<Self> {
+		let call = state.voice.active.as_ref()?;
+		if call.phase == voice::Phase::Failed {
+			return None;
+		}
+		Some(Self {
+			channel: call.channel,
+			guild: call.guild,
+			muted: call.muted,
+			deafened: call.deafened,
+			disconnected_at: std::time::Instant::now(),
+		})
+	}
 }
 
 const MEMBER_CHUNK: usize = 100;
@@ -919,10 +963,24 @@ impl Default for State {
 			history_pending: false,
 			older_exhausted: false,
 			gateway_connected: false,
+			gateway_reconnect: None,
+			gateway_disconnected_at: None,
+			auto_rejoin: None,
 			revision: 0,
 			demo: false,
 			trail: Trail::default(),
 		}
+	}
+}
+
+impl State {
+	pub fn capture_auto_rejoin(&mut self) {
+		self.auto_rejoin = AutoRejoinCall::capture_from(self);
+	}
+
+	pub fn take_auto_rejoin_if_recent(&mut self) -> Option<AutoRejoinCall> {
+		let target = self.auto_rejoin.take()?;
+		(target.disconnected_at.elapsed() <= AutoRejoinCall::WINDOW).then_some(target)
 	}
 }
 /// Channels the conversation pane can present: text, voice, and forum containers.
@@ -3026,6 +3084,8 @@ impl State {
 				self.archived_thread = None;
 				self.auth = auth::AuthState::Authenticated;
 				self.gateway_connected = true;
+				self.gateway_reconnect = None;
+				self.gateway_disconnected_at = None;
 				self.status = if unavailable {
 					"Conversation no longer available in navigation"
 				} else {
@@ -3369,14 +3429,29 @@ impl State {
 				// roster and known DM calls all stay. Only a fresh READY invalidates the voice state.
 				self.voice.incoming = None;
 				self.gateway_connected = false;
+				self.gateway_reconnect = None;
+				self.gateway_disconnected_at.get_or_insert(std::time::Instant::now());
 				self.cancel_history();
 				self.freshness = Freshness::Stale;
+				self.status = "Reconnecting…";
+				Ok(())
+			}
+			Event::Reconnecting { attempt, retry_in_ms } => {
+				self.gateway_connected = false;
+				self.gateway_disconnected_at.get_or_insert(std::time::Instant::now());
+				self.gateway_reconnect = Some(GatewayReconnect {
+					attempt,
+					retry_in_ms,
+					since: std::time::Instant::now(),
+				});
 				self.status = "Reconnecting…";
 				Ok(())
 			}
 			Event::Resumed => {
 				self.member_search = Default::default();
 				self.gateway_connected = true;
+				self.gateway_reconnect = None;
+				self.gateway_disconnected_at = None;
 				self.cancel_history();
 				self.freshness = Freshness::Stale;
 				self.status = "";
@@ -5939,5 +6014,41 @@ mod tests {
 		assert!(state.timeline.is_empty());
 		apply(&mut state, Event::Message(message(200)));
 		assert!(state.timeline.is_empty()); // queued live content cannot undo revocation
+	}
+
+	#[test]
+	fn auto_rejoin_window_accepts_14s_rejects_16s() {
+		let mut state = State::default();
+		state.voice.active = Some(voice::Call {
+			channel: Id(2),
+			guild: None,
+			connected_at: None,
+			server_muted: false,
+			server_deafened: false,
+			request: 1,
+			phase: voice::Phase::Connected,
+			muted: true,
+			deafened: false,
+			participants: Vec::new(),
+			camera: false,
+			watching: None,
+			error: None,
+		});
+		state.auto_rejoin = Some(AutoRejoinCall {
+			channel: Id(2),
+			guild: None,
+			muted: true,
+			deafened: false,
+			disconnected_at: std::time::Instant::now() - std::time::Duration::from_secs(14),
+		});
+		assert!(state.take_auto_rejoin_if_recent().is_some());
+		state.auto_rejoin = Some(AutoRejoinCall {
+			channel: Id(2),
+			guild: None,
+			muted: true,
+			deafened: false,
+			disconnected_at: std::time::Instant::now() - std::time::Duration::from_secs(16),
+		});
+		assert!(state.take_auto_rejoin_if_recent().is_none());
 	}
 }

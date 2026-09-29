@@ -2003,9 +2003,18 @@ impl MessagingUi {
 				self.language,
 			);
 		}
-		design::group(ui, crate::i18n::text(self.language, "Camera"), |ui| {
-			self.camera_settings_content(ui, demo)
-		});
+		design::group(
+			ui,
+			crate::i18n::text(self.language, "Connection recovery"),
+			|ui| self.voice_auto_rejoin_setting(ui),
+		);
+		if !compact {
+			design::group(ui, crate::i18n::text(self.language, "Camera"), |ui| {
+				self.camera_settings_content(ui, demo)
+			});
+		} else {
+			self.camera_settings_content(ui, demo);
+		}
 		if active && let Some(code) = &self.voice_privacy_code {
 			egui::CollapsingHeader::new(crate::i18n::text(self.language, "Voice privacy code"))
 				.show(ui, |ui| {
@@ -2914,6 +2923,104 @@ impl MessagingUi {
 		.clicked()
 		{
 			self.screen.launch(state);
+		}
+	}
+
+	/// Gateway backoff indicator; appears only after a short disconnect delay.
+	pub(super) fn gateway_reconnect_banner(&mut self, ui: &mut egui::Ui, state: &State) {
+		let Some(disconnected_at) = state.gateway_disconnected_at else {
+			return;
+		};
+		if state.gateway_connected || state.demo {
+			return;
+		}
+		if disconnected_at.elapsed() < std::time::Duration::from_secs(2) {
+			return;
+		}
+		let Some(reconnect) = state.gateway_reconnect else {
+			return;
+		};
+		let colors = design::palette(ui);
+		let label = format!(
+			"{} · {} {}",
+			crate::i18n::text(self.language, "Reconnecting"),
+			crate::i18n::text(self.language, "attempt"),
+			reconnect.attempt
+		);
+		let retry = std::time::Duration::from_millis(reconnect.retry_in_ms.max(1));
+		let progress = (reconnect.since.elapsed().as_secs_f32() / retry.as_secs_f32()).clamp(0.0, 1.0);
+		egui::Panel::top("gateway-reconnect")
+			.show_separator_line(false)
+			.frame(
+				egui::Frame::new()
+					.fill(colors.raised)
+					.inner_margin(egui::Margin::symmetric(16, 10)),
+			)
+			.show(ui, |ui| {
+				ui.vertical(|ui| {
+					ui.spacing_mut().item_spacing.y = 8.0;
+					ui.label(design::semibold(ui, &label, 14.0).color(colors.text_strong));
+					ui.add(
+						egui::ProgressBar::new(progress)
+							.desired_width(f32::INFINITY)
+							.fill(colors.accent),
+					);
+					if disconnected_at.elapsed() >= std::time::Duration::from_secs(2)
+						&& ui
+							.button(crate::i18n::text(self.language, "Reconnect now"))
+							.clicked()
+					{
+						self.gateway_reconnect_skip_requested = true;
+					}
+				});
+			});
+	}
+
+	pub(super) fn voice_auto_rejoin_setting(&mut self, ui: &mut egui::Ui) {
+		let mut enabled = self.voice_auto_rejoin_short_disconnect;
+		let previous = enabled;
+		design::switch(
+			ui,
+			crate::i18n::text(
+				self.language,
+				"Rejoin calls after brief disconnects",
+			),
+			Some(crate::i18n::text(
+				self.language,
+				"Automatically returns to the same call when Discord reconnects within 15 seconds.",
+			)),
+			&mut enabled,
+		);
+		if enabled != previous {
+			if enabled {
+				self.voice_auto_rejoin_confirm = true;
+			} else {
+				self.voice_auto_rejoin_short_disconnect = false;
+			}
+		}
+	}
+
+	pub(super) fn voice_auto_rejoin_dialog(&mut self, ctx: &egui::Context) {
+		if !self.voice_auto_rejoin_confirm {
+			return;
+		}
+		let t = |english: &'static str| crate::i18n::text(self.language, english);
+		match crate::dialog::DoubleConfirm::new(
+			"voice-auto-rejoin",
+			t("Rejoin calls after brief disconnects"),
+			t("This can put you back on voice without an extra tap after short outages."),
+			t("Only enable this if you are comfortable rejoining voice automatically on this device."),
+		)
+		.confirm_labels(t("Continue"), t("Enable auto-rejoin"))
+		.show(ctx)
+		{
+			Some(crate::dialog::Choice::Confirmed) => {
+				self.voice_auto_rejoin_short_disconnect = true;
+				self.voice_auto_rejoin_confirm = false;
+			}
+			Some(crate::dialog::Choice::Cancelled) | None => {
+				self.voice_auto_rejoin_confirm = false;
+			}
 		}
 	}
 

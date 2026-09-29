@@ -84,6 +84,9 @@ pub struct AppPreferences {
 	/// Channel, optional guild, account and timestamp only — never a voice token.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub reconnect_call: Option<ReconnectCallHint>,
+	/// Rejoin the last call automatically when the gateway returns within 15 seconds.
+	#[serde(default)]
+	pub voice_auto_rejoin_short_disconnect: bool,
 	/// The owner has seen the in-app notice that this build is unofficial and
 	/// includes other people's licenses. Not a waiver of those licenses.
 	#[serde(default)]
@@ -163,6 +166,7 @@ impl Default for AppPreferences {
 			muted_users: Vec::new(),
 			voice_bot_safe_volume: true,
 			reconnect_call: None,
+			voice_auto_rejoin_short_disconnect: false,
 			notices_accepted: false,
 		}
 	}
@@ -1988,6 +1992,16 @@ mod tests {
 			model::GpuPreference::PowerSaving
 		);
 	}
+	#[test]
+	fn voice_auto_rejoin_preference_round_trips() {
+		let mut value = AppPreferences::default();
+		assert!(!value.voice_auto_rejoin_short_disconnect);
+		value.voice_auto_rejoin_short_disconnect = true;
+		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+		store.save_app_preferences(&value).unwrap();
+		assert!(store.app_preferences().unwrap().voice_auto_rejoin_short_disconnect);
+	}
+
 	#[test]
 	fn reconnect_call_hint_is_recent_account_scoped_and_survives_preferences() {
 		let joined = 1_700_000_000;

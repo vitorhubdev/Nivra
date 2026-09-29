@@ -21,7 +21,7 @@ use futures_util::{SinkExt, StreamExt};
 use model::{Freshness, Id, Member, MemberList};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tokio::{
-	sync::{mpsc, watch},
+	sync::{mpsc, watch, Notify},
 	time::{Instant, interval_at, sleep, timeout},
 };
 use tokio_tungstenite::{
@@ -162,6 +162,37 @@ fn jitter_ms(max: u64) -> u64 {
 	}
 	let bound = max.max(1) as u32;
 	(u32::from_le_bytes(buf) % bound) as u64
+}
+
+fn reconnect_delay_ms(attempt: u32) -> u64 {
+	(1000_u64 << attempt.min(5)) + jitter_ms(1000)
+}
+
+async fn wait_reconnect(retry: Duration, skip: &Arc<Notify>) {
+	tokio::select! {
+		_ = sleep(retry) => {}
+		_ = skip.notified() => {}
+	}
+}
+
+fn emit_gateway_loss(
+	was_ready: bool,
+	ready_at: Option<Instant>,
+	outage: &mut bool,
+	emit: &impl Fn(Event) -> Result<(), Failure>,
+	attempt: u32,
+) -> Result<(), Failure> {
+	if was_ready && ready_at.is_some() {
+		if !*outage {
+			emit(Event::Disconnected)?;
+			*outage = true;
+		}
+		emit(Event::Reconnecting {
+			attempt,
+			retry_in_ms: reconnect_delay_ms(attempt),
+		})?;
+	}
+	Ok(())
 }
 
 // Explicit troubleshooting only. Each scope shares its budgets across reconnects.
@@ -886,6 +917,7 @@ pub async fn run(
 		mpsc::channel(1).1,
 		None,
 		emit,
+		Arc::new(Notify::new()),
 		#[cfg(test)]
 		None,
 	)
@@ -906,6 +938,7 @@ pub async fn run_with_voice(
 		controls,
 		None,
 		emit,
+		Arc::new(Notify::new()),
 		#[cfg(test)]
 		None,
 	)
@@ -928,6 +961,40 @@ pub async fn run_with_activity(
 	observe: impl Fn(ActivityObservation) -> Result<(), Failure> + Sync,
 	emit: impl Fn(Event) -> Result<(), Failure>,
 ) -> Result<(), Failure> {
+	run_with_activity_and_reconnect(
+		secret,
+		initial_url,
+		subscriptions,
+		controls,
+		activity,
+		observe,
+		Arc::new(Notify::new()),
+		emit,
+	)
+	.await
+}
+struct ActivityInput<'a> {
+	spotify: watch::Receiver<Option<discord_protocol::spotify::Activity>>,
+	member_queries: watch::Receiver<[Option<client_core::member_search::Request>; 2]>,
+	receiver: watch::Receiver<Option<discord_protocol::rpc::Activity>>,
+	own_presence: watch::Receiver<model::OwnPresence>,
+	observe: &'a (dyn Fn(ActivityObservation) -> Result<(), Failure> + Sync),
+}
+pub async fn run_with_activity_and_reconnect(
+	secret: Arc<SessionSecret>,
+	initial_url: String,
+	subscriptions: watch::Receiver<Option<MemberSubscription>>,
+	controls: mpsc::Receiver<client_core::voice::Command>,
+	activity: (
+		watch::Receiver<Option<discord_protocol::rpc::Activity>>,
+		watch::Receiver<model::OwnPresence>,
+		watch::Receiver<[Option<client_core::member_search::Request>; 2]>,
+		watch::Receiver<Option<discord_protocol::spotify::Activity>>,
+	),
+	observe: impl Fn(ActivityObservation) -> Result<(), Failure> + Sync,
+	reconnect_skip: Arc<Notify>,
+	emit: impl Fn(Event) -> Result<(), Failure>,
+) -> Result<(), Failure> {
 	run_inner(
 		secret,
 		initial_url,
@@ -941,18 +1008,13 @@ pub async fn run_with_activity(
 			observe: &observe,
 		}),
 		emit,
+		reconnect_skip,
 		#[cfg(test)]
 		None,
 	)
 	.await
 }
-struct ActivityInput<'a> {
-	spotify: watch::Receiver<Option<discord_protocol::spotify::Activity>>,
-	member_queries: watch::Receiver<[Option<client_core::member_search::Request>; 2]>,
-	receiver: watch::Receiver<Option<discord_protocol::rpc::Activity>>,
-	own_presence: watch::Receiver<model::OwnPresence>,
-	observe: &'a (dyn Fn(ActivityObservation) -> Result<(), Failure> + Sync),
-}
+
 async fn run_inner(
 	secret: Arc<SessionSecret>,
 	initial_url: String,
@@ -960,6 +1022,7 @@ async fn run_inner(
 	mut voice_controls: mpsc::Receiver<client_core::voice::Command>,
 	activity: Option<ActivityInput<'_>>,
 	emit: impl Fn(Event) -> Result<(), Failure>,
+	reconnect_skip: Arc<Notify>,
 	#[cfg(test)] test_endpoint: Option<&str>,
 ) -> Result<(), Failure> {
 	let initial_url = validated_url(&initial_url)?;
@@ -1005,16 +1068,35 @@ async fn run_inner(
 	let mut inbox = channel_events::Inbox::default();
 	let mut known_guilds = std::collections::BTreeSet::new();
 	let mut voice_open = true;
+	let mut gateway_outage = false;
+	let mut reconnect_announced = false;
 	// Initial login is bounded, but an established session must survive long outages.
 	while was_ready || attempt < 6 {
 		if attempt > 0 {
-			calls.disconnected();
+			if state.session.is_none() && was_ready {
+				calls.session_reset();
+			}
 			while voice_controls.try_recv().is_ok() {}
-			emit(Event::Disconnected)?;
-			sleep(Duration::from_millis(
-				(1000_u64 << attempt.min(5)) + jitter_ms(1000),
-			))
-			.await;
+			let retry_ms = reconnect_delay_ms(attempt);
+			if !reconnect_announced {
+				if was_ready {
+					if !gateway_outage {
+						emit(Event::Disconnected)?;
+						gateway_outage = true;
+					}
+					emit(Event::Reconnecting {
+						attempt,
+						retry_in_ms: retry_ms,
+					})?;
+				} else {
+					emit(Event::Reconnecting {
+						attempt,
+						retry_in_ms: retry_ms,
+					})?;
+				}
+			}
+			reconnect_announced = false;
+			wait_reconnect(Duration::from_millis(retry_ms), &reconnect_skip).await;
 		}
 		let url = state.url.as_deref().unwrap_or(&initial_url);
 		// Compiled out of shipped builds. Tests replace only dialing, never URL validation.
@@ -1106,6 +1188,7 @@ async fn run_inner(
 		let mut queries_open = true;
 		let mut queries = member_search::Search::default();
 		outgoing_activity.reconnect();
+		let mut defer_attempt: Option<u32> = None;
 		loop {
 			if activity_enabled && last_observation != Some(outgoing_activity.observation) {
 				observe(outgoing_activity.observation)?;
@@ -1336,9 +1419,22 @@ async fn run_inner(
 						},
 						Some(Err(error)) => {
 							let failure = socket_failure(error);
-							if failure.ends_session() { return Err(failure); }
+							if failure.ends_session() {
+								return Err(failure);
+							}
+							let next =
+								next_attempt(attempt, ready_at.map(|ready| ready.elapsed()));
+							emit_gateway_loss(
+								was_ready,
+								ready_at,
+								&mut gateway_outage,
+								&emit,
+								next,
+							)?;
+							reconnect_announced = true;
+							defer_attempt = Some(next);
 							break;
-						},
+						}
 						other => other,
 					};
 					match frame {
@@ -1358,16 +1454,40 @@ async fn run_inner(
 									if !matches!(timeout(Duration::from_secs(5), socket.send(Frame::Text(packet.into()))).await, Ok(Ok(()))) { break; }
 									heartbeat.sent(Instant::now());
 								}
-								7 => break,
+								7 => {
+									let next =
+										next_attempt(attempt, ready_at.map(|ready| ready.elapsed()));
+									emit_gateway_loss(
+										was_ready,
+										ready_at,
+										&mut gateway_outage,
+										&emit,
+										next,
+									)?;
+									reconnect_announced = true;
+									defer_attempt = Some(next);
+									break;
+								}
 								9 => {
 									let resumable: bool = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?;
 									if !resumable { state = ResumeState::default(); }
-									emit(Event::Disconnected)?;
-									sleep(Duration::from_millis(1000 + jitter_ms(4000))).await;
+									let next =
+										next_attempt(attempt, ready_at.map(|ready| ready.elapsed()));
+									emit_gateway_loss(
+										was_ready,
+										ready_at,
+										&mut gateway_outage,
+										&emit,
+										next,
+									)?;
+									reconnect_announced = true;
+									defer_attempt = Some(next);
 									break;
 								}
 								0 => match packet.t.as_deref().unwrap_or("") {
 									"READY" => {
+										gateway_outage = false;
+										reconnect_announced = false;
 										direct_presence=presence::Pending::default();
 										active_members=None;members_deadline=None;sent_members = !subscriptions_open;
 										let envelope = ready::decode(packet.d.get().as_bytes()).map_err(|_| Failure::ProtocolAt("Gateway login: invalid READY identity or relationships"))?;
@@ -1484,7 +1604,13 @@ async fn run_inner(
 										if !participants.is_empty() { emit(Event::Voice(client_core::voice::Event::Snapshot { partial: true, guild: None, participants }))?; }
 										calls.users.clear();
 									}
-									"RESUMED" => { emit(Event::Interaction(client_core::interactions::Event::Session(state.session.clone().ok_or(Failure::Protocol)?)))?; emit(Event::Resumed)?; ready_at = Some(Instant::now()); },
+									"RESUMED" => {
+										gateway_outage = false;
+										reconnect_announced = false;
+										emit(Event::Interaction(client_core::interactions::Event::Session(state.session.clone().ok_or(Failure::Protocol)?)))?;
+										emit(Event::Resumed)?;
+										ready_at = Some(Instant::now());
+									}
 									"CALL_CREATE" | "CALL_UPDATE" | "CALL_DELETE" | "VOICE_STATE_UPDATE" | "VOICE_SERVER_UPDATE" | "STREAM_CREATE" | "STREAM_SERVER_UPDATE" | "STREAM_DELETE" => calls.dispatch(packet.t.as_deref().unwrap_or(""),packet.d.get().as_bytes(),owner_id,&emit)?,
 									"THREAD_MEMBER_LIST_UPDATE" => {
 										if let Some(active) = &mut active_members {
@@ -1733,18 +1859,56 @@ async fn run_inner(
 						}
 						Some(Ok(Frame::Close(close))) => {
 							let code = close.map_or(1006, |f| u16::from(f.code));
-							match close_action(code) { Reconnect::Stop => return Err(if code == 4004 { Failure::Expired } else { Failure::Protocol }), Reconnect::Identify => state = ResumeState::default(), Reconnect::Resume => {} }
+							match close_action(code) {
+								Reconnect::Stop => {
+									return Err(if code == 4004 {
+										Failure::Expired
+									} else {
+										Failure::Protocol
+									});
+								}
+								Reconnect::Identify => state = ResumeState::default(),
+								Reconnect::Resume => {}
+							}
+							let next =
+								next_attempt(attempt, ready_at.map(|ready| ready.elapsed()));
+							emit_gateway_loss(
+								was_ready,
+								ready_at,
+								&mut gateway_outage,
+								&emit,
+								next,
+							)?;
+							reconnect_announced = true;
+							defer_attempt = Some(next);
 							break;
 						}
 						Some(Ok(Frame::Ping(data))) => { if !matches!(timeout(Duration::from_secs(5), socket.send(Frame::Pong(data))).await, Ok(Ok(()))) { break; } }
 						Some(Ok(Frame::Pong(_))) => {},
 						Some(Ok(Frame::Binary(_))) => return Err(Failure::Protocol),
-						_ => break,
+						_ => {
+							let next =
+								next_attempt(attempt, ready_at.map(|ready| ready.elapsed()));
+							if ready_at.is_some() {
+								emit_gateway_loss(
+									was_ready,
+									ready_at,
+									&mut gateway_outage,
+									&emit,
+									next,
+								)?;
+								reconnect_announced = true;
+								defer_attempt = Some(next);
+							}
+							break;
+						}
 					}
 				}
 			}
 		}
-		attempt = next_attempt(attempt, ready_at.map(|ready| ready.elapsed()));
+		attempt = defer_attempt
+			.take()
+			.unwrap_or_else(|| next_attempt(attempt, ready_at.map(|ready| ready.elapsed())));
 	}
 	Err(Failure::Network)
 }
@@ -2033,7 +2197,7 @@ mod tests {
                 let result = run_inner(
                     Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
                     "wss://gateway.discord.gg/".into(), watch::channel(None).1,
-                    mpsc::channel(1).1, Some(ActivityInput { spotify: watch::channel(None).1, member_queries: watch::channel(Default::default()).1, receiver, own_presence: presence_receiver, observe: &|value| { observations.send_replace(value); Ok(()) } }), |_| Ok(()), Some(&endpoint),
+                    mpsc::channel(1).1, Some(ActivityInput { spotify: watch::channel(None).1, member_queries: watch::channel(Default::default()).1, receiver, own_presence: presence_receiver, observe: &|value| { observations.send_replace(value); Ok(()) } }), |_| Ok(()), Arc::new(Notify::new()), Some(&endpoint),
                 ).await;
                 finished.send(()).unwrap();
                 result
@@ -2087,6 +2251,7 @@ mod tests {
                     }
                     Ok(())
                 },
+                Arc::new(Notify::new()),
                 Some(&endpoint),
             );
             let ((), result) = tokio::join!(server, client);
@@ -2144,7 +2309,7 @@ mod tests {
                         _ => {}
                     }
                     Ok(())
-                }, Some(&endpoint),
+                }, Arc::new(Notify::new()), Some(&endpoint),
             );
             let client = async {
                 let result = client.await;
@@ -2289,7 +2454,7 @@ mod tests {
                         assert_eq!(state.channels.iter().find(|c|c.id==Id(6)).unwrap().name,"Synced thread");
                     }
                     Ok(())
-                },Some(&endpoint)
+                }, Arc::new(Notify::new()), Some(&endpoint)
             );
             let client=async {
                 let result=client.await;
@@ -2423,6 +2588,7 @@ mod tests {
 						Event::DirectPresence(_) => "presence",
 						Event::Resync => "resync",
 						Event::Disconnected => "disconnected",
+						Event::Reconnecting { .. } => return Ok(()),
 						// A fresh session after resume failure must refetch account settings.
 						Event::AccountSettings {
 							status: true,
@@ -2468,6 +2634,7 @@ mod tests {
 					events.push(label);
 					Ok(())
 				},
+				Arc::new(Notify::new()),
 				Some(&endpoint),
 			);
 			let client = async {
@@ -2564,7 +2731,7 @@ mod tests {
 						_ => {}
 					}
 					Ok(())
-				}, Some(&endpoint),
+				}, Arc::new(Notify::new()), Some(&endpoint),
 			);
 			let ((), result) = tokio::join!(server, client);
 			assert_eq!(result, Err(Failure::Expired));
@@ -2605,10 +2772,36 @@ mod tests {
                     _=>{},
                 }
                 Ok(())
-            },Some(&endpoint));
+            }, Arc::new(Notify::new()), Some(&endpoint));
             let ((),result)=tokio::join!(server,client);assert_eq!(result,Err(Failure::Expired));
         }).await.unwrap();
 	}
+	#[test]
+	fn gateway_loss_emits_disconnect_then_reconnecting() {
+		let mut outage = false;
+		let events = std::sync::Mutex::new(Vec::<String>::new());
+		let emit = |event: Event| {
+			match event {
+				Event::Disconnected => events.lock().unwrap().push("disconnected".into()),
+				Event::Reconnecting { attempt, .. } => {
+					events.lock().unwrap().push(format!("reconnect-{attempt}"));
+				}
+				_ => {}
+			}
+			Ok(())
+		};
+		emit_gateway_loss(
+			true,
+			Some(Instant::now()),
+			&mut outage,
+			&emit,
+			2,
+		)
+		.unwrap();
+		let events = events.into_inner().unwrap();
+		assert_eq!(events, ["disconnected", "reconnect-2"]);
+	}
+
 	#[test]
 	fn jitter_stays_within_max() {
 		for max in [1_u64, 1000, 4000] {
@@ -3324,7 +3517,7 @@ mod member_tests {
 		})).unwrap();
                 }
                 Ok(())
-            },Some(&endpoint));
+            }, Arc::new(Notify::new()), Some(&endpoint));
             let ((),result)=tokio::join!(server,client);assert_eq!(result,Err(Failure::Expired));
         }).await.unwrap();
 	}

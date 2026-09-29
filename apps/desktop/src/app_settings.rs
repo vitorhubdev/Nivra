@@ -85,6 +85,7 @@ impl Settings {
 			muted_users: ui.voice_user_mutes().to_vec(),
 			voice_bot_safe_volume: ui.voice_bot_safe_volume,
 			reconnect_call: self.current.reconnect_call,
+			voice_auto_rejoin_short_disconnect: ui.voice_auto_rejoin_short_disconnect,
 			notices_accepted: self.current.notices_accepted,
 		};
 		if value != self.current {
@@ -131,6 +132,7 @@ impl Settings {
 		ui.set_voice_user_volume_overrides(&value.user_volumes);
 		ui.set_voice_user_mutes(&value.muted_users);
 		ui.voice_bot_safe_volume = value.voice_bot_safe_volume;
+		ui.voice_auto_rejoin_short_disconnect = value.voice_auto_rejoin_short_disconnect;
 	}
 }
 

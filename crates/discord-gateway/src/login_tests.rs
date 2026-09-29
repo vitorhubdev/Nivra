@@ -1,7 +1,8 @@
 //! Offline regressions for large, valid login metadata without voice participants.
 use super::*;
 use serde_json::{Value, json};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use tokio::sync::Notify;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{
 	WebSocketStream, accept_async,
@@ -126,8 +127,9 @@ async fn login_metadata(
 				}
 				Ok(())
 			},
-			Some(&endpoint),
-		);
+            Arc::new(Notify::new()),
+            Some(&endpoint),
+        );
 		let ((), result) = tokio::join!(server, client);
 		assert_eq!(
 			result,
@@ -297,8 +299,9 @@ async fn oversized_frames_stop_login_during_and_after_hello() {
 					);
 					Ok(())
 				},
-				Some(&endpoint),
-			);
+            Arc::new(Notify::new()),
+            Some(&endpoint),
+        );
 			let (_socket, result) = tokio::join!(server, client);
 			assert_eq!(
 				result,
@@ -356,8 +359,9 @@ async fn invalid_owner_identity_or_session_never_emits_startup() {
 					assert!(event.ready_navigation().is_none());
 					Ok(())
 				},
-				Some(&endpoint),
-			);
+            Arc::new(Notify::new()),
+            Some(&endpoint),
+        );
 			let (_socket, result) = tokio::join!(server, client);
 			assert_eq!(
 				result,
@@ -432,8 +436,9 @@ async fn ready_premium_type_seeds_full_nitro_limit() {
 				}
 				Ok(())
 			},
-			Some(&endpoint),
-		);
+            Arc::new(Notify::new()),
+            Some(&endpoint),
+        );
 		let ((), result) = tokio::join!(server, client);
 		assert_eq!(result, Err(Failure::Expired), "only the synthetic close may terminate login");
 		assert!(

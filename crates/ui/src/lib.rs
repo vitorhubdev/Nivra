@@ -454,6 +454,9 @@ pub struct MessagingUi {
 	pub reconnect_offer: Option<(Id, Option<Id>)>,
 	/// Clear the persisted reconnect hint after an explicit dismiss.
 	pub reconnect_dismissed: bool,
+	pub gateway_reconnect_skip_requested: bool,
+	pub voice_auto_rejoin_short_disconnect: bool,
+	pub voice_auto_rejoin_confirm: bool,
 	pub voice_switch_ready: bool,
 	voice_switch: Option<voice::CallSwitch>,
 	pub screen: screen::ScreenUi,
@@ -4247,6 +4250,7 @@ impl MessagingUi {
 							);
 						});
 				}
+				self.gateway_reconnect_banner(ui, state);
 				self.reconnect_call_banner(ui, state, &mut commands);
 				if state.selected.is_none() && self.guild.is_none() {
 					self.call_bar(ui, state, &mut commands);
@@ -5037,6 +5041,7 @@ impl MessagingUi {
 			}
 		}
 		self.show_call_switch(&ctx, state, &mut commands);
+		self.voice_auto_rejoin_dialog(&ctx);
 		self.verification.show(&ctx, state);
 		self.scroll.clear_if_unbound(&ctx);
 		self.scroll.paint(&ctx);

@@ -424,6 +424,59 @@ impl Confirm {
 	}
 }
 
+/// Two-step confirmation for settings that change automatic behavior.
+pub struct DoubleConfirm {
+	first: Confirm,
+	second: Confirm,
+}
+
+impl DoubleConfirm {
+	pub fn new(
+		id: impl std::hash::Hash + std::fmt::Debug + Clone,
+		title: impl Into<String>,
+		first_message: impl Into<String>,
+		second_message: impl Into<String>,
+	) -> Self {
+		let title = title.into();
+		Self {
+			first: Confirm::new(
+				(id.clone(), "first"),
+				title.clone(),
+				first_message,
+			)
+			.confirm_label("Continue")
+			.cancel_label("Cancel"),
+			second: Confirm::new((id, "second"), title, second_message)
+				.confirm_label("Enable")
+				.cancel_label("Cancel"),
+		}
+	}
+
+	pub fn danger(mut self) -> Self {
+		self.first = self.first.danger();
+		self.second = self.second.danger();
+		self
+	}
+
+	pub fn confirm_labels(
+		mut self,
+		first: impl Into<String>,
+		second: impl Into<String>,
+	) -> Self {
+		self.first = self.first.confirm_label(first);
+		self.second = self.second.confirm_label(second);
+		self
+	}
+
+	/// Returns `Some(Confirmed)` only when both steps were accepted.
+	pub fn show(self, ctx: &egui::Context) -> Option<Choice> {
+		match self.first.show(ctx)? {
+			Choice::Cancelled => Some(Choice::Cancelled),
+			Choice::Confirmed => self.second.show(ctx),
+		}
+	}
+}
+
 fn enter_after_shown_frame(
 	ctx: &egui::Context,
 	dialog_id: egui::Id,
@@ -499,5 +552,36 @@ mod tests {
 		let short = height(1);
 		assert!(short > 0.0 && height(20) > short + 200.0);
 		assert_eq!(height(1), short, "the footer must not keep the old height");
+	}
+
+	#[test]
+	fn double_confirm_requires_both_steps() {
+		let ctx = egui::Context::default();
+		let mut confirmed = false;
+		for _ in 0..2 {
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 700.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					if let Some(Choice::Confirmed) = DoubleConfirm::new(
+						"double-test",
+						"Enable feature",
+						"First warning",
+						"Second warning",
+					)
+					.show(ui.ctx())
+					{
+						confirmed = true;
+					}
+				},
+			)
+			.drop_without_applying_deltas();
+		}
+		assert!(!confirmed, "one frame must not enable without both steps");
 	}
 }

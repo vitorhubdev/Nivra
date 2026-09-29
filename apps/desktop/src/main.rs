@@ -5389,6 +5389,7 @@ public static class NivraShortcut {
 			let voice_failure = self.voice.observe(&self.state, &mut event.event);
 			let ready = event.event.ready_navigation().is_some();
 			let resumed = matches!(event.event, Event::Resumed);
+			let gateway_disconnected = matches!(event.event, Event::Disconnected);
 			let confirmed_channel = confirmed_recovery_channel(&self.state, &event.event);
 			let deleted_shortcut = match &event.event {
 				Event::Unavailable(channel)
@@ -5474,6 +5475,26 @@ public static class NivraShortcut {
 				self.extensions.access_changed(&mut self.messaging);
 			}
 			self.state.apply(event);
+			if gateway_disconnected
+				&& self.app_settings.current.voice_auto_rejoin_short_disconnect
+			{
+				self.state.capture_auto_rejoin();
+			}
+			if resumed {
+				if let Some(target) = self.state.take_auto_rejoin_if_recent() {
+					if self.state.voice.active.is_none_or(|call| call.channel != target.channel)
+						&& let Some(command) = self.state.start_call_with_mute(
+							target.channel,
+							false,
+							target.muted,
+							target.deafened,
+						) {
+						self.command(command);
+					}
+					self.messaging.voice_muted = target.muted;
+					self.messaging.voice_deafened = target.deafened;
+				}
+			}
 			self.extensions.data_changed(data_changes);
 			self.extensions.cancel_stale_message_events(&self.state);
 			for candidate in extension_events {
@@ -6991,6 +7012,12 @@ impl eframe::App for Desktop {
 					.is_some_and(|worker| worker.request(key.clone()))
 				{
 					self.messaging.accept_avatar(&ctx, key, None);
+				}
+			}
+			if self.messaging.gateway_reconnect_skip_requested {
+				self.messaging.gateway_reconnect_skip_requested = false;
+				if let Some(connection) = &self.connection {
+					connection.skip_gateway_reconnect();
 				}
 			}
 			if self.messaging.reconnect_requested {

@@ -949,6 +949,18 @@ mod tests {
 	}
 
 	#[test]
+	fn disconnected_preserves_active_call_for_resume() {
+		let mut calls = Calls::default();
+		calls.active = Some((Id(2), 1));
+		calls.muted = true;
+		calls.disconnected();
+		assert_eq!(calls.active, Some((Id(2), 1)));
+		assert!(calls.muted);
+		calls.session_reset();
+		assert!(calls.active.is_none());
+	}
+
+	#[test]
 	fn optional_members_overflow_keeps_voice_participants_and_filters_ineligible_states() {
 		let mut calls = Calls::default();
 		calls.allowed.insert(Id(20), Some(Id(10)));

@@ -381,6 +381,22 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Recent call" => "Chamada recente",
 		"You were in this call recently" => "Você estava nesta chamada recentemente",
 		"Dismiss" => "Dispensar",
+		"Reconnecting" => "Reconectando",
+		"attempt" => "tentativa",
+		"Reconnect now" => "Reconectar agora",
+		"Connection recovery" => "Recuperação de conexão",
+		"Rejoin calls after brief disconnects" => "Reentrar na chamada após quedas breves",
+		"Automatically returns to the same call when Discord reconnects within 15 seconds." => {
+			"Volta automaticamente para a mesma chamada quando o Discord reconecta em até 15 segundos."
+		}
+		"This can put you back on voice without an extra tap after short outages." => {
+			"Isso pode colocá-lo de volta na voz sem um toque extra após quedas curtas."
+		}
+		"Only enable this if you are comfortable rejoining voice automatically on this device." => {
+			"Só ative se você aceitar reentrar na voz automaticamente neste dispositivo."
+		}
+		"Continue" => "Continuar",
+		"Enable auto-rejoin" => "Ativar reentrada automática",
 		"Share your screen" => "Compartilhar tela",
 		"Stop sharing" => "Parar de compartilhar",
 		"Turn on camera" => "Ligar câmera",
@@ -1734,6 +1750,22 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Recent call" => "Llamada reciente",
 		"You were in this call recently" => "Estuviste en esta llamada hace poco",
 		"Dismiss" => "Descartar",
+		"Reconnecting" => "Reconectando",
+		"attempt" => "intento",
+		"Reconnect now" => "Reconectar ahora",
+		"Connection recovery" => "Recuperación de conexión",
+		"Rejoin calls after brief disconnects" => "Reunirse a la llamada tras cortes breves",
+		"Automatically returns to the same call when Discord reconnects within 15 seconds." => {
+			"Vuelve automáticamente a la misma llamada cuando Discord se reconecta en 15 segundos."
+		}
+		"This can put you back on voice without an extra tap after short outages." => {
+			"Puede devolverte a voz sin un toque extra tras cortes breves."
+		}
+		"Only enable this if you are comfortable rejoining voice automatically on this device." => {
+			"Actívalo solo si aceptas volver a voz automáticamente en este dispositivo."
+		}
+		"Continue" => "Continuar",
+		"Enable auto-rejoin" => "Activar reingreso automático",
 		"Share your screen" => "Compartir pantalla",
 		"Stop sharing" => "Dejar de compartir",
 		"Turn on camera" => "Activar cámara",
@@ -2938,6 +2970,16 @@ mod tests {
 			"Recent call",
 			"You were in this call recently",
 			"Dismiss",
+			"Reconnecting",
+			"attempt",
+			"Reconnect now",
+			"Connection recovery",
+			"Rejoin calls after brief disconnects",
+			"Automatically returns to the same call when Discord reconnects within 15 seconds.",
+			"This can put you back on voice without an extra tap after short outages.",
+			"Only enable this if you are comfortable rejoining voice automatically on this device.",
+			"Continue",
+			"Enable auto-rejoin",
 			"Share your screen",
 			"Stop sharing",
 			"Turn on camera",

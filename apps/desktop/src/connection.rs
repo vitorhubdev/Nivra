@@ -14,7 +14,7 @@ use std::{
 };
 use tokio::{
 	runtime::Handle,
-	sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch},
+	sync::{mpsc, watch, Notify, OwnedSemaphorePermit, Semaphore},
 	task::JoinHandle,
 };
 
@@ -38,6 +38,7 @@ pub struct Connection {
 	pub activity_observation: watch::Receiver<discord_gateway::ActivityObservation>,
 	pub activity_sharing: watch::Receiver<Result<Option<bool>, Failure>>,
 	pub activity_sharing_request: mpsc::Sender<bool>,
+	pub reconnect_skip: Arc<Notify>,
 	typing_channel: Arc<AtomicU64>,
 	task: JoinHandle<()>,
 }
@@ -53,6 +54,10 @@ impl Drop for AbortTask {
 	}
 }
 impl Connection {
+	pub fn skip_gateway_reconnect(&self) {
+		self.reconnect_skip.notify_one();
+	}
+
 	pub fn set_typing_channel(&self, channel: Option<model::Id>) {
 		self.typing_channel
 			.store(channel.map_or(0, |id| id.0), Ordering::Relaxed);
@@ -90,6 +95,8 @@ impl Connection {
 		let typing_gate = Mutex::new(TypingGate::default());
 		let status_changed = Arc::new(tokio::sync::Notify::new());
 		let status_refresh = status_changed.clone();
+		let reconnect_skip = Arc::new(Notify::new());
+		let gateway_reconnect_skip = reconnect_skip.clone();
 		let task=runtime.spawn(async move {
             let emit=move |event:Event| -> Result<(),Failure> {
                 if let Event::AccountSettings { status: true, .. } = &event { status_changed.notify_one(); }
@@ -137,7 +144,7 @@ impl Connection {
                 let gateway_wake=wake.clone();
                 let activity_wake=wake.clone();
                 let mut gateway_task=AbortTask(tokio::spawn(async move {
-                    let error=discord_gateway::run_with_activity(secret,gateway,member_receive,voice_receive,(activity_receive,presence_receive,member_query_receive,spotify_receive),move |observation| {
+                    let error=discord_gateway::run_with_activity_and_reconnect(secret,gateway,member_receive,voice_receive,(activity_receive,presence_receive,member_query_receive,spotify_receive),move |observation| {
                         if activity_observed.send_if_modified(|current| { if *current == observation { false } else { *current = observation; true } }) { activity_wake.request_repaint(); }
                         Ok(())
                     },|event|{
@@ -159,7 +166,7 @@ impl Connection {
                         if event.ready_navigation().is_some() || matches!(&event,Event::Resumed) {let _=voice_online.send(true);}
                         if matches!(&event,Event::Disconnected|Event::Resync) {let _=voice_online.send(false);}
                         gateway_emit(event)
-                    }).await.err().unwrap_or(Failure::Network).protocol_at("Gateway connection: unsupported handshake or event");
+                    }, gateway_reconnect_skip).await.err().unwrap_or(Failure::Network).protocol_at("Gateway connection: unsupported handshake or event");
                     gateway_api.stop();let _=terminal_send.send(Some(error));gateway_wake.request_repaint();
                 }));
                 // Keep hangup/mute controls responsive while an HTTP message write is awaiting Discord.
@@ -434,6 +441,7 @@ impl Connection {
 			activity_observation,
 			activity_sharing,
 			activity_sharing_request,
+			reconnect_skip,
 			typing_channel,
 			task,
 		}

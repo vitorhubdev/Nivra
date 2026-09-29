@@ -120,6 +120,8 @@ impl Deep {
 		)
 	}
 
+	// Test-only on Windows ARM64 (production start() needs the tract model there).
+	#[cfg(any(test, not(all(target_os = "windows", target_arch = "aarch64"))))]
 	#[allow(clippy::type_complexity)] // Audio frames carry fixed 480-sample buffers.
 	fn start_with<M, L, P>(
 		loader: L,

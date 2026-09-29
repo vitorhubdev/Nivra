@@ -114,6 +114,9 @@ impl Desktop {
 				}
 			}
 		}
+		let max_file_bytes = channel
+			.map(|id| self.state.attachment_upload_limit(id).bytes)
+			.unwrap_or(client_core::upload_limit::account_upload_bytes(None));
 		let allowed = !self.fixture_only
 			&& !self.state.demo
 			&& self.state.gateway_connected
@@ -123,14 +126,12 @@ impl Desktop {
 			|| sources.len() > 10
 			|| sources
 				.iter()
-				.map(discord_api::upload::Source::size)
-				.sum::<u64>()
-				> discord_api::upload::MAX_TOTAL_BYTES
+				.any(|source| source.size() > max_file_bytes)
 			|| self.connection.is_none()
 		{
 			self.state.command_rejected(command);
 			self.state.interactions.error =
-				Some("Files were not sent; select up to 10 files totaling at most 500 MB");
+				Some("This file exceeds the upload limit here; compress it or share a link");
 			return;
 		}
 		let (progress, receive) =
@@ -148,6 +149,7 @@ impl Desktop {
 		let request = crate::uploads::UploadRequest {
 			command,
 			source: sources,
+			max_file_bytes,
 			progress,
 			cancel,
 		};

@@ -211,10 +211,11 @@ impl DiscordApi {
 		&self,
 		command: Command,
 		source: Source,
+		max_file_bytes: u64,
 		progress: watch::Sender<Status>,
 		cancel: watch::Receiver<bool>,
 	) -> Event {
-		self.upload_messages(command, vec![source], progress, cancel)
+		self.upload_messages(command, vec![source], max_file_bytes, progress, cancel)
 			.await
 	}
 
@@ -222,6 +223,7 @@ impl DiscordApi {
 		&self,
 		command: Command,
 		sources: Vec<Source>,
+		max_file_bytes: u64,
 		progress: watch::Sender<Status>,
 		mut cancel: watch::Receiver<bool>,
 	) -> Event {
@@ -281,12 +283,13 @@ impl DiscordApi {
 			progress.send_replace(Status::Failed(failure.label()));
 			return target.failed(channel, failure);
 		}
+		let limit = max_file_bytes.max(1).min(MAX_BYTES);
 		if sources.is_empty()
 			|| sources.len() > MAX_FILES
-			|| sources.iter().map(Source::size).sum::<u64>() > MAX_TOTAL_BYTES
+			|| sources.iter().any(|source| source.size() > limit)
 		{
 			let failure = Failure::ProtocolAt(
-				"Choose up to 10 files totaling at most 500 MB; account limits may be lower",
+				"This file exceeds the upload limit here; compress it or share a link",
 			);
 			progress.send_replace(Status::Failed(failure.label()));
 			return target.failed(channel, failure);
@@ -775,10 +778,37 @@ mod tests {
             });
             let (progress, status) = watch::channel(Status::Preparing);
             let (_cancel, cancelled) = watch::channel(false);
-            assert!(matches!(api.upload_messages(command(), vec![source.clone(), source], progress, cancelled).await, Event::SendResult { result: Ok(message), .. } if message.id == model::Id(3)));
+            assert!(matches!(api.upload_messages(command(), vec![source.clone(), source], MAX_BYTES, progress, cancelled).await, Event::SendResult { result: Ok(message), .. } if message.id == model::Id(3)));
             assert_eq!(*status.borrow(), Status::Finished);
             server.await.unwrap();
         }).await.unwrap();
+	}
+
+	#[tokio::test]
+	async fn upload_rejects_file_above_max_file_bytes_before_network() {
+		crate::ensure_tls_provider();
+		let fixture = Fixture::new(b"x").await;
+		let file = tokio::fs::OpenOptions::new()
+			.write(true)
+			.open(&fixture.0)
+			.await
+			.unwrap();
+		file.set_len(11 * 1024 * 1024).await.unwrap();
+		drop(file);
+		let source = Source::inspect(fixture.0.clone()).await.unwrap();
+		let api = api();
+		let (progress, status) = watch::channel(Status::Preparing);
+		let (_cancel, cancelled) = watch::channel(false);
+		let limit = 10 * 1024 * 1024;
+		assert_eq!(
+			failed(
+				api.upload_message(command(), source, limit, progress, cancelled).await
+			),
+			Failure::ProtocolAt(
+				"This file exceeds the upload limit here; compress it or share a link"
+			)
+		);
+		assert!(matches!(*status.borrow(), Status::Failed(_)));
 	}
 
 	#[tokio::test]
@@ -831,7 +861,7 @@ mod tests {
             api.base = format!("http://{}", listener.local_addr().unwrap());
             let (progress, status) = watch::channel(Status::Preparing);
             let (_cancel, cancelled) = watch::channel(true);
-            assert_eq!(failed(api.upload_message(command(), Source::inspect(fixture.0.clone()).await.unwrap(), progress, cancelled).await), Failure::ProtocolAt(CANCELLED));
+            assert_eq!(failed(api.upload_message(command(), Source::inspect(fixture.0.clone()).await.unwrap(), MAX_BYTES, progress, cancelled).await), Failure::ProtocolAt(CANCELLED));
             assert_eq!(*status.borrow(), Status::Cancelled);
             assert!(tokio::time::timeout(Duration::from_millis(30), listener.accept()).await.is_err());
 
@@ -852,7 +882,7 @@ mod tests {
             });
             let (progress, _) = watch::channel(Status::Preparing);
             let (_cancel, cancelled) = watch::channel(false);
-            assert_eq!(failed(api.upload_message(command(), Source::inspect(fixture.0.clone()).await.unwrap(), progress, cancelled).await), Failure::ProtocolAt("File upload rejected; no message was sent"));
+            assert_eq!(failed(api.upload_message(command(), Source::inspect(fixture.0.clone()).await.unwrap(), MAX_BYTES, progress, cancelled).await), Failure::ProtocolAt("File upload rejected; no message was sent"));
             server.await.unwrap();
         }).await.unwrap();
 	}
@@ -885,7 +915,7 @@ mod tests {
                 assert!(tokio::time::timeout(Duration::from_millis(50), listener.accept()).await.is_err());
             });
             let (progress, status) = watch::channel(Status::Preparing);
-            assert_eq!(failed(api.upload_message(command(), Source::inspect(fixture.0.clone()).await.unwrap(), progress, cancelled).await), Failure::Ambiguous);
+            assert_eq!(failed(api.upload_message(command(), Source::inspect(fixture.0.clone()).await.unwrap(), MAX_BYTES, progress, cancelled).await), Failure::Ambiguous);
             assert_eq!(*status.borrow(), Status::Failed(Failure::Ambiguous.label()));
             server.await.unwrap();
         }).await.unwrap();
@@ -925,7 +955,7 @@ mod tests {
                     assert!(tokio::time::timeout(Duration::from_millis(50), listener.accept()).await.is_err());
                 });
                 let (progress, _) = watch::channel(Status::Preparing);
-                assert_eq!(failed(api.upload_message(command(), source, progress, cancelled).await), Failure::ProtocolAt(if cancel_put { CANCELLED } else { CHANGED }));
+                assert_eq!(failed(api.upload_message(command(), source, MAX_BYTES, progress, cancelled).await), Failure::ProtocolAt(if cancel_put { CANCELLED } else { CHANGED }));
                 server.await.unwrap();
             }
         }).await.unwrap();

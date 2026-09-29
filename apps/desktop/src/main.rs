@@ -744,7 +744,8 @@ struct Desktop {
 	batch_downloads: batch_downloads::BatchDownloads,
 	save_txt_done: Option<std::sync::mpsc::Receiver<bool>>,
 	/// Bounded text preview fetched off the render thread, drained each frame.
-	preview_done: Option<std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>>>,
+	preview_done:
+		Option<std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>>>,
 	audio: audio::Audio,
 	video: video::Video,
 	/// Offline fixture flags start (and optionally pause) the demo attachment without input.
@@ -3015,6 +3016,7 @@ impl Desktop {
 					let request = uploads::UploadRequest {
 						command,
 						source,
+						max_file_bytes: self.state.attachment_upload_limit(channel).bytes,
 						progress,
 						cancel,
 					};
@@ -3070,6 +3072,7 @@ impl Desktop {
 					let request = uploads::UploadRequest {
 						command,
 						source,
+						max_file_bytes: self.state.attachment_upload_limit(parent).bytes,
 						progress,
 						cancel,
 					};
@@ -5475,14 +5478,17 @@ public static class NivraShortcut {
 				self.extensions.access_changed(&mut self.messaging);
 			}
 			self.state.apply(event);
-			if gateway_disconnected
-				&& self.app_settings.current.voice_auto_rejoin_short_disconnect
+			if gateway_disconnected && self.app_settings.current.voice_auto_rejoin_short_disconnect
 			{
 				self.state.capture_auto_rejoin();
 			}
 			if resumed {
 				if let Some(target) = self.state.take_auto_rejoin_if_recent() {
-					if self.state.voice.active.is_none_or(|call| call.channel != target.channel)
+					if self
+						.state
+						.voice
+						.active
+						.is_none_or(|call| call.channel != target.channel)
 						&& let Some(command) = self.state.start_call_with_mute(
 							target.channel,
 							false,
@@ -6214,11 +6220,16 @@ impl eframe::App for Desktop {
 		self.messaging.downloads().active = self.downloads.is_active();
 		self.messaging.downloads().status = download_status;
 		// Inline text preview: publish the fetched body or its failure once.
-		if let Some(result) = self.preview_done.as_ref().and_then(|done| match done.try_recv() {
-			Ok(result) => Some(result),
-			Err(std::sync::mpsc::TryRecvError::Empty) => None,
-			Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err("Preview worker stopped")),
-		}) {
+		if let Some(result) = self
+			.preview_done
+			.as_ref()
+			.and_then(|done| match done.try_recv() {
+				Ok(result) => Some(result),
+				Err(std::sync::mpsc::TryRecvError::Empty) => None,
+				Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+					Some(Err("Preview worker stopped"))
+				}
+			}) {
 			self.preview_done = None;
 			match result {
 				Ok(preview) => self.messaging.set_preview(preview),
@@ -6818,9 +6829,9 @@ impl eframe::App for Desktop {
 								return;
 							};
 							let saved = std::fs::write(&path, &bytes).is_ok();
-					let _ = send.send(saved);
+							let _ = send.send(saved);
 						});
-				})
+					})
 					.ok();
 			}
 
@@ -6847,8 +6858,9 @@ impl eframe::App for Desktop {
 							.spawn(move || {
 								let result = runtime.block_on(async {
 									let bytes = downloads::fetch_preview(url, size).await?;
-									let (text, truncated) = ui::text_preview::decode_preview(&bytes)
-										.ok_or("This file has no readable text")?;
+									let (text, truncated) =
+										ui::text_preview::decode_preview(&bytes)
+											.ok_or("This file has no readable text")?;
 									Ok(ui::text_preview::TextPreview {
 										filename,
 										format,

@@ -13,6 +13,8 @@ use tokio::sync::watch;
 pub struct UploadRequest {
 	pub command: Command,
 	pub source: Vec<Source>,
+	/// Per-file ceiling for this conversation (account vs server boost).
+	pub max_file_bytes: u64,
 	pub progress: watch::Sender<Status>,
 	pub cancel: watch::Sender<bool>,
 }
@@ -36,8 +38,7 @@ const SHARE_BYTES: usize = 8 * 1024 * 1024;
 const EMOJI_EDGE: u32 = 48;
 const STICKER_EDGE: u32 = 160;
 const ARTWORK_FRAMES: usize = 240;
-const FILE_TOO_LARGE: &str =
-	"This file exceeds the upload limit here; compress it or share a link";
+const FILE_TOO_LARGE: &str = "This file exceeds the upload limit here; compress it or share a link";
 
 fn apng_delay(delay: image::Delay) -> (u16, u16) {
 	let (numerator, denominator) = delay.numer_denom_ms();

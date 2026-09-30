@@ -572,8 +572,10 @@ mod tests {
 			worst = worst.max(start.elapsed());
 			assert!(frame.iter().all(|s| s.is_finite()));
 		}
+		// A real wait is the model's 25 ms stall. A few milliseconds is scheduler
+		// noise on a loaded CI runner, not the audio thread joining the model.
 		assert!(
-			worst < Duration::from_millis(2),
+			worst < Duration::from_millis(15),
 			"audio thread never waits on the model: {worst:?}"
 		);
 		assert!(

@@ -5983,11 +5983,17 @@ impl eframe::App for Desktop {
 				}
 			}
 		}
-		self.tray_window.logic(
+		let close_disposition = self.tray_window.logic(
 			ctx,
+			self.tray_setting.enabled,
 			self.tray_available(),
 			self.window.is_visible().is_some(),
 		);
+		if close_disposition == tray_window::CloseDisposition::MinimizedWithoutTray {
+			eprintln!(
+				"Nivra: system tray icon unavailable; minimized to the taskbar instead of hiding to the tray."
+			);
+		}
 		if tray_window::should_show_hide_notice(
 			self.tray_available(),
 			self.tray_setting.enabled,

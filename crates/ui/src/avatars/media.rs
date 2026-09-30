@@ -1059,17 +1059,19 @@ impl Avatars {
 				colors.accent,
 			);
 		}
-		if rect.width() >= 100.0 && rect.height() >= 32.0 {
+		let caption = if demo {
+			"Synthetic preview"
+		} else if failed {
+			// The bytes are missing. The file row keeps the name and download; no fake preview caption.
+			""
+		} else {
+			"Image preview"
+		};
+		if !caption.is_empty() && rect.width() >= 100.0 && rect.height() >= 32.0 {
 			ui.painter().text(
 				rect.center(),
 				egui::Align2::CENTER_CENTER,
-				if demo {
-					"Synthetic preview"
-				} else if failed {
-					"Preview unavailable"
-				} else {
-					"Image preview"
-				},
+				caption,
 				egui::FontId::proportional(11.0),
 				colors.muted,
 			);

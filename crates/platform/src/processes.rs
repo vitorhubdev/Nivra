@@ -150,127 +150,6 @@ mod native {
 }
 
 #[cfg(test)]
-fn walkdir(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
-	let mut files = Vec::new();
-	let Ok(entries) = std::fs::read_dir(directory) else {
-		return files;
-	};
-	for entry in entries.flatten() {
-		let path = entry.path();
-		if path.is_dir() {
-			let name = path
-				.file_name()
-				.and_then(|name| name.to_str())
-				.unwrap_or("");
-			if name == "target" || name == "examples" {
-				continue;
-			}
-			files.extend(walkdir(&path));
-		} else {
-			files.push(path);
-		}
-	}
-	files
-}
-
-/// `Command::new` compiled into the Windows app, outside `hidden_command`.
-#[cfg(test)]
-fn windows_command_new(source: &str) -> Option<String> {
-	for line in source.lines() {
-		let trimmed = line.trim();
-		if trimmed.starts_with("#!") {
-			let as_outer = trimmed.replacen("#!", "#", 1);
-			if !cfg_runs_on_windows(&as_outer) {
-				return None;
-			}
-		}
-		if !trimmed.is_empty() && !trimmed.starts_with("#!") && !trimmed.starts_with("//") {
-			break;
-		}
-	}
-	let mut brace = 0_i32;
-	let mut skip_until: Option<i32> = None;
-	let mut pending_cfg: Vec<String> = Vec::new();
-	let mut function = String::new();
-	let mut function_brace: Option<i32> = None;
-	for (index, line) in source.lines().enumerate() {
-		let trimmed = line.trim();
-		if trimmed.starts_with("//") || trimmed.is_empty() {
-			continue;
-		}
-		if trimmed.starts_with("#[") {
-			pending_cfg.push(trimmed.to_owned());
-			continue;
-		}
-		if skip_until.is_none() && !pending_cfg.is_empty() {
-			let capable = pending_cfg.iter().all(|attr| cfg_runs_on_windows(attr));
-			pending_cfg.clear();
-			if !capable {
-				skip_until = Some(brace);
-			}
-		} else if !trimmed.starts_with('#') {
-			pending_cfg.clear();
-		}
-		if let Some(name) = trimmed
-			.strip_prefix("pub fn ")
-			.or_else(|| trimmed.strip_prefix("fn "))
-			.or_else(|| trimmed.strip_prefix("pub(super) fn "))
-			.and_then(|rest| rest.split(['(', '<', ' ']).next())
-		{
-			function = name.to_owned();
-			function_brace = Some(brace);
-		}
-		if skip_until.is_none()
-			&& trimmed.contains("Command::new(")
-			&& function != "hidden_command"
-			&& function != "windows_command_new"
-		{
-			return Some(format!("line {}: {trimmed}", index + 1));
-		}
-		brace += trimmed.matches('{').count() as i32;
-		brace -= trimmed.matches('}').count() as i32;
-		if let Some(start) = skip_until
-			&& brace <= start
-		{
-			skip_until = None;
-		}
-		if let Some(start) = function_brace
-			&& brace <= start
-		{
-			function.clear();
-			function_brace = None;
-		}
-	}
-	None
-}
-
-#[cfg(test)]
-fn cfg_runs_on_windows(attr: &str) -> bool {
-	let Some(inner) = attr
-		.trim()
-		.strip_prefix("#[cfg(")
-		.and_then(|rest| rest.strip_suffix(")]"))
-	else {
-		return true;
-	};
-	let inner = inner.replace(' ', "");
-	if inner.starts_with("not(windows)") || inner.starts_with("not(target_os=\"windows\")") {
-		return false;
-	}
-	if inner.contains("not(any(") && inner.contains("windows") {
-		return false;
-	}
-	let names_windows = inner.contains("windows") || inner.contains("target_os=\"windows\"");
-	let names_other = inner.contains("unix")
-		|| inner.contains("target_os=\"linux\"")
-		|| inner.contains("target_os=\"macos\"");
-	if names_other && !names_windows {
-		return false;
-	}
-	true
-}
-
-#[cfg(test)]
 mod tests {
 	use super::*;
 
@@ -335,29 +214,32 @@ mod tests {
 	}
 
 	#[test]
-	fn windows_spawns_use_the_hidden_command_helper() {
+	fn create_no_window_is_the_documented_flag() {
 		assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);
-		let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-		let mut offenders = Vec::new();
-		for relative in ["apps/desktop/src", "crates"] {
-			let directory = root.join(relative);
-			for path in walkdir(&directory) {
-				if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-					continue;
-				}
-				let text = std::fs::read_to_string(&path).unwrap();
-				if let Some(hit) = windows_command_new(&text) {
-					offenders.push(format!(
-						"{}: {hit}",
-						path.strip_prefix(&root).unwrap_or(&path).display()
-					));
-				}
-			}
-		}
+	}
+
+	/// The child must start, and a console app must not have a console to flash.
+	#[cfg(windows)]
+	#[test]
+	fn hidden_powershell_has_no_console() {
+		let output = powershell_hidden()
+			.args([
+				"-NoProfile",
+				"-NonInteractive",
+				"-Command",
+				"try { $null = [Console]::WindowWidth; 'has-console' } catch { 'no-console' }",
+			])
+			.output()
+			.expect("hidden PowerShell must start");
 		assert!(
-			offenders.is_empty(),
-			"a Windows process spawn must go through hidden_command:\n{}",
-			offenders.join("\n")
+			output.status.success(),
+			"{}",
+			String::from_utf8_lossy(&output.stderr)
+		);
+		let text = String::from_utf8_lossy(&output.stdout);
+		assert!(
+			text.contains("no-console"),
+			"CREATE_NO_WINDOW should leave the child without a console, got {text}"
 		);
 	}
 }

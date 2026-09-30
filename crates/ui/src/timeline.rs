@@ -3033,7 +3033,7 @@ impl TimelineView {
 												if unknown_system {
 													ui.label(
 														RichText::new(format!(
-															"Unsupported message type {} · Preview unavailable",
+															"Unsupported message type {}",
 															message.kind
 														))
 														.small()
@@ -3041,21 +3041,18 @@ impl TimelineView {
 													);
 												}
 												for (present, label) in [
-													(
-														message.extra_content.poll,
-														"Poll · Preview unavailable",
-													),
+													(message.extra_content.poll, "Poll"),
 													(
 														(message.extra_content.sticker_items
 															|| message.extra_content.stickers)
 															&& message.sticker_items.is_empty(),
-														"Sticker · Preview unavailable",
+														"Sticker",
 													),
 													(
 														(message.extra_content.components
 															|| message.extra_content.components_v2)
 															&& message.components.is_empty(),
-														"Components · Preview unavailable",
+														"Components",
 													),
 												] {
 													if present {
@@ -6088,7 +6085,7 @@ mod tests {
 					.iter()
 					.filter(|s| s.contains("Preview unavailable"))
 					.count(),
-				1
+				0
 			);
 			assert!(
 				painted
@@ -6439,15 +6436,9 @@ mod tests {
 					.any(|(text, _)| text.trim_end() == "Supported text remains")
 			);
 			for (label, present) in [
-				("Poll · Preview unavailable", extra.poll),
-				(
-					"Sticker · Preview unavailable",
-					extra.sticker_items || extra.stickers,
-				),
-				(
-					"Components · Preview unavailable",
-					extra.components || extra.components_v2,
-				),
+				("Poll", extra.poll),
+				("Sticker", extra.sticker_items || extra.stickers),
+				("Components", extra.components || extra.components_v2),
 				("Open in Discord", extra.any()),
 			] {
 				assert_eq!(

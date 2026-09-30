@@ -81,8 +81,10 @@ pub struct TimelineView {
 	/// Folder-pick + sequential download requested with these attachments (max 15).
 	pub(super) batch_download_requested: bool,
 	pub(super) batch_download_attachments: Vec<model::Attachment>,
-	/// Save selection as .txt: filename + bytes for the desktop to write.
+	/// Save selection as .txt or .md: filename + bytes for the desktop to write.
 	pub(super) save_txt_request: Option<(String, Vec<u8>)>,
+	/// Loaded conversation export, one chunk per frame.
+	export_job: Option<crate::batch_select::ExportJob>,
 	/// Download manager snapshot written by the desktop; rendered in the timeline.
 	pub(super) batch_mgr_open: bool,
 	pub(super) batch_mgr_folder: Option<String>,
@@ -1018,28 +1020,59 @@ fn toggle_batch_delete(selected: &mut BTreeSet<Id>, id: Id) -> bool {
 	crate::batch_select::toggle(selected, id)
 }
 
+fn export_row(message: &model::Message, dated: bool) -> crate::batch_select::TxtMessage {
+	let when = timestamp(message.id);
+	let when = if dated {
+		format!(
+			"{:04}-{:02}-{:02} {:02}:{:02}",
+			when.year(),
+			u8::from(when.month()),
+			when.day(),
+			when.hour(),
+			when.minute()
+		)
+	} else {
+		format!("{:02}:{:02}", when.hour(), when.minute())
+	};
+	crate::batch_select::TxtMessage {
+		author: message.author.name.clone(),
+		when,
+		text: message.display_text().into_owned(),
+		attachments: message
+			.attachments
+			.iter()
+			.map(|attachment| attachment.filename.clone())
+			.collect(),
+		links: message
+			.attachments
+			.iter()
+			.map(|attachment| {
+				attachment
+					.media
+					.url
+					.clone()
+					.or_else(|| attachment.media.proxy_url.clone())
+					.filter(|url| !url.is_empty())
+			})
+			.collect(),
+	}
+}
+
 /// Selection as "Author — hh:mm: text" lines in id order, attachments by name.
 /// Inputs are bounded by `MAX_SELECT`, so no extra cap.
-fn selection_txt(state: &State, ids: &BTreeSet<Id>) -> String {
-	let messages: Vec<crate::batch_select::TxtMessage> = ids
-		.iter()
+fn selection_rows(state: &State, ids: &BTreeSet<Id>) -> Vec<crate::batch_select::TxtMessage> {
+	ids.iter()
 		.filter_map(|id| {
-			state.timeline.get(*id).map(|message| {
-				let when = timestamp(message.id);
-				crate::batch_select::TxtMessage {
-					author: message.author.name.clone(),
-					when: format!("{:02}:{:02}", when.hour(), when.minute()),
-					text: message.display_text().into_owned(),
-					attachments: message
-						.attachments
-						.iter()
-						.map(|attachment| attachment.filename.clone())
-						.collect(),
-				}
-			})
+			state
+				.timeline
+				.get(*id)
+				.map(|message| export_row(message, false))
 		})
-		.collect();
-	crate::batch_select::format_txt(&messages)
+		.collect()
+}
+
+fn selection_txt(state: &State, ids: &BTreeSet<Id>) -> String {
+	crate::batch_select::format_txt(&selection_rows(state, ids))
 }
 
 enum DeletedLocalAction {
@@ -1660,6 +1693,44 @@ impl TimelineView {
 			TargetReveal::Center
 		});
 	}
+	/// Loaded messages of the open conversation, oldest first. The timeline cap is 500.
+	pub(super) fn begin_chat_export(&mut self, state: &State, markdown: bool) {
+		let rows: Vec<_> = state
+			.timeline
+			.iter()
+			.map(|message| export_row(message, true))
+			.collect();
+		if rows.is_empty() {
+			return;
+		}
+		self.export_job = Some(crate::batch_select::ExportJob::start(rows, markdown));
+	}
+
+	pub(super) fn export_progress(&self) -> Option<(usize, usize)> {
+		self.export_job.as_ref().map(|job| job.progress())
+	}
+
+	/// One chunk per call. A finished job becomes a save request.
+	pub(super) fn advance_export(&mut self) {
+		let Some(job) = self.export_job.as_mut() else {
+			return;
+		};
+		let finished = job.step();
+		if !finished {
+			return;
+		}
+		let markdown = job.markdown();
+		let Some(job) = self.export_job.take() else {
+			return;
+		};
+		let text = job.take();
+		if text.is_empty() {
+			return;
+		}
+		let name = if markdown { "chat.md" } else { "chat.txt" };
+		self.save_txt_request = Some((name.to_owned(), text.into_bytes()));
+	}
+
 	#[cfg(test)]
 	pub fn show(
 		&mut self,
@@ -1699,6 +1770,11 @@ impl TimelineView {
 		upload: Option<&crate::pending::Upload>,
 		session: &mut crate::scroll::Session,
 	) {
+		let exporting = self.export_job.is_some();
+		self.advance_export();
+		if exporting || self.export_job.is_some() {
+			ui.ctx().request_repaint();
+		}
 		crate::select::set_message_select_mode(ui.ctx(), self.select_mode);
 		let width = ui.available_width();
 		let channel_changed = self.channel != state.selected;
@@ -4129,6 +4205,14 @@ impl TimelineView {
 									let text = selection_txt(state, &self.batch_delete);
 									self.save_txt_request =
 										Some(("messages.txt".to_owned(), text.into_bytes()));
+								}
+								if ui.button(crate::i18n::text(language, "Save .md")).clicked() {
+									let text = crate::batch_select::format_md(&selection_rows(
+										state,
+										&self.batch_delete,
+									));
+									self.save_txt_request =
+										Some(("messages.md".to_owned(), text.into_bytes()));
 								}
 								if ui
 									.button(crate::i18n::text(language, "Select all visible"))

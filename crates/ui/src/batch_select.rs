@@ -102,12 +102,14 @@ pub fn download_disabled_reason(attachment_count: usize) -> Option<&'static str>
 	}
 }
 
-/// One message for `.txt` export, in timeline order.
+/// One message for `.txt` / `.md` export, in timeline order.
 pub struct TxtMessage {
 	pub author: String,
 	pub when: String,
 	pub text: String,
 	pub attachments: Vec<String>,
+	/// Same length as `attachments` when a URL is known; missing entries stay names.
+	pub links: Vec<Option<String>>,
 }
 
 /// One line per message, in the order given: `Author — hh:mm: text`.
@@ -119,13 +121,114 @@ pub fn format_txt(messages: &[TxtMessage]) -> String {
 		out.push_str(&m.when);
 		out.push_str(": ");
 		out.push_str(&m.text);
-		if !m.attachments.is_empty() {
-			out.push_str(" · ");
-			out.push_str(&m.attachments.join(", "));
-		}
+		write_txt_files(&mut out, m);
 		out.push('\n');
 	}
 	out
+}
+
+fn write_txt_files(out: &mut String, message: &TxtMessage) {
+	if message.attachments.is_empty() {
+		return;
+	}
+	out.push_str(" · ");
+	for (index, name) in message.attachments.iter().enumerate() {
+		if index > 0 {
+			out.push_str(", ");
+		}
+		out.push_str(name);
+		if let Some(url) = message
+			.links
+			.get(index)
+			.and_then(|url| url.as_deref())
+			.filter(|url| !url.is_empty())
+		{
+			out.push(' ');
+			out.push_str(url);
+		}
+	}
+}
+
+/// Markdown for the same messages: author, time, text, and attachment links.
+pub fn format_md(messages: &[TxtMessage]) -> String {
+	let mut out = String::new();
+	for message in messages {
+		out.push_str("**");
+		out.push_str(&message.author.replace('*', ""));
+		out.push_str("** — ");
+		out.push_str(&message.when);
+		out.push_str("\n\n");
+		out.push_str(&message.text);
+		out.push('\n');
+		for (index, name) in message.attachments.iter().enumerate() {
+			out.push_str("\n- ");
+			let url = message
+				.links
+				.get(index)
+				.and_then(|url| url.as_deref())
+				.filter(|url| !url.is_empty());
+			if let Some(url) = url {
+				out.push('[');
+				out.push_str(&name.replace(['[', ']'], ""));
+				out.push_str("](");
+				out.push_str(&url.replace(')', "%29"));
+				out.push(')');
+			} else {
+				out.push_str(name);
+			}
+		}
+		out.push_str("\n\n");
+	}
+	out
+}
+
+/// Formats a loaded history a chunk at a time so a frame does not walk every message.
+pub struct ExportJob {
+	rest: Vec<TxtMessage>,
+	done: usize,
+	total: usize,
+	markdown: bool,
+	out: String,
+}
+
+impl ExportJob {
+	pub const CHUNK: usize = 40;
+
+	pub fn start(messages: Vec<TxtMessage>, markdown: bool) -> Self {
+		let total = messages.len();
+		Self {
+			rest: messages,
+			done: 0,
+			total,
+			markdown,
+			out: String::new(),
+		}
+	}
+
+	pub fn markdown(&self) -> bool {
+		self.markdown
+	}
+
+	pub fn progress(&self) -> (usize, usize) {
+		(self.done, self.total)
+	}
+
+	/// Appends one chunk. `true` when nothing remains.
+	pub fn step(&mut self) -> bool {
+		let count = self.rest.len().min(Self::CHUNK);
+		let chunk: Vec<TxtMessage> = self.rest.drain(..count).collect();
+		if self.markdown {
+			self.out.push_str(&format_md(&chunk));
+		} else {
+			self.out.push_str(&format_txt(&chunk));
+		}
+		self.done += count;
+		self.rest.is_empty()
+	}
+
+	pub fn take(self) -> String {
+		self.out
+	}
 }
 
 /// Sequential download queue (mock, no network): one at a time, retry failed.
@@ -404,18 +507,43 @@ mod tests {
 				when: "10:01".into(),
 				text: "second".into(),
 				attachments: vec!["b.png".into()],
+				links: vec![Some("https://cdn.example/b.png".into())],
 			},
 			TxtMessage {
 				author: "A".into(),
 				when: "10:00".into(),
 				text: "first".into(),
 				attachments: vec![],
+				links: vec![],
 			},
 		];
 		let out = format_txt(&msgs);
 		assert!(out.find("B — 10:01: second").unwrap() < out.find("A — 10:00: first").unwrap());
-		assert!(out.contains("b.png"));
+		assert!(out.contains("b.png https://cdn.example/b.png"));
 		assert!(!out.contains('['));
+		let md = format_md(&msgs);
+		assert!(md.contains("**B** — 10:01"));
+		assert!(md.contains("[b.png](https://cdn.example/b.png)"));
+		assert!(md.find("second").unwrap() < md.find("first").unwrap());
+	}
+
+	#[test]
+	fn export_job_formats_in_chunks() {
+		let messages: Vec<TxtMessage> = (0..41)
+			.map(|index| TxtMessage {
+				author: "A".into(),
+				when: "12:00".into(),
+				text: format!("m{index}"),
+				attachments: vec![],
+				links: vec![],
+			})
+			.collect();
+		let expected = format_txt(&messages);
+		let mut job = ExportJob::start(messages, false);
+		assert!(!job.step());
+		assert_eq!(job.progress(), (40, 41));
+		assert!(job.step());
+		assert_eq!(job.take(), expected);
 	}
 
 	#[test]

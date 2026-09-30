@@ -150,98 +150,6 @@ mod native {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn cmdline_reads_are_bounded_and_only_accept_complete_first_paths() {
-		let mut command = b"/usr/bin/game\0".to_vec();
-		command.extend(vec![b'x'; 1024 * 1024]);
-		let mut reader = std::io::Cursor::new(command);
-		let mut paths = Vec::new();
-		accept_cmdline(&mut reader, &mut paths).unwrap();
-		assert_eq!(reader.position(), (MAX_PATH + 1) as u64);
-		assert_eq!(paths, ["/usr/bin/game"]);
-
-		let exact = vec![b'x'; MAX_PATH];
-		accept_cmdline(exact.as_slice(), &mut paths).unwrap();
-		let mut terminated = exact.clone();
-		terminated.push(0);
-		accept_cmdline(terminated.as_slice(), &mut paths).unwrap();
-		assert_eq!(paths.len(), 3);
-		assert_eq!(paths[1].len(), MAX_PATH);
-		assert_eq!(paths[1], paths[2]);
-
-		let overlong = vec![b'x'; MAX_PATH + 1];
-		for invalid in [overlong.as_slice(), b"\xff\0", b"\0", b""] {
-			accept_cmdline(invalid, &mut paths).unwrap();
-		}
-		assert_eq!(paths.len(), 3);
-	}
-
-	#[test]
-	fn own_process_is_listed_within_bounds() {
-		let paths = running().expect("the current user's process list must be readable");
-		assert!(paths.len() <= MAX_PROCESSES);
-		assert!(paths.iter().all(|path| path.len() <= MAX_PATH));
-		let current = std::env::current_exe().unwrap();
-		let name = current
-			.file_name()
-			.unwrap()
-			.to_string_lossy()
-			.to_lowercase();
-		assert!(
-			paths
-				.iter()
-				.any(|path| path.to_lowercase().contains(name.trim_end_matches(".exe"))),
-			"the test binary must appear in {paths:?}"
-		);
-	}
-
-	#[test]
-	fn unbounded_and_control_character_paths_are_dropped() {
-		let mut paths = Vec::new();
-		accept("", &mut paths);
-		accept("  ", &mut paths);
-		accept("/usr/bin/game\u{7}", &mut paths);
-		accept(&"x".repeat(MAX_PATH + 1), &mut paths);
-		assert!(paths.is_empty());
-		accept("  /usr/bin/game  ", &mut paths);
-		assert_eq!(paths, ["/usr/bin/game"]);
-		let mut full = vec![String::new(); MAX_PROCESSES];
-		accept("/usr/bin/game", &mut full);
-		assert_eq!(full.len(), MAX_PROCESSES);
-	}
-
-	#[test]
-	fn windows_spawns_use_the_hidden_command_helper() {
-		assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);
-		let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-		let mut offenders = Vec::new();
-		for relative in ["apps/desktop/src", "crates"] {
-			let directory = root.join(relative);
-			for path in walkdir(&directory) {
-				if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-					continue;
-				}
-				let text = std::fs::read_to_string(&path).unwrap();
-				if let Some(hit) = windows_command_new(&text) {
-					offenders.push(format!(
-						"{}: {hit}",
-						path.strip_prefix(&root).unwrap_or(&path).display()
-					));
-				}
-			}
-		}
-		assert!(
-			offenders.is_empty(),
-			"a Windows process spawn must go through hidden_command:\n{}",
-			offenders.join("\n")
-		);
-	}
-}
-
-#[cfg(test)]
 fn walkdir(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
 	let mut files = Vec::new();
 	let Ok(entries) = std::fs::read_dir(directory) else {
@@ -360,4 +268,96 @@ fn cfg_runs_on_windows(attr: &str) -> bool {
 		return false;
 	}
 	true
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn cmdline_reads_are_bounded_and_only_accept_complete_first_paths() {
+		let mut command = b"/usr/bin/game\0".to_vec();
+		command.extend(vec![b'x'; 1024 * 1024]);
+		let mut reader = std::io::Cursor::new(command);
+		let mut paths = Vec::new();
+		accept_cmdline(&mut reader, &mut paths).unwrap();
+		assert_eq!(reader.position(), (MAX_PATH + 1) as u64);
+		assert_eq!(paths, ["/usr/bin/game"]);
+
+		let exact = vec![b'x'; MAX_PATH];
+		accept_cmdline(exact.as_slice(), &mut paths).unwrap();
+		let mut terminated = exact.clone();
+		terminated.push(0);
+		accept_cmdline(terminated.as_slice(), &mut paths).unwrap();
+		assert_eq!(paths.len(), 3);
+		assert_eq!(paths[1].len(), MAX_PATH);
+		assert_eq!(paths[1], paths[2]);
+
+		let overlong = vec![b'x'; MAX_PATH + 1];
+		for invalid in [overlong.as_slice(), b"\xff\0", b"\0", b""] {
+			accept_cmdline(invalid, &mut paths).unwrap();
+		}
+		assert_eq!(paths.len(), 3);
+	}
+
+	#[test]
+	fn own_process_is_listed_within_bounds() {
+		let paths = running().expect("the current user's process list must be readable");
+		assert!(paths.len() <= MAX_PROCESSES);
+		assert!(paths.iter().all(|path| path.len() <= MAX_PATH));
+		let current = std::env::current_exe().unwrap();
+		let name = current
+			.file_name()
+			.unwrap()
+			.to_string_lossy()
+			.to_lowercase();
+		assert!(
+			paths
+				.iter()
+				.any(|path| path.to_lowercase().contains(name.trim_end_matches(".exe"))),
+			"the test binary must appear in {paths:?}"
+		);
+	}
+
+	#[test]
+	fn unbounded_and_control_character_paths_are_dropped() {
+		let mut paths = Vec::new();
+		accept("", &mut paths);
+		accept("  ", &mut paths);
+		accept("/usr/bin/game\u{7}", &mut paths);
+		accept(&"x".repeat(MAX_PATH + 1), &mut paths);
+		assert!(paths.is_empty());
+		accept("  /usr/bin/game  ", &mut paths);
+		assert_eq!(paths, ["/usr/bin/game"]);
+		let mut full = vec![String::new(); MAX_PROCESSES];
+		accept("/usr/bin/game", &mut full);
+		assert_eq!(full.len(), MAX_PROCESSES);
+	}
+
+	#[test]
+	fn windows_spawns_use_the_hidden_command_helper() {
+		assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);
+		let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+		let mut offenders = Vec::new();
+		for relative in ["apps/desktop/src", "crates"] {
+			let directory = root.join(relative);
+			for path in walkdir(&directory) {
+				if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+					continue;
+				}
+				let text = std::fs::read_to_string(&path).unwrap();
+				if let Some(hit) = windows_command_new(&text) {
+					offenders.push(format!(
+						"{}: {hit}",
+						path.strip_prefix(&root).unwrap_or(&path).display()
+					));
+				}
+			}
+		}
+		assert!(
+			offenders.is_empty(),
+			"a Windows process spawn must go through hidden_command:\n{}",
+			offenders.join("\n")
+		);
+	}
 }

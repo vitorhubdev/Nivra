@@ -537,6 +537,7 @@ impl Formatted {
 		// `> ` quotes exactly one line, `-# ` marks one line as subtext, and blank lines
 		// between blocks are kept instead of collapsed.
 		let mut quote_all = false;
+		let mut table_cell = 0_u8;
 		let mut quote_lazy = false;
 		let mut subtext = false;
 		let mut block_end = 0;
@@ -553,9 +554,12 @@ impl Formatted {
 					.take_while(|b| *b == b'\\')
 					.count() % 2 == 0
 		};
-		let mut events = Parser::new_ext(input, Options::ENABLE_STRIKETHROUGH)
-			.into_offset_iter()
-			.peekable();
+		let mut events = Parser::new_ext(
+			input,
+			Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS,
+		)
+		.into_offset_iter()
+		.peekable();
 		// Merge only unchanged source text. Entity/escape expansions stay separate and inert,
 		// even when followed by an identical literal reference.
 		let events = std::iter::from_fn(|| {
@@ -662,6 +666,11 @@ impl Formatted {
 								_ => output.push("• ", style),
 							}
 						}
+						Tag::TableCell => {
+							if table_cell > 0 {
+								output.push(" | ", style);
+							}
+						}
 						Tag::Link { dest_url, .. } => {
 							style.no_autolink = true;
 							style.link = output.add_link(&dest_url);
@@ -697,6 +706,12 @@ impl Formatted {
 							lists.pop();
 							block_end = block_end.max(range.end);
 						}
+						TagEnd::TableCell => table_cell = table_cell.saturating_add(1),
+						TagEnd::TableRow | TagEnd::TableHead => {
+							output.push("\n", style);
+							table_cell = 0;
+							block_end = block_end.max(range.end);
+						}
 						TagEnd::Image => output.push("]", style),
 						_ => {}
 					}
@@ -704,6 +719,9 @@ impl Formatted {
 						quote_lazy = false;
 					}
 					style = stack.pop().unwrap_or_default();
+				}
+				Event::TaskListMarker(checked) => {
+					output.push(if checked { "[x] " } else { "[ ] " }, style);
 				}
 				Event::Text(text) => {
 					let mut range = range;
@@ -2453,6 +2471,8 @@ mod tests {
 			("text\n```\ncode\n```\n\nend", "text\ncode\n\nend"),
 			("# Title\nbody", "Title\nbody"),
 			("- a\n- b", "• a\n• b"),
+			("- [ ] a\n- [x] b", "• [ ] a\n• [x] b"),
+			("| a | b |\n| - | - |\n| 1 | 2 |", "a | b\n1 | 2"),
 			("1. a\n2. b", "1. a\n2. b"),
 			("> quoted\nplain", "quoted\nplain"),
 			("> one\n> two", "one\ntwo"),

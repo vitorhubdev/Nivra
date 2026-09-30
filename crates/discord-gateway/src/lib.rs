@@ -1083,7 +1083,8 @@ async fn run_inner(
 			if state.session.is_none() && was_ready {
 				calls.session_reset();
 			}
-			while voice_controls.try_recv().is_ok() {}
+			// Voice commands already accepted stay queued. The resumed session
+			// sends them after READY; dropping them left the UI waiting.
 			let retry_ms = reconnect_delay_ms(attempt);
 			if !reconnect_announced {
 				if was_ready {
@@ -2053,6 +2054,97 @@ mod tests {
 			"user":{"id":"1","username":"synthetic"}, "session_id":session,
 			"resume_gateway_url":"wss://gateway.discord.gg/", "guilds":[], "private_channels":[]
 		}})
+	}
+
+	#[tokio::test]
+	async fn queued_join_is_sent_after_reconnect() {
+		timeout(Duration::from_secs(15), async {
+			let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+			let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+			let (controls_tx, controls_rx) = mpsc::channel(4);
+			controls_tx
+				.try_send(client_core::voice::Command::Join {
+					channel: Id(2),
+					request: 7,
+					ring: false,
+					mute: false,
+					deaf: false,
+				})
+				.unwrap();
+			let skip = Arc::new(Notify::new());
+			skip.notify_one();
+			let server = async {
+				for attempt in 0..2 {
+					let (stream, _) = listener.accept().await.unwrap();
+					let mut socket = accept_async(stream).await.unwrap();
+					send(
+						&mut socket,
+						json!({"op":10,"d":{"heartbeat_interval":45000}}),
+					)
+					.await;
+					assert_eq!(packet(&mut socket).await["op"], 2);
+					if attempt == 0 {
+						let _ = socket
+							.close(Some(CloseFrame {
+								code: CloseCode::Library(4000),
+								reason: "synthetic drop".into(),
+							}))
+							.await;
+						continue;
+					}
+					send(
+						&mut socket,
+						json!({"op":0,"t":"READY","s":1,"d":{
+							"user":{"id":"1","username":"synthetic"},
+							"session_id":"synthetic-voice-hold",
+							"resume_gateway_url":"wss://gateway.discord.gg/",
+							"guilds":[{"id":"10","owner_id":"1","name":"Synthetic","roles":[],
+								"channels":[{"id":"2","type":2,"name":"voice","permission_overwrites":[]}]}],
+							"private_channels":[]
+						}}),
+					)
+					.await;
+					let mut saw_join = false;
+					for _ in 0..8 {
+						let value = packet(&mut socket).await;
+						if value["op"] == 1 {
+							send(&mut socket, json!({"op":11,"d":null})).await;
+							continue;
+						}
+						if value["op"] == 4 {
+							assert_eq!(value["d"]["channel_id"], "2");
+							assert_eq!(value["d"]["guild_id"], "10");
+							saw_join = true;
+							break;
+						}
+					}
+					assert!(
+						saw_join,
+						"accepted Join must be sent on the resumed session"
+					);
+					let _ = socket
+						.close(Some(CloseFrame {
+							code: CloseCode::Library(4004),
+							reason: "synthetic stop".into(),
+						}))
+						.await;
+				}
+			};
+			let client = run_inner(
+				Arc::new(SessionSecret::from_owner_input("synthetic-voice-hold".into()).unwrap()),
+				"wss://gateway.discord.gg/".into(),
+				watch::channel(None).1,
+				controls_rx,
+				None,
+				|_| Ok(()),
+				skip,
+				Some(&endpoint),
+			);
+			let ((), result) = tokio::join!(server, client);
+			assert_eq!(result, Err(Failure::Expired));
+		})
+		.await
+		.expect("queued join was not delivered after reconnect");
 	}
 
 	#[test]

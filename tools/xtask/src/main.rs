@@ -188,6 +188,14 @@ fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Re
 }
 #[allow(dead_code)]
 fn package_windows(root: &std::path::Path) -> Result<(), String> {
+	// Windows ships as one executable; without the staged license page there is
+	// nothing for the NSIS installer to show or bundle, so skip it.
+	if !root.join("LICENSE-MIT").is_file() {
+		println!(
+			"single-exe dist: skipping Windows installer binary creation (the executable is the package)"
+		);
+		return Ok(());
+	}
 	let nsis_candidates = [
 		PathBuf::from("makensis"),
 		PathBuf::from("makensis.exe"),

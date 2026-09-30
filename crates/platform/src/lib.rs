@@ -10,6 +10,7 @@ pub mod notifications;
 pub mod pointer;
 pub mod processes;
 pub mod save;
+pub mod shortcut;
 pub mod startup;
 pub mod tray;
 pub mod video;

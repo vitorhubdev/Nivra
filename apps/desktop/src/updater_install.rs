@@ -21,7 +21,6 @@ const WINDOWS_FILES: &[&str] = &[
 	"docs",
 	"licenses",
 	"source",
-	"install-notifications.ps1",
 	"setup.ps1",
 ];
 

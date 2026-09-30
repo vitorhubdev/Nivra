@@ -4814,13 +4814,14 @@ fn device_combo(
 			.find(|(key, _)| key == id)
 			.map_or(unavailable, |(_, label)| label.as_str()),
 	};
+	let combo_width = ui.available_width().min(280.0);
 	egui::ComboBox::from_id_salt(id)
 		.selected_text(label)
-		.width(ui.available_width().max(280.0))
+		.width(combo_width)
 		.height(220.0)
 		.show_ui(ui, |ui| {
-			ui.set_min_width(280.0);
-			ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+			ui.set_min_width(combo_width);
+			ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
 			ui.selectable_value(selected, None, t("System default (recommended)"));
 			for (id, label) in devices.iter().take(32) {
 				ui.selectable_value(selected, Some(id.clone()), label)

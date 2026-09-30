@@ -1111,9 +1111,14 @@ impl MessagingUi {
 			self.deleting = None;
 		}
 		self.timeline.batch_delete.retain(|id| !ids.contains(id));
-		// Freed rows vanish at once; hold the viewport by their cached heights.
-		let compensation = self.timeline.take_removal_compensation(ids);
-		self.timeline.compensate_scroll(compensation);
+		// Grouped deletes already left the layout together. Do not step the
+		// scroll once per server echo.
+		if ids.iter().any(|id| self.timeline.batch_hold.contains(id)) {
+			self.timeline.note_group_echo(ids);
+		} else {
+			let compensation = self.timeline.take_removal_compensation(ids);
+			self.timeline.compensate_scroll(compensation);
+		}
 		let clear_batch = if let Some((batch_channel, selected)) = &mut self.deleting_batch {
 			if *batch_channel == channel {
 				selected.retain(|id| !ids.contains(id));
@@ -3882,19 +3887,29 @@ impl MessagingUi {
 		self.timeline.video.seen = false;
 		let side = self.drain_side_press();
 		let mut commands = Vec::new();
+		if self.timeline.batch_restore_notice {
+			self.timeline.batch_restore_notice = false;
+			self.toasts.push(
+				design::Level::Warning,
+				crate::i18n::text(
+					self.language,
+					"A selected message could not be deleted and is back in the conversation",
+				),
+			);
+		}
 		if self.timeline.batch_delete_cancel {
 			self.timeline.batch_delete_cancel = false;
 			self.batch_delete_queue.clear();
 			self.batch_delete_next = None;
 			self.timeline.batch_progress = None;
+			self.timeline.cancel_group_removal();
 		}
 		if let Some(due) = self.batch_delete_next
 			&& ui.input(|input| input.time) >= due
 			&& let Some((channel, message)) = self.batch_delete_queue.first().copied()
 		{
 			self.batch_delete_queue.remove(0);
-			// Arm the ~180ms removal fade; the echo frees the space with
-			// scroll compensation, or the fade releases on failure.
+			// The group fade already started. This send does not move the list.
 			self.timeline
 				.removing
 				.entry(message)
@@ -5146,9 +5161,12 @@ impl MessagingUi {
 					self.batch_delete_total = self.batch_delete_queue.len();
 					self.batch_delete_sent = 0;
 					self.batch_delete_next = Some(now + batch_delete_gap_secs());
-					for &(_, message) in &self.batch_delete_queue {
-						self.timeline.removing.entry(message).or_insert(now);
-					}
+					let held: Vec<Id> = self
+						.batch_delete_queue
+						.iter()
+						.map(|(_, message)| *message)
+						.collect();
+					self.timeline.begin_group_removal(&held, now);
 					self.timeline.batch_delete.clear();
 					self.timeline.batch_progress = Some((0, self.batch_delete_total));
 					self.deleting_batch = None;

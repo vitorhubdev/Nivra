@@ -68,6 +68,9 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Voice preview" => "Prévia de voz",
 		"Connecting…" => "Conectando…",
 		"Call failed" => "Chamada falhou",
+		"A selected message could not be deleted and is back in the conversation" => {
+			"Uma mensagem selecionada não pôde ser apagada e voltou para a conversa"
+		}
 		"User settings" => "Configurações do usuário",
 		"App settings" => "Configurações do aplicativo",
 		"Customization" => "Personalização",
@@ -1473,6 +1476,9 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Voice preview" => "Vista previa de voz",
 		"Connecting…" => "Conectando…",
 		"Call failed" => "La llamada falló",
+		"A selected message could not be deleted and is back in the conversation" => {
+			"Un mensaje seleccionado no se pudo borrar y volvió a la conversación"
+		}
 		"User settings" => "Ajustes de usuario",
 		"App settings" => "Ajustes de la aplicación",
 		"Customization" => "Personalización",
@@ -3760,6 +3766,7 @@ mod tests {
 			"Voice preview",
 			"Connecting…",
 			"Call failed",
+			"A selected message could not be deleted and is back in the conversation",
 		];
 		for key in KEYS {
 			assert!(portuguese_brazil(key).is_some(), "missing pt-BR: {key}");

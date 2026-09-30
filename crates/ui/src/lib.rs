@@ -7311,9 +7311,25 @@ mod composer_tests {
 					}
 				}
 				assert!(activated, "Tab must reach the own-message edit action");
-				assert_eq!(view.editing.as_ref().unwrap().2, "Original");
+				let reopened = view
+					.timeline
+					.inline_edit
+					.as_ref()
+					.map(|edit| edit.text.as_str())
+					.or(view.editing.as_ref().map(|edit| edit.2.as_str()));
+				assert_eq!(reopened, Some("Original"));
 			}
-			let retained = view.editing.as_ref().unwrap().2.clone();
+			let retained = view
+				.editing
+				.as_ref()
+				.map(|edit| edit.2.clone())
+				.or_else(|| {
+					view.timeline
+						.inline_edit
+						.as_ref()
+						.map(|edit| edit.text.clone())
+				})
+				.expect("an editor stays open");
 			let keep_edit = modified && !reopen;
 			assert_eq!(retained != "Original", keep_edit);
 			view.deleting = Some((Id(10), Id(20)));

@@ -1,4 +1,6 @@
 use super::Staged;
+#[cfg(not(windows))]
+use std::process::Command;
 use std::{
 	collections::HashSet,
 	fs,
@@ -10,8 +12,6 @@ use std::{
 		atomic::{AtomicBool, Ordering},
 	},
 };
-#[cfg(not(windows))]
-use std::process::Command;
 
 const MAX_FILES: usize = 8192;
 const MAX_UNPACKED: u64 = 1024 * 1024 * 1024;

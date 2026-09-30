@@ -69,6 +69,8 @@ pub struct TimelineView {
 	batch_anchored: bool,
 	/// A held row was still in the timeline after the hold window.
 	pub(super) batch_restore_notice: bool,
+	/// Pointer-down time for a long click that enters select mode.
+	select_hold: Option<(Id, f64)>,
 	/// Ids painted this frame, backing "select all visible".
 	pub(super) last_visible: Vec<Id>,
 	/// Last pointer height while a text-selection drag runs; survives hover loss
@@ -1019,14 +1021,7 @@ fn selection_txt(state: &State, ids: &BTreeSet<Id>) -> String {
 				let when = timestamp(message.id);
 				crate::batch_select::TxtMessage {
 					author: message.author.name.clone(),
-					when: format!(
-						"{:02}/{:02}/{:04} {:02}:{:02}",
-						when.day(),
-						when.month() as u8,
-						when.year(),
-						when.hour(),
-						when.minute()
-					),
+					when: format!("{:02}:{:02}", when.hour(), when.minute()),
 					text: message.display_text().into_owned(),
 					attachments: message
 						.attachments
@@ -3160,6 +3155,37 @@ impl TimelineView {
 							surface.finish(ui);
 						});
 					let rect = row.response.rect;
+					if !self.select_mode {
+						let over = ui
+							.input(|input| input.pointer.hover_pos())
+							.is_some_and(|pos| rect.contains(pos));
+						let pressed = ui.input(|input| input.pointer.primary_pressed());
+						let down = ui.input(|input| input.pointer.primary_down());
+						let shift = ui.input(|input| input.modifiers.shift);
+						let dragging = ui.input(|input| input.pointer.is_decidedly_dragging());
+						if over && pressed && shift {
+							self.enter_select_mode(Some(id));
+							self.select_hold = None;
+						} else if over && pressed {
+							self.select_hold = Some((id, ui.input(|input| input.time)));
+						}
+						if let Some((held, started)) = self.select_hold
+							&& held == id && over && down
+							&& !dragging
+						{
+							let elapsed = ui.input(|input| input.time) - started;
+							if elapsed >= 0.45 {
+								self.enter_select_mode(Some(id));
+								self.select_hold = None;
+							} else {
+								ui.ctx()
+									.request_repaint_after(std::time::Duration::from_millis(50));
+							}
+						}
+						if !down {
+							self.select_hold = None;
+						}
+					}
 					// The select column is always reserved and painted: entering or
 					// leaving select mode fades the boxes instead of shifting rows.
 					let select_alpha = crate::anim::bool_alpha(
@@ -3884,6 +3910,12 @@ impl TimelineView {
 		let show_bar =
 			self.select_mode || !self.batch_delete.is_empty() || self.batch_progress.is_some();
 		if show_bar
+			&& ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::A))
+		{
+			let ordered = self.last_visible.clone();
+			let _ = crate::batch_select::select_all_visible(&ordered, &mut self.batch_delete);
+		}
+		if show_bar
 			&& ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
 		{
 			self.exit_select_mode();
@@ -3969,15 +4001,11 @@ impl TimelineView {
 								ui.label(
 									crate::design::medium(
 										ui,
-										self.batch_delete.len().to_string(),
-										13.0,
-									)
-									.color(colors.text_strong),
-								);
-								ui.label(
-									crate::design::medium(
-										ui,
-										crate::i18n::text(language, "selected"),
+										format!(
+											"{} {}",
+											self.batch_delete.len(),
+											crate::i18n::text(language, "selected")
+										),
 										13.0,
 									)
 									.color(colors.text_strong),
@@ -4011,8 +4039,15 @@ impl TimelineView {
 						if deleting.is_none() {
 							ui.horizontal_wrapped(|ui| {
 								ui.spacing_mut().item_spacing.x = 6.0;
-								let delete =
-									egui::Button::new(crate::i18n::text(language, "Delete"));
+								let delete_label = if delete_reason.is_none() {
+									format!(
+										"{} ({deletable})",
+										crate::i18n::text(language, "Delete")
+									)
+								} else {
+									crate::i18n::text(language, "Delete").to_owned()
+								};
+								let delete = egui::Button::new(delete_label);
 								if let Some(reason) = delete_reason {
 									ui.add_enabled(false, delete).on_disabled_hover_text(
 										crate::i18n::text(language, reason),
@@ -4020,8 +4055,15 @@ impl TimelineView {
 								} else if ui.add_enabled(true, delete).clicked() {
 									self.batch_delete_requested = true;
 								}
-								let download =
-									egui::Button::new(crate::i18n::text(language, "Download"));
+								let download_label = if download_reason.is_none() {
+									format!(
+										"{} ({attach_count})",
+										crate::i18n::text(language, "Download attachments")
+									)
+								} else {
+									crate::i18n::text(language, "Download attachments").to_owned()
+								};
+								let download = egui::Button::new(download_label);
 								if let Some(reason) = download_reason {
 									ui.add_enabled(false, download).on_disabled_hover_text(
 										crate::i18n::text(language, reason),
@@ -4055,7 +4097,10 @@ impl TimelineView {
 									self.batch_mgr_open = true;
 									self.batch_download_requested = true;
 								}
-								if ui.button(crate::i18n::text(language, "Copy")).clicked() {
+								if ui
+									.button(crate::i18n::text(language, "Copy text"))
+									.clicked()
+								{
 									ui.ctx().copy_text(selection_txt(state, &self.batch_delete));
 								}
 								if ui

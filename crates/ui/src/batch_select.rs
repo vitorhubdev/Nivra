@@ -80,10 +80,10 @@ pub fn delete_disabled_reason(
 ) -> Option<&'static str> {
 	if selected_count == 0 {
 		Some("Select messages to enable actions")
-	} else if deletable_count == 0 {
-		Some("None of the selected messages can be deleted")
 	} else if selected_count > MAX_DELETE {
-		Some("Maximum 5 messages per delete")
+		Some("You can delete up to 5 at a time")
+	} else if deletable_count != selected_count {
+		Some("Only your messages can be deleted here")
 	} else {
 		None
 	}
@@ -94,7 +94,7 @@ pub fn download_disabled_reason(attachment_count: usize) -> Option<&'static str>
 	if attachment_count == 0 {
 		Some("No attachments in the selection")
 	} else if attachment_count > MAX_DOWNLOAD {
-		Some("Maximum 15 attachments per download")
+		Some("You can download up to 15 attachments at a time")
 	} else {
 		None
 	}
@@ -108,14 +108,20 @@ pub struct TxtMessage {
 	pub attachments: Vec<String>,
 }
 
-/// Formats messages in order as `Author [when]: text`, attachments listed by name.
+/// One line per message, in the order given: `Author — hh:mm: text`.
 pub fn format_txt(messages: &[TxtMessage]) -> String {
 	let mut out = String::new();
 	for m in messages {
-		out.push_str(&format!("{} [{}]: {}\n", m.author, m.when, m.text));
+		out.push_str(&m.author);
+		out.push_str(" — ");
+		out.push_str(&m.when);
+		out.push_str(": ");
+		out.push_str(&m.text);
 		if !m.attachments.is_empty() {
-			out.push_str(&format!("Attachments: {}\n", m.attachments.join(", ")));
+			out.push_str(" · ");
+			out.push_str(&m.attachments.join(", "));
 		}
+		out.push('\n');
 	}
 	out
 }
@@ -333,11 +339,15 @@ mod tests {
 		assert!(!toggle(&mut sel, Id(99)));
 		assert_eq!(
 			delete_disabled_reason(0, 5),
-			Some("None of the selected messages can be deleted")
+			Some("Only your messages can be deleted here")
 		);
 		assert_eq!(
 			delete_disabled_reason(5, 6),
-			Some("Maximum 5 messages per delete")
+			Some("You can delete up to 5 at a time")
+		);
+		assert_eq!(
+			delete_disabled_reason(2, 3),
+			Some("Only your messages can be deleted here")
 		);
 		assert_eq!(delete_disabled_reason(3, 3), None);
 		assert_eq!(
@@ -346,7 +356,7 @@ mod tests {
 		);
 		assert_eq!(
 			download_disabled_reason(16),
-			Some("Maximum 15 attachments per download")
+			Some("You can download up to 15 attachments at a time")
 		);
 		assert_eq!(download_disabled_reason(15), None);
 	}
@@ -368,8 +378,9 @@ mod tests {
 			},
 		];
 		let out = format_txt(&msgs);
-		assert!(out.find("B [10:01]: second").unwrap() < out.find("A [10:00]: first").unwrap());
+		assert!(out.find("B — 10:01: second").unwrap() < out.find("A — 10:00: first").unwrap());
 		assert!(out.contains("b.png"));
+		assert!(!out.contains('['));
 	}
 
 	#[test]

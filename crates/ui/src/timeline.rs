@@ -69,6 +69,8 @@ pub struct TimelineView {
 	batch_anchored: bool,
 	/// A held row was still in the timeline after the hold window.
 	pub(super) batch_restore_notice: bool,
+	/// Pointer-down time for a long click that enters select mode.
+	select_hold: Option<(Id, f64)>,
 	/// Ids painted this frame, backing "select all visible".
 	pub(super) last_visible: Vec<Id>,
 	/// Last pointer height while a text-selection drag runs; survives hover loss
@@ -765,8 +767,6 @@ fn action_button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> eg
 	crate::icons::button(ui, icon, 28.0, label)
 }
 
-const MAX_BATCH_DELETE: usize = 5;
-
 /// Live-edge follow decision: an open in-place editor freezes autoscroll so
 /// new arrivals hold the viewport instead of shifting the edited row.
 fn follow_at_bottom(at_bottom: bool, target_browsing: bool, editing: bool) -> bool {
@@ -999,18 +999,11 @@ impl TimelineView {
 }
 
 fn toggle_batch_delete(selected: &mut BTreeSet<Id>, id: Id) -> bool {
-	if selected.remove(&id) {
-		return true;
-	}
-	if selected.len() >= MAX_BATCH_DELETE {
-		return false;
-	}
-	selected.insert(id);
-	true
+	crate::batch_select::toggle(selected, id)
 }
 
-/// Selection as "Author [date time]: text" lines in id order, attachments by name.
-/// Inputs are bounded (at most five server-limited messages), so no extra cap.
+/// Selection as "Author — hh:mm: text" lines in id order, attachments by name.
+/// Inputs are bounded by `MAX_SELECT`, so no extra cap.
 fn selection_txt(state: &State, ids: &BTreeSet<Id>) -> String {
 	let messages: Vec<crate::batch_select::TxtMessage> = ids
 		.iter()
@@ -1019,14 +1012,7 @@ fn selection_txt(state: &State, ids: &BTreeSet<Id>) -> String {
 				let when = timestamp(message.id);
 				crate::batch_select::TxtMessage {
 					author: message.author.name.clone(),
-					when: format!(
-						"{:02}/{:02}/{:04} {:02}:{:02}",
-						when.day(),
-						when.month() as u8,
-						when.year(),
-						when.hour(),
-						when.minute()
-					),
+					when: format!("{:02}:{:02}", when.hour(), when.minute()),
 					text: message.display_text().into_owned(),
 					attachments: message
 						.attachments
@@ -1696,6 +1682,7 @@ impl TimelineView {
 		upload: Option<&crate::pending::Upload>,
 		session: &mut crate::scroll::Session,
 	) {
+		crate::select::set_message_select_mode(ui.ctx(), self.select_mode);
 		let width = ui.available_width();
 		let channel_changed = self.channel != state.selected;
 		if channel_changed {
@@ -2242,7 +2229,9 @@ impl TimelineView {
 				(offset.unwrap_or(self.scroll_offset) + select_scroll).clamp(0.0, max_offset);
 			offset = Some(next);
 			self.following = false;
-			ui.ctx().request_repaint();
+			if next != self.scroll_offset {
+				ui.ctx().request_repaint();
+			}
 		}
 		if let Some(offset) = offset {
 			scroll = scroll.vertical_scroll_offset(offset);
@@ -3160,6 +3149,37 @@ impl TimelineView {
 							surface.finish(ui);
 						});
 					let rect = row.response.rect;
+					if !self.select_mode {
+						let over = ui
+							.input(|input| input.pointer.hover_pos())
+							.is_some_and(|pos| rect.contains(pos));
+						let pressed = ui.input(|input| input.pointer.primary_pressed());
+						let down = ui.input(|input| input.pointer.primary_down());
+						let shift = ui.input(|input| input.modifiers.shift);
+						let dragging = ui.input(|input| input.pointer.is_decidedly_dragging());
+						if over && pressed && shift {
+							self.enter_select_mode(Some(id));
+							self.select_hold = None;
+						} else if over && pressed {
+							self.select_hold = Some((id, ui.input(|input| input.time)));
+						}
+						if let Some((held, started)) = self.select_hold
+							&& held == id && over && down
+							&& !dragging
+						{
+							let elapsed = ui.input(|input| input.time) - started;
+							if elapsed >= 0.45 {
+								self.enter_select_mode(Some(id));
+								self.select_hold = None;
+							} else {
+								ui.ctx()
+									.request_repaint_after(std::time::Duration::from_millis(50));
+							}
+						}
+						if !down {
+							self.select_hold = None;
+						}
+					}
 					// The select column is always reserved and painted: entering or
 					// leaving select mode fades the boxes instead of shifting rows.
 					let select_alpha = crate::anim::bool_alpha(
@@ -3169,8 +3189,7 @@ impl TimelineView {
 						0.15,
 					);
 					if select_alpha > 0.01 {
-						let hit =
-							egui::Rect::from_min_size(rect.min, egui::vec2(36.0, rect.height()));
+						let hit = rect;
 						let toggle = if self.select_mode {
 							Some(ui.interact(
 								hit,
@@ -3247,7 +3266,8 @@ impl TimelineView {
 									.rect_filled(rect, 0.0, colors.chat.gamma_multiply(t));
 							}
 							if t < 1.0 {
-								ui.ctx().request_repaint();
+								ui.ctx()
+									.request_repaint_after(std::time::Duration::from_millis(16));
 							}
 						}
 					}
@@ -3884,6 +3904,12 @@ impl TimelineView {
 		let show_bar =
 			self.select_mode || !self.batch_delete.is_empty() || self.batch_progress.is_some();
 		if show_bar
+			&& ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::A))
+		{
+			let ordered = self.last_visible.clone();
+			let _ = crate::batch_select::select_all_visible(&ordered, &mut self.batch_delete);
+		}
+		if show_bar
 			&& ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
 		{
 			self.exit_select_mode();
@@ -3969,15 +3995,11 @@ impl TimelineView {
 								ui.label(
 									crate::design::medium(
 										ui,
-										self.batch_delete.len().to_string(),
-										13.0,
-									)
-									.color(colors.text_strong),
-								);
-								ui.label(
-									crate::design::medium(
-										ui,
-										crate::i18n::text(language, "selected"),
+										format!(
+											"{} {}",
+											self.batch_delete.len(),
+											crate::i18n::text(language, "selected")
+										),
 										13.0,
 									)
 									.color(colors.text_strong),
@@ -4011,8 +4033,15 @@ impl TimelineView {
 						if deleting.is_none() {
 							ui.horizontal_wrapped(|ui| {
 								ui.spacing_mut().item_spacing.x = 6.0;
-								let delete =
-									egui::Button::new(crate::i18n::text(language, "Delete"));
+								let delete_label = if delete_reason.is_none() {
+									format!(
+										"{} ({deletable})",
+										crate::i18n::text(language, "Delete")
+									)
+								} else {
+									crate::i18n::text(language, "Delete").to_owned()
+								};
+								let delete = egui::Button::new(delete_label);
 								if let Some(reason) = delete_reason {
 									ui.add_enabled(false, delete).on_disabled_hover_text(
 										crate::i18n::text(language, reason),
@@ -4020,8 +4049,15 @@ impl TimelineView {
 								} else if ui.add_enabled(true, delete).clicked() {
 									self.batch_delete_requested = true;
 								}
-								let download =
-									egui::Button::new(crate::i18n::text(language, "Download"));
+								let download_label = if download_reason.is_none() {
+									format!(
+										"{} ({attach_count})",
+										crate::i18n::text(language, "Download attachments")
+									)
+								} else {
+									crate::i18n::text(language, "Download attachments").to_owned()
+								};
+								let download = egui::Button::new(download_label);
 								if let Some(reason) = download_reason {
 									ui.add_enabled(false, download).on_disabled_hover_text(
 										crate::i18n::text(language, reason),
@@ -4055,7 +4091,10 @@ impl TimelineView {
 									self.batch_mgr_open = true;
 									self.batch_download_requested = true;
 								}
-								if ui.button(crate::i18n::text(language, "Copy")).clicked() {
+								if ui
+									.button(crate::i18n::text(language, "Copy text"))
+									.clicked()
+								{
 									ui.ctx().copy_text(selection_txt(state, &self.batch_delete));
 								}
 								if ui
@@ -4489,15 +4528,19 @@ mod tests {
 	#[test]
 	fn batch_delete_selection_is_bounded_and_toggleable() {
 		let mut selected = BTreeSet::new();
-		for id in 1..=MAX_BATCH_DELETE as u64 {
+		for id in 1..=crate::batch_select::MAX_SELECT as u64 {
 			assert!(toggle_batch_delete(&mut selected, Id(id)));
 		}
-		assert_eq!(selected.len(), MAX_BATCH_DELETE);
+		assert_eq!(selected.len(), crate::batch_select::MAX_SELECT);
 		assert!(!toggle_batch_delete(&mut selected, Id(99)));
 		assert!(toggle_batch_delete(&mut selected, Id(3)));
 		assert!(!selected.contains(&Id(3)));
 		assert!(toggle_batch_delete(&mut selected, Id(99)));
-		assert_eq!(selected.len(), MAX_BATCH_DELETE);
+		assert_eq!(selected.len(), crate::batch_select::MAX_SELECT);
+		assert_eq!(
+			crate::batch_select::delete_disabled_reason(6, 6),
+			Some("You can delete up to 5 at a time")
+		);
 	}
 
 	#[test]
@@ -6455,6 +6498,166 @@ mod tests {
 				);
 			}
 		}
+	}
+
+	#[test]
+	fn select_drag_paints_rows_scrolls_at_the_edge_and_idles() {
+		fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+			match shape {
+				egui::Shape::Text(text) => out.push((
+					text.galley.job.text.clone(),
+					text.galley.rect.translate(text.pos.to_vec2()),
+				)),
+				egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, out)),
+				_ => {}
+			}
+		}
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		crate::select::install(&ctx);
+		let mut state = test_support::chat_demo_state();
+		state.freshness = model::Freshness::Fresh;
+		state.older_exhausted = true;
+		state.history_pending = false;
+		let mut view = TimelineView::default();
+		let mut avatars = crate::avatars::Avatars::default();
+		let mut frame = 0u32;
+		let mut render = |view: &mut TimelineView, state: &mut State, events: Vec<egui::Event>| {
+			frame += 1;
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(420.0, 320.0),
+					)),
+					time: Some(f64::from(frame) * 0.05),
+					predicted_dt: 1.0 / 60.0,
+					events,
+					..Default::default()
+				},
+				|ui| {
+					view.show(
+						ui,
+						state,
+						&mut None,
+						&mut None,
+						(
+							&mut avatars,
+							&mut crate::profiles::ProfileSession::default(),
+						),
+						None,
+					);
+				},
+			);
+			let mut painted = Vec::new();
+			for shape in &output.shapes {
+				texts(&shape.shape, &mut painted);
+			}
+			let delay = output
+				.viewport_output
+				.values()
+				.next()
+				.map(|viewport| viewport.repaint_delay);
+			output.drop_without_applying_deltas();
+			(painted, delay)
+		};
+		for _ in 0..4 {
+			render(&mut view, &mut state, vec![]);
+		}
+		view.enter_select_mode(None);
+		for _ in 0..8 {
+			render(&mut view, &mut state, vec![]);
+		}
+		assert!(view.select_mode, "select mode stays on while the bar is up");
+		let (painted, _) = render(&mut view, &mut state, vec![]);
+		let sample: Vec<_> = painted
+			.iter()
+			.map(|(text, _)| text.clone())
+			.take(40)
+			.collect();
+		let rows: Vec<egui::Rect> = painted
+			.iter()
+			.filter(|(text, _)| {
+				text.contains("A new day, same conversation.")
+					|| text.contains("Welcome back. All of this is synthetic")
+			})
+			.map(|(_, rect)| *rect)
+			.collect();
+		assert!(
+			rows.len() >= 2,
+			"at least two message rows are on screen, painted {sample:?}"
+		);
+		let from = egui::pos2(18.0, rows[0].center().y);
+		let to = egui::pos2(18.0, rows[rows.len() - 1].center().y);
+		let drag = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+			pos,
+			button: egui::PointerButton::Primary,
+			pressed,
+			modifiers: egui::Modifiers::NONE,
+		};
+		render(
+			&mut view,
+			&mut state,
+			vec![egui::Event::PointerMoved(from), drag(from, true)],
+		);
+		render(
+			&mut view,
+			&mut state,
+			vec![egui::Event::PointerMoved(from + egui::vec2(0.0, 20.0))],
+		);
+		render(&mut view, &mut state, vec![egui::Event::PointerMoved(to)]);
+		assert!(
+			view.batch_delete.len() >= 2,
+			"dragging paints every row the pointer crosses, got {}",
+			view.batch_delete.len()
+		);
+		view.browse_away();
+		view.scroll_offset = 0.0;
+		render(&mut view, &mut state, vec![]);
+		let before = view.scroll_offset;
+		let edge = egui::pos2(200.0, 340.0);
+		render(
+			&mut view,
+			&mut state,
+			vec![egui::Event::PointerMoved(edge), drag(edge, true)],
+		);
+		render(
+			&mut view,
+			&mut state,
+			vec![egui::Event::PointerMoved(edge + egui::vec2(0.0, 12.0))],
+		);
+		assert!(
+			view.scroll_offset > before + 0.5,
+			"a drag past the bottom edge scrolls downward, before {before} after {}",
+			view.scroll_offset
+		);
+		render(&mut view, &mut state, vec![drag(edge, false)]);
+		for _ in 0..12 {
+			render(&mut view, &mut state, vec![]);
+		}
+		let (_, delay) = render(&mut view, &mut state, vec![]);
+		assert_ne!(
+			delay,
+			Some(std::time::Duration::ZERO),
+			"a settled selection does not request another frame"
+		);
+		render(
+			&mut view,
+			&mut state,
+			vec![egui::Event::Key {
+				key: egui::Key::Escape,
+				physical_key: None,
+				pressed: true,
+				repeat: false,
+				modifiers: egui::Modifiers::NONE,
+			}],
+		);
+		render(&mut view, &mut state, vec![]);
+		assert!(!view.select_mode, "Esc leaves select mode");
+		assert!(
+			!crate::select::message_select_mode(&ctx),
+			"text selection is available again after Esc"
+		);
 	}
 
 	#[test]

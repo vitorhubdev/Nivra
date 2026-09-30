@@ -360,6 +360,13 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Maximum 5 messages per delete" => "Máximo de 5 mensagens por vez para apagar",
 		"No attachments in the selection" => "Sem anexos na seleção",
 		"Maximum 15 attachments per download" => "Máximo de 15 anexos por download",
+		"You can delete up to 5 at a time" => "Dá para apagar até 5 de uma vez",
+		"Only your messages can be deleted here" => "Só suas mensagens podem ser apagadas aqui",
+		"You can download up to 15 attachments at a time" => {
+			"Dá para baixar até 15 anexos de uma vez"
+		}
+		"Download attachments" => "Baixar anexos",
+		"Copy text" => "Copiar texto",
 		"Downloads" => "Downloads",
 		"Choose a folder…" => "Escolha uma pasta…",
 		"Queued" => "Na fila",
@@ -1753,7 +1760,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 			"Puedes seleccionar hasta 5 mensajes a la vez."
 		}
 		"Select" => "Seleccionar",
-		"selected" => "seleccionados",
+		"selected" => "seleccionadas",
 		"Shift+click selects a range · drag paints · Esc exits" => {
 			"Mayús+clic selecciona un intervalo · arrastrar pinta · Esc sale"
 		}
@@ -1770,6 +1777,13 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Maximum 5 messages per delete" => "Máximo 5 mensajes por borrado",
 		"No attachments in the selection" => "Sin adjuntos en la selección",
 		"Maximum 15 attachments per download" => "Máximo 15 adjuntos por descarga",
+		"You can delete up to 5 at a time" => "Se pueden borrar hasta 5 a la vez",
+		"Only your messages can be deleted here" => "Solo tus mensajes se pueden borrar aquí",
+		"You can download up to 15 attachments at a time" => {
+			"Se pueden descargar hasta 15 adjuntos a la vez"
+		}
+		"Download attachments" => "Descargar adjuntos",
+		"Copy text" => "Copiar texto",
 		"Downloads" => "Descargas",
 		"Choose a folder…" => "Elige una carpeta…",
 		"Queued" => "En cola",
@@ -3023,6 +3037,11 @@ mod tests {
 			"Maximum 5 messages per delete",
 			"No attachments in the selection",
 			"Maximum 15 attachments per download",
+			"You can delete up to 5 at a time",
+			"Only your messages can be deleted here",
+			"You can download up to 15 attachments at a time",
+			"Download attachments",
+			"Copy text",
 			"Downloads",
 			"Choose a folder…",
 			"Queued",

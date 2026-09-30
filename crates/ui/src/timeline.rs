@@ -767,8 +767,6 @@ fn action_button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> eg
 	crate::icons::button(ui, icon, 28.0, label)
 }
 
-const MAX_BATCH_DELETE: usize = 5;
-
 /// Live-edge follow decision: an open in-place editor freezes autoscroll so
 /// new arrivals hold the viewport instead of shifting the edited row.
 fn follow_at_bottom(at_bottom: bool, target_browsing: bool, editing: bool) -> bool {
@@ -1001,18 +999,11 @@ impl TimelineView {
 }
 
 fn toggle_batch_delete(selected: &mut BTreeSet<Id>, id: Id) -> bool {
-	if selected.remove(&id) {
-		return true;
-	}
-	if selected.len() >= MAX_BATCH_DELETE {
-		return false;
-	}
-	selected.insert(id);
-	true
+	crate::batch_select::toggle(selected, id)
 }
 
-/// Selection as "Author [date time]: text" lines in id order, attachments by name.
-/// Inputs are bounded (at most five server-limited messages), so no extra cap.
+/// Selection as "Author — hh:mm: text" lines in id order, attachments by name.
+/// Inputs are bounded by `MAX_SELECT`, so no extra cap.
 fn selection_txt(state: &State, ids: &BTreeSet<Id>) -> String {
 	let messages: Vec<crate::batch_select::TxtMessage> = ids
 		.iter()
@@ -2238,7 +2229,9 @@ impl TimelineView {
 				(offset.unwrap_or(self.scroll_offset) + select_scroll).clamp(0.0, max_offset);
 			offset = Some(next);
 			self.following = false;
-			ui.ctx().request_repaint();
+			if next != self.scroll_offset {
+				ui.ctx().request_repaint();
+			}
 		}
 		if let Some(offset) = offset {
 			scroll = scroll.vertical_scroll_offset(offset);
@@ -3196,8 +3189,7 @@ impl TimelineView {
 						0.15,
 					);
 					if select_alpha > 0.01 {
-						let hit =
-							egui::Rect::from_min_size(rect.min, egui::vec2(36.0, rect.height()));
+						let hit = rect;
 						let toggle = if self.select_mode {
 							Some(ui.interact(
 								hit,
@@ -4536,15 +4528,19 @@ mod tests {
 	#[test]
 	fn batch_delete_selection_is_bounded_and_toggleable() {
 		let mut selected = BTreeSet::new();
-		for id in 1..=MAX_BATCH_DELETE as u64 {
+		for id in 1..=crate::batch_select::MAX_SELECT as u64 {
 			assert!(toggle_batch_delete(&mut selected, Id(id)));
 		}
-		assert_eq!(selected.len(), MAX_BATCH_DELETE);
+		assert_eq!(selected.len(), crate::batch_select::MAX_SELECT);
 		assert!(!toggle_batch_delete(&mut selected, Id(99)));
 		assert!(toggle_batch_delete(&mut selected, Id(3)));
 		assert!(!selected.contains(&Id(3)));
 		assert!(toggle_batch_delete(&mut selected, Id(99)));
-		assert_eq!(selected.len(), MAX_BATCH_DELETE);
+		assert_eq!(selected.len(), crate::batch_select::MAX_SELECT);
+		assert_eq!(
+			crate::batch_select::delete_disabled_reason(6, 6),
+			Some("You can delete up to 5 at a time")
+		);
 	}
 
 	#[test]

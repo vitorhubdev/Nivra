@@ -189,6 +189,8 @@ pub struct ExportJob {
 	total: usize,
 	markdown: bool,
 	out: String,
+	/// Next index in the open timeline. None once every loaded message is copied.
+	capture_at: Option<usize>,
 }
 
 impl ExportJob {
@@ -202,7 +204,36 @@ impl ExportJob {
 			total,
 			markdown,
 			out: String::new(),
+			capture_at: None,
 		}
+	}
+
+	/// Copies the open timeline one chunk at a time. Nothing is cloned here.
+	pub fn open(markdown: bool) -> Self {
+		Self {
+			rest: Vec::new(),
+			done: 0,
+			total: 0,
+			markdown,
+			out: String::new(),
+			capture_at: Some(0),
+		}
+	}
+
+	pub fn capturing(&self) -> bool {
+		self.capture_at.is_some()
+	}
+
+	pub fn capture_index(&self) -> usize {
+		self.capture_at.unwrap_or(0)
+	}
+
+	/// Stores one copied chunk. `more` means the timeline still has later messages.
+	pub fn store_captured(&mut self, rows: Vec<TxtMessage>, more: bool) {
+		let added = rows.len();
+		self.total += added;
+		self.rest.extend(rows);
+		self.capture_at = more.then_some(self.capture_index() + added);
 	}
 
 	pub fn markdown(&self) -> bool {
@@ -544,6 +575,25 @@ mod tests {
 		assert_eq!(job.progress(), (40, 41));
 		assert!(job.step());
 		assert_eq!(job.take(), expected);
+		let mut open = ExportJob::open(false);
+		assert!(open.capturing());
+		assert_eq!(open.capture_index(), 0);
+		open.store_captured(
+			(0..ExportJob::CHUNK)
+				.map(|index| TxtMessage {
+					author: "A".into(),
+					when: "12:00".into(),
+					text: format!("c{index}"),
+					attachments: vec![],
+					links: vec![],
+				})
+				.collect(),
+			true,
+		);
+		assert!(open.capturing());
+		assert_eq!(open.capture_index(), ExportJob::CHUNK);
+		open.store_captured(Vec::new(), false);
+		assert!(!open.capturing());
 	}
 
 	#[test]

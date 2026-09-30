@@ -2361,6 +2361,8 @@ impl MessagingUi {
 										"{} {done}/{total}",
 										crate::i18n::text(self.language, "Exporting chat")
 									));
+								} else if self.timeline.export_cancelled {
+									ui.label(crate::i18n::text(self.language, "Export cancelled"));
 								}
 								ui.menu_button(
 									crate::i18n::text(self.language, "Export chat"),

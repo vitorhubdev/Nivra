@@ -359,6 +359,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Save .md" => "Salvar .md",
 		"Export chat" => "Exportar conversa",
 		"Exporting chat" => "Exportando conversa",
+		"Export cancelled" => "Exportação cancelada",
 		"Select all visible" => "Selecionar visíveis",
 		"Select messages to enable actions" => "Selecione mensagens para ativar as ações",
 		"None of the selected messages can be deleted" => {
@@ -1784,6 +1785,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Save .md" => "Guardar .md",
 		"Export chat" => "Exportar conversación",
 		"Exporting chat" => "Exportando conversación",
+		"Export cancelled" => "Exportación cancelada",
 		"Select all visible" => "Seleccionar visibles",
 		"Select messages to enable actions" => "Selecciona mensajes para activar las acciones",
 		"None of the selected messages can be deleted" => {
@@ -3050,6 +3052,7 @@ mod tests {
 			"Save .md",
 			"Export chat",
 			"Exporting chat",
+			"Export cancelled",
 			"Select all visible",
 			"Select messages to enable actions",
 			"None of the selected messages can be deleted",

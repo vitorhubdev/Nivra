@@ -85,6 +85,8 @@ pub struct TimelineView {
 	pub(super) save_txt_request: Option<(String, Vec<u8>)>,
 	/// Loaded conversation export, one chunk per frame.
 	export_job: Option<crate::batch_select::ExportJob>,
+	/// The open chat changed before the export had copied every message.
+	pub(super) export_cancelled: bool,
 	/// Download manager snapshot written by the desktop; rendered in the timeline.
 	pub(super) batch_mgr_open: bool,
 	pub(super) batch_mgr_folder: Option<String>,
@@ -1695,26 +1697,35 @@ impl TimelineView {
 	}
 	/// Loaded messages of the open conversation, oldest first. The timeline cap is 500.
 	pub(super) fn begin_chat_export(&mut self, state: &State, markdown: bool) {
-		let rows: Vec<_> = state
-			.timeline
-			.iter()
-			.map(|message| export_row(message, true))
-			.collect();
-		if rows.is_empty() {
+		if state.timeline.iter().next().is_none() {
 			return;
 		}
-		self.export_job = Some(crate::batch_select::ExportJob::start(rows, markdown));
+		self.export_cancelled = false;
+		self.export_job = Some(crate::batch_select::ExportJob::open(markdown));
 	}
 
 	pub(super) fn export_progress(&self) -> Option<(usize, usize)> {
 		self.export_job.as_ref().map(|job| job.progress())
 	}
 
-	/// One chunk per call. A finished job becomes a save request.
-	pub(super) fn advance_export(&mut self) {
+	/// One chunk per call. Copying and formatting never share a frame. A finished job becomes a save request.
+	pub(super) fn advance_export(&mut self, state: &State) {
 		let Some(job) = self.export_job.as_mut() else {
 			return;
 		};
+		if job.capturing() {
+			let index = job.capture_index();
+			let rows: Vec<_> = state
+				.timeline
+				.iter()
+				.skip(index)
+				.take(crate::batch_select::ExportJob::CHUNK)
+				.map(|message| export_row(message, true))
+				.collect();
+			let more = rows.len() == crate::batch_select::ExportJob::CHUNK;
+			job.store_captured(rows, more);
+			return;
+		}
 		let finished = job.step();
 		if !finished {
 			return;
@@ -1729,6 +1740,27 @@ impl TimelineView {
 		}
 		let name = if markdown { "chat.md" } else { "chat.txt" };
 		self.save_txt_request = Some((name.to_owned(), text.into_bytes()));
+	}
+
+	/// A finished snapshot keeps formatting after a channel change. An unfinished copy is cancelled.
+	fn take_export_across_channel(
+		&mut self,
+	) -> (
+		Option<crate::batch_select::ExportJob>,
+		bool,
+		Option<(String, Vec<u8>)>,
+	) {
+		let cancelled = self.export_job.as_ref().is_some_and(|job| job.capturing());
+		let job = if cancelled {
+			None
+		} else {
+			self.export_job.take()
+		};
+		(
+			job,
+			cancelled || self.export_cancelled,
+			self.save_txt_request.take(),
+		)
 	}
 
 	#[cfg(test)]
@@ -1771,7 +1803,7 @@ impl TimelineView {
 		session: &mut crate::scroll::Session,
 	) {
 		let exporting = self.export_job.is_some();
-		self.advance_export();
+		self.advance_export(state);
 		if exporting || self.export_job.is_some() {
 			ui.ctx().request_repaint();
 		}
@@ -1795,6 +1827,8 @@ impl TimelineView {
 			}
 			let restored = state.selected.and_then(|id| state.reading(id));
 			let following = restored.is_none_or(|cursor| cursor.message.is_none());
+			let (export_job, export_cancelled, save_txt_request) =
+				self.take_export_across_channel();
 			*self = Self {
 				extension_actions: self.extension_actions.clone(),
 				hide_media_links: self.hide_media_links,
@@ -1812,6 +1846,9 @@ impl TimelineView {
 				jump: following,
 				leave_read: self.channel.zip(self.seen_latest),
 				inline_edit: self.inline_edit.take(),
+				export_job,
+				export_cancelled,
+				save_txt_request,
 				..Self::default()
 			};
 		}
@@ -4659,6 +4696,33 @@ mod tests {
 			crate::batch_select::delete_disabled_reason(6, 6),
 			Some("You can delete up to 5 at a time")
 		);
+	}
+
+	#[test]
+	fn channel_change_cancels_an_unfinished_export_and_keeps_a_copied_one() {
+		let mut view = TimelineView::default();
+		view.export_job = Some(crate::batch_select::ExportJob::open(false));
+		let (job, cancelled, saved) = view.take_export_across_channel();
+		assert!(job.is_none());
+		assert!(cancelled);
+		assert!(saved.is_none());
+
+		let mut view = TimelineView::default();
+		view.export_job = Some(crate::batch_select::ExportJob::start(
+			vec![crate::batch_select::TxtMessage {
+				author: "A".into(),
+				when: "12:00".into(),
+				text: "kept".into(),
+				attachments: vec![],
+				links: vec![],
+			}],
+			false,
+		));
+		view.save_txt_request = Some(("chat.txt".into(), b"kept".to_vec()));
+		let (job, cancelled, saved) = view.take_export_across_channel();
+		assert!(job.is_some());
+		assert!(!cancelled);
+		assert_eq!(saved.unwrap().0, "chat.txt");
 	}
 
 	#[test]

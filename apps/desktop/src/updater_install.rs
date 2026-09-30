@@ -658,7 +658,7 @@ fn verify_mac(candidate: &Path, installed: &Path) -> Result<(), String> {
 	#[cfg(not(target_os = "macos"))]
 	{
 		let _ = (candidate, installed);
-		return Ok(());
+		Ok(())
 	}
 	#[cfg(target_os = "macos")]
 	{

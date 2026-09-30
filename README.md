@@ -127,7 +127,7 @@ Stable builds are published on the [Releases page](https://github.com/vitorhubde
 
 ### Release channels
 
-- **production**: tested releases, tagged `v<version>` (for example `v1.0.5`). Each production release attaches its installers and portable archives with a `SHA256SUMS.txt` checksum file.
+- **production**: tested releases, tagged `v<version>` (for example `v1.0.5`). Each production release attaches a `SHA256SUMS.txt` checksum file plus one asset per platform: Windows is a single `Nivra-v<version>-Windows-<arch>.exe` (download it and open it, nothing to extract), Linux a `.tar.gz`, macOS a `.zip`.
 - **nightly**: automated builds from `main`, tagged `v<version>-nightly.<date>.<run>` and marked as pre-release. Nightlies track development and may be unstable.
 
 ### Current source

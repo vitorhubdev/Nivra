@@ -515,10 +515,19 @@ fn asset_name(tag: &str) -> Option<String> {
 	if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
 		return install::appimage_session().then(|| format!("nivra-{tag}-Linux-X64.AppImage"));
 	}
+	if cfg!(windows) {
+		let arch = if cfg!(target_arch = "aarch64") {
+			"ARM64"
+		} else if cfg!(target_arch = "x86_64") {
+			"X64"
+		} else {
+			return None;
+		};
+		// Windows ships as one self-registering executable, not a ZIP archive.
+		return Some(format!("Nivra-{tag}-Windows-{arch}.exe"));
+	}
 	let os = if cfg!(target_os = "macos") {
 		"macOS"
-	} else if cfg!(windows) {
-		"Windows"
 	} else {
 		return None;
 	};
@@ -530,6 +539,11 @@ fn asset_name(tag: &str) -> Option<String> {
 		return None;
 	};
 	Some(format!("nivra-{tag}-{os}-{arch}.zip"))
+}
+/// A release asset that installs as-is: the single Windows executable lands
+/// staged under `package/`, while every other platform still unpacks an archive.
+fn is_single_executable_asset(name: &str) -> bool {
+	name.ends_with(".exe")
 }
 fn select_release(
 	releases: Vec<Release>,
@@ -707,14 +721,31 @@ async fn download_package(
 			return Err("Update cancelled.".into());
 		}
 		if !reused {
-			let partial = directory.join("package.zip");
-			match tokio::fs::remove_file(&partial).await {
+			// The single Windows executable stages ready to move; every other
+			// platform still lands an archive for unpack().
+			let staged = if is_single_executable_asset(&archive.name) {
+				directory.join("package").join("Nivra.exe")
+			} else {
+				directory.join("package.zip")
+			};
+			if let Some(parent) = staged.parent()
+				&& tokio::fs::create_dir_all(parent).await.is_err()
+			{
+				return Err("Could not prepare update storage.".into());
+			}
+			match tokio::fs::remove_file(&staged).await {
 				Ok(()) => {}
 				Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
 				Err(_) => return Err("Could not discard the partial update.".into()),
 			}
 			progress.store(0, Ordering::Relaxed);
-			download_full(&client, &archive, &directory, &expected, &cancel, &progress).await?;
+			download_full(&client, &archive, &staged, &expected, &cancel, &progress).await?;
+		}
+		if is_single_executable_asset(&archive.name) {
+			if !directory.join("package").join("Nivra.exe").is_file() {
+				return Err("The staged update is missing its executable.".into());
+			}
+			return Ok(());
 		}
 		let path = directory.clone();
 		let installation = stage.installation.clone();
@@ -738,7 +769,7 @@ async fn download_package(
 async fn download_full(
 	client: &reqwest::Client,
 	archive: &Asset,
-	directory: &std::path::Path,
+	destination: &std::path::Path,
 	expected: &[u8; 32],
 	cancel: &AtomicBool,
 	progress: &AtomicU64,
@@ -754,7 +785,7 @@ async fn download_full(
 	let mut file = tokio::fs::OpenOptions::new()
 		.write(true)
 		.create_new(true)
-		.open(directory.join("package.zip"))
+		.open(destination)
 		.await
 		.map_err(|_| "Could not create the update download.".to_owned())?;
 	let mut hasher = Sha256::new();
@@ -894,4 +925,54 @@ pub fn debug_check() -> Result<(), String> {
 		}
 	}
 	install::debug_check()
+}
+
+#[cfg(test)]
+mod tests {
+	use super::{asset_name, checksum, is_single_executable_asset};
+
+	#[test]
+	fn windows_update_looks_for_the_single_exe() {
+		let Some(name) = asset_name("v1.0.6") else {
+			// No installable asset by design (e.g. Linux outside an AppImage).
+			return;
+		};
+		if cfg!(windows) {
+			let arch = if cfg!(target_arch = "aarch64") {
+				"ARM64"
+			} else {
+				"X64"
+			};
+			assert_eq!(name, format!("Nivra-v1.0.6-Windows-{arch}.exe"));
+			assert!(is_single_executable_asset(&name));
+		} else {
+			assert!(!is_single_executable_asset(&name));
+		}
+	}
+
+	#[test]
+	fn single_exe_assets_skip_the_zip_stage() {
+		assert!(is_single_executable_asset("Nivra-v1.0.6-Windows-X64.exe"));
+		assert!(is_single_executable_asset("Nivra-v1.0.6-Windows-ARM64.exe"));
+		assert!(!is_single_executable_asset("nivra-v1.0.5-Windows-X64.zip"));
+		assert!(!is_single_executable_asset(
+			"nivra-v1.0.6-Linux-X64.AppImage"
+		));
+		assert!(!is_single_executable_asset("nivra-v1.0.6-macOS-ARM64.zip"));
+	}
+
+	#[test]
+	fn checksum_file_covers_the_single_exe_name() {
+		let body = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  Nivra-v1.0.6-Windows-X64.exe\n";
+		let expected: [u8; 32] = [
+			0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f,
+			0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b,
+			0x78, 0x52, 0xb8, 0x55,
+		];
+		assert_eq!(
+			checksum(body.as_bytes(), "Nivra-v1.0.6-Windows-X64.exe").unwrap(),
+			expected
+		);
+		assert!(checksum(body.as_bytes(), "nivra-v1.0.5-Windows-X64.zip").is_err());
+	}
 }

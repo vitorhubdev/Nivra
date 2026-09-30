@@ -966,7 +966,10 @@ impl DiscordApi {
 				if before.is_some() && after.is_some() {
 					return Event::Failure(Failure::Protocol);
 				}
-				let mut path = format!("/channels/{channel}/messages?limit=50");
+				let mut path = format!(
+					"/channels/{channel}/messages?limit={}",
+					client_core::HISTORY_PAGE
+				);
 				if let Some(before) = before {
 					path.push_str(&format!("&before={before}"));
 				}
@@ -979,7 +982,7 @@ impl DiscordApi {
 					.and_then(|bytes| {
 						decode::<Vec<MessageDto>>(&bytes).map_err(|_| Failure::Protocol)
 					}) {
-					Ok(messages) if messages.len() <= 50 => Event::History {
+					Ok(messages) if messages.len() <= client_core::HISTORY_PAGE => Event::History {
 						channel,
 						request,
 						older: before.is_some(),
@@ -1814,7 +1817,7 @@ mod tests {
 					("after=0", vec![2, 1]),
 					("after=9", vec![11, 10]),
 					("before=9", vec![8, 7]),
-					("after=99", (100..151).collect()),
+					("after=99", (100..201).collect()),
 				] {
 					let (mut socket, _) = listener.accept().await.unwrap();
 					let mut request = Vec::new();
@@ -1829,7 +1832,7 @@ mod tests {
 						}
 					}
 					assert!(std::str::from_utf8(&request).unwrap().starts_with(&format!(
-						"GET /channels/1/messages?limit=50&{cursor} HTTP/1.1\r\n"
+						"GET /channels/1/messages?limit=100&{cursor} HTTP/1.1\r\n"
 					),));
 					let body = serde_json::to_string(
 						&ids.into_iter()

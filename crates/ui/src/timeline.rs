@@ -62,6 +62,13 @@ pub struct TimelineView {
 	pub(super) select_anchor: Option<Id>,
 	/// Removal fade start (egui time) per id sent for delete; space held until echo.
 	pub(super) removing: BTreeMap<Id, f64>,
+	/// Ids leaving together. Hidden in one layout pass after the short fade.
+	pub(super) batch_hold: BTreeSet<Id>,
+	batch_hold_at: Option<f64>,
+	batch_collapsed: bool,
+	batch_anchored: bool,
+	/// A held row was still in the timeline after the hold window.
+	pub(super) batch_restore_notice: bool,
 	/// Ids painted this frame, backing "select all visible".
 	pub(super) last_visible: Vec<Id>,
 	/// Last pointer height while a text-selection drag runs; survives hover loss
@@ -884,10 +891,14 @@ impl TimelineView {
 		{
 			cancel = true;
 		}
+		let colors = crate::design::palette(ui);
+		ui.visuals_mut().text_cursor.stroke.width = 1.5;
+		ui.visuals_mut().text_cursor.stroke.color = colors.text_strong;
 		let response = egui::TextEdit::multiline(&mut edit.text)
 			.id(editor_id)
 			.desired_width(f32::INFINITY)
-			.desired_rows(1)
+			.desired_rows(2)
+			.min_size(egui::vec2(160.0, 44.0))
 			.show(ui)
 			.response;
 		if edit.focus_requested {
@@ -919,6 +930,10 @@ impl TimelineView {
 	pub(super) fn take_removal_compensation(&mut self, ids: &[Id]) -> f32 {
 		let mut total = 0.0;
 		for id in ids {
+			// Grouped rows leave in one pass. Adding each echo would step the list.
+			if self.batch_hold.contains(id) {
+				continue;
+			}
 			if self.removing.remove(id).is_some()
 				&& let Some((_, height)) = self.rows.iter().find(|(row, _)| row == id)
 			{
@@ -931,6 +946,55 @@ impl TimelineView {
 		if delta > 0.0 {
 			self.scroll_offset += delta;
 		}
+	}
+
+	/// Start one exit for every id. The rows stay until the fade ends, then
+	/// leave the layout together so each server echo cannot shift the list.
+	pub(super) fn begin_group_removal(&mut self, ids: &[Id], now: f64) {
+		self.batch_hold.clear();
+		for id in ids {
+			self.batch_hold.insert(*id);
+			self.removing.insert(*id, now);
+		}
+		self.batch_hold_at = Some(now);
+		self.batch_collapsed = false;
+		self.batch_anchored = false;
+		if !self.following
+			&& let Some(anchor) = crate::batch_select::stable_scroll_anchor(
+				&self.rows,
+				self.scroll_offset,
+				&self.batch_hold,
+			) {
+			self.anchor = Some(anchor);
+			self.batch_anchored = true;
+		}
+	}
+
+	/// An echo for a grouped id must not add its height to the scroll.
+	pub(super) fn note_group_echo(&mut self, ids: &[Id]) {
+		for id in ids {
+			if self.batch_hold.remove(id) {
+				self.removing.remove(id);
+			}
+		}
+		if self.batch_hold.is_empty() {
+			self.batch_hold_at = None;
+			self.batch_collapsed = false;
+			self.batch_anchored = false;
+		}
+	}
+
+	/// Stop a group exit that has not been confirmed. Rows stay where they are.
+	pub(super) fn cancel_group_removal(&mut self) {
+		let held: Vec<Id> = self.batch_hold.iter().copied().collect();
+		for id in held {
+			self.removing.remove(&id);
+		}
+		self.batch_hold.clear();
+		self.batch_hold_at = None;
+		self.batch_collapsed = false;
+		self.batch_anchored = false;
+		self.revision = u64::MAX;
 	}
 }
 
@@ -1042,24 +1106,24 @@ fn message_actions(
 			});
 			ui.separator();
 		}
-		if crate::select::has_selection(ui.ctx())
-			&& ui.button(crate::i18n::text(language, "Copy")).clicked()
-		{
-			crate::select::request_copy(ui.ctx());
-			ui.close();
-		}
-		if crate::select::has_selection(ui.ctx())
-			&& ui
+		// One entry per action: a text range owns Copy / Save .txt.
+		// The whole message is copied only when no range is active.
+		if crate::select::has_selection(ui.ctx()) {
+			if ui.button(crate::i18n::text(language, "Copy")).clicked() {
+				crate::select::request_copy(ui.ctx());
+				ui.close();
+			}
+			if ui
 				.button(crate::i18n::text(language, "Save .txt"))
 				.clicked()
-		{
-			let text = crate::select::selected_text(ui.ctx());
-			if !text.is_empty() {
-				*save_txt = Some(("selection.txt".to_owned(), text.into_bytes()));
+			{
+				let text = crate::select::selected_text(ui.ctx());
+				if !text.is_empty() {
+					*save_txt = Some(("selection.txt".to_owned(), text.into_bytes()));
+				}
+				ui.close();
 			}
-			ui.close();
-		}
-		if ui
+		} else if ui
 			.button(crate::i18n::text(language, "Copy message"))
 			.clicked()
 		{
@@ -1670,6 +1734,43 @@ impl TimelineView {
 				..Self::default()
 			};
 		}
+		let now = ui.input(|input| input.time);
+		if let Some(started) = self.batch_hold_at {
+			let elapsed = now - started;
+			if !self.batch_collapsed && elapsed >= crate::batch_select::REMOVAL_SECS as f64 {
+				self.batch_collapsed = true;
+				self.revision = u64::MAX;
+			}
+			if elapsed >= crate::batch_select::REMOVAL_HOLD_SECS {
+				let stuck: Vec<Id> = self
+					.batch_hold
+					.iter()
+					.copied()
+					.filter(|id| state.timeline.get(*id).is_some())
+					.collect();
+				if stuck.is_empty() {
+					self.batch_hold.clear();
+					self.batch_hold_at = None;
+					self.batch_collapsed = false;
+					self.batch_anchored = false;
+				} else {
+					for id in &stuck {
+						self.batch_hold.remove(id);
+						self.removing.remove(id);
+					}
+					self.batch_restore_notice = true;
+					self.batch_collapsed = !self.batch_hold.is_empty();
+					self.batch_anchored = false;
+					self.revision = u64::MAX;
+					if self.batch_hold.is_empty() {
+						self.batch_hold_at = None;
+					}
+				}
+			} else if !self.batch_collapsed {
+				ui.ctx()
+					.request_repaint_after(std::time::Duration::from_millis(16));
+			}
+		}
 		let own_user = state.user.as_ref().map(|user| user.id);
 		self.batch_delete.retain(|id| {
 			state.timeline.get(*id).is_some_and(|message| {
@@ -1775,6 +1876,16 @@ impl TimelineView {
 		let mut offset = None;
 		let mut lead_rows = None;
 		if changed {
+			if self.batch_collapsed && !self.batch_anchored && !self.following {
+				if let Some(anchor) = crate::batch_select::stable_scroll_anchor(
+					&self.rows,
+					self.scroll_offset,
+					&self.batch_hold,
+				) {
+					self.anchor = Some(anchor);
+				}
+				self.batch_anchored = true;
+			}
 			if content_dimensions_changed {
 				self.heights.clear();
 				self.pending_heights.clear();
@@ -1806,6 +1917,7 @@ impl TimelineView {
 			self.rows = starter
 				.into_iter()
 				.chain(display_rows(state))
+				.filter(|message| !(self.batch_collapsed && self.batch_hold.contains(&message.id)))
 				.map(|m| {
 					let prior = previous;
 					let deleted = state.timeline.is_deleted(m.id);
@@ -1940,7 +2052,7 @@ impl TimelineView {
 		}
 		let mut select_scroll = 0.0;
 		if dragging_text
-			&& crate::select::has_selection(ui.ctx())
+			&& (self.select_mode || crate::select::has_selection(ui.ctx()))
 			&& let Some(y) = self.drag_pointer_y
 		{
 			let speed = crate::select::edge_scroll_speed(y, area.top(), area.bottom());
@@ -3104,13 +3216,17 @@ impl TimelineView {
 									}
 								}
 							}
-							// Dragging across boxes paints the selection without
+							// Dragging across a row paints the selection without
 							// untoggling on release: add-only while decidedly dragging.
 							let dragging = ui.input(|input| {
 								input.pointer.primary_down()
 									&& input.pointer.is_decidedly_dragging()
 							});
-							if dragging && toggle.hovered() && !self.batch_delete.contains(&id) {
+							let over_row = dragging
+								&& ui
+									.input(|input| input.pointer.hover_pos())
+									.is_some_and(|pos| rect.contains(pos));
+							if over_row && !self.batch_delete.contains(&id) {
 								let _ = toggle_batch_delete(&mut self.batch_delete, id);
 							}
 						}
@@ -3197,11 +3313,13 @@ impl TimelineView {
 						&& !other_toolbar_hover
 						&& !egui::Popup::is_any_open(ui.ctx())
 						&& retained_toolbar.is_none_or(|(active, _)| active == id);
+					// A text-range right-click already opens the selection menu.
+					// Opening this menu too listed Copy and Save .txt twice.
 					let context_menu = (ui.rect_contains_pointer(rect) || toolbar_hover)
 						&& !other_toolbar_hover
 						&& !reaction_menu && !egui::Popup::is_any_open(ui.ctx())
-						&& (ui.input(|i| i.pointer.secondary_clicked())
-							|| crate::select::open_menu(ui.ctx()));
+						&& !crate::select::open_menu(ui.ctx())
+						&& ui.input(|i| i.pointer.secondary_clicked());
 					if context_menu
 						|| hovered || focus.has_focus()
 						|| keyboard_focus.as_ref().is_some_and(|r| r.id == focus.id)
@@ -3378,7 +3496,12 @@ impl TimelineView {
 									.inner
 									.clicked()
 							{
-								*editing = Some((message.channel, id, message.content.clone()));
+								*editing = None;
+								self.enter_inline_edit(
+									message.channel,
+									id,
+									message.content.clone(),
+								);
 								self.edit_started = true;
 							}
 							if can_delete
@@ -3924,6 +4047,7 @@ impl TimelineView {
 											received: 0,
 											total: attachment.size,
 											status: crate::batch_select::BatchFileStatus::Queued,
+											error: None,
 										})
 										.collect();
 									self.batch_download_attachments = attachments;
@@ -3993,7 +4117,7 @@ impl TimelineView {
 									crate::i18n::text(language, "Done")
 								}
 								crate::batch_select::BatchFileStatus::Failed => {
-									crate::i18n::text(language, "Failed")
+									file.error.unwrap_or(crate::i18n::text(language, "Failed"))
 								}
 								crate::batch_select::BatchFileStatus::Cancelled => {
 									crate::i18n::text(language, "Cancelled")
@@ -6500,6 +6624,20 @@ mod tests {
 							.then_some(label.as_str()))
 						.collect::<Vec<_>>(),
 					menu_labels,
+				);
+				assert_eq!(
+					labels
+						.iter()
+						.filter(|(label, _)| label == "Copy message")
+						.count(),
+					1,
+					"the message menu lists copy once"
+				);
+				assert!(
+					!labels
+						.iter()
+						.any(|(label, _)| label == "Copy" || label == "Save .txt"),
+					"a message menu without a text range does not repeat the selection actions"
 				);
 				let reply = labels
 					.iter()

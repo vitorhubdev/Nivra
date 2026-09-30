@@ -1854,7 +1854,7 @@ mod tests {
 	}
 }
 
-/// Release channel shown in the title bar; stable builds show nothing.
+/// Release channel shown in the title bar. Stable builds keep a small version dot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Channel {
 	#[default]
@@ -1867,10 +1867,24 @@ pub struct Build {
 	pub channel: Channel,
 	pub version: &'static str,
 }
-/// Gradient release pill with a glow, a channel glyph and the version. None for stable builds.
+/// Small orange dot beside the window controls. Hover reveals the version.
+fn version_dot(ui: &mut egui::Ui, version: &str) -> egui::Response {
+	let (rect, response) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+	ui.painter()
+		.circle_filled(rect.center(), 4.0, rgb(0xe8a33d));
+	let label = if version.is_empty() {
+		"Nivra".to_owned()
+	} else {
+		format!("Nivra {version}")
+	};
+	response.on_hover_text(label)
+}
+
+/// Gradient release pill with a glow, a channel glyph and the version.
+/// Stable builds show the orange version dot beside the window controls.
 pub fn build_badge(ui: &mut egui::Ui, build: Build) -> Option<egui::Response> {
 	let (label, hint, stops) = match build.channel {
-		Channel::Stable => return None,
+		Channel::Stable => return Some(version_dot(ui, build.version)),
 		Channel::Nightly => (
 			"NIGHTLY",
 			"Nightly build from the latest main. Unofficial client; live compatibility is unverified.",
@@ -1901,6 +1915,11 @@ pub fn build_badge(ui: &mut egui::Ui, build: Build) -> Option<egui::Response> {
 		+ 5.0 + title.size().x
 		+ version.as_ref().map_or(0.0, |v| 13.0 + v.size().x)
 		+ PAD;
+	// The title-bar slot is often only wide enough for the orange cap. A clipped
+	// pill looks like a dot and hides the version, so use the hover dot instead.
+	if ui.available_width() < width {
+		return Some(version_dot(ui, build.version));
+	}
 	let (rect, response) = ui.allocate_exact_size(egui::vec2(width, HEIGHT), egui::Sense::hover());
 	let painter = ui.painter();
 	let radius = HEIGHT / 2.0;
@@ -1978,7 +1997,12 @@ pub fn build_badge(ui: &mut egui::Ui, build: Build) -> Option<egui::Response> {
 			Color32::WHITE,
 		);
 	}
-	Some(response.on_hover_text(hint))
+	let hover = if build.version.is_empty() {
+		hint.to_owned()
+	} else {
+		format!("Nivra {} · {hint}", build.version)
+	};
+	Some(response.on_hover_text(hover))
 }
 
 /// Discord-style settings row with a pill switch on the right. Clicking anywhere on the row

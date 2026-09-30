@@ -210,6 +210,38 @@ pub fn select_all_visible(ordered: &[Id], selected: &mut BTreeSet<Id>) -> usize 
 /// Past this the row reappears instead of vanishing silently on a failed delete.
 pub const REMOVAL_HOLD_SECS: f64 = 5.0;
 
+/// First row that survives `removed` and still meets the viewport.
+/// The inset is how far into that row the current scroll sits, so one
+/// layout pass can keep it still instead of stepping once per delete.
+pub fn stable_scroll_anchor(
+	rows: &[(Id, f32)],
+	scroll: f32,
+	removed: &BTreeSet<Id>,
+) -> Option<(Id, f32)> {
+	let mut y = 0.0;
+	for (id, height) in rows {
+		let bottom = y + *height;
+		if !removed.contains(id) && bottom > scroll + 0.5 {
+			let inset = (scroll - y).max(0.0).min((*height).max(0.0));
+			return Some((*id, inset));
+		}
+		y = bottom;
+	}
+	None
+}
+
+/// Scroll offset that places `anchor` at the same inset after `removed` rows are gone.
+pub fn offset_keeping_anchor(rows: &[(Id, f32)], anchor: Id, inset: f32) -> f32 {
+	let mut y = 0.0;
+	for (id, height) in rows {
+		if *id == anchor {
+			return y + inset.min((*height).max(0.0));
+		}
+		y += *height;
+	}
+	y
+}
+
 /// Per-file manager state. Transfers run on the desktop; this is the rendered snapshot.
 #[derive(Clone)]
 pub struct BatchFileView {
@@ -217,6 +249,7 @@ pub struct BatchFileView {
 	pub received: u64,
 	pub total: u64,
 	pub status: BatchFileStatus,
+	pub error: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -231,6 +264,43 @@ pub enum BatchFileStatus {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn group_removal_anchors_once_instead_of_stepping_per_echo() {
+		let rows = vec![
+			(Id(1), 100.0),
+			(Id(2), 100.0),
+			(Id(3), 100.0),
+			(Id(4), 100.0),
+			(Id(5), 100.0),
+		];
+		let scroll = 150.0;
+		let removed = BTreeSet::from([Id(2), Id(3)]);
+		let (anchor, inset) = stable_scroll_anchor(&rows, scroll, &removed).unwrap();
+		assert_eq!(anchor, Id(4));
+		assert!(!removed.contains(&anchor));
+		let kept: Vec<_> = rows
+			.iter()
+			.copied()
+			.filter(|(id, _)| !removed.contains(id))
+			.collect();
+		let after = offset_keeping_anchor(&kept, anchor, inset);
+		// One collapse: the viewport moves by the deleted height above the
+		// survivor, not by each echoed row (100 + 100) added onto the scroll.
+		assert_eq!(after, 100.0);
+		let per_echo = scroll + 100.0 + 100.0;
+		assert!(per_echo - scroll > (scroll - after).abs());
+
+		let tail = BTreeSet::from([Id(5)]);
+		let (anchor, inset) = stable_scroll_anchor(&rows, scroll, &tail).unwrap();
+		assert_eq!(anchor, Id(2));
+		let kept: Vec<_> = rows
+			.iter()
+			.copied()
+			.filter(|(id, _)| !tail.contains(id))
+			.collect();
+		assert_eq!(offset_keeping_anchor(&kept, anchor, inset), scroll);
+	}
 
 	#[test]
 	fn entering_mode_keeps_row_size() {

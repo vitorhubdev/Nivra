@@ -320,13 +320,22 @@ pub(super) fn devices() -> Result<Vec<(String, String)>, &'static str> {
 			))
 		})
 		.collect();
-	// Keep backend identities distinct: virtual devices may share a friendly name.
+	// DirectShow repeats the same physical camera Media Foundation already listed.
+	let seen = devices
+		.iter()
+		.map(|(_, name)| camera_name_key(name))
+		.collect::<std::collections::BTreeSet<_>>();
 	devices.extend(
 		ds.unwrap_or_default()
 			.into_iter()
+			.filter(|(_, name)| !seen.contains(&camera_name_key(name)))
 			.take(32usize.saturating_sub(devices.len())),
 	);
 	Ok(devices)
+}
+
+fn camera_name_key(name: &str) -> String {
+	name.trim().to_lowercase()
 }
 
 fn selected_camera(
@@ -474,6 +483,15 @@ fn rgb_rows(bytes: &[u8], first: usize, stride: i32) -> Result<Vec<u8>, &'static
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn camera_name_key_collapses_the_same_device() {
+		assert_eq!(
+			camera_name_key(" Anker PowerConf C200 "),
+			camera_name_key("anker powerconf c200")
+		);
+	}
+
 	#[test]
 	#[ignore = "manual read-only device enumeration; never activates a camera"]
 	fn list_windows_camera_names_without_capture() {

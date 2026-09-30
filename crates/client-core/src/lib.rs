@@ -55,6 +55,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use trail::Place;
 
 pub const MAX_DRAFT_BYTES: usize = 2 * 1024 * 1024;
+/// One history page. Discord accepts at most 100 messages per request.
+pub const HISTORY_PAGE: usize = 100;
 pub const MAX_CONTENT: usize = 2000;
 /// Message length for full Nitro; Basic and Classic keep `MAX_CONTENT`.
 pub const MAX_CONTENT_NITRO: usize = 4000;
@@ -3126,7 +3128,7 @@ impl State {
 				let mut ids = BTreeSet::new();
 				let has_deleted_reference = messages.iter().any(|message| message.reply_deleted);
 				if older != self.history_before.is_some()
-					|| messages.len() > 50
+					|| messages.len() > HISTORY_PAGE
 					|| messages.iter().any(|message| {
 						message.channel != channel
 							|| (has_deleted_reference && !Timeline::valid_message(message))
@@ -3162,11 +3164,11 @@ impl State {
 				self.older_exhausted = if let Some(after) = self.history_after {
 					after.0 == 0
 				} else {
-					messages.len() < 50
+					messages.len() < HISTORY_PAGE
 				};
 				if self.history_after.is_some() {
 					self.newer_cursor = messages.iter().map(|m| m.id).max();
-					self.newer_may_have_more = messages.len() == 50;
+					self.newer_may_have_more = messages.len() == HISTORY_PAGE;
 				}
 				let jump = self.history_after.is_some() && self.timeline.is_empty();
 				let r = self.timeline.finish_page(messages, older);
@@ -5298,7 +5300,7 @@ mod tests {
 				channel: Id(1),
 				request,
 				older: false,
-				messages: (100..150).map(message).collect(),
+				messages: (100..200).map(message).collect(),
 			},
 		);
 		let positions = state.timeline.row_ids().collect::<Vec<_>>();
@@ -5321,13 +5323,20 @@ mod tests {
 		);
 		assert_eq!(state.reply, None);
 		state.reply = Some(Reply::to(Id(101)));
-		let mut ids: Vec<_> = (101..150).map(Id).collect();
-		ids.extend([Id(101), Id(999)]); // Duplicate and unknown IDs create no extra rows.
+		let mut ids: Vec<_> = (101..200).map(Id).collect();
+		ids.push(Id(101)); // A duplicate stays inside the 100-id bulk cap.
 		apply(
 			&mut state,
 			Event::DeleteBulk {
 				channel: Id(1),
 				ids,
+			},
+		);
+		apply(
+			&mut state,
+			Event::DeleteBulk {
+				channel: Id(1),
+				ids: vec![Id(999)],
 			},
 		);
 		assert_eq!(state.reply, None);
@@ -5363,7 +5372,7 @@ mod tests {
 			},
 		);
 		assert_eq!(state.timeline.len(), 1);
-		assert_eq!(state.timeline.row_count(), 51);
+		assert_eq!(state.timeline.row_count(), 101);
 		assert_eq!(state.timeline.row_ids().next(), Some(Id(99)));
 		state.history(None);
 		let request = state.request;
@@ -5380,16 +5389,16 @@ mod tests {
 				channel: Id(1),
 				request,
 				older: false,
-				messages: vec![message(99), message(150)],
+				messages: vec![message(99), message(200)],
 			},
 		);
 		assert_eq!(
 			state.timeline.row_ids().collect::<Vec<_>>(),
-			[Id(99), Id(150)]
+			[Id(99), Id(200)]
 		);
 		assert!(state.timeline.get(Id(99)).is_none());
 		assert!(state.timeline.get_display(Id(99)).is_none());
-		assert!(state.timeline.get(Id(150)).is_some());
+		assert!(state.timeline.get(Id(200)).is_some());
 		state.history(None);
 		let request = state.request;
 		apply(&mut state, Event::Resync);
@@ -5993,7 +6002,7 @@ mod tests {
 				channel: Id(1),
 				request,
 				older: false,
-				messages: (51..101).map(message).collect(),
+				messages: (51..151).map(message).collect(),
 			},
 		);
 		assert_eq!(state.freshness, Freshness::Fresh);
@@ -6025,7 +6034,7 @@ mod tests {
 				messages: vec![message(50)],
 			},
 		);
-		assert_eq!(state.timeline.len(), 51);
+		assert_eq!(state.timeline.len(), 101);
 		assert!(!state.can_load_older()); // short final page
 		apply(
 			&mut state,
@@ -6034,7 +6043,7 @@ mod tests {
 				ids: vec![Id(50), Id(51)],
 			},
 		);
-		assert_eq!(state.timeline.len(), 49);
+		assert_eq!(state.timeline.len(), 99);
 		assert!(state.timeline.get(Id(50)).is_none());
 
 		state.history(None);

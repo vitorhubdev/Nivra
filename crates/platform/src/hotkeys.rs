@@ -26,7 +26,10 @@ pub struct Hotkeys {
 	registered: [Option<HotKey>; 3],
 	bindings: Option<[KeyChord; 3]>,
 	ptt_down: bool,
+	mute_down: bool,
+	deafen_down: bool,
 	pending_toggles: u8,
+	last_toggle: Option<std::time::Instant>,
 	status: &'static str,
 	#[cfg(target_os = "linux")]
 	portal: Option<tokio::task::JoinHandle<()>>,
@@ -62,7 +65,10 @@ impl Hotkeys {
 			registered: [None; 3],
 			bindings: None,
 			ptt_down: false,
+			mute_down: false,
+			deafen_down: false,
 			pending_toggles: 0,
+			last_toggle: None,
 			status,
 			#[cfg(target_os = "linux")]
 			portal: None,
@@ -91,7 +97,10 @@ impl Hotkeys {
 		self.bindings = Some(next.clone());
 		self.unregister_all();
 		self.ptt_down = false;
+		self.mute_down = false;
+		self.deafen_down = false;
 		self.pending_toggles = 0;
+		self.last_toggle = None;
 
 		#[cfg(target_os = "linux")]
 		if std::env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -144,6 +153,12 @@ impl Hotkeys {
 				modifier_required |= index != PUSH_TO_TALK;
 				continue;
 			}
+			// Mute and deafen need a real chord globally. A bare key still works
+			// while Nivra is focused, but must not fire from games.
+			if index != PUSH_TO_TALK && chord.modifiers == 0 {
+				modifier_required = true;
+				continue;
+			}
 			let Some(hotkey) = native_hotkey(chord) else {
 				failed = true;
 				continue;
@@ -181,8 +196,20 @@ impl Hotkeys {
 					match (index, event.state()) {
 						(PUSH_TO_TALK, HotKeyState::Pressed) => self.ptt_down = true,
 						(PUSH_TO_TALK, HotKeyState::Released) => self.ptt_down = false,
-						(TOGGLE_MUTE, HotKeyState::Pressed) => self.pending_toggles ^= 1,
-						(TOGGLE_DEAFEN, HotKeyState::Pressed) => self.pending_toggles ^= 2,
+						(TOGGLE_MUTE, HotKeyState::Pressed) => {
+							if !self.mute_down {
+								self.mute_down = true;
+								self.pending_toggles |= 1;
+							}
+						}
+						(TOGGLE_MUTE, HotKeyState::Released) => self.mute_down = false,
+						(TOGGLE_DEAFEN, HotKeyState::Pressed) => {
+							if !self.deafen_down {
+								self.deafen_down = true;
+								self.pending_toggles |= 2;
+							}
+						}
+						(TOGGLE_DEAFEN, HotKeyState::Released) => self.deafen_down = false,
 						_ => {}
 					}
 				}
@@ -193,8 +220,17 @@ impl Hotkeys {
 	pub fn take_toggle_pending(&mut self) -> u8 {
 		let pending = std::mem::take(&mut self.pending_toggles);
 		#[cfg(target_os = "linux")]
-		return pending | self.portal_pending.swap(0, Ordering::Relaxed);
-		#[cfg(not(target_os = "linux"))]
+		let pending = pending | self.portal_pending.swap(0, Ordering::Relaxed);
+		if pending == 0 {
+			return 0;
+		}
+		let now = std::time::Instant::now();
+		if self.last_toggle.is_some_and(|then| {
+			now.saturating_duration_since(then) < std::time::Duration::from_millis(400)
+		}) {
+			return 0;
+		}
+		self.last_toggle = Some(now);
 		pending
 	}
 
@@ -258,13 +294,16 @@ async fn portal(
 	.into_iter()
 	.zip(bindings.iter())
 	.filter_map(|((id, description), chord)| {
+		if id != "push-to-talk" && chord.modifiers == 0 {
+			return None;
+		}
 		portal_trigger(chord)
 			.map(|trigger| NewShortcut::new(id, description).preferred_trigger(trigger.as_str()))
 	})
 	.collect();
-	let modifier_required = bindings[TOGGLE_MUTE..].iter().any(|chord| {
-		chord.is_valid() && chord.modifiers == 0 && !is_standalone_global_key(&chord.key)
-	});
+	let modifier_required = bindings[TOGGLE_MUTE..]
+		.iter()
+		.any(|chord| chord.is_valid() && chord.modifiers == 0);
 	if shortcuts.is_empty() {
 		status.store(if modifier_required { 4 } else { 3 }, Ordering::Relaxed);
 		wake();
@@ -483,5 +522,18 @@ mod tests {
 		assert!(native_hotkey(&KeyChord::new("PageUp", 0)).is_some());
 		assert!(native_hotkey(&KeyChord::new("Insert", 0)).is_some());
 		assert!(native_hotkey(&KeyChord::new("F12", 0)).is_some());
+	}
+
+	#[test]
+	fn repeated_mute_toggles_collapse_inside_the_debounce_window() {
+		let mut hotkeys = Hotkeys::new(|| {});
+		hotkeys.pending_toggles = 1;
+		assert_eq!(hotkeys.take_toggle_pending(), 1);
+		hotkeys.pending_toggles = 1;
+		assert_eq!(
+			hotkeys.take_toggle_pending(),
+			0,
+			"a second mute inside 400 ms is ignored"
+		);
 	}
 }

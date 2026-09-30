@@ -1111,9 +1111,14 @@ impl MessagingUi {
 			self.deleting = None;
 		}
 		self.timeline.batch_delete.retain(|id| !ids.contains(id));
-		// Freed rows vanish at once; hold the viewport by their cached heights.
-		let compensation = self.timeline.take_removal_compensation(ids);
-		self.timeline.compensate_scroll(compensation);
+		// Grouped deletes already left the layout together. Do not step the
+		// scroll once per server echo.
+		if ids.iter().any(|id| self.timeline.batch_hold.contains(id)) {
+			self.timeline.note_group_echo(ids);
+		} else {
+			let compensation = self.timeline.take_removal_compensation(ids);
+			self.timeline.compensate_scroll(compensation);
+		}
 		let clear_batch = if let Some((batch_channel, selected)) = &mut self.deleting_batch {
 			if *batch_channel == channel {
 				selected.retain(|id| !ids.contains(id));
@@ -2573,7 +2578,9 @@ impl MessagingUi {
 			.rev()
 			.find(|message| !message.unsupported && state.can_edit(channel, message.id))
 		{
-			self.editing = Some((channel, message.id, message.content.clone()));
+			self.editing = None;
+			self.timeline
+				.enter_inline_edit(channel, message.id, message.content.clone());
 			self.edit_modified = None;
 			self.composer_edit = None;
 		}
@@ -2834,20 +2841,39 @@ impl MessagingUi {
 			};
 			let mut requested = false;
 			ctx.input_mut(|input| {
-				// eframe consumes native paste key-down. File-only clipboards can emit
-				// no Paste event, so the matching key-up is also a paste trigger.
-				let shortcut = input.events.iter().any(|event| {
-					matches!(event,
-					egui::Event::Key { key: egui::Key::V, pressed, repeat: false, modifiers, .. }
-					if !modifiers.shift && (modifiers.ctrl || modifiers.command || modifiers.alt)
-						&& (*pressed || !self.paste_key_handled))
-				});
+				// eframe often delivers Ctrl+V key-down before the clipboard payload.
+				// Starting the read on that key-down fails once and needs a second press.
+				// Use a Paste event when it is already here, otherwise the key-up.
+				let mut key_down = false;
+				let mut key_up = false;
+				for event in &input.events {
+					if let egui::Event::Key {
+						key: egui::Key::V,
+						pressed,
+						repeat: false,
+						modifiers,
+						..
+					} = event && !modifiers.shift
+						&& (modifiers.ctrl || modifiers.command || modifiers.alt)
+					{
+						if *pressed {
+							key_down = true;
+						} else {
+							key_up = true;
+						}
+					}
+				}
 				let has_paste = input.events.iter().any(|event| {
 					matches!(event, egui::Event::Paste(_) | egui::Event::PasteImage(_))
 				});
-				if has_paste || shortcut {
-					requested = true;
-					self.paste_key_handled = true;
+				let start = has_paste || (key_up && !self.paste_key_handled);
+				if start || key_down {
+					if start {
+						requested = true;
+						self.paste_key_handled = true;
+					} else {
+						self.paste_key_handled = false;
+					}
 					input.events.retain_mut(|event| match event {
 						egui::Event::Paste(text) => {
 							request.text = Some(std::mem::take(text));
@@ -2861,7 +2887,7 @@ impl MessagingUi {
 							key: egui::Key::V, ..
 						} => false,
 						// Option+V can also produce a platform text character.
-						egui::Event::Text(_) if shortcut => false,
+						egui::Event::Text(_) if start || key_down => false,
 						_ => true,
 					});
 				}
@@ -3290,6 +3316,8 @@ impl MessagingUi {
                                         demo,
                                     )
                                 };
+                                ui.visuals_mut().text_cursor.stroke.width = 1.5;
+                                ui.visuals_mut().text_cursor.stroke.color = colors.text_strong;
                                 let output = TextEdit::multiline(draft)
                                     .interactive(keyboard_enabled)
                                     .layouter(&mut layouter)
@@ -3298,10 +3326,10 @@ impl MessagingUi {
                                         horizontal_arrows: true, vertical_arrows: true, escape: editing_here,
                                         ..Default::default()
                                     })
-                                    .desired_rows(1)
+                                    .desired_rows(2)
                                     .desired_width(f32::INFINITY)
                                     // Horizontal layouts reserve the interaction height, including around icons.
-                                    .min_size(egui::vec2(0.0, ui.spacing().interact_size.y))
+                                    .min_size(egui::vec2(0.0, 44.0))
                                     .align(egui::Align2::LEFT_CENTER)
                                     .frame(egui::Frame::NONE)
                                     .hint_text(placeholder.as_str())
@@ -3859,22 +3887,33 @@ impl MessagingUi {
 		self.timeline.video.seen = false;
 		let side = self.drain_side_press();
 		let mut commands = Vec::new();
+		if self.timeline.batch_restore_notice {
+			self.timeline.batch_restore_notice = false;
+			self.toasts.push(
+				design::Level::Warning,
+				crate::i18n::text(
+					self.language,
+					"A selected message could not be deleted and is back in the conversation",
+				),
+			);
+		}
 		if self.timeline.batch_delete_cancel {
 			self.timeline.batch_delete_cancel = false;
 			self.batch_delete_queue.clear();
 			self.batch_delete_next = None;
 			self.timeline.batch_progress = None;
+			self.timeline.cancel_group_removal();
 		}
 		if let Some(due) = self.batch_delete_next
 			&& ui.input(|input| input.time) >= due
 			&& let Some((channel, message)) = self.batch_delete_queue.first().copied()
 		{
 			self.batch_delete_queue.remove(0);
-			// Arm the ~180ms removal fade; the echo frees the space with
-			// scroll compensation, or the fade releases on failure.
+			// The group fade already started. This send does not move the list.
 			self.timeline
 				.removing
-				.insert(message, ui.input(|input| input.time));
+				.entry(message)
+				.or_insert_with(|| ui.input(|input| input.time));
 			if let Some(command) = state.prepare_delete(channel, message) {
 				commands.push(command);
 			}
@@ -5122,6 +5161,12 @@ impl MessagingUi {
 					self.batch_delete_total = self.batch_delete_queue.len();
 					self.batch_delete_sent = 0;
 					self.batch_delete_next = Some(now + batch_delete_gap_secs());
+					let held: Vec<Id> = self
+						.batch_delete_queue
+						.iter()
+						.map(|(_, message)| *message)
+						.collect();
+					self.timeline.begin_group_removal(&held, now);
 					self.timeline.batch_delete.clear();
 					self.timeline.batch_progress = Some((0, self.batch_delete_total));
 					self.deleting_batch = None;
@@ -7266,9 +7311,25 @@ mod composer_tests {
 					}
 				}
 				assert!(activated, "Tab must reach the own-message edit action");
-				assert_eq!(view.editing.as_ref().unwrap().2, "Original");
+				let reopened = view
+					.timeline
+					.inline_edit
+					.as_ref()
+					.map(|edit| edit.text.as_str())
+					.or(view.editing.as_ref().map(|edit| edit.2.as_str()));
+				assert_eq!(reopened, Some("Original"));
 			}
-			let retained = view.editing.as_ref().unwrap().2.clone();
+			let retained = view
+				.editing
+				.as_ref()
+				.map(|edit| edit.2.clone())
+				.or_else(|| {
+					view.timeline
+						.inline_edit
+						.as_ref()
+						.map(|edit| edit.text.clone())
+				})
+				.expect("an editor stays open");
 			let keep_edit = modified && !reopen;
 			assert_eq!(retained != "Original", keep_edit);
 			view.deleting = Some((Id(10), Id(20)));

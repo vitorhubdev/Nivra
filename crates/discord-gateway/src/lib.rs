@@ -1320,6 +1320,9 @@ async fn run_inner(
 					let packet=match if stream {calls.stream_packet(command,owner_id)} else {calls.packet(command)} {
 						Ok(packet)=>packet,
 						Err(_) => {
+							if let Some(event) = calls.take_replaced_departure() {
+								emit(event)?;
+							}
 							match command {
 								client_core::voice::Command::Join{channel,request,..} => emit(Event::Voice(client_core::voice::Event::Failed{channel,request,message:"Previous call is still leaving, or the channel is unavailable; wait for departure or reconnect"}))?,
 								client_core::voice::Command::StartStream{channel,request,stream_request} => emit(Event::Voice(client_core::voice::Event::Stream{channel,request,stream_request,event:client_core::screen::Event::Failed("A screen share is already active, stopping, or the call is unavailable")}))?,
@@ -1329,6 +1332,9 @@ async fn run_inner(
 							continue;
 						}
 					};
+					if let Some(event) = calls.take_replaced_departure() {
+						emit(event)?;
+					}
 					if let client_core::voice::Command::Leave { channel, request } = command
 						&& packet.is_none() && !calls.has_call() {
 						emit(Event::Voice(client_core::voice::Event::Departed { channel, request }))?;

@@ -11,21 +11,29 @@ pub fn running() -> std::io::Result<Vec<String>> {
 	native::running()
 }
 
+/// `CREATE_NO_WINDOW` (0x08000000). The process is created without a console, so a
+/// console app does not flash a window. `STARTF_USESHOWWINDOW` / Hidden is not enough:
+/// the console exists before the child can hide it.
+/// https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Every Windows spawn in `apps/` and `crates/` goes through here.
+#[cfg(target_os = "windows")]
+pub fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+	use std::os::windows::process::CommandExt;
+	let mut command = std::process::Command::new(program);
+	command.creation_flags(CREATE_NO_WINDOW);
+	command
+}
+
 /// Absolute PowerShell 5.1 with no console window (no flash).
-/// All Windows `powershell` launches in apps/ and crates/ must go through here:
-/// fixed `System32` path (not PATH) + `CREATE_NO_WINDOW` (Hidden alone still flashes
-/// because the console is created before PowerShell hides itself).
+/// Fixed `System32` path (not PATH) plus [`hidden_command`].
 #[cfg(target_os = "windows")]
 pub fn powershell_hidden() -> std::process::Command {
-	use std::os::windows::process::CommandExt;
-	const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 	let root = std::env::var_os("SystemRoot")
 		.map(std::path::PathBuf::from)
 		.unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
-	let mut cmd =
-		std::process::Command::new(root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe"));
-	cmd.creation_flags(CREATE_NO_WINDOW);
-	cmd
+	hidden_command(root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe"))
 }
 
 fn accept(path: &str, into: &mut Vec<String>) {
@@ -115,18 +123,13 @@ mod native {
 
 #[cfg(target_os = "windows")]
 mod native {
-	use super::{MAX_PROCESSES, accept};
-	use std::os::windows::process::CommandExt;
-	use std::process::Command;
-
-	const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+	use super::{MAX_PROCESSES, accept, hidden_command};
 
 	/// `tasklist` lists image names without opening another process' handle. Paths are
 	/// unavailable this way, which is fine: detectable entries are image names on Windows.
 	pub fn running() -> std::io::Result<Vec<String>> {
-		let output = Command::new("tasklist.exe")
+		let output = hidden_command("tasklist.exe")
 			.args(["/nh", "/fo", "csv"])
-			.creation_flags(CREATE_NO_WINDOW)
 			.output()?;
 		if !output.status.success() {
 			return Err(std::io::Error::other("process list is unavailable"));
@@ -208,5 +211,35 @@ mod tests {
 		let mut full = vec![String::new(); MAX_PROCESSES];
 		accept("/usr/bin/game", &mut full);
 		assert_eq!(full.len(), MAX_PROCESSES);
+	}
+
+	#[test]
+	fn create_no_window_is_the_documented_flag() {
+		assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);
+	}
+
+	/// The child must start, and a console app must not have a console to flash.
+	#[cfg(windows)]
+	#[test]
+	fn hidden_powershell_has_no_console() {
+		let output = powershell_hidden()
+			.args([
+				"-NoProfile",
+				"-NonInteractive",
+				"-Command",
+				"try { $null = [Console]::WindowWidth; 'has-console' } catch { 'no-console' }",
+			])
+			.output()
+			.expect("hidden PowerShell must start");
+		assert!(
+			output.status.success(),
+			"{}",
+			String::from_utf8_lossy(&output.stderr)
+		);
+		let text = String::from_utf8_lossy(&output.stdout);
+		assert!(
+			text.contains("no-console"),
+			"CREATE_NO_WINDOW should leave the child without a console, got {text}"
+		);
 	}
 }

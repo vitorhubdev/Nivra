@@ -581,36 +581,57 @@ impl Dave {
 		if payload.len() < 3 || payload.len() > MAX_SIGNAL {
 			return Err("Truncated DAVE group transition");
 		}
-		// A working epoch stays usable when this commit/welcome is rejected.
+		// A rejected commit leaves a working epoch in place. A commit that
+		// applies still waits for execute_transition before media uses that key.
 		let keep_media = self.ready && self.session.is_ready();
-		if !keep_media {
-			self.ready = false;
-			self.waiting = false;
+		if let Err(error) = self.transition_budget() {
+			if !keep_media {
+				self.ready = false;
+				self.waiting = false;
+			}
+			return Err(error);
 		}
-		self.transition_budget()?;
 		let transition = u16::from_be_bytes([payload[0], payload[1]]);
-		if opcode == 29 {
+		let failed = if opcode == 29 {
 			if self
 				.session
 				.epoch()
 				.is_some_and(|epoch| epoch.as_u64() == 0)
 				&& self.pending_commit.as_deref() != Some(&payload[2..])
 			{
+				if !keep_media {
+					self.ready = false;
+					self.waiting = false;
+				}
 				return Err("Initial DAVE commit differs from the locally proposed commit");
 			}
-			self.session
-				.process_commit(&payload[2..])
-				.map_err(|_| "DAVE commit validation failed")?;
+			self.session.process_commit(&payload[2..]).is_err()
 		} else {
-			self.session
-				.process_welcome(&payload[2..])
-				.map_err(|_| "DAVE welcome validation failed")?;
+			self.session.process_welcome(&payload[2..]).is_err()
+		};
+		if failed {
+			if !keep_media {
+				self.ready = false;
+				self.waiting = false;
+			}
+			return Err(if opcode == 29 {
+				"DAVE commit validation failed"
+			} else {
+				"DAVE welcome validation failed"
+			});
 		}
-		self.validate_group()?;
+		if self.validate_group().is_err() {
+			self.ready = false;
+			self.waiting = false;
+			return Err("DAVE group does not match the authenticated call participants");
+		}
 		self.pending_commit = None;
 		self.pending = Some(transition);
 		if transition == 0 {
 			self.execute(transition)?;
+		} else {
+			self.ready = false;
+			self.waiting = false;
 		}
 		Ok(transition)
 	}

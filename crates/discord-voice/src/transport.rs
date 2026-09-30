@@ -34,6 +34,16 @@ type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// Time a sole member gives the roster announcement before waiting for a peer.
 const PEER_GRACE: Duration = Duration::from_millis(500);
 
+fn announced_media(dave: &Dave) -> Status {
+	if dave.transport_only {
+		Status::TransportOnly
+	} else {
+		Status::Ready {
+			privacy_code: dave.session.voice_privacy_code().unwrap_or_default().into(),
+		}
+	}
+}
+
 fn negotiation_timeout(
 	hello: bool,
 	transport: bool,
@@ -357,6 +367,7 @@ async fn run_inner(
 	let mut heartbeat_ms: Option<u64> = None;
 	let mut heartbeat_at = Instant::now();
 	let mut awaiting_ack = None;
+	let mut missed_acks = 0u8;
 	let mut heartbeat_sent: Option<Instant> = None;
 	let mut heartbeat_nonce = 0u64;
 	let mut deadline = Some(Instant::now() + Duration::from_secs(90));
@@ -416,8 +427,22 @@ async fn run_inner(
 					next_udp_ping=now+Duration::from_secs(5);
 				}
 				if let Some(interval)=heartbeat_ms && now>=heartbeat_at {
-					// A missed ack used to end the call. Send the next beat instead; a dead
-					// socket still resumes on the close path.
+					// One late ack stays in the call. Three missed acks on a socket that
+					// still accepts writes is a half-open connection: resume, do not hang up.
+					if awaiting_ack.is_some() {
+						missed_acks=missed_acks.saturating_add(1);
+						if missed_acks>=3 {
+							if encryption.is_none() || resume_attempts>=2 {return Err("Voice socket failed; rejoin the call");}
+							video.clear();video.announced=false;
+							resume_attempts+=1;resuming=true;resume_since=Some(Instant::now());capture_reset=true;
+							deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;awaiting_ack=None;heartbeat_sent=None;missed_acks=0;
+							let config=WebSocketConfig::default().max_message_size(Some(MAX_SIGNAL)).max_frame_size(Some(MAX_SIGNAL)).write_buffer_size(0).max_write_buffer_size(MAX_SIGNAL*2);
+							let (replacement,_)=timeout(Duration::from_secs(15),tokio_tungstenite::connect_async_with_config(&url,Some(config),false)).await.map_err(|_|"Voice resume timed out; rejoin the call")?.map_err(|_|"Voice resume failed; rejoin the call")?;
+							ws=replacement;
+							json_send(&mut ws,json!({"op":7,"d":{"server_id":credentials.guild.unwrap_or(credentials.channel).to_string(),"session_id":credentials.session.expose(),"token":credentials.token.expose(),"seq_ack":seq_ack}})).await?;
+							continue;
+						}
+					}
 					heartbeat_nonce=heartbeat_nonce.wrapping_add(1);
 					let sent=Instant::now();
 					json_send(&mut ws,json!({"op":3,"d":{"t":heartbeat_nonce,"seq_ack":seq_ack}})).await?;
@@ -436,7 +461,7 @@ async fn run_inner(
 				if !waiting {waiting_announced=false;}
 				if enabled && !ready_announced {
 					deadline=None;ready_announced=true;
-					emit(Status::Ready{privacy_code:dave.session.voice_privacy_code().unwrap_or_default().into()}).map_err(|_|"Call interface closed")?;
+					emit(announced_media(&dave)).map_err(|_|"Call interface closed")?;
 				}
 				watch.tick(&mut metrics,&mut receivers,decoder.as_ref(),now);
 				// Lost or stalled pictures stay frozen until the sender refreshes; ask twice a second at most.
@@ -576,7 +601,7 @@ async fn run_inner(
 					if !dave.ready {metrics.video(Video::NotReady,1);continue;}
 					let Some((user,frame))=receivers.push(rtp.ssrc,rtp.sequence,rtp.timestamp,rtp.marker,&rtp.payload) else{continue;};
 					if !dave.contains(user) {metrics.video(Video::NotReady,1);continue;}
-					let Ok(data)=dave.session.decrypt(user,davey::MediaType::VIDEO,&frame) else{receivers.require_keyframe(user);metrics.video(Video::DecryptFailed,1);continue;};
+					let data=if dave.transport_only {frame} else {let Ok(data)=dave.session.decrypt(user,davey::MediaType::VIDEO,&frame) else{receivers.require_keyframe(user);metrics.video(Video::DecryptFailed,1);continue;};data};
 					let keyframe=is_keyframe(&data);
 					if keyframe {metrics.video(Video::Keyframes,1);metrics.video(Video::KeyframesWithoutParams,u64::from(!has_parameter_sets(&data)));}
 					if !receivers.accept(user,keyframe) {metrics.video(Video::Gated,1);continue;}
@@ -587,7 +612,7 @@ async fn run_inner(
 				let (source,seq,frame)=(rtp.ssrc,rtp.sequence,rtp.payload);
 				let Some(user)=mixer.user(source) else{continue;};
 				if !dave.ready || !dave.contains(user) || controls.borrow().deafened {continue;}
-				let Ok(opus)=dave.session.decrypt(user,davey::MediaType::AUDIO,&frame) else{continue;};
+				let opus=if dave.transport_only {frame} else {let Ok(opus)=dave.session.decrypt(user,davey::MediaType::AUDIO,&frame) else{continue;};opus};
 				mixer.push(source,seq,opus);
 				metrics.finish(crate::diagnostics::Stage::Receive, start);
 			},
@@ -599,7 +624,7 @@ async fn run_inner(
 						if encryption.is_none() || resume_attempts>=2 {return Err("Voice socket failed; rejoin the call");}
 						video.clear();video.announced=false;
 						resume_attempts+=1;resuming=true;resume_since=Some(Instant::now());capture_reset=true;
-						deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;awaiting_ack=None;heartbeat_sent=None;
+						deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;awaiting_ack=None;heartbeat_sent=None;missed_acks=0;
 						let config=WebSocketConfig::default().max_message_size(Some(MAX_SIGNAL)).max_frame_size(Some(MAX_SIGNAL)).write_buffer_size(0).max_write_buffer_size(MAX_SIGNAL*2);
 						let (replacement,_)=timeout(Duration::from_secs(15),tokio_tungstenite::connect_async_with_config(&url,Some(config),false)).await.map_err(|_|"Voice resume timed out; rejoin the call")?.map_err(|_|"Voice resume failed; rejoin the call")?;
 						ws=replacement;
@@ -628,7 +653,7 @@ async fn run_inner(
 									let ms=u32::try_from(sent.elapsed().as_millis().min(9_999)).unwrap_or(9_999);
 									emit(Status::Ping(ms)).map_err(|_| "Call interface closed")?;
 								}
-								awaiting_ack=None;
+								awaiting_ack=None;missed_acks=0;
 							},
 							2=>{
 								if udp.is_some(){return Err("Unexpected voice transport replacement; rejoin the call");}
@@ -805,7 +830,7 @@ async fn run_inner(
 								json_send(&mut ws,json!({"op":5,"d":{"speaking":0,"delay":0,"ssrc":ssrc}})).await?;
 								speaking=false;silence=0;
 								resuming=false;resume_since=None;ready_announced=true;
-								emit(Status::Ready{privacy_code:dave.session.voice_privacy_code().unwrap_or_default().into()}).map_err(|_|"Call interface closed")?;
+								emit(announced_media(&dave)).map_err(|_|"Call interface closed")?;
 							},
 							12=>{
 								let user=id(data,"user_id")?;
@@ -1311,7 +1336,7 @@ async fn run_stream_inner(
 				}
 				metrics.finish(crate::diagnostics::Stage::VideoSend,start);
 				if outgoing.is_empty() && outgoing_keyframe {
-					if awaiting_keyframe {emit(Status::Ready{privacy_code:dave.session.voice_privacy_code().unwrap_or_default().into()}).map_err(|_|"Stream interface closed")?;}
+					if awaiting_keyframe {emit(announced_media(&dave)).map_err(|_|"Stream interface closed")?;}
 					awaiting_keyframe=false;
 				}
 			},
@@ -1356,7 +1381,7 @@ async fn run_stream_inner(
 						json_send(&mut ws,json!({"op":15,"d":{"any":100}})).await?;
 						metrics.signal(Signal::SinkWantsSent,1);
 						next_sink_wants=now+SINK_WANTS_INTERVAL;
-						emit(Status::Ready{privacy_code:dave.session.voice_privacy_code().unwrap_or_default().into()}).map_err(|_|"Stream interface closed")?;
+						emit(announced_media(&dave)).map_err(|_|"Stream interface closed")?;
 					}
 					announced=true; deadline=None;
 				}
@@ -1470,7 +1495,7 @@ async fn run_stream_inner(
 					let Some(user)=mixer.user(rtp.ssrc) else {continue;};
 					if !dave.contains(user) {continue;}
 					let start=metrics.start();
-					let Ok(opus)=dave.session.decrypt(user,davey::MediaType::AUDIO,&rtp.payload) else {metrics.poll(false,1,false,0);continue;};
+					let opus=if dave.transport_only {rtp.payload} else {let Ok(opus)=dave.session.decrypt(user,davey::MediaType::AUDIO,&rtp.payload) else {metrics.poll(false,1,false,0);continue;};opus};
 					metrics.finish(crate::diagnostics::Stage::Receive,start);
 					mixer.push(rtp.ssrc,rtp.sequence,opus);
 					continue;
@@ -1480,7 +1505,7 @@ async fn run_stream_inner(
 				let Some((user,frame))=receivers.push(rtp.ssrc,rtp.sequence,rtp.timestamp,rtp.marker,&rtp.payload) else {continue;};
 				if !dave.contains(user) {metrics.video(Video::NotReady,1);continue;}
 				let start=metrics.start();
-				let Ok(data)=dave.session.decrypt(user,davey::MediaType::VIDEO,&frame) else {receivers.require_keyframe(user);metrics.poll(false,1,false,0);metrics.video(Video::DecryptFailed,1);continue;};
+				let data=if dave.transport_only {frame} else {let Ok(data)=dave.session.decrypt(user,davey::MediaType::VIDEO,&frame) else {receivers.require_keyframe(user);metrics.poll(false,1,false,0);metrics.video(Video::DecryptFailed,1);continue;};data};
 				let keyframe=is_keyframe(&data);
 				if keyframe {metrics.video(Video::Keyframes,1);metrics.video(Video::KeyframesWithoutParams,u64::from(!has_parameter_sets(&data)));}
 				if !receivers.accept(user,keyframe) {metrics.video(Video::Gated,1);continue;}

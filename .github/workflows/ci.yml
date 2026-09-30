@@ -2,6 +2,7 @@ name: native-client
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -63,9 +64,13 @@ jobs:
       - name: Linux package regression
         if: runner.os == 'Linux'
         run: PYTHONDONTWRITEBYTECODE=1 python3 packaging/linux/test_package.py
+      # The release executable is the long step. PRs compile and test only.
+      # Main pushes and v* tags still build and upload dist/.
       - name: Package app without demo or developer features
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         run: cargo xtask package
       - uses: actions/upload-artifact@v7.0.1
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         with:
           name: nivra-${{ runner.os }}-${{ runner.arch }}-unsigned
           path: dist/

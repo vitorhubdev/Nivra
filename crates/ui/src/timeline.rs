@@ -1691,6 +1691,7 @@ impl TimelineView {
 		upload: Option<&crate::pending::Upload>,
 		session: &mut crate::scroll::Session,
 	) {
+		crate::select::set_message_select_mode(ui.ctx(), self.select_mode);
 		let width = ui.available_width();
 		let channel_changed = self.channel != state.selected;
 		if channel_changed {
@@ -3273,7 +3274,8 @@ impl TimelineView {
 									.rect_filled(rect, 0.0, colors.chat.gamma_multiply(t));
 							}
 							if t < 1.0 {
-								ui.ctx().request_repaint();
+								ui.ctx()
+									.request_repaint_after(std::time::Duration::from_millis(16));
 							}
 						}
 					}
@@ -6500,6 +6502,166 @@ mod tests {
 				);
 			}
 		}
+	}
+
+	#[test]
+	fn select_drag_paints_rows_scrolls_at_the_edge_and_idles() {
+		fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+			match shape {
+				egui::Shape::Text(text) => out.push((
+					text.galley.job.text.clone(),
+					text.galley.rect.translate(text.pos.to_vec2()),
+				)),
+				egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, out)),
+				_ => {}
+			}
+		}
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		crate::select::install(&ctx);
+		let mut state = test_support::chat_demo_state();
+		state.freshness = model::Freshness::Fresh;
+		state.older_exhausted = true;
+		state.history_pending = false;
+		let mut view = TimelineView::default();
+		let mut avatars = crate::avatars::Avatars::default();
+		let mut frame = 0u32;
+		let mut render = |view: &mut TimelineView, state: &mut State, events: Vec<egui::Event>| {
+			frame += 1;
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(420.0, 320.0),
+					)),
+					time: Some(f64::from(frame) * 0.05),
+					predicted_dt: 1.0 / 60.0,
+					events,
+					..Default::default()
+				},
+				|ui| {
+					view.show(
+						ui,
+						state,
+						&mut None,
+						&mut None,
+						(
+							&mut avatars,
+							&mut crate::profiles::ProfileSession::default(),
+						),
+						None,
+					);
+				},
+			);
+			let mut painted = Vec::new();
+			for shape in &output.shapes {
+				texts(&shape.shape, &mut painted);
+			}
+			let delay = output
+				.viewport_output
+				.values()
+				.next()
+				.map(|viewport| viewport.repaint_delay);
+			output.drop_without_applying_deltas();
+			(painted, delay)
+		};
+		for _ in 0..4 {
+			render(&mut view, &mut state, vec![]);
+		}
+		view.enter_select_mode(None);
+		for _ in 0..8 {
+			render(&mut view, &mut state, vec![]);
+		}
+		assert!(view.select_mode, "select mode stays on while the bar is up");
+		let (painted, _) = render(&mut view, &mut state, vec![]);
+		let sample: Vec<_> = painted.iter().map(|(text, _)| text.clone()).take(40).collect();
+		let rows: Vec<egui::Rect> = painted
+			.iter()
+			.filter(|(text, _)| {
+				text.contains("A new day, same conversation.")
+					|| text.contains("Welcome back. All of this is synthetic")
+			})
+			.map(|(_, rect)| *rect)
+			.collect();
+		assert!(
+			rows.len() >= 2,
+			"at least two message rows are on screen, painted {sample:?}"
+		);
+		let from = egui::pos2(18.0, rows[0].center().y);
+		let to = egui::pos2(18.0, rows[rows.len() - 1].center().y);
+		let drag = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+			pos,
+			button: egui::PointerButton::Primary,
+			pressed,
+			modifiers: egui::Modifiers::NONE,
+		};
+		render(
+			&mut view,
+			&mut state,
+			vec![egui::Event::PointerMoved(from), drag(from, true)],
+		);
+		render(
+			&mut view,
+			&mut state,
+			vec![egui::Event::PointerMoved(from + egui::vec2(0.0, 20.0))],
+		);
+		render(
+			&mut view,
+			&mut state,
+			vec![egui::Event::PointerMoved(to)],
+		);
+		assert!(
+			view.batch_delete.len() >= 2,
+			"dragging paints every row the pointer crosses, got {}",
+			view.batch_delete.len()
+		);
+		view.browse_away();
+		view.scroll_offset = 0.0;
+		render(&mut view, &mut state, vec![]);
+		let before = view.scroll_offset;
+		let edge = egui::pos2(200.0, 340.0);
+		render(
+			&mut view,
+			&mut state,
+			vec![egui::Event::PointerMoved(edge), drag(edge, true)],
+		);
+		render(
+			&mut view,
+			&mut state,
+			vec![egui::Event::PointerMoved(edge + egui::vec2(0.0, 12.0))],
+		);
+		assert!(
+			view.scroll_offset > before + 0.5,
+			"a drag past the bottom edge scrolls downward, before {before} after {}",
+			view.scroll_offset
+		);
+		render(&mut view, &mut state, vec![drag(edge, false)]);
+		for _ in 0..12 {
+			render(&mut view, &mut state, vec![]);
+		}
+		let (_, delay) = render(&mut view, &mut state, vec![]);
+		assert_ne!(
+			delay,
+			Some(std::time::Duration::ZERO),
+			"a settled selection does not request another frame"
+		);
+		render(
+			&mut view,
+			&mut state,
+			vec![egui::Event::Key {
+				key: egui::Key::Escape,
+				physical_key: None,
+				pressed: true,
+				repeat: false,
+				modifiers: egui::Modifiers::NONE,
+			}],
+		);
+		render(&mut view, &mut state, vec![]);
+		assert!(!view.select_mode, "Esc leaves select mode");
+		assert!(
+			!crate::select::message_select_mode(&ctx),
+			"text selection is available again after Esc"
+		);
 	}
 
 	#[test]

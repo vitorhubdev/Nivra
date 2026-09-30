@@ -60,6 +60,10 @@ codegen-units = 16
 strip = "symbols"
 debug = "line-tables-only"
 
+# Dependency debuginfo dominates test link time. Workspace crates keep full debuginfo.
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
 # Real-time echo processing must also keep up in otherwise unoptimized dev builds.
 [profile.dev.package.sonora]
 opt-level = 3

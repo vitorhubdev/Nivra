@@ -531,6 +531,16 @@ impl LocalStore {
 			transaction.execute_batch("ALTER TABLE messages ADD COLUMN author_nick TEXT;")?;
 		}
 		transaction.commit()?;
+		// Builds between 2026-09-18 and 2026-09-25 observed the tray switch before
+		// the stored override loaded and persisted a phantom opt-out on startup,
+		// then discarded the real load as "touched". Such a row cannot be told
+		// apart from an explicit choice, so clear it once; a disable stored after
+		// this heal is explicit and survives restarts.
+		connection.execute_batch(
+			"CREATE TABLE IF NOT EXISTS tray_opt_out_heal(singleton INTEGER PRIMARY KEY CHECK(singleton=1));
+			 DELETE FROM minimize_to_tray WHERE singleton=1 AND enabled=0 AND NOT EXISTS(SELECT 1 FROM tray_opt_out_heal WHERE singleton=1);
+			 INSERT OR IGNORE INTO tray_opt_out_heal(singleton) VALUES(1);",
+		)?;
 		connection.execute_batch(
 			"CREATE TABLE IF NOT EXISTS stats(singleton INTEGER PRIMARY KEY CHECK(singleton=1), content_bytes INTEGER NOT NULL DEFAULT 0, message_count INTEGER NOT NULL DEFAULT 0);
 			 INSERT INTO stats(singleton) SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM stats WHERE singleton=1);",
@@ -1906,9 +1916,11 @@ mod tests {
 		assert!(!legacy.hide_offline_members);
 		assert!(!legacy.hide_bot_dms);
 		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
-		let mut value = AppPreferences::default();
-		value.hide_offline_members = true;
-		value.hide_bot_dms = true;
+		let value = AppPreferences {
+			hide_offline_members: true,
+			hide_bot_dms: true,
+			..Default::default()
+		};
 		store.save_app_preferences(&value).unwrap();
 		let loaded = store.app_preferences().unwrap();
 		assert!(loaded.hide_offline_members);
@@ -1999,7 +2011,12 @@ mod tests {
 		value.voice_auto_rejoin_short_disconnect = true;
 		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
 		store.save_app_preferences(&value).unwrap();
-		assert!(store.app_preferences().unwrap().voice_auto_rejoin_short_disconnect);
+		assert!(
+			store
+				.app_preferences()
+				.unwrap()
+				.voice_auto_rejoin_short_disconnect
+		);
 	}
 
 	#[test]
@@ -2360,6 +2377,42 @@ mod tests {
 			.execute_batch("DROP TABLE minimize_to_tray;")
 			.unwrap();
 		assert_eq!(store.minimize_to_tray(), Err(StoreError::Unavailable));
+		drop(store);
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn legacy_tray_opt_out_heals_once_then_respects_explicit_choice() {
+		// Builds between 2026-09-18 and 2026-09-25 persisted a phantom opt-out
+		// on every startup; such a row cannot be told apart from an explicit
+		// choice, so the first open after the fix clears it once.
+		let root =
+			std::env::temp_dir().join(format!("nivra-synthetic-tray-heal-{}", std::process::id()));
+		std::fs::create_dir_all(&root).unwrap();
+		let path = root.join("test.sqlite3");
+		let store = LocalStore::open(&path).unwrap();
+		store.save_minimize_to_tray(false).unwrap();
+		assert!(!store.minimize_to_tray().unwrap());
+		// Simulate a database written before the heal existed.
+		store
+			.0
+			.execute_batch("DROP TABLE tray_opt_out_heal;")
+			.unwrap();
+		drop(store);
+		let store = LocalStore::open(&path).unwrap();
+		assert!(
+			store.minimize_to_tray().unwrap(),
+			"legacy opt-out heals to the opt-out default"
+		);
+		// An explicit choice made after the heal persists across restarts.
+		store.save_minimize_to_tray(false).unwrap();
+		assert!(!store.minimize_to_tray().unwrap());
+		drop(store);
+		let store = LocalStore::open(&path).unwrap();
+		assert!(
+			!store.minimize_to_tray().unwrap(),
+			"post-heal opt-out is an explicit choice and survives"
+		);
 		drop(store);
 		std::fs::remove_dir_all(root).unwrap();
 	}

@@ -645,7 +645,8 @@ mod tests {
 			name: "Synthetic guild".into(),
 			icon: None,
 			emojis: None,
-		premium_tier: 0,		});
+			premium_tier: 0,
+		});
 		state.channels[0].guild = Some(Id(10));
 		state.channels[0].kind = 0;
 		state

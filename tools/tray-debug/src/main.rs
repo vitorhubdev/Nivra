@@ -1,5 +1,6 @@
 //! Offline Linux tray check. Run with `dbus-run-session -- cargo run --locked -p tray-debug`.
 #[cfg(target_os = "linux")]
+#[allow(dead_code)] // Harness exercises Event/Tray; the icon renderer ships in the desktop.
 #[path = "../../../crates/platform/src/tray.rs"]
 mod tray;
 
@@ -183,16 +184,16 @@ fn check_window() {
 		.unwrap()
 		.events
 		.push(egui::ViewportEvent::Close);
-	for available in [false, true] {
+	for wanted in [false, true] {
 		let _ = ctx.run_logic(&close, |ctx| {
-			state.logic(ctx, available, true);
+			state.logic(ctx, wanted, wanted, true);
 			assert!(ctx.input(|i| i.viewport().close_requested()));
 		});
 	}
 	state.cancel_quit();
 	for can_hide in [true, false] {
 		let output = ctx.run_logic(&close, |ctx| {
-			state.logic(ctx, true, can_hide);
+			state.logic(ctx, true, true, can_hide);
 			assert!(!ctx.input(|i| i.viewport().close_requested()));
 		});
 		let cmds = &output.viewport_commands[&ViewportId::ROOT];
@@ -204,15 +205,30 @@ fn check_window() {
 		}));
 		assert_eq!(state.hidden, can_hide);
 	}
-	let _ = ctx.run_logic(&close, |ctx| state.logic(ctx, true, true));
+	// Setting on but no icon: minimize to the taskbar and survive, never strand.
+	let output = ctx.run_logic(&close, |ctx| {
+		assert_eq!(
+			state.logic(ctx, true, false, true),
+			tray_window::CloseDisposition::MinimizedWithoutTray
+		);
+	});
+	let cmds = &output.viewport_commands[&ViewportId::ROOT];
+	assert!(cmds.contains(&Cmd::Minimized(true)));
+	assert!(cmds.contains(&Cmd::CancelClose));
+	assert!(!cmds.contains(&Cmd::Visible(false)));
+	assert!(!cmds.contains(&Cmd::Close));
+	assert!(!state.hidden);
+	let _ = ctx.run_logic(&close, |ctx| {
+		state.logic(ctx, true, true, true);
+	});
 	let output = ctx.run_logic(&egui::RawInput::default(), |ctx| {
-		state.logic(ctx, false, true)
+		state.logic(ctx, false, false, true);
 	});
 	assert!(!state.hidden);
 	assert!(output.viewport_commands[&ViewportId::ROOT].contains(&Cmd::Visible(true)));
 	let output = ctx.run_logic(&close, |ctx| {
 		state.quit(ctx);
-		state.logic(ctx, true, true);
+		state.logic(ctx, true, true, true);
 	});
 	assert!(!output.viewport_commands[&ViewportId::ROOT].contains(&Cmd::Close));
 	let mut output = ctx.run_ui(egui::RawInput::default(), |ui| state.ui(ui.ctx()));
@@ -223,11 +239,13 @@ fn check_window() {
 			.contains(&Cmd::Close)
 	);
 	let _ = ctx.run_logic(&close, |ctx| {
-		state.logic(ctx, true, true);
+		state.logic(ctx, true, true, true);
 		assert!(ctx.input(|i| i.viewport().close_requested()));
 	});
 	state.cancel_quit();
-	let _ = ctx.run_logic(&close, |ctx| state.logic(ctx, true, true));
+	let _ = ctx.run_logic(&close, |ctx| {
+		state.logic(ctx, true, true, true);
+	});
 	assert!(state.hidden);
 	println!(
 		"PASS: close/hide, Wayland minimize fallback, host loss, deferred Quit and cancelled Quit."

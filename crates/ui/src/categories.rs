@@ -534,7 +534,11 @@ impl MessagingUi {
 			egui::pos2(rect.right() - 66.0, rect.bottom() - 26.0),
 			egui::vec2(58.0, 18.0),
 		);
-		let response = ui.interact(button, ui.id().with("hide-bot-dms"), egui::Sense::click());
+		let response = ui.interact(
+			button,
+			ui.scope_id().with("hide-bot-dms"),
+			egui::Sense::click(),
+		);
 		let hot = response.hovered() || response.has_focus() || hidden;
 		ui.painter().rect_filled(
 			button,
@@ -1252,7 +1256,13 @@ impl MessagingUi {
 								self.group_menu.context(&response, state, channel, view);
 							}
 							if channel.guild.is_some() {
-								self.channel_menu.context(&response, state, channel, view, self.language);
+								self.channel_menu.context(
+									&response,
+									state,
+									channel,
+									view,
+									self.language,
+								);
 							}
 							if enabled && response.clicked() {
 								selected = Some(channel.id);
@@ -1321,7 +1331,7 @@ impl MessagingUi {
 			let target = hovered.filter(|(channel, _)| {
 				state.can_move_voice_member(source.guild, source.user, source.from, *channel)
 			});
-			if let Some((target, target_rect)) = target {
+			if let Some((_target, target_rect)) = target {
 				ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
 				ui.painter().rect_filled(
 					target_rect.shrink(1.0),
@@ -1387,8 +1397,13 @@ impl MessagingUi {
 					crate::design::menu_anchor_sense(),
 				);
 				let mut next = hide_muted;
-				self.channel_menu
-					.sidebar_context(&response, state, guild, &mut next, self.language);
+				self.channel_menu.sidebar_context(
+					&response,
+					state,
+					guild,
+					&mut next,
+					self.language,
+				);
 				if next != hide_muted {
 					if let Some(channel) = state
 						.channels
@@ -2104,7 +2119,7 @@ mod tests {
 			name: "Synthetic".into(),
 			icon: None,
 			emojis: None,
-		premium_tier: 0
+			premium_tier: 0,
 		}];
 		state.channels = (0..20)
 			.map(|index| {
@@ -2301,7 +2316,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			channels: vec![channel(9, 13, 0, None)],
 			demo: true,
@@ -2480,7 +2495,7 @@ mod tests {
 				name: "Synthetic guild".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			channels,
 			demo: true,

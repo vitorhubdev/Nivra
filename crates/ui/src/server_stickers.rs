@@ -135,7 +135,10 @@ impl StickersUi {
 		if let Some(error) = state.server_admin.error.or(self.error) {
 			design::notice(ui, design::Level::Error, error);
 			if ui
-				.add_enabled(!state.server_admin.pending, egui::Button::new(crate::tr_ui!(ui, "Reload")))
+				.add_enabled(
+					!state.server_admin.pending,
+					egui::Button::new(crate::tr_ui!(ui, "Reload")),
+				)
 				.clicked() && let Some(command) =
 				state.request_server_admin(guild, Action::LoadStickers)
 			{
@@ -158,7 +161,13 @@ impl StickersUi {
 			if ui
 				.add_enabled_ui(
 					!self.choosing && self.upload.is_none() && !state.server_admin.pending,
-					|ui| design::button(ui, crate::tr_ui!(ui, "Upload Sticker"), design::ButtonKind::Primary),
+					|ui| {
+						design::button(
+							ui,
+							crate::tr_ui!(ui, "Upload Sticker"),
+							design::ButtonKind::Primary,
+						)
+					},
 				)
 				.inner
 				.clicked()
@@ -226,7 +235,11 @@ impl StickersUi {
 		};
 		let count = catalog.items.len();
 		ui.horizontal(|ui| {
-			ui.label(design::semibold(ui, crate::tr_ui!(ui, "Your stickers"), 18.0));
+			ui.label(design::semibold(
+				ui,
+				crate::tr_ui!(ui, "Your stickers"),
+				18.0,
+			));
 			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 				ui.weak(catalog.limit.map_or_else(
 					|| format!("{count} stickers"),
@@ -297,8 +310,11 @@ impl StickersUi {
 												}
 												if ui
 													.button(
-														RichText::new(crate::tr_ui!(ui, "Delete Sticker"))
-															.color(design::palette(ui).danger),
+														RichText::new(crate::tr_ui!(
+															ui,
+															"Delete Sticker"
+														))
+														.color(design::palette(ui).danger),
 													)
 													.clicked()
 												{

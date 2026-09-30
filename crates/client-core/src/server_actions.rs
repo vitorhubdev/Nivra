@@ -520,7 +520,7 @@ mod tests {
 				name: "Synthetic server".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			channels: vec![model::Channel {
 				id: Id(3),
@@ -809,7 +809,7 @@ mod tests {
 			name: "Other".into(),
 			icon: None,
 			emojis: None,
-		premium_tier: 0
+			premium_tier: 0,
 		});
 		current.channels.push(model::Channel {
 			id: Id(20),

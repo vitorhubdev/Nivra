@@ -106,7 +106,7 @@ The source is still being validated before a binary GitHub Release is published.
 </p>
 
 <p align="center">
-  <a href="https://github.com/vitorhubdev/Nivra/tags"><img src="https://img.shields.io/github/v/tag/vitorhubdev/Nivra?label=tag&color=blue" alt="SereinExt tag" /></a>
+  <a href="https://github.com/vitorhubdev/Nivra/tags"><img src="https://img.shields.io/github/v/tag/vitorhubdev/Nivra?label=tag&color=blue" alt="Nivra tag" /></a>
   <a href="Cargo.toml"><img src="https://img.shields.io/badge/rust-1.98.1_pinned-blue.svg?logo=rust" alt="Rust 1.98.1 Pinned" /></a>
   <a href="crates/ui"><img src="https://img.shields.io/badge/ui-egui%20%2F%20wgpu-orange.svg" alt="UI egui/wgpu" /></a>
   <a href="docs/platform-support.md"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg" alt="Platform Support" /></a>
@@ -117,19 +117,24 @@ The source is still being validated before a binary GitHub Release is published.
 
 > [!WARNING]
 > **Unofficial and not endorsed by Discord.**
-> SereinExt is a modified Serein fork and communicates directly with Discord's public gateway and REST endpoints for your existing account. Automating normal accounts outside the official OAuth2/bot API violates Discord's Terms of Service and carries risk of account termination. Technical interoperability does not imply platform approval. Review the [compatibility matrix](docs/discord-compatibility.md) and [authentication guide](docs/authentication.md) before use.
+> Nivra is a modified Serein fork and communicates directly with Discord's public gateway and REST endpoints for your existing account. Automating normal accounts outside the official OAuth2/bot API violates Discord's Terms of Service and carries risk of account termination. Technical interoperability does not imply platform approval. Review the [compatibility matrix](docs/discord-compatibility.md) and [authentication guide](docs/authentication.md) before use.
 
 ---
 
 ## Downloads & Installation
 
-SereinExt is currently **source/tag first**. Until this repository publishes its own GitHub Release assets, do not treat installers, Flatpaks, AppImages, Homebrew packages or package repositories published by upstream Serein as SereinExt binaries.
+Stable builds are published on the [Releases page](https://github.com/vitorhubdev/Nivra/releases). Do not treat installers, Flatpaks, AppImages, Homebrew packages or package repositories published by upstream Serein as Nivra binaries.
+
+### Release channels
+
+- **production**: tested releases, tagged `v<version>` (for example `v1.0.5`). Each production release attaches a `SHA256SUMS.txt` checksum file plus one asset per platform: Windows is a single `Nivra-v<version>-Windows-<arch>.exe` (download it and open it, nothing to extract), Linux a `.tar.gz`, macOS a `.zip`.
+- **nightly**: automated builds from `main`, tagged `v<version>-nightly.<date>.<run>` and marked as pre-release. Nightlies track development and may be unstable.
 
 ### Current source
 
 - Repository: [`vitorhubdev/Nivra`](https://github.com/vitorhubdev/Nivra)
 - Development branch: `main`
-- Workspace version: `1.0.4`
+- Workspace version: `1.0.5`
 - Version history: [Tags](https://github.com/vitorhubdev/Nivra/tags)
 
 ### Build from source
@@ -138,11 +143,19 @@ The workspace pins Rust **1.98** and uses the same native platform dependencies 
 
 ```sh
 git clone https://github.com/vitorhubdev/Nivra.git
-cd SereinExt
+cd Nivra
 cargo build --locked --release -p nivra
 ```
 
 Platform-specific runtime/build requirements remain documented under [Platform Support](docs/platform-support.md) and the `packaging/` directory. Upstream documentation can still be useful as technical reference, but its downloads belong to the original project, not this fork.
+
+### Requirements
+
+Rust **1.98.1** is pinned (see `rust-toolchain.toml`). You also need the standard C/C++ toolchain, CMake and `bun` 1.4.2 for the JS test harnesses. OS details (WebView2 on Windows, GTK/WebKit on Linux, Xcode tools on macOS) are listed under [Quick Start](#quick-start) and [Platform Support](docs/platform-support.md).
+
+### Reporting problems
+
+Report Nivra issues at [vitorhubdev/Nivra/issues](https://github.com/vitorhubdev/Nivra/issues). Include the app version (Settings or `--version`), the OS and version, and steps to reproduce. Do not file Nivra bugs upstream.
 
 
 ---
@@ -268,7 +281,7 @@ cargo xtask package
 Serein is engineered as a clean multi-crate Cargo workspace, isolating UI rendering from networking, persistence, and service protocols:
 
 ```
-rustcord/
+nivra/
 ├── apps/
 │   └── desktop/          # Application entrypoint, CLI flags, window lifecycle
 ├── crates/

@@ -203,7 +203,7 @@ pub(crate) fn valid_txt_filename(name: &str) -> bool {
 		&& name.len() <= 256
 		&& !matches!(name, "." | "..")
 		&& name.ends_with(".txt")
-		&& name.trim_end_matches(".txt").trim().len() > 0
+		&& !name.trim_end_matches(".txt").trim().is_empty()
 		&& name
 			.chars()
 			.all(|c| !c.is_control() && !matches!(c, '/' | '\\' | ':'))
@@ -3632,8 +3632,8 @@ impl MessagingUi {
 			if let Some(dialog) = self.long_text_dialog.take() {
 				// The dialog owns the text, so cancelling returns it unless the
 				// owner typed a fresh draft meanwhile.
-				if !state.drafts.contains_key(&channel) {
-					state.drafts.insert(channel, dialog.text);
+				if let std::collections::btree_map::Entry::Vacant(e) = state.drafts.entry(channel) {
+					e.insert(dialog.text);
 				}
 			}
 		} else if send {
@@ -3680,12 +3680,11 @@ impl MessagingUi {
 				commands.push(command);
 			}
 			None => {
-				if let Some(staged) = self.long_text_attachment.take() {
-					if !state.drafts.contains_key(&channel) {
-						if let Ok(restored) = String::from_utf8(staged.bytes) {
-							state.drafts.insert(channel, restored);
-						}
-					}
+				if let Some(staged) = self.long_text_attachment.take()
+					&& !state.drafts.contains_key(&channel)
+					&& let Ok(restored) = String::from_utf8(staged.bytes)
+				{
+					state.drafts.insert(channel, restored);
 				}
 			}
 		}
@@ -5462,12 +5461,14 @@ mod composer_tests {
 	fn invalid_filename_is_refused() {
 		let ctx = egui::Context::default();
 		let mut state = dm_state();
-		let mut view = MessagingUi::default();
-		view.long_text_dialog = Some(LongTextDialog {
-			channel: Id(1),
-			text: "x".repeat(2500),
-			filename: "a/b.txt".into(),
-		});
+		let mut view = MessagingUi {
+			long_text_dialog: Some(LongTextDialog {
+				channel: Id(1),
+				text: "x".repeat(2500),
+				filename: "a/b.txt".into(),
+			}),
+			..Default::default()
+		};
 		let mut commands = vec![];
 		let labels = render_dialog(&ctx, &mut view, &mut state, &mut commands);
 		assert!(
@@ -7438,7 +7439,7 @@ mod composer_tests {
 				clients: model::ClientPlatforms::default(),
 			})
 		}
-		let slots = vec![
+		let slots = [
 			Some(model::MemberSlot::Group("online".into())),
 			Some(person(1)),
 			Some(model::MemberSlot::Group("offline".into())),

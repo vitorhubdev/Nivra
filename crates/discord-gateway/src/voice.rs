@@ -60,6 +60,7 @@ pub(super) struct Calls {
 impl Calls {
 	/// The gateway socket dropped. A RESUME keeps Discord's voice state, so the joined call
 	/// and its mute flags survive; only an unacknowledged hangup is abandoned.
+	#[allow(dead_code)] // Reconnect path not yet rewired in Nivra; covered by test.
 	pub(super) fn disconnected(&mut self) {
 		self.departing = None;
 		self.departure_deadline = None;
@@ -993,9 +994,11 @@ mod tests {
 
 	#[test]
 	fn disconnected_preserves_active_call_for_resume() {
-		let mut calls = Calls::default();
-		calls.active = Some((Id(2), 1));
-		calls.muted = true;
+		let mut calls = Calls {
+			active: Some((Id(2), 1)),
+			muted: true,
+			..Default::default()
+		};
 		calls.disconnected();
 		assert_eq!(calls.active, Some((Id(2), 1)));
 		assert!(calls.muted);

@@ -162,9 +162,9 @@ mod tests {
 		// Infinite/idle deadlines are a no-op: must not panic nor schedule.
 		request_until(&ctx, f64::INFINITY);
 		// Eased wrappers settle without extra work once at rest.
-		let id = egui::Id::new("anim-test-bool");
+		let id = egui::Id::unique("anim-test-bool");
 		assert_eq!(bool_alpha(&ctx, id, true, 0.0), 1.0);
-		let hid = egui::Id::new("anim-test-height");
+		let hid = egui::Id::unique("anim-test-height");
 		assert_eq!(animated_height(&ctx, hid, 24.0, 0.0), 24.0);
 	}
 }

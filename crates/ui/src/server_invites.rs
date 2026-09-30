@@ -128,7 +128,11 @@ impl InvitesUi {
 			if state.invite_channel(guild).is_some()
 				&& ui
 					.add_enabled_ui(writable && !paused, |ui| {
-						design::button(ui, crate::tr_ui!(ui, "Create Invite Link"), design::ButtonKind::Primary)
+						design::button(
+							ui,
+							crate::tr_ui!(ui, "Create Invite Link"),
+							design::ButtonKind::Primary,
+						)
 					})
 					.inner
 					.clicked()
@@ -166,9 +170,16 @@ impl InvitesUi {
 		if let Some(snapshot) = &state.server_admin.invites {
 			if snapshot.items.is_empty() {
 				ui.add_space(32.0);
-				ui.label(design::semibold(ui, crate::tr_ui!(ui, "No active invite links"), 18.0));
+				ui.label(design::semibold(
+					ui,
+					crate::tr_ui!(ui, "No active invite links"),
+					18.0,
+				));
 				if state.invite_channel(guild).is_some() {
-					ui.weak(crate::tr_ui!(ui, "Create an invite link to welcome people to this server."));
+					ui.weak(crate::tr_ui!(
+						ui,
+						"Create an invite link to welcome people to this server."
+					));
 				}
 			} else {
 				let now = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
@@ -315,7 +326,10 @@ impl InvitesUi {
 													.truncate()
 													.sense(egui::Sense::click()),
 												)
-												.on_hover_text(crate::tr_ui!(ui, "Copy invite link"))
+												.on_hover_text(crate::tr_ui!(
+													ui,
+													"Copy invite link"
+												))
 												.clicked()
 											{
 												ui.ctx().copy_text(format!(
@@ -408,8 +422,12 @@ impl InvitesUi {
 														},
 													);
 												}
-												if response.on_hover_text(crate::tr_ui!(ui, "Revoke invite")).clicked()
-													&& writable
+												if response
+													.on_hover_text(crate::tr_ui!(
+														ui,
+														"Revoke invite"
+													))
+													.clicked() && writable
 												{
 													self.revoke = Some(invite.code.clone());
 												}

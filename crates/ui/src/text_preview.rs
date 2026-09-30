@@ -66,15 +66,13 @@ pub fn decode_preview(bytes: &[u8]) -> Option<(String, bool)> {
 	let slice = &bytes[..bytes.len().min(MAX_PREVIEW_BYTES as usize)];
 	let text = String::from_utf8_lossy(slice);
 	let mut body = String::new();
-	let mut chars = 0usize;
 	let mut char_truncated = false;
-	for character in text.chars() {
+	for (chars, character) in text.chars().enumerate() {
 		if chars == MAX_PREVIEW_CHARS {
 			char_truncated = true;
 			break;
 		}
 		body.push(character);
-		chars += 1;
 	}
 	if body.trim().is_empty() {
 		return None;
@@ -98,8 +96,14 @@ mod tests {
 
 	#[test]
 	fn only_text_and_code_are_previewable() {
-		assert_eq!(preview_format("notes.txt", None), Some(PreviewFormat::Plain));
-		assert_eq!(preview_format("README.md", None), Some(PreviewFormat::Markdown));
+		assert_eq!(
+			preview_format("notes.txt", None),
+			Some(PreviewFormat::Plain)
+		);
+		assert_eq!(
+			preview_format("README.md", None),
+			Some(PreviewFormat::Markdown)
+		);
 		assert_eq!(preview_format("main.rs", None), Some(PreviewFormat::Code));
 		assert_eq!(preview_format("data.json", None), Some(PreviewFormat::Code));
 		assert_eq!(preview_format("clip.mp4", Some("video/mp4")), None);

@@ -43,7 +43,7 @@ fn large_startup() -> crate::Startup {
 			name: "Synthetic large account".into(),
 			icon: None,
 			emojis: Some(vec![]),
-		premium_tier: 0
+			premium_tier: 0,
 		});
 		let mut setting = crate::notifications::Setting {
 			guild: Some(Id(guild)),
@@ -408,7 +408,7 @@ fn state() -> State {
 				name: "Synthetic guild".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			channels: vec![
 				channel(20, 0, None),
@@ -444,7 +444,7 @@ fn cross_server_emoji_checks_destination_and_known_source_roles() {
 		name: "Emoji source".into(),
 		icon: None,
 		emojis: Some(vec![emoji.clone()]),
-	premium_tier: 0
+		premium_tier: 0,
 	});
 	state.channels.push(Channel {
 		guild: None,

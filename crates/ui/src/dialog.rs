@@ -439,13 +439,9 @@ impl DoubleConfirm {
 	) -> Self {
 		let title = title.into();
 		Self {
-			first: Confirm::new(
-				(id.clone(), "first"),
-				title.clone(),
-				first_message,
-			)
-			.confirm_label("Continue")
-			.cancel_label("Cancel"),
+			first: Confirm::new((id.clone(), "first"), title.clone(), first_message)
+				.confirm_label("Continue")
+				.cancel_label("Cancel"),
 			second: Confirm::new((id, "second"), title, second_message)
 				.confirm_label("Enable")
 				.cancel_label("Cancel"),
@@ -458,11 +454,7 @@ impl DoubleConfirm {
 		self
 	}
 
-	pub fn confirm_labels(
-		mut self,
-		first: impl Into<String>,
-		second: impl Into<String>,
-	) -> Self {
+	pub fn confirm_labels(mut self, first: impl Into<String>, second: impl Into<String>) -> Self {
 		self.first = self.first.confirm_label(first);
 		self.second = self.second.confirm_label(second);
 		self

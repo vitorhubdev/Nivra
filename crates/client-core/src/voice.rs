@@ -963,7 +963,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			channels: [20, 21]
 				.into_iter()
@@ -1216,7 +1216,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			channels: [20, 21]
 				.into_iter()
@@ -1779,7 +1779,7 @@ mod tests {
 				name: "Synthetic".into(),
 				icon: None,
 				emojis: None,
-			premium_tier: 0
+				premium_tier: 0,
 			}],
 			channels: [20, 21]
 				.into_iter()

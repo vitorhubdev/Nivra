@@ -26,9 +26,9 @@ const ALLOC_NAMES: [&str; 2] = ["nivra_alloc", "serein_alloc"];
 const INVOKE_NAMES: [&str; 2] = ["nivra_invoke", "serein_invoke"];
 
 fn has_export(module: &Module, names: &[&str], ty: &FuncType) -> bool {
-		names.iter().any(|name| {
-			matches!(module.get_export(name), Some(ExternType::Func(actual)) if actual == *ty)
-		})
+	names.iter().any(
+		|name| matches!(module.get_export(name), Some(ExternType::Func(actual)) if actual == *ty),
+	)
 }
 
 fn module(engine: &Engine, bytes: &[u8]) -> Result<Module, Error> {
@@ -44,13 +44,11 @@ fn module(engine: &Engine, bytes: &[u8]) -> Result<Module, Error> {
 			&module,
 			&ALLOC_NAMES,
 			&FuncType::new([ValType::I32], [ValType::I32]),
-		)
-		|| !has_export(
-			&module,
-			&INVOKE_NAMES,
-			&FuncType::new([ValType::I32, ValType::I32], [ValType::I64]),
-		)
-	{
+		) || !has_export(
+		&module,
+		&INVOKE_NAMES,
+		&FuncType::new([ValType::I32, ValType::I32], [ValType::I64]),
+	) {
 		return Err(Error::Module);
 	}
 	Ok(module)

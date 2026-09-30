@@ -51,6 +51,8 @@ impl Runtime {
 		None
 	}
 	/// Direct pings last counted for the taskbar badge; zero while unread badges are off.
+	/// Windows-only: read by the Windows tray sync; other platforms never query it.
+	#[cfg(target_os = "windows")]
 	pub fn pings(&self) -> u32 {
 		self.badge.unwrap_or(0)
 	}

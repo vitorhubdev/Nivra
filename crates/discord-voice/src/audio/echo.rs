@@ -47,6 +47,7 @@ impl Load {
 	}
 }
 
+#[cfg(not(all(target_os = "windows", target_arch = "aarch64")))]
 fn deep_model() -> Option<df::tract::DfTract> {
 	let params = df::tract::DfParams::default();
 	let runtime = df::tract::RuntimeParams::default_with_ch(1);
@@ -54,6 +55,7 @@ fn deep_model() -> Option<df::tract::DfTract> {
 	(model.hop_size == 480 && model.sr == 48_000).then_some(model)
 }
 
+#[cfg(not(all(target_os = "windows", target_arch = "aarch64")))]
 fn deep_frame(model: &mut df::tract::DfTract, chunk: [f32; 480]) -> Option<[f32; 480]> {
 	let mut output = [0.0f32; 480];
 	let input = ndarray::ArrayView2::from_shape((1, 480), &chunk[..]).ok()?;
@@ -85,6 +87,7 @@ const PLAY_BEHIND: u64 = 2;
 /// frame from `PLAY_BEHIND` positions back, and a cover RNNoise runs on every frame
 /// so it is warm and sample-aligned when the model has no answer for the play frame.
 /// Answers arriving after their frame played are discarded.
+#[allow(clippy::type_complexity)] // Audio frames carry fixed 480-sample buffers.
 struct Deep {
 	requests: mpsc::SyncSender<(u64, [f32; 480])>,
 	responses: mpsc::Receiver<(u64, Option<([f32; 480], Duration)>)>,
@@ -98,6 +101,13 @@ struct Deep {
 	cover_history: std::collections::VecDeque<(u64, [f32; 480])>,
 }
 impl Deep {
+	// tract 0.19 cannot assemble its ARM64 kernels with MSVC, so Maximum
+	// suppression is unavailable on Windows ARM64; the RNNoise cover applies.
+	#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+	fn start() -> Option<Self> {
+		None
+	}
+	#[cfg(not(all(target_os = "windows", target_arch = "aarch64")))]
 	fn start() -> Option<Self> {
 		let mut cover = noise_state();
 		Self::start_with(
@@ -110,6 +120,9 @@ impl Deep {
 		)
 	}
 
+	// Test-only on Windows ARM64 (production start() needs the tract model there).
+	#[cfg(any(test, not(all(target_os = "windows", target_arch = "aarch64"))))]
+	#[allow(clippy::type_complexity)] // Audio frames carry fixed 480-sample buffers.
 	fn start_with<M, L, P>(
 		loader: L,
 		mut process_frame: P,
@@ -600,6 +613,7 @@ mod tests {
 	}
 
 	#[test]
+	#[allow(clippy::type_complexity)] // Test cover uses the fixed 480-sample frame.
 	fn deep_fixed_delay_never_skips_or_repeats() {
 		const FRAMES: usize = 24;
 		let mut dsp = Echo::new();
@@ -646,6 +660,8 @@ mod tests {
 		);
 	}
 
+	// Requires the DeepFilterNet model, unavailable on Windows ARM64 (see Deep::start).
+	#[cfg(not(all(target_os = "windows", target_arch = "aarch64")))]
 	#[test]
 	fn deep_filter_denoises_and_falls_back_to_rnnoise() {
 		let mut seed = 0x2545_f491_u32;

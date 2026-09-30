@@ -35,6 +35,7 @@ pub struct FileState {
 	pub error: Option<&'static str>,
 }
 
+#[derive(Default)]
 struct Shared {
 	folder: Option<PathBuf>,
 	files: Vec<FileState>,
@@ -48,20 +49,6 @@ struct Shared {
 	/// Folder pick cancelled before any transfer.
 	closed: bool,
 }
-impl Default for Shared {
-	fn default() -> Self {
-		Self {
-			folder: None,
-			files: Vec::new(),
-			items: Vec::new(),
-			active: false,
-			finished: false,
-			announced: false,
-			closed: false,
-		}
-	}
-}
-
 #[derive(Default)]
 pub struct BatchDownloads {
 	shared: Arc<std::sync::Mutex<Shared>>,
@@ -120,7 +107,7 @@ async fn run_indices(
 	cancelled: &Arc<AtomicBool>,
 	wake_cancel: &Arc<Notify>,
 	context: &eframe::egui::Context,
-	folder: &PathBuf,
+	folder: &Path,
 	indices: Vec<usize>,
 ) {
 	let client = reqwest::Client::builder()

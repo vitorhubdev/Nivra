@@ -796,6 +796,7 @@ impl TimelineView {
 	}
 	/// Open the in-place editor on this row, invalidating only its cached
 	/// height so the rest of the list never shifts.
+	#[allow(dead_code)] // Inline edit wiring lands next; covered by upcoming UI path.
 	pub(super) fn enter_inline_edit(&mut self, channel: Id, message: Id, text: String) {
 		self.inline_edit = Some(InlineEdit {
 			channel,
@@ -878,10 +879,10 @@ impl TimelineView {
 				commit = true;
 			}
 		}
-		if focused || unfocused {
-			if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-				cancel = true;
-			}
+		if (focused || unfocused)
+			&& ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+		{
+			cancel = true;
 		}
 		let colors = crate::design::palette(ui);
 		ui.visuals_mut().text_cursor.stroke.width = 1.5;
@@ -3055,7 +3056,7 @@ impl TimelineView {
 					// leaving select mode fades the boxes instead of shifting rows.
 					let select_alpha = crate::anim::bool_alpha(
 						ui.ctx(),
-						ui.id().with("batch-select-col"),
+						ui.scope_id().with("batch-select-col"),
 						self.select_mode,
 						0.15,
 					);
@@ -3065,7 +3066,7 @@ impl TimelineView {
 						let toggle = if self.select_mode {
 							Some(ui.interact(
 								hit,
-								ui.id().with(("batch-select", id)),
+								ui.scope_id().with(("batch-select", id)),
 								egui::Sense::click(),
 							))
 						} else {
@@ -3782,7 +3783,7 @@ impl TimelineView {
 		// Animated floating bar: height glides instead of popping rows.
 		let bar_h = crate::anim::animated_height(
 			ui.ctx(),
-			ui.id().with("select-bar-h"),
+			ui.scope_id().with("select-bar-h"),
 			if show_bar { 78.0 } else { 0.0 },
 			0.18,
 		);
@@ -3833,7 +3834,7 @@ impl TimelineView {
 								ui.label(
 									crate::design::medium(
 										ui,
-										&format!("Deleting {done} of {total}"),
+										format!("Deleting {done} of {total}"),
 										13.0,
 									)
 									.color(colors.text_strong),
@@ -3858,7 +3859,7 @@ impl TimelineView {
 								ui.label(
 									crate::design::medium(
 										ui,
-										&self.batch_delete.len().to_string(),
+										self.batch_delete.len().to_string(),
 										13.0,
 									)
 									.color(colors.text_strong),
@@ -5386,6 +5387,7 @@ mod tests {
 	}
 
 	#[test]
+	#[allow(clippy::field_reassign_with_default)] // Test stages inline-edit states.
 	fn inline_editor_saves_on_enter_cancels_on_esc() {
 		fn frame(view: &mut TimelineView, ctx: &egui::Context, events: Vec<egui::Event>) {
 			let output = ctx.run_ui(
@@ -5478,6 +5480,7 @@ mod tests {
 	}
 
 	#[test]
+	#[allow(clippy::field_reassign_with_default)] // Test stages gateway states.
 	fn inline_commit_emits_edit_and_closes_on_success() {
 		let mut state = State::default();
 		state.auth = client_core::auth::AuthState::Authenticated;

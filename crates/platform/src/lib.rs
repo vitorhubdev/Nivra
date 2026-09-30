@@ -10,6 +10,7 @@ pub mod notifications;
 pub mod pointer;
 pub mod processes;
 pub mod save;
+pub mod shortcut;
 pub mod startup;
 pub mod tray;
 pub mod video;
@@ -36,6 +37,9 @@ pub use login_linux::LoginView;
 
 /// Logical height of the native header the desktop app draws above the login webview.
 pub const LOGIN_HEADER_HEIGHT: f32 = 56.0;
+/// Application identity referenced only by the Linux login helper and the
+/// Windows notification shortcut (macOS builds never reference it).
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const SERVICE: &str = "io.github.vitorhubdev.Nivra";
 /// Nivra must not share saved Discord sessions with the upstream Serein app.
 const CREDENTIAL_SERVICE: &str = "io.github.vitorhubdev.Nivra";

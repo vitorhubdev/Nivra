@@ -1,9 +1,9 @@
 //! Shared user actions; rendering only records intent, dispatched after borrowed rows finish.
 use crate::shortcuts::{Intent, ShortcutView};
 use client_core::{Command, State};
-use model::{Language, Shortcut, User};
+use model::{Shortcut, User};
 
-use crate::i18n::{interface_language, store_interface_language};
+use crate::i18n::interface_language;
 
 #[derive(Clone)]
 pub enum Action {
@@ -11,8 +11,14 @@ pub enum Action {
 	Nickname(User),
 	Mention(User),
 	CloseDm(model::Id),
-	Block { user: model::Id, blocked: bool },
-	Mute { channel: model::Id, muted: bool },
+	Block {
+		user: model::Id,
+		blocked: bool,
+	},
+	Mute {
+		channel: model::Id,
+		muted: bool,
+	},
 	Shortcut(Intent),
 	/// Server moderation, gated by the same rules as Server Settings. The fence
 	/// inside `request_server_admin` re-checks permission before anything runs.
@@ -29,12 +35,24 @@ impl PartialEq for Action {
 			(Action::Mention(a), Action::Mention(b)) => a == b,
 			(Action::CloseDm(a), Action::CloseDm(b)) => a == b,
 			(
-				Action::Block { user: a, blocked: ab },
-				Action::Block { user: b, blocked: bb },
+				Action::Block {
+					user: a,
+					blocked: ab,
+				},
+				Action::Block {
+					user: b,
+					blocked: bb,
+				},
 			) => a == b && ab == bb,
 			(
-				Action::Mute { channel: a, muted: am },
-				Action::Mute { channel: b, muted: bm },
+				Action::Mute {
+					channel: a,
+					muted: am,
+				},
+				Action::Mute {
+					channel: b,
+					muted: bm,
+				},
 			) => a == b && am == bm,
 			(Action::Shortcut(a), Action::Shortcut(b)) => a == b,
 			// The inner server-admin action has no equality; tests match on it.
@@ -140,13 +158,17 @@ fn admin_guild(state: &State) -> Option<model::Id> {
 }
 
 /// Guild member behind the right-clicked user, if their row is loaded.
-fn guild_member<'a>(state: &'a State, user: model::Id) -> Option<&'a model::Member> {
-	state.members.as_ref()?.slots.iter().filter_map(|slot| slot.as_ref()).find_map(
-		|slot| match slot {
+fn guild_member(state: &State, user: model::Id) -> Option<&model::Member> {
+	state
+		.members
+		.as_ref()?
+		.slots
+		.iter()
+		.filter_map(|slot| slot.as_ref())
+		.find_map(|slot| match slot {
 			model::MemberSlot::Person(member) if member.user.id == user => Some(member),
 			_ => None,
-		},
-	)
+		})
 }
 
 fn kick_key(user: model::Id) -> egui::Id {
@@ -166,7 +188,10 @@ fn pending_admin_dialog(
 	action: &mut Option<Action>,
 ) -> bool {
 	let ctx = ui.ctx();
-	if ctx.data(|data| data.get_temp::<bool>(kick_key(user.id))).unwrap_or(false) {
+	if ctx
+		.data(|data| data.get_temp::<bool>(kick_key(user.id)))
+		.unwrap_or(false)
+	{
 		let language = interface_language(ctx);
 		let name = user.name.clone();
 		match crate::dialog::Confirm::new(
@@ -215,42 +240,40 @@ fn pending_admin_dialog(
 		.show(ctx, |d| {
 			d.content(|ui| {
 				crate::dialog::label(ui, crate::i18n::text(language, "Nickname"));
-					let mut draft: Option<NickDraft> = ctx
-						.data(|data| data.get_temp(nick_key(user.id)))
-						.unwrap_or(None);
-					if let Some(draft) = draft.as_mut() {
-						crate::dialog::input(
-							ui,
-							egui::TextEdit::singleline(&mut draft.name).hint_text(&user.name),
-						);
-						let ready = !draft.name.chars().any(char::is_control)
-							&& state.can_edit_guild_nickname(draft.guild, draft.user);
-						if crate::dialog::action(
-							ui,
-							crate::i18n::text(language, "Save"),
-							crate::dialog::Action::Primary,
-						)
-						.clicked() && ready
-						{
-							save = true;
-						}
-						ctx.data_mut(|data| {
-							data.insert_temp(nick_key(user.id), Some(draft.clone()))
-						});
-					}
-				});
-				d.footer(|ui| {
+				let mut draft: Option<NickDraft> = ctx
+					.data(|data| data.get_temp(nick_key(user.id)))
+					.unwrap_or(None);
+				if let Some(draft) = draft.as_mut() {
+					crate::dialog::input(
+						ui,
+						egui::TextEdit::singleline(&mut draft.name).hint_text(&user.name),
+					);
+					let ready = !draft.name.chars().any(char::is_control)
+						&& state.can_edit_guild_nickname(draft.guild, draft.user);
 					if crate::dialog::action(
 						ui,
-						crate::i18n::text(language, "Cancel"),
-						crate::dialog::Action::Neutral,
+						crate::i18n::text(language, "Save"),
+						crate::dialog::Action::Primary,
 					)
-					.clicked()
+					.clicked() && ready
 					{
-						cancel = true;
+						save = true;
 					}
-				});
+					ctx.data_mut(|data| data.insert_temp(nick_key(user.id), Some(draft.clone())));
+				}
 			});
+			d.footer(|ui| {
+				if crate::dialog::action(
+					ui,
+					crate::i18n::text(language, "Cancel"),
+					crate::dialog::Action::Neutral,
+				)
+				.clicked()
+				{
+					cancel = true;
+				}
+			});
+		});
 		if save {
 			if let Some(Some(draft)) =
 				ctx.data_mut(|data| data.remove_temp::<Option<NickDraft>>(nick_key(user.id)))
@@ -287,10 +310,7 @@ pub(super) fn contents(
 	if pending_admin_dialog(ui, state, user, action) {
 		return;
 	}
-	if ui
-		.button(crate::i18n::text(language, "Profile"))
-		.clicked()
-	{
+	if ui.button(crate::i18n::text(language, "Profile")).clicked() {
 		profile.command_open(user.clone());
 		ui.close();
 	}
@@ -299,9 +319,7 @@ pub(super) fn contents(
 			state
 				.channel(id)
 				.is_some_and(|channel| channel.supports_text())
-		}) && ui
-		.button(crate::i18n::text(language, "Mention"))
-		.clicked()
+		}) && ui.button(crate::i18n::text(language, "Mention")).clicked()
 	{
 		*action = Some(Action::Mention(user.clone()));
 		ui.close();
@@ -459,9 +477,8 @@ pub(super) fn contents(
 			}
 			if !roles.is_empty() {
 				ui.menu_button(crate::i18n::text(language, "Roles"), |ui| {
-					let assigned_roles: Vec<model::Id> = member
-						.map(|m| m.roles.clone())
-						.unwrap_or_default();
+					let assigned_roles: Vec<model::Id> =
+						member.map(|m| m.roles.clone()).unwrap_or_default();
 					for (role, name) in &roles {
 						let mut assigned = assigned_roles.contains(role);
 						if ui
@@ -496,7 +513,8 @@ pub(super) fn contents(
 					)
 					.clicked()
 			{
-				ui.ctx().data_mut(|data| data.insert_temp(kick_key(user.id), true));
+				ui.ctx()
+					.data_mut(|data| data.insert_temp(kick_key(user.id), true));
 			}
 		}
 	}
@@ -761,7 +779,11 @@ mod tests {
 		ctx: &egui::Context,
 		state: &State,
 		user: &model::User,
-	) -> (crate::profiles::ProfileSession, Option<Action>, Vec<(String, Rect)>) {
+	) -> (
+		crate::profiles::ProfileSession,
+		Option<Action>,
+		Vec<(String, Rect)>,
+	) {
 		let (mut profile, mut action) = (crate::profiles::ProfileSession::default(), None);
 		let (row, _) = frame(ctx, state, user, vec![], &mut profile, &mut action);
 		for pressed in [true, false] {
@@ -794,7 +816,14 @@ mod tests {
 			.1
 			.center();
 		for pressed in [true, false] {
-			frame(ctx, state, user, pointer(pos, PointerButton::Primary, pressed), profile, action);
+			frame(
+				ctx,
+				state,
+				user,
+				pointer(pos, PointerButton::Primary, pressed),
+				profile,
+				action,
+			);
 		}
 	}
 
@@ -861,11 +890,27 @@ mod tests {
 			);
 		}
 		let (_, text) = frame(&ctx, &state, &target, vec![], &mut profile, &mut action);
-		click_label(&ctx, &state, &target, &mut profile, &mut action, &text, "Kick Target");
+		click_label(
+			&ctx,
+			&state,
+			&target,
+			&mut profile,
+			&mut action,
+			&text,
+			"Kick Target",
+		);
 		assert!(action.is_none(), "kick dispatched without confirmation");
 		let (_, text) = frame(&ctx, &state, &target, vec![], &mut profile, &mut action);
 		assert!(text.iter().any(|(s, _)| s == "Kick Target?"));
-		click_label(&ctx, &state, &target, &mut profile, &mut action, &text, "Kick");
+		click_label(
+			&ctx,
+			&state,
+			&target,
+			&mut profile,
+			&mut action,
+			&text,
+			"Kick",
+		);
 		assert!(
 			matches!(
 				action,
@@ -874,7 +919,7 @@ mod tests {
 					action: model::server_admin::Action::Kick { user },
 				}) if g == guild && user == target.id
 			),
-		 "expected confirmed kick, got {action:?}"
+			"expected confirmed kick, got {action:?}"
 		);
 	}
 
@@ -882,12 +927,11 @@ mod tests {
 	fn admin_menu_renders_fully_translated_in_portuguese() {
 		let ctx = egui::Context::default();
 		let _ = crate::i18n::drain_untranslated_keys();
-		store_interface_language(&ctx, model::Language::PortugueseBrazil);
+		crate::i18n::store_interface_language(&ctx, model::Language::PortugueseBrazil);
 		let (state, _, target) = admin_state(1);
 		let (_, action, text) = open_menu(&ctx, &state, &target);
 		assert!(action.is_none());
-		let rendered: Vec<&str> =
-			text.iter().map(|(label, _)| label.as_str()).collect();
+		let rendered: Vec<&str> = text.iter().map(|(label, _)| label.as_str()).collect();
 		for expected in [
 			"Perfil",
 			"Mudar apelido",
@@ -949,7 +993,13 @@ mod tests {
 	fn every_plain_option_closes_the_menu() {
 		let ctx = egui::Context::default();
 		let state = test_support::demo_state();
-		let peer = state.channels.iter().find(|c| c.kind == 1).expect("dm").recipients[0].clone();
+		let peer = state
+			.channels
+			.iter()
+			.find(|c| c.kind == 1)
+			.expect("dm")
+			.recipients[0]
+			.clone();
 		let friend = state.friends().next().expect("friend").clone();
 		let prefs = model::ChannelPreferences {
 			favorites: vec![],
@@ -970,17 +1020,38 @@ mod tests {
 			let mut action = None;
 			let mut open = |events: Vec<Event>| {
 				if pin {
-					pin_frame(&ctx, &state, target, events, &mut profile, &mut action, &prefs).0
+					pin_frame(
+						&ctx,
+						&state,
+						target,
+						events,
+						&mut profile,
+						&mut action,
+						&prefs,
+					)
+					.0
 				} else {
 					frame(&ctx, &state, target, events, &mut profile, &mut action).0
 				}
 			};
 			let row = open(vec![]);
 			for pressed in [true, false] {
-				open(pointer(row.rect.center(), PointerButton::Secondary, pressed));
+				open(pointer(
+					row.rect.center(),
+					PointerButton::Secondary,
+					pressed,
+				));
 			}
 			let (_, text) = if pin {
-				pin_frame(&ctx, &state, target, vec![], &mut profile, &mut action, &prefs)
+				pin_frame(
+					&ctx,
+					&state,
+					target,
+					vec![],
+					&mut profile,
+					&mut action,
+					&prefs,
+				)
 			} else {
 				frame(&ctx, &state, target, vec![], &mut profile, &mut action)
 			};

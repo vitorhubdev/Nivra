@@ -524,12 +524,12 @@ impl MessagingUi {
 						}
 						if page == Page::MessagingPermissions && self.settings.page == page {
 							ui.indent("messaging-permission-sections", |ui| {
-							for tab in crate::messaging_permissions::Tab::ALL {
-								if nav_item(
-									ui,
-									tab.label(self.language),
-									self.settings.messaging_permissions.active == tab,
-								)
+								for tab in crate::messaging_permissions::Tab::ALL {
+									if nav_item(
+										ui,
+										tab.label(self.language),
+										self.settings.messaging_permissions.active == tab,
+									)
 									.clicked()
 									{
 										self.settings.messaging_permissions.jump = Some(tab);
@@ -540,12 +540,12 @@ impl MessagingUi {
 						}
 						if page == Page::Notifications && self.settings.page == page {
 							ui.indent("notification-sections", |ui| {
-							for tab in crate::notification_settings::Tab::ALL {
-								if nav_item(
-									ui,
-									tab.label(self.language),
-									self.settings.notifications.active == tab,
-								)
+								for tab in crate::notification_settings::Tab::ALL {
+									if nav_item(
+										ui,
+										tab.label(self.language),
+										self.settings.notifications.active == tab,
+									)
 									.clicked()
 									{
 										self.settings.notifications.jump = Some(tab);
@@ -907,11 +907,8 @@ impl MessagingUi {
 		});
 		design::group(ui, crate::i18n::text(self.language, "Graphics"), |ui| {
 			let detail = if self.gpu_adapter.is_empty() {
-				crate::i18n::text(
-					self.language,
-					"Takes effect the next time Nivra starts.",
-				)
-				.to_owned()
+				crate::i18n::text(self.language, "Takes effect the next time Nivra starts.")
+					.to_owned()
 			} else {
 				format!(
 					"Currently drawing with {}. Takes effect the next time Nivra starts.",
@@ -1612,6 +1609,7 @@ mod translation_tests {
 	}
 
 	#[test]
+	#[allow(clippy::field_reassign_with_default)] // Test setup mirrors production defaults.
 	fn every_settings_page_renders_fully_translated_in_portuguese() {
 		let ctx = egui::Context::default();
 		let _ = crate::i18n::drain_untranslated_keys();
@@ -1657,15 +1655,16 @@ mod translation_tests {
 				}
 			}
 		}
-		assert!(missing_pages.is_empty(), "untranslated settings keys: {missing_pages:?}");
+		assert!(
+			missing_pages.is_empty(),
+			"untranslated settings keys: {missing_pages:?}"
+		);
 	}
 
 	#[test]
+	#[allow(clippy::field_reassign_with_default)] // Test setup mirrors production defaults.
 	fn settings_pages_call_the_app_nivra_in_english_and_portuguese() {
-		for language in [
-			model::Language::English,
-			model::Language::PortugueseBrazil,
-		] {
+		for language in [model::Language::English, model::Language::PortugueseBrazil] {
 			let ctx = egui::Context::default();
 			let _ = crate::i18n::drain_untranslated_keys();
 			let mut labels = Vec::new();
@@ -1697,7 +1696,10 @@ mod translation_tests {
 				"{language:?} never shows the product name: {rendered}"
 			);
 			let missing = crate::i18n::drain_untranslated_keys();
-			assert!(missing.is_empty(), "untranslated settings keys: {missing:?}");
+			assert!(
+				missing.is_empty(),
+				"untranslated settings keys: {missing:?}"
+			);
 		}
 	}
 }

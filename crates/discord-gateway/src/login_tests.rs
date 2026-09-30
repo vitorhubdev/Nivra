@@ -1,9 +1,12 @@
 //! Offline regressions for large, valid login metadata without voice participants.
 use super::*;
 use serde_json::{Value, json};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use tokio::sync::Notify;
+use std::sync::{
+	Arc,
+	atomic::{AtomicBool, Ordering},
+};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Notify;
 use tokio_tungstenite::{
 	WebSocketStream, accept_async,
 	tungstenite::protocol::{CloseFrame, frame::coding::CloseCode},
@@ -127,9 +130,9 @@ async fn login_metadata(
 				}
 				Ok(())
 			},
-            Arc::new(Notify::new()),
-            Some(&endpoint),
-        );
+			Arc::new(Notify::new()),
+			Some(&endpoint),
+		);
 		let ((), result) = tokio::join!(server, client);
 		assert_eq!(
 			result,
@@ -299,9 +302,9 @@ async fn oversized_frames_stop_login_during_and_after_hello() {
 					);
 					Ok(())
 				},
-            Arc::new(Notify::new()),
-            Some(&endpoint),
-        );
+				Arc::new(Notify::new()),
+				Some(&endpoint),
+			);
 			let (_socket, result) = tokio::join!(server, client);
 			assert_eq!(
 				result,
@@ -359,9 +362,9 @@ async fn invalid_owner_identity_or_session_never_emits_startup() {
 					assert!(event.ready_navigation().is_none());
 					Ok(())
 				},
-            Arc::new(Notify::new()),
-            Some(&endpoint),
-        );
+				Arc::new(Notify::new()),
+				Some(&endpoint),
+			);
 			let (_socket, result) = tokio::join!(server, client);
 			assert_eq!(
 				result,
@@ -421,26 +424,28 @@ async fn ready_premium_type_seeds_full_nitro_limit() {
 		};
 		let seen = saw_entitlement.clone();
 		let client = run_inner(
-			Arc::new(
-				SessionSecret::from_owner_input("synthetic-nitro-secret".into()).unwrap(),
-			),
+			Arc::new(SessionSecret::from_owner_input("synthetic-nitro-secret".into()).unwrap()),
 			"wss://gateway.discord.gg/".into(),
 			watch::channel(None).1,
 			mpsc::channel(1).1,
 			None,
 			|event| {
-				if let client_core::Event::StickerEntitlement { user, premium_type } = &event {
-					if user.0 == 1 && matches!(premium_type, model::Patch::Value(2)) {
-						seen.store(true, Ordering::Relaxed);
-					}
+				if let client_core::Event::StickerEntitlement { user, premium_type } = &event
+					&& user.0 == 1 && matches!(premium_type, model::Patch::Value(2))
+				{
+					seen.store(true, Ordering::Relaxed);
 				}
 				Ok(())
 			},
-            Arc::new(Notify::new()),
-            Some(&endpoint),
-        );
+			Arc::new(Notify::new()),
+			Some(&endpoint),
+		);
 		let ((), result) = tokio::join!(server, client);
-		assert_eq!(result, Err(Failure::Expired), "only the synthetic close may terminate login");
+		assert_eq!(
+			result,
+			Err(Failure::Expired),
+			"only the synthetic close may terminate login"
+		);
 		assert!(
 			saw_entitlement.load(Ordering::Relaxed),
 			"READY must seed the owner entitlement"

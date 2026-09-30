@@ -317,7 +317,7 @@ mod native {
 			let stride = side.div_ceil(16) * 2;
 			let mut mask = vec![0u8; stride * side];
 			let mut pixels = vec![0u8; side * side * 4];
-			for (index, rgba) in rgba.chunks_exact(4).enumerate() {
+			for (index, rgba) in rgba.as_chunks::<4>().0.iter().enumerate() {
 				let alpha = u32::from(rgba[3]);
 				if alpha == 0 {
 					mask[(index / side) * stride + (index % side) / 8] |= 0x80 >> (index % 8);

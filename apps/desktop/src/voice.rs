@@ -266,6 +266,7 @@ impl Voice {
 			self.retiring = Some(live.audio.shutdown());
 		}
 	}
+	#[allow(dead_code)] // Leave-cue path; exercised by test.
 	pub fn joined(&self) -> bool {
 		self.live.as_ref().is_some_and(|live| live.cues.joined)
 	}

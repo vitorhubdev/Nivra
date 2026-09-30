@@ -411,7 +411,8 @@ mod join_tests {
 					name: "Synthetic".into(),
 					icon: None,
 					emojis: None,
-				premium_tier: 0,				}),
+					premium_tier: 0,
+				}),
 			});
 		}
 		assert_eq!(state.guilds.len(), 1);

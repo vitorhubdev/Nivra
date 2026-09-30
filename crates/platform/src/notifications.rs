@@ -70,7 +70,7 @@ impl Status {
 				}
 				#[cfg(target_os = "windows")]
 				{
-					"System notifications unavailable. Register the packaged Start Menu shortcut with install-notifications.ps1 and check Windows notification settings."
+					"System notifications unavailable. Check Windows Settings > Notifications for Nivra."
 				}
 				#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 				{

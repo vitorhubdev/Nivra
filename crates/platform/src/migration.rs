@@ -39,14 +39,11 @@ pub const OLD_SOURCES: [&str; 2] = [OLD_CREDENTIAL_SERVICE, OLD_APP_ID];
 pub const OLD_RUN_VALUE: &str = "Serein";
 /// Old Start-Menu shortcut.
 pub const OLD_SHORTCUT_NAME: &str = "SereinExt.lnk";
-/// Old PowerShell shortcut helper class.
-pub const OLD_SHORTCUT_CLASS: &str = "SereinExtShortcut";
 
 // New identifiers are duplicated here for migration logic; everywhere else they
 // are the only names present.
 pub const NEW_RUN_VALUE: &str = "Nivra";
 pub const NEW_SHORTCUT_NAME: &str = "Nivra.lnk";
-pub const NEW_SHORTCUT_CLASS: &str = "NivraShortcut";
 
 // ---------------------------------------------------------------------------
 // Data dir migration (fatal on failure).
@@ -498,7 +495,7 @@ pub enum ShortcutOutcome {
 	NoOldEntry,
 }
 
-/// Decide + act. `create_new` actually creates the new link (PowerShell in
+/// Decide + act. `create_new` actually creates the new link (native COM in
 /// production, a temp-file write in tests). Deletes `old` only after `new`
 /// exists.
 pub fn migrate_shortcut(
@@ -567,8 +564,9 @@ pub fn migrate_all() -> Result<(), MigrationError> {
 	#[cfg(target_os = "windows")]
 	{
 		let _ = migrate_autostart();
-		// Shortcut: best effort via PowerShell (same script as the app's own
-		// ensure step, but with the new names; old cleanup only after new exists).
+		// Shortcut: best effort through the native registration (same helper as
+		// the app's own ensure step, but with the new names; old cleanup only
+		// after new exists).
 		let programs = std::env::var_os("APPDATA")
 			.map(PathBuf::from)
 			.map(|roaming| {
@@ -589,68 +587,21 @@ pub fn migrate_all() -> Result<(), MigrationError> {
 	Ok(())
 }
 
-/// Create the new notification shortcut (new names only). Used by migration and
-/// by the app's own ensure step.
+/// Create the new notification shortcut (new names only) through the same native
+/// registration the app runs on startup: IShellLink plus the AUMID property,
+/// no script and no administrator. Used by migration and by the app's own ensure step.
 #[cfg(target_os = "windows")]
 pub fn create_notification_shortcut(shortcut: &Path) -> Result<(), String> {
-	let script = format!(
-		r#"
-$shortcut = '{path}'
-$exe = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-$shell = New-Object -ComObject WScript.Shell
-$link = $shell.CreateShortcut($shortcut)
-$link.TargetPath = $exe
-$link.WorkingDirectory = Split-Path -Parent $exe
-$link.Save()
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class {class} {{
-    [StructLayout(LayoutKind.Sequential)] struct PropertyKey {{ public Guid format; public uint id; }}
-    [StructLayout(LayoutKind.Explicit)] struct PropVariant {{
-        [FieldOffset(0)] public ushort type;
-        [FieldOffset(8)] public IntPtr value;
-        [FieldOffset(16)] private IntPtr padding;
-    }}
-    [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    interface IPropertyStore {{
-        void GetCount(out uint count);
-        void GetAt(uint index, out PropertyKey key);
-        void GetValue(ref PropertyKey key, out PropVariant value);
-        void SetValue(ref PropertyKey key, ref PropVariant value);
-        void Commit();
-    }}
-    [DllImport("shell32.dll", CharSet=CharSet.Unicode, PreserveSig=false)]
-    static extern void SHGetPropertyStoreFromParsingName(string path, IntPtr bindContext, uint flags, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
-    public static void SetAppId(string path) {{
-        Guid iid = typeof(IPropertyStore).GUID;
-        IPropertyStore store;
-        SHGetPropertyStoreFromParsingName(path, IntPtr.Zero, 2, ref iid, out store);
-        PropertyKey key = new PropertyKey {{ format = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), id = 5 }};
-        PropVariant value = new PropVariant {{ type = 31, value = Marshal.StringToCoTaskMemUni("{appid}") }};
-        try {{ store.SetValue(ref key, ref value); store.Commit(); }}
-        finally {{ Marshal.FreeCoTaskMem(value.value); Marshal.FinalReleaseComObject(store); }}
-    }}
-}}
-'@
-[{class}]::SetAppId($shortcut)
-"#,
-		path = shortcut.to_string_lossy().replace('\'', "''"),
-		class = NEW_SHORTCUT_CLASS,
-		appid = super::SERVICE,
-	);
-	// Absolute System32 PowerShell + CREATE_NO_WINDOW (Hidden alone still flashes).
-	crate::processes::powershell_hidden()
-		.args([
-			"-NoProfile",
-			"-NonInteractive",
-			"-WindowStyle",
-			"Hidden",
-			"-Command",
-			&script,
-		])
-		.output()
-		.map_err(|e| e.to_string())?;
+	let dir = shortcut
+		.parent()
+		.ok_or("Cannot locate the Start Menu Programs folder.")?;
+	let exe = std::env::current_exe().map_err(|_| "Cannot locate the running executable.")?;
+	crate::shortcut::ensure_link_in(dir, &exe)?;
+	shortcut_result(shortcut)
+}
+
+#[cfg(target_os = "windows")]
+fn shortcut_result(shortcut: &Path) -> Result<(), String> {
 	if shortcut.exists() {
 		Ok(())
 	} else {

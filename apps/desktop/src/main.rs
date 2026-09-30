@@ -4114,75 +4114,13 @@ impl Desktop {
 			}
 			static STARTED: std::sync::Once = std::sync::Once::new();
 			STARTED.call_once(|| {
-				// Skip PowerShell entirely when the link already exists (no flash on every open).
-			if std::env::var_os("APPDATA")
-					.map(std::path::PathBuf::from)
-					.map(|roaming| {
-						roaming
-							.join("Microsoft")
-							.join("Windows")
-							.join("Start Menu")
-							.join("Programs")
-							.join("Nivra.lnk")
-					})
-					.is_some_and(|p| p.is_file())
-				{
-					return;
+				// The executable registers its own Start Menu link (with the AUMID)
+				// and refreshes it when it moved; no script, no administrator.
+				match platform::shortcut::ensure_notification_shortcut() {
+					Ok(platform::shortcut::Outcome::Current) => {}
+					Ok(outcome) => eprintln!("Nivra: notification shortcut {outcome:?}."),
+					Err(error) => eprintln!("Nivra: notification shortcut: {error}"),
 				}
-				let script = r#"
-$shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Nivra.lnk'
-if (Test-Path -LiteralPath $shortcut) { exit 0 }
-$exe = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-$shell = New-Object -ComObject WScript.Shell
-$link = $shell.CreateShortcut($shortcut)
-$link.TargetPath = $exe
-$link.WorkingDirectory = Split-Path -Parent $exe
-$link.Save()
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class NivraShortcut {
-    [StructLayout(LayoutKind.Sequential)] struct PropertyKey { public Guid format; public uint id; }
-    [StructLayout(LayoutKind.Explicit)] struct PropVariant {
-        [FieldOffset(0)] public ushort type;
-        [FieldOffset(8)] public IntPtr value;
-        [FieldOffset(16)] private IntPtr padding;
-    }
-    [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    interface IPropertyStore {
-        void GetCount(out uint count);
-        void GetAt(uint index, out PropertyKey key);
-        void GetValue(ref PropertyKey key, out PropVariant value);
-        void SetValue(ref PropertyKey key, ref PropVariant value);
-        void Commit();
-    }
-    [DllImport("shell32.dll", CharSet=CharSet.Unicode, PreserveSig=false)]
-    static extern void SHGetPropertyStoreFromParsingName(string path, IntPtr bindContext, uint flags, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
-    public static void SetAppId(string path) {
-        Guid iid = typeof(IPropertyStore).GUID;
-        IPropertyStore store;
-        SHGetPropertyStoreFromParsingName(path, IntPtr.Zero, 2, ref iid, out store);
-        PropertyKey key = new PropertyKey { format = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), id = 5 };
-        PropVariant value = new PropVariant { type = 31, value = Marshal.StringToCoTaskMemUni("io.github.vitorhubdev.Nivra") };
-        try { store.SetValue(ref key, ref value); store.Commit(); }
-        finally { Marshal.FreeCoTaskMem(value.value); Marshal.FinalReleaseComObject(store); }
-    }
-}
-'@
-[NivraShortcut]::SetAppId($shortcut)
-"#;
-				// Absolute System32 PowerShell + CREATE_NO_WINDOW (Hidden alone still flashes:
-				// the console is created before PowerShell hides itself).
-				let _ = platform::processes::powershell_hidden()
-					.args([
-						"-NoProfile",
-						"-NonInteractive",
-						"-WindowStyle",
-						"Hidden",
-						"-Command",
-						script,
-					])
-					.spawn();
 			});
 		}
 	}

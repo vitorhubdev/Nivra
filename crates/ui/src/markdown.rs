@@ -600,6 +600,7 @@ impl Formatted {
 						| Tag::CodeBlock(_)
 						| Tag::BlockQuote(_)
 						| Tag::List(_) | Tag::Item
+						| Tag::Table(_)
 				) | Event::Rule
 			) {
 				// Source blank lines between blocks are kept. A block whose range excludes its
@@ -2473,6 +2474,7 @@ mod tests {
 			("- a\n- b", "• a\n• b"),
 			("- [ ] a\n- [x] b", "• [ ] a\n• [x] b"),
 			("| a | b |\n| - | - |\n| 1 | 2 |", "a | b\n1 | 2"),
+			("before\n\n| a |\n| - |\n| b |", "before\n\na\nb"),
 			("1. a\n2. b", "1. a\n2. b"),
 			("> quoted\nplain", "quoted\nplain"),
 			("> one\n> two", "one\ntwo"),

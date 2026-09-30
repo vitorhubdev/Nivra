@@ -32,7 +32,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.2
         with:
           cache-on-failure: true
-      - run: cargo xtask check
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
+      - name: Format and lint
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Compile tests
+        run: |
+          cargo nextest run --workspace --locked --profile ci --no-run
+          cargo test --workspace --locked --doc --no-run
+      - name: Test
+        timeout-minutes: 15
+        run: |
+          cargo nextest run --workspace --locked --profile ci
+          cargo test --workspace --locked --doc
+      - name: Check the release feature set and policy
+        run: |
+          cargo check -p nivra --no-default-features --locked
+          cargo xtask policy
       - uses: oven-sh/setup-bun@v2.2.0
         with:
           bun-version: 1.4.2
@@ -66,8 +86,12 @@ jobs:
             . -> target
             examples/extensions -> target
       - run: cargo fmt --manifest-path examples/extensions/Cargo.toml --all -- --check
-      - run: cargo test --manifest-path examples/extensions/Cargo.toml --workspace --locked
-      - run: cargo test --locked -p extensions --test app_contract --example manifest_check
+      - name: Test extension workspace
+        timeout-minutes: 15
+        run: cargo test --manifest-path examples/extensions/Cargo.toml --workspace --locked
+      - name: Test host extension contract
+        timeout-minutes: 15
+        run: cargo test --locked -p extensions --test app_contract --example manifest_check
       - run: cargo clippy --manifest-path examples/extensions/Cargo.toml --workspace --all-targets --locked -- -D warnings
       - run: cargo build --manifest-path examples/extensions/Cargo.toml --workspace --locked --release --target wasm32-unknown-unknown
       - name: Check existing and rebuilt plugins in the host sandbox (offline)

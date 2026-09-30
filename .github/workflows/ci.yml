@@ -43,7 +43,7 @@ jobs:
       - name: Compile tests
         run: |
           cargo nextest run --workspace --locked --profile ci --no-run
-          cargo test --workspace --locked --doc --no-run
+          # cargo test --doc rejects --no-run. Doctests compile inside the Test step.
       - name: Test
         timeout-minutes: 15
         run: |

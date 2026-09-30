@@ -2573,7 +2573,9 @@ impl MessagingUi {
 			.rev()
 			.find(|message| !message.unsupported && state.can_edit(channel, message.id))
 		{
-			self.editing = Some((channel, message.id, message.content.clone()));
+			self.editing = None;
+			self.timeline
+				.enter_inline_edit(channel, message.id, message.content.clone());
 			self.edit_modified = None;
 			self.composer_edit = None;
 		}
@@ -2834,20 +2836,39 @@ impl MessagingUi {
 			};
 			let mut requested = false;
 			ctx.input_mut(|input| {
-				// eframe consumes native paste key-down. File-only clipboards can emit
-				// no Paste event, so the matching key-up is also a paste trigger.
-				let shortcut = input.events.iter().any(|event| {
-					matches!(event,
-					egui::Event::Key { key: egui::Key::V, pressed, repeat: false, modifiers, .. }
-					if !modifiers.shift && (modifiers.ctrl || modifiers.command || modifiers.alt)
-						&& (*pressed || !self.paste_key_handled))
-				});
+				// eframe often delivers Ctrl+V key-down before the clipboard payload.
+				// Starting the read on that key-down fails once and needs a second press.
+				// Use a Paste event when it is already here, otherwise the key-up.
+				let mut key_down = false;
+				let mut key_up = false;
+				for event in &input.events {
+					if let egui::Event::Key {
+						key: egui::Key::V,
+						pressed,
+						repeat: false,
+						modifiers,
+						..
+					} = event && !modifiers.shift
+						&& (modifiers.ctrl || modifiers.command || modifiers.alt)
+					{
+						if *pressed {
+							key_down = true;
+						} else {
+							key_up = true;
+						}
+					}
+				}
 				let has_paste = input.events.iter().any(|event| {
 					matches!(event, egui::Event::Paste(_) | egui::Event::PasteImage(_))
 				});
-				if has_paste || shortcut {
-					requested = true;
-					self.paste_key_handled = true;
+				let start = has_paste || (key_up && !self.paste_key_handled);
+				if start || key_down {
+					if start {
+						requested = true;
+						self.paste_key_handled = true;
+					} else {
+						self.paste_key_handled = false;
+					}
 					input.events.retain_mut(|event| match event {
 						egui::Event::Paste(text) => {
 							request.text = Some(std::mem::take(text));
@@ -2861,7 +2882,7 @@ impl MessagingUi {
 							key: egui::Key::V, ..
 						} => false,
 						// Option+V can also produce a platform text character.
-						egui::Event::Text(_) if shortcut => false,
+						egui::Event::Text(_) if start || key_down => false,
 						_ => true,
 					});
 				}
@@ -3290,6 +3311,8 @@ impl MessagingUi {
                                         demo,
                                     )
                                 };
+                                ui.visuals_mut().text_cursor.stroke.width = 1.5;
+                                ui.visuals_mut().text_cursor.stroke.color = colors.text_strong;
                                 let output = TextEdit::multiline(draft)
                                     .interactive(keyboard_enabled)
                                     .layouter(&mut layouter)
@@ -3298,10 +3321,10 @@ impl MessagingUi {
                                         horizontal_arrows: true, vertical_arrows: true, escape: editing_here,
                                         ..Default::default()
                                     })
-                                    .desired_rows(1)
+                                    .desired_rows(2)
                                     .desired_width(f32::INFINITY)
                                     // Horizontal layouts reserve the interaction height, including around icons.
-                                    .min_size(egui::vec2(0.0, ui.spacing().interact_size.y))
+                                    .min_size(egui::vec2(0.0, 44.0))
                                     .align(egui::Align2::LEFT_CENTER)
                                     .frame(egui::Frame::NONE)
                                     .hint_text(placeholder.as_str())
@@ -3875,7 +3898,8 @@ impl MessagingUi {
 			// scroll compensation, or the fade releases on failure.
 			self.timeline
 				.removing
-				.insert(message, ui.input(|input| input.time));
+				.entry(message)
+				.or_insert_with(|| ui.input(|input| input.time));
 			if let Some(command) = state.prepare_delete(channel, message) {
 				commands.push(command);
 			}
@@ -5123,6 +5147,9 @@ impl MessagingUi {
 					self.batch_delete_total = self.batch_delete_queue.len();
 					self.batch_delete_sent = 0;
 					self.batch_delete_next = Some(now + batch_delete_gap_secs());
+					for &(_, message) in &self.batch_delete_queue {
+						self.timeline.removing.entry(message).or_insert(now);
+					}
 					self.timeline.batch_delete.clear();
 					self.timeline.batch_progress = Some((0, self.batch_delete_total));
 					self.deleting_batch = None;

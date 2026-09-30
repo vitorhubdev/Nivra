@@ -216,6 +216,7 @@ pub struct BatchFileView {
 	pub received: u64,
 	pub total: u64,
 	pub status: BatchFileStatus,
+	pub error: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

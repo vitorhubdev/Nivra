@@ -64,6 +64,10 @@ thread_local! {
 
 fn portuguese_brazil(key: &str) -> Option<&'static str> {
 	Some(match key {
+		"Voice Connected" => "Voz conectada",
+		"Voice preview" => "Prévia de voz",
+		"Connecting…" => "Conectando…",
+		"Call failed" => "Chamada falhou",
 		"User settings" => "Configurações do usuário",
 		"App settings" => "Configurações do aplicativo",
 		"Customization" => "Personalização",
@@ -1465,6 +1469,10 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 
 fn spanish(key: &str) -> Option<&'static str> {
 	Some(match key {
+		"Voice Connected" => "Voz conectada",
+		"Voice preview" => "Vista previa de voz",
+		"Connecting…" => "Conectando…",
+		"Call failed" => "La llamada falló",
 		"User settings" => "Ajustes de usuario",
 		"App settings" => "Ajustes de la aplicación",
 		"Customization" => "Personalización",
@@ -3748,6 +3756,10 @@ mod tests {
 			"Proposed composer text",
 			"Proposed app action",
 			"Apply to Draft",
+			"Voice Connected",
+			"Voice preview",
+			"Connecting…",
+			"Call failed",
 		];
 		for key in KEYS {
 			assert!(portuguese_brazil(key).is_some(), "missing pt-BR: {key}");

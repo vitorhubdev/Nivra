@@ -32,6 +32,7 @@ pub struct FileState {
 	pub received: u64,
 	pub total: u64,
 	pub status: FileStatus,
+	pub error: Option<&'static str>,
 }
 
 struct Shared {
@@ -69,27 +70,36 @@ pub struct BatchDownloads {
 	worker: Option<std::thread::JoinHandle<()>>,
 }
 
-fn unique_dest(folder: &Path, filename: &str) -> PathBuf {
+fn unique_dest(folder: &Path, filename: &str, reserved: &mut Vec<String>) -> (PathBuf, String) {
 	let safe = platform::save::safe_filename(filename);
-	let candidate = folder.join(&safe);
-	if !candidate.exists() {
-		return candidate;
-	}
 	let (stem, extension) = match safe.rsplit_once('.') {
-		Some((stem, extension)) => (stem, Some(extension)),
-		None => (safe.as_str(), None),
-	};
-	for n in 1..=99 {
-		let numbered = match extension {
-			Some(extension) => format!("{stem} ({n}).{extension}"),
-			None => format!("{stem} ({n})"),
-		};
-		let candidate = folder.join(numbered);
-		if !candidate.exists() {
-			return candidate;
+		Some((stem, extension)) if !stem.is_empty() && !extension.is_empty() => {
+			(stem.to_owned(), Some(extension.to_owned()))
 		}
+		_ => (safe.clone(), None),
+	};
+	for n in 0..=99 {
+		let named = if n == 0 {
+			safe.clone()
+		} else {
+			match &extension {
+				Some(extension) => format!("{stem} ({n}).{extension}"),
+				None => format!("{stem} ({n})"),
+			}
+		};
+		if reserved.iter().any(|taken| taken == &named) {
+			continue;
+		}
+		let candidate = folder.join(&named);
+		if candidate.exists() {
+			continue;
+		}
+		reserved.push(named.clone());
+		return (candidate, named);
 	}
-	candidate
+	let fallback = format!("{safe}-{}", reserved.len() + 1);
+	reserved.push(fallback.clone());
+	(folder.join(&fallback), fallback)
 }
 
 pub fn open_folder(folder: &Path) {
@@ -127,6 +137,7 @@ async fn run_indices(
 		for index in &indices {
 			if shared.files[*index].status == FileStatus::Queued {
 				shared.files[*index].status = FileStatus::Failed;
+				shared.files[*index].error = Some("Download unavailable");
 			}
 		}
 		shared.active = false;
@@ -134,6 +145,7 @@ async fn run_indices(
 		context.request_repaint();
 		return;
 	};
+	let mut reserved = Vec::new();
 	for index in indices {
 		if cancelled.load(Ordering::Acquire) {
 			let mut shared = shared.lock().expect("batch download state");
@@ -156,7 +168,11 @@ async fn run_indices(
 		}) {
 			None => Err("Attachment download unavailable"),
 			Some((url, filename, size)) => {
-				let destination = unique_dest(folder, &filename);
+				let (destination, named) = unique_dest(folder, &filename, &mut reserved);
+				{
+					let mut shared = shared.lock().expect("batch download state");
+					shared.files[index].name = named;
+				}
 				super::downloads::download(
 					&client,
 					url,
@@ -193,8 +209,9 @@ async fn run_indices(
 					}
 					break;
 				}
-				Err(_) => {
+				Err(error) => {
 					shared.files[index].status = FileStatus::Failed;
+					shared.files[index].error = Some(error);
 				}
 			}
 		}
@@ -266,6 +283,7 @@ impl BatchDownloads {
 					received: 0,
 					total: attachment.size,
 					status: FileStatus::Queued,
+					error: None,
 				})
 				.collect();
 			shared.active = true;
@@ -310,6 +328,7 @@ impl BatchDownloads {
 						for file in &mut shared.files {
 							if file.status == FileStatus::Queued {
 								file.status = FileStatus::Failed;
+								file.error = Some("Download unavailable");
 							}
 						}
 						shared.active = false;
@@ -317,6 +336,7 @@ impl BatchDownloads {
 						worker_context.request_repaint();
 						return;
 					};
+					let mut reserved = Vec::new();
 					for (index, attachment) in attachments.iter().enumerate() {
 						if cancelled.load(Ordering::Acquire) {
 							let mut shared = shared.lock().expect("batch download state");
@@ -337,7 +357,12 @@ impl BatchDownloads {
 						let result = match super::downloads::original_url(attachment) {
 							None => Err("Attachment download unavailable"),
 							Some(url) => {
-								let destination = unique_dest(&folder, &attachment.filename);
+								let (destination, named) =
+									unique_dest(&folder, &attachment.filename, &mut reserved);
+								{
+									let mut shared = shared.lock().expect("batch download state");
+									shared.files[index].name = named;
+								}
 								super::downloads::download(
 									&client,
 									url,
@@ -379,8 +404,9 @@ impl BatchDownloads {
 									}
 									break;
 								}
-								Err(_) => {
+								Err(error) => {
 									shared.files[index].status = FileStatus::Failed;
+									shared.files[index].error = Some(error);
 								}
 							}
 						}
@@ -481,5 +507,24 @@ impl BatchDownloads {
 		}
 		let mut shared = self.locked();
 		*shared = Shared::default();
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::unique_dest;
+
+	#[test]
+	fn batch_names_stay_unique_before_any_file_exists() {
+		let folder = std::env::temp_dir().join(format!("nivra-batch-names-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&folder);
+		std::fs::create_dir_all(&folder).unwrap();
+		let mut reserved = Vec::new();
+		let (first, first_name) = unique_dest(&folder, "pasted-image.png", &mut reserved);
+		let (second, second_name) = unique_dest(&folder, "pasted-image.png", &mut reserved);
+		assert_ne!(first, second);
+		assert_eq!(first_name, "pasted-image.png");
+		assert_eq!(second_name, "pasted-image (1).png");
+		let _ = std::fs::remove_dir_all(&folder);
 	}
 }

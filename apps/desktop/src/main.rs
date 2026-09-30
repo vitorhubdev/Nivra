@@ -6300,6 +6300,7 @@ impl eframe::App for Desktop {
 								ui::batch_select::BatchFileStatus::Cancelled
 							}
 						},
+						error: file.error,
 					})
 					.collect();
 				let folder = folder.map(|folder| folder.display().to_string());
@@ -6350,6 +6351,7 @@ impl eframe::App for Desktop {
 							ui::batch_select::BatchFileStatus::Cancelled
 						}
 					},
+					error: file.error,
 				})
 				.collect();
 			let folder = folder.map(|folder| folder.display().to_string());

@@ -683,15 +683,23 @@ impl Voice {
 					&& !devices_ready;
 				match device_wait(&mut live.device_deadline, pending, Instant::now()) {
 					Ok(Some(remaining)) => {
-						state.apply_voice(voice::Event::Progress {
-							channel: live.channel,
-							request: live.request,
-							phase: if ui.voice_privacy_code.is_some() {
-								Phase::OpeningAudio
-							} else {
-								Phase::Waiting
-							},
+						let already_connected = state.voice.active.as_ref().is_some_and(|call| {
+							call.channel == live.channel
+								&& call.request == live.request
+								&& call.phase == Phase::Connected
 						});
+						// Device reopen must not reload a call that is already up.
+						if !already_connected {
+							state.apply_voice(voice::Event::Progress {
+								channel: live.channel,
+								request: live.request,
+								phase: if ui.voice_privacy_code.is_some() {
+									Phase::OpeningAudio
+								} else {
+									Phase::Waiting
+								},
+							});
+						}
 						ctx.request_repaint_after(remaining);
 					}
 					Ok(None) => {}

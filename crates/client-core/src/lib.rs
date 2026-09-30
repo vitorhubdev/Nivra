@@ -55,6 +55,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use trail::Place;
 
 pub const MAX_DRAFT_BYTES: usize = 2 * 1024 * 1024;
+/// One history page. Discord accepts at most 100 messages per request.
+pub const HISTORY_PAGE: usize = 100;
 pub const MAX_CONTENT: usize = 2000;
 /// Message length for full Nitro; Basic and Classic keep `MAX_CONTENT`.
 pub const MAX_CONTENT_NITRO: usize = 4000;
@@ -3126,7 +3128,7 @@ impl State {
 				let mut ids = BTreeSet::new();
 				let has_deleted_reference = messages.iter().any(|message| message.reply_deleted);
 				if older != self.history_before.is_some()
-					|| messages.len() > 50
+					|| messages.len() > HISTORY_PAGE
 					|| messages.iter().any(|message| {
 						message.channel != channel
 							|| (has_deleted_reference && !Timeline::valid_message(message))
@@ -3162,11 +3164,11 @@ impl State {
 				self.older_exhausted = if let Some(after) = self.history_after {
 					after.0 == 0
 				} else {
-					messages.len() < 50
+					messages.len() < HISTORY_PAGE
 				};
 				if self.history_after.is_some() {
 					self.newer_cursor = messages.iter().map(|m| m.id).max();
-					self.newer_may_have_more = messages.len() == 50;
+					self.newer_may_have_more = messages.len() == HISTORY_PAGE;
 				}
 				let jump = self.history_after.is_some() && self.timeline.is_empty();
 				let r = self.timeline.finish_page(messages, older);

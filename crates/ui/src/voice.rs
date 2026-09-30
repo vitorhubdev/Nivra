@@ -3368,13 +3368,13 @@ impl MessagingUi {
 			None => channel,
 		};
 		let title = if state.demo && phase != Phase::Failed {
-			"Voice preview"
+			crate::i18n::text(self.language, "Voice preview")
 		} else if phase == Phase::Failed {
-			"Call failed"
+			crate::i18n::text(self.language, "Call failed")
 		} else if connected || !settled {
-			"Voice Connected"
+			crate::i18n::text(self.language, "Voice Connected")
 		} else {
-			"Connecting…"
+			crate::i18n::text(self.language, "Connecting…")
 		};
 		let color = if phase == Phase::Failed {
 			colors.danger
@@ -3424,9 +3424,9 @@ impl MessagingUi {
 									crate::icons::Icon::HangUp,
 									32.0,
 									if phase == Phase::Failed {
-										"Dismiss call"
+										crate::i18n::text(self.language, "Dismiss call")
 									} else {
-										"Disconnect"
+										crate::i18n::text(self.language, "Disconnect")
 									},
 								)
 							})
@@ -4816,11 +4816,11 @@ fn device_combo(
 	};
 	egui::ComboBox::from_id_salt(id)
 		.selected_text(label)
-		.width(ui.available_width())
-		.truncate()
+		.width(ui.available_width().max(280.0))
 		.height(220.0)
 		.show_ui(ui, |ui| {
-			ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+			ui.set_min_width(280.0);
+			ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
 			ui.selectable_value(selected, None, t("System default (recommended)"));
 			for (id, label) in devices.iter().take(32) {
 				ui.selectable_value(selected, Some(id.clone()), label)

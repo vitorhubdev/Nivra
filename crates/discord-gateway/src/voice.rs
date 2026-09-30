@@ -44,6 +44,13 @@ pub(super) struct Calls {
 	departing: Option<(Id, u64)>,
 	departing_guild: Option<Id>,
 	pub(super) departure_deadline: Option<Instant>,
+	/// Hangup finished locally so the next join is not wedged. The next own
+	/// null voice state for this guild is that ack and must not clear the
+	/// replacement call.
+	ignore_own_null: bool,
+	ignore_own_null_guild: Option<Id>,
+	/// Departure completed inside `packet` so the gateway loop can emit it.
+	replaced_departure: Option<(Id, u64)>,
 	stream: Option<StreamAttempt>,
 	watch: Option<WatchAttempt>,
 	// Optional metadata, retained until READY_SUPPLEMENTAL or reset within the roster budget.
@@ -56,6 +63,9 @@ impl Calls {
 	pub(super) fn disconnected(&mut self) {
 		self.departing = None;
 		self.departure_deadline = None;
+		self.ignore_own_null = false;
+		self.ignore_own_null_guild = None;
+		self.replaced_departure = None;
 		self.users.clear();
 	}
 	/// A fresh READY: Discord dropped every voice state bound to the previous session.
@@ -67,6 +77,9 @@ impl Calls {
 		self.camera = false;
 		self.departing = None;
 		self.departure_deadline = None;
+		self.ignore_own_null = false;
+		self.ignore_own_null_guild = None;
+		self.replaced_departure = None;
 		self.stream = None;
 		self.watch = None;
 		self.users.clear();
@@ -85,15 +98,25 @@ impl Calls {
 		self.active.is_some() || self.departing.is_some()
 	}
 
+	/// Finish an unacked hangup so a later join is not blocked forever.
+	/// A following null voice state for the same guild is ignored while a
+	/// replacement call is active, so the old ack cannot be retagged.
+	fn complete_departure(&mut self) -> Option<(Id, u64)> {
+		let (channel, request) = self.departing.take()?;
+		self.ignore_own_null = true;
+		self.ignore_own_null_guild = self.departing_guild.take();
+		self.departure_deadline = None;
+		Some((channel, request))
+	}
 	pub(super) fn departure_expired(&mut self) -> Option<Event> {
 		self.departure_deadline = None;
-		self.departing.map(|(channel, request)| {
-			Event::Voice(voice::Event::Failed {
-				channel,
-				request,
-				message: "Discord did not acknowledge hangup; reconnect before calling again",
-			})
-		})
+		self.complete_departure()
+			.map(|(channel, request)| Event::Voice(voice::Event::Departed { channel, request }))
+	}
+	pub(super) fn take_replaced_departure(&mut self) -> Option<Event> {
+		self.replaced_departure
+			.take()
+			.map(|(channel, request)| Event::Voice(voice::Event::Departed { channel, request }))
 	}
 	pub(super) fn remember_users(&mut self, users: Vec<UserDto>) {
 		self.users.clear();
@@ -257,8 +280,13 @@ impl Calls {
 				..
 			} => {
 				let guild = *self.allowed.get(&channel).ok_or(Failure::Protocol)?;
-				if self.active.is_some() || self.departing.is_some() {
+				if self.active.is_some() {
 					return Err(Failure::Protocol);
+				}
+				// An unacked hangup must not wedge the channel. Finish it locally
+				// and let this join replace it. The stale null ack is ignored below.
+				if self.departing.is_some() {
+					self.replaced_departure = self.complete_departure();
 				}
 				self.active = Some((channel, request));
 				self.active_guild = guild;
@@ -686,6 +714,18 @@ impl Calls {
 	) -> Result<(), Failure> {
 		let session = state.session_id.take().map(Zeroizing::new);
 		let own = owner == Some(state.user_id);
+		if own
+			&& self.ignore_own_null
+			&& state.channel_id.is_none()
+			&& state.guild_id == self.ignore_own_null_guild
+		{
+			self.ignore_own_null = false;
+			// The null belongs to the hangup already completed. Do not clear a
+			// replacement call, and do not retag that departure onto it.
+			if self.active.is_some() {
+				return Ok(());
+			}
+		}
 		if own && self.departing.is_some() {
 			if state.guild_id == self.departing_guild && state.channel_id.is_none() {
 				let (channel, request) = self.departing.take().expect("departing call");
@@ -718,6 +758,9 @@ impl Calls {
 				.active
 				.is_some_and(|(channel, _)| state.channel_id == Some(channel))
 			&& self.active_guild == state.guild_id;
+		if own && matches_active {
+			self.ignore_own_null = false;
+		}
 		let secret = if own && matches_active {
 			session.map(|s| Secret::new(s.to_string())).transpose()?
 		} else {
@@ -1428,29 +1471,25 @@ mod tests {
 		assert!(value["d"]["channel_id"].is_null());
 		calls.dispatch("VOICE_SERVER_UPDATE",br#"{"channel_id":"2","token":"synthetic-token","endpoint":"voice.discord.media:443"}"#,Some(Id(1)),&emit).unwrap();
 		assert_eq!(events.lock().unwrap().len(), 3);
-		assert!(
-			calls
-				.packet(Command::Join {
-					channel: Id(2),
-					request: 8,
-					ring: false,
-					mute: false,
-					deaf: false,
-				})
-				.is_err()
-		);
-		assert!(calls.departure_expired().is_some());
-		assert!(
-			calls
-				.packet(Command::Join {
-					channel: Id(2),
-					request: 8,
-					ring: false,
-					mute: false,
-					deaf: false,
-				})
-				.is_err()
-		);
+		// Rejoin while the hangup is still unacked: finish it locally and accept the call.
+		calls
+			.packet(Command::Join {
+				channel: Id(2),
+				request: 8,
+				ring: false,
+				mute: false,
+				deaf: false,
+			})
+			.unwrap()
+			.expect("join replaces a stuck departure");
+		assert!(matches!(
+			calls.take_replaced_departure(),
+			Some(Event::Voice(voice::Event::Departed {
+				channel: Id(2),
+				request: 7
+			}))
+		));
+		assert_eq!(calls.active, Some((Id(2), 8)));
 		calls
 			.dispatch(
 				"VOICE_STATE_UPDATE",
@@ -1460,25 +1499,52 @@ mod tests {
 			)
 			.unwrap();
 		assert!(calls.departing.is_none());
-		assert_eq!(events.lock().unwrap().len(), 4);
-		assert!(matches!(
-			events.lock().unwrap().last(),
-			Some(Event::Voice(voice::Event::Departed {
-				channel: Id(2),
-				request: 7
-			}))
-		)); // never retagged to request 8
+		assert_eq!(calls.active, Some((Id(2), 8)));
+		assert_eq!(events.lock().unwrap().len(), 3); // stale null is not retagged to request 8
+		calls.dispatch("VOICE_STATE_UPDATE",br#"{"guild_id":"9","channel_id":"10","user_id":"1","session_id":"synthetic-session"}"#,Some(Id(1)),&emit).unwrap();
+		assert!(calls.active.is_none());
+	}
+
+	#[test]
+	fn expired_departure_unblocks_the_next_join() {
+		let mut calls = Calls::default();
+		calls.allowed.insert(Id(2), None);
 		calls
 			.packet(Command::Join {
 				channel: Id(2),
-				request: 8,
+				request: 1,
 				ring: false,
 				mute: false,
 				deaf: false,
 			})
 			.unwrap();
-		calls.dispatch("VOICE_STATE_UPDATE",br#"{"guild_id":"9","channel_id":"10","user_id":"1","session_id":"synthetic-session"}"#,Some(Id(1)),&emit).unwrap();
-		assert!(calls.active.is_none());
+		calls
+			.packet(Command::Leave {
+				channel: Id(2),
+				request: 1,
+			})
+			.unwrap();
+		assert!(calls.departing.is_some());
+		assert!(matches!(
+			calls.departure_expired(),
+			Some(Event::Voice(voice::Event::Departed {
+				channel: Id(2),
+				request: 1
+			}))
+		));
+		assert!(calls.departing.is_none());
+		calls
+			.packet(Command::Join {
+				channel: Id(2),
+				request: 2,
+				ring: false,
+				mute: false,
+				deaf: false,
+			})
+			.unwrap()
+			.expect("expired hangup does not wedge the channel");
+		assert!(calls.take_replaced_departure().is_none());
+		assert_eq!(calls.active, Some((Id(2), 2)));
 	}
 
 	#[test]

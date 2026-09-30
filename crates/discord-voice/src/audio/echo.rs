@@ -246,6 +246,9 @@ pub struct Echo {
 	/// Set when DeepFilterNet was chosen but could not load or keep up; RNNoise runs instead.
 	deep_fallback: bool,
 	settings: Processing,
+	/// Frames to pass through after RNNoise misses its budget, so a slow
+	/// denoiser cannot stall the send path.
+	noise_skip: u8,
 }
 
 fn processor(config: Config) -> AudioProcessing {
@@ -282,6 +285,7 @@ impl Echo {
 			deep: None,
 			deep_fallback: false,
 			settings: VoiceProcessing::from_legacy(false).effective(),
+			noise_skip: 0,
 		}
 	}
 
@@ -428,13 +432,21 @@ impl Echo {
 				// loads, the persistent cover below runs.
 				Some(Step::Covered) | Some(Step::Loading) | None => {}
 			}
-			if let Some(noise) = &mut self.noise
+			if self.noise_skip > 0 {
+				self.noise_skip -= 1;
+			} else if let Some(noise) = &mut self.noise
 				&& !self.deep.as_ref().is_some_and(|deep| deep.ready)
 			{
-				let start = time_noise.then(Instant::now);
+				let start = Instant::now();
 				rnnoise_frame(noise, &mut output);
-				if let Some(start) = start {
-					noise_time += start.elapsed();
+				let elapsed = start.elapsed();
+				if time_noise {
+					noise_time += elapsed;
+				}
+				// A frame that blows the 6 ms budget skips the next two instead
+				// of letting denoise pile up and stutter the far side.
+				if elapsed > Duration::from_millis(6) {
+					self.noise_skip = 2;
 				}
 			}
 			chunk.copy_from_slice(&output);
@@ -487,10 +499,7 @@ mod tests {
 		);
 	}
 
-	fn fake_deep(
-		stall_once: bool,
-		reported: Duration,
-	) -> Deep {
+	fn fake_deep(stall_once: bool, reported: Duration) -> Deep {
 		let stalled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 		let mut cover = noise_state();
 		Deep::start_with(
@@ -498,16 +507,12 @@ mod tests {
 			move |_: &mut (), chunk: [f32; 480]| {
 				// One real stall exercises the non-blocking path; the reported time
 				// simulates what a slow machine accounts per frame.
-				if stall_once
-					&& !stalled.swap(true, std::sync::atomic::Ordering::SeqCst)
-				{
+				if stall_once && !stalled.swap(true, std::sync::atomic::Ordering::SeqCst) {
 					std::thread::sleep(Duration::from_millis(25));
 				}
 				Some((chunk, reported))
 			},
-			Box::new(
-				move |output: &mut [f32; 480]| rnnoise_frame(&mut cover, output),
-			),
+			Box::new(move |output: &mut [f32; 480]| rnnoise_frame(&mut cover, output)),
 		)
 		.expect("fake model thread starts")
 	}
@@ -522,6 +527,23 @@ mod tests {
 				"fake model reports load"
 			);
 		}
+	}
+
+	#[test]
+	fn overloaded_noise_bypass_skips_following_frames() {
+		let mut dsp = Echo::new();
+		dsp.settings.suppression = NoiseSuppression::RnNoise;
+		dsp.sync_rnnoise();
+		dsp.noise_skip = 2;
+		let mut frame = [0.2; 960];
+		let start = Instant::now();
+		dsp.capture(&mut frame, false).unwrap();
+		assert!(
+			start.elapsed() < Duration::from_millis(2),
+			"a bypassed frame must not run the denoiser"
+		);
+		assert_eq!(dsp.noise_skip, 0);
+		assert!(frame.iter().all(|sample| sample.is_finite()));
 	}
 
 	#[test]
@@ -676,10 +698,7 @@ mod tests {
 		}
 		// Average model inference time from the load counters, not wall pacing.
 		let deep = dsp.deep.as_ref().expect("model still active");
-		assert!(
-			deep.load.frames > 0,
-			"paced frames reach the model"
-		);
+		assert!(deep.load.frames > 0, "paced frames reach the model");
 		let per_frame = deep.load.busy / deep.load.frames;
 		println!("DeepFilterNet ready after {load_time:?}, {per_frame:?} per 10 ms frame");
 		assert!(

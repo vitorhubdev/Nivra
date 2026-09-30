@@ -1542,11 +1542,11 @@ async fn run_stream_inner(
 					};dave.enter_sole_member_waiting()?;deadline=None;}else if was_ready{dave.ready=true;deadline=None;}else if was_group_member{deadline=Some(Instant::now()+Duration::from_secs(30));announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
 					};}}},
-							21=>{let version=number(data,"protocol_version")?;if version>1{return Err("Unsupported stream DAVE version");}if version==0{dave.downgrade_pending=true;dave.transport_only=true;dave.ready=true;}else{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
+							21=>{let version=number(data,"protocol_version")?;if version>1{return Err("Unsupported stream DAVE version");}else if version==0{dave.downgrade_pending=true;dave.transport_only=true;dave.ready=true;}else{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
 					};dave.pending=Some(transition(data)?);if dave.pending==Some(0){if dave.session.is_ready(){dave.execute(0)?;}else if dave.alone(){dave.enter_sole_member_waiting()?;deadline=None;}else{dave.pending=None;dave.ready=false;}}else{json_send(&mut ws,json!({"op":23,"d":{"transition_id":dave.pending}})).await?;}}},
 							22=>{let id=transition(data)?;if dave.downgrade_pending{dave.finish_downgrade();}else{let was_open=dave.transport_only;dave.execute(id)?;if was_open{dave.transport_only=false;}}},
-							24=>{let version=number(data,"protocol_version")?;if version>1{return Err("Unsupported stream DAVE version");}if version==0{dave.downgrade_pending=true;dave.transport_only=true;dave.ready=true;}else if number(data,"epoch")?==1{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
+							24=>{let version=number(data,"protocol_version")?;if version>1{return Err("Unsupported stream DAVE version");}else if version==0{dave.downgrade_pending=true;dave.transport_only=true;dave.ready=true;}else if number(data,"epoch")?==1{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
 					};let stay=dave.ready||dave.transport_only;dave.reinitialize()?;if stay{dave.transport_only=true;dave.ready=true;}send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;}},
 							// Watching a stream receives signaling the sender never does; unknown

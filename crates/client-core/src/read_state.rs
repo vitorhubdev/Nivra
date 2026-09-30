@@ -1260,7 +1260,7 @@ mod navigation_tests {
 			&mut state,
 			CoreEvent::DeleteBulk {
 				channel: Id(1),
-				ids: (101..=150).map(Id).collect(),
+				ids: (101..=200).map(Id).collect(),
 			},
 		);
 		apply(
@@ -1270,17 +1270,17 @@ mod navigation_tests {
 				id: Id(500),
 			},
 		);
-		page(&mut state, (101..=150).map(message).collect());
+		page(&mut state, (101..=200).map(message).collect());
 		assert_eq!(state.timeline.iter().count(), 0);
 		assert!(state.search_target.is_none());
 		assert!(matches!(
 			state.newer_history(),
 			Some(Command::History {
-				after: Some(Id(150)),
+				after: Some(Id(200)),
 				..
 			})
 		));
-		page(&mut state, (151..=200).map(message).collect());
+		page(&mut state, (201..=300).map(message).collect());
 		let mut reply = message(601);
 		reply.reply_to = Some(Id(151));
 		reply.reply_deleted = true;
@@ -1291,7 +1291,7 @@ mod navigation_tests {
 		assert!(matches!(
 			state.newer_history(),
 			Some(Command::History {
-				after: Some(Id(200)),
+				after: Some(Id(300)),
 				..
 			})
 		));

@@ -360,6 +360,20 @@ fn hovering_edit(ctx: &egui::Context) -> bool {
 		.any(|id| egui::text_edit::TextEditState::load(ctx, *id).is_some())
 }
 
+const MESSAGE_SELECT_MODE: &str = "nivra-message-select-mode";
+
+/// While message select is on, drags paint rows instead of a text range.
+pub fn set_message_select_mode(ctx: &egui::Context, on: bool) {
+	ctx.data_mut(|data| data.insert_temp(egui::Id::unique(MESSAGE_SELECT_MODE), on));
+}
+
+pub fn message_select_mode(ctx: &egui::Context) -> bool {
+	ctx.data(|data| {
+		data.get_temp::<bool>(egui::Id::unique(MESSAGE_SELECT_MODE))
+			.unwrap_or(false)
+	})
+}
+
 pub fn install(ctx: &egui::Context) {
 	ctx.add_plugin(Pointer::default());
 }
@@ -439,7 +453,9 @@ fn show_embed(ui: &mut egui::Ui, embed: &Embed, menu_open: bool) {
 	}
 	// The galley carries its own per-token colours; the fallback only covers unstyled glyphs.
 	let color = ui.visuals().text_color();
-	if menu_open {
+	// Message-select mode paints the row. Text range selection stays off
+	// until that mode exits, so a drag cannot grab the channel name.
+	if menu_open || message_select_mode(ui.ctx()) {
 		ui.painter().add(TextShape::new(
 			embed.galley_pos,
 			embed.galley.clone(),

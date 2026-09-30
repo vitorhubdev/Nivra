@@ -59,34 +59,12 @@ pub struct BatchDownloads {
 
 fn unique_dest(folder: &Path, filename: &str, reserved: &mut Vec<String>) -> (PathBuf, String) {
 	let safe = platform::save::safe_filename(filename);
-	let (stem, extension) = match safe.rsplit_once('.') {
-		Some((stem, extension)) if !stem.is_empty() && !extension.is_empty() => {
-			(stem.to_owned(), Some(extension.to_owned()))
-		}
-		_ => (safe.clone(), None),
-	};
-	for n in 0..=99 {
-		let named = if n == 0 {
-			safe.clone()
-		} else {
-			match &extension {
-				Some(extension) => format!("{stem} ({n}).{extension}"),
-				None => format!("{stem} ({n})"),
-			}
-		};
-		if reserved.iter().any(|taken| taken == &named) {
-			continue;
-		}
-		let candidate = folder.join(&named);
-		if candidate.exists() {
-			continue;
-		}
-		reserved.push(named.clone());
-		return (candidate, named);
-	}
-	let fallback = format!("{safe}-{}", reserved.len() + 1);
-	reserved.push(fallback.clone());
-	(folder.join(&fallback), fallback)
+	let named = ui::batch_select::first_free_filename(&safe, |name| {
+		reserved.iter().any(|taken| taken == name) || folder.join(name).exists()
+	})
+	.unwrap_or_else(|| format!("{safe}-{}", reserved.len() + 1));
+	reserved.push(named.clone());
+	(folder.join(&named), named)
 }
 
 pub fn open_folder(folder: &Path) {

@@ -9,6 +9,8 @@ use std::collections::BTreeSet;
 
 /// Max messages per delete action. Matches `timeline.rs`.
 pub const MAX_DELETE: usize = 5;
+/// Max messages in one selection. Six through this cap is a download batch.
+pub const MAX_SELECT: usize = 15;
 /// Max attachments per download action.
 pub const MAX_DOWNLOAD: usize = 15;
 /// Removal animation: height and opacity to 0.
@@ -21,12 +23,12 @@ pub fn reserved_width(_mode_on: bool) -> f32 {
 	SELECT_COL_WIDTH
 }
 
-/// Toggle one id, bounded by `MAX_DELETE`.
+/// Toggle one id, bounded by `MAX_SELECT`. Delete stays capped at `MAX_DELETE`.
 pub fn toggle(selected: &mut BTreeSet<Id>, id: Id) -> bool {
 	if selected.remove(&id) {
 		return true;
 	}
-	if selected.len() >= MAX_DELETE {
+	if selected.len() >= MAX_SELECT {
 		return false;
 	}
 	selected.insert(id);
@@ -54,7 +56,7 @@ pub fn range_select(
 		if selected.contains(id) {
 			continue;
 		}
-		if selected.len() >= MAX_DELETE {
+		if selected.len() >= MAX_SELECT {
 			break;
 		}
 		selected.insert(*id);
@@ -80,10 +82,10 @@ pub fn delete_disabled_reason(
 ) -> Option<&'static str> {
 	if selected_count == 0 {
 		Some("Select messages to enable actions")
-	} else if deletable_count == 0 {
-		Some("None of the selected messages can be deleted")
 	} else if selected_count > MAX_DELETE {
-		Some("Maximum 5 messages per delete")
+		Some("You can delete up to 5 at a time")
+	} else if deletable_count != selected_count {
+		Some("Only your messages can be deleted here")
 	} else {
 		None
 	}
@@ -94,7 +96,7 @@ pub fn download_disabled_reason(attachment_count: usize) -> Option<&'static str>
 	if attachment_count == 0 {
 		Some("No attachments in the selection")
 	} else if attachment_count > MAX_DOWNLOAD {
-		Some("Maximum 15 attachments per download")
+		Some("You can download up to 15 attachments at a time")
 	} else {
 		None
 	}
@@ -108,14 +110,20 @@ pub struct TxtMessage {
 	pub attachments: Vec<String>,
 }
 
-/// Formats messages in order as `Author [when]: text`, attachments listed by name.
+/// One line per message, in the order given: `Author — hh:mm: text`.
 pub fn format_txt(messages: &[TxtMessage]) -> String {
 	let mut out = String::new();
 	for m in messages {
-		out.push_str(&format!("{} [{}]: {}\n", m.author, m.when, m.text));
+		out.push_str(&m.author);
+		out.push_str(" — ");
+		out.push_str(&m.when);
+		out.push_str(": ");
+		out.push_str(&m.text);
 		if !m.attachments.is_empty() {
-			out.push_str(&format!("Attachments: {}\n", m.attachments.join(", ")));
+			out.push_str(" · ");
+			out.push_str(&m.attachments.join(", "));
 		}
+		out.push('\n');
 	}
 	out
 }
@@ -182,6 +190,34 @@ impl DownloadQueue {
 	}
 }
 
+/// `photo.png` at 0, then `photo (1).png` … `photo (99).png`.
+pub fn filename_with_index(filename: &str, index: usize) -> String {
+	if index == 0 {
+		return filename.to_owned();
+	}
+	let (stem, extension) = match filename.rsplit_once('.') {
+		Some((stem, extension)) if !stem.is_empty() && !extension.is_empty() => {
+			(stem, Some(extension))
+		}
+		_ => (filename, None),
+	};
+	match extension {
+		Some(extension) => format!("{stem} ({index}).{extension}"),
+		None => format!("{stem} ({index})"),
+	}
+}
+
+/// First free name from the original through ` (99)`, using `taken`.
+pub fn first_free_filename(filename: &str, mut taken: impl FnMut(&str) -> bool) -> Option<String> {
+	for index in 0..=99 {
+		let named = filename_with_index(filename, index);
+		if !taken(&named) {
+			return Some(named);
+		}
+	}
+	None
+}
+
 /// 0..1 removal progress over `REMOVAL_SECS`; height and opacity scale with `1-t`.
 pub fn removal_progress(elapsed: f32) -> f32 {
 	crate::anim::progress(elapsed, REMOVAL_SECS)
@@ -192,11 +228,11 @@ pub fn removal_height(base: f32, elapsed: f32) -> f32 {
 	(base * (1.0 - removal_progress(elapsed))).max(0.0)
 }
 
-/// Adds visible ids in order until the delete cap. Returns how many were added.
+/// Adds visible ids in order until the selection cap. Returns how many were added.
 pub fn select_all_visible(ordered: &[Id], selected: &mut BTreeSet<Id>) -> usize {
 	let mut added = 0;
 	for id in ordered {
-		if selected.len() >= MAX_DELETE {
+		if selected.len() >= MAX_SELECT {
 			break;
 		}
 		if selected.insert(*id) {
@@ -314,30 +350,39 @@ mod tests {
 
 	#[test]
 	fn shift_range_selects_in_order_with_limit() {
-		let ordered = vec![Id(1), Id(2), Id(3), Id(4), Id(5), Id(6), Id(7)];
+		let ordered: Vec<Id> = (1..=20).map(Id).collect();
 		let mut sel = BTreeSet::new();
 		let added = range_select(&ordered, Some(Id(2)), Id(5), &mut sel);
 		assert_eq!(added, 4);
 		assert!(sel.contains(&Id(2)) && sel.contains(&Id(5)));
-		let added2 = range_select(&ordered, Some(Id(1)), Id(7), &mut sel);
-		assert!(added2 <= MAX_DELETE);
-		assert!(sel.len() <= MAX_DELETE);
+		let added2 = range_select(&ordered, Some(Id(1)), Id(20), &mut sel);
+		assert_eq!(added2, MAX_SELECT - 4);
+		assert_eq!(sel.len(), MAX_SELECT);
 	}
 
 	#[test]
 	fn delete_and_download_limits_with_reasons() {
 		let mut sel = BTreeSet::new();
-		for i in 1..=5u64 {
+		for i in 1..=15u64 {
 			assert!(toggle(&mut sel, Id(i)));
 		}
 		assert!(!toggle(&mut sel, Id(99)));
+		assert_eq!(sel.len(), MAX_SELECT);
+		assert_eq!(
+			delete_disabled_reason(6, 6),
+			Some("You can delete up to 5 at a time")
+		);
 		assert_eq!(
 			delete_disabled_reason(0, 5),
-			Some("None of the selected messages can be deleted")
+			Some("Only your messages can be deleted here")
 		);
 		assert_eq!(
 			delete_disabled_reason(5, 6),
-			Some("Maximum 5 messages per delete")
+			Some("You can delete up to 5 at a time")
+		);
+		assert_eq!(
+			delete_disabled_reason(2, 3),
+			Some("Only your messages can be deleted here")
 		);
 		assert_eq!(delete_disabled_reason(3, 3), None);
 		assert_eq!(
@@ -346,7 +391,7 @@ mod tests {
 		);
 		assert_eq!(
 			download_disabled_reason(16),
-			Some("Maximum 15 attachments per download")
+			Some("You can download up to 15 attachments at a time")
 		);
 		assert_eq!(download_disabled_reason(15), None);
 	}
@@ -368,8 +413,9 @@ mod tests {
 			},
 		];
 		let out = format_txt(&msgs);
-		assert!(out.find("B [10:01]: second").unwrap() < out.find("A [10:00]: first").unwrap());
+		assert!(out.find("B — 10:01: second").unwrap() < out.find("A — 10:00: first").unwrap());
 		assert!(out.contains("b.png"));
+		assert!(!out.contains('['));
 	}
 
 	#[test]
@@ -391,6 +437,23 @@ mod tests {
 	}
 
 	#[test]
+	fn repeated_download_names_use_parenthetical_index() {
+		assert_eq!(filename_with_index("photo.png", 0), "photo.png");
+		assert_eq!(filename_with_index("photo.png", 1), "photo (1).png");
+		assert_eq!(filename_with_index("photo.png", 99), "photo (99).png");
+		assert_eq!(filename_with_index("notes", 2), "notes (2)");
+		let mut taken = vec!["photo.png".to_owned(), "photo (1).png".to_owned()];
+		let next = first_free_filename("photo.png", |name| taken.iter().any(|item| item == name));
+		assert_eq!(next.as_deref(), Some("photo (2).png"));
+		taken.push(next.unwrap());
+		assert_eq!(
+			first_free_filename("photo.png", |name| taken.iter().any(|item| item == name))
+				.as_deref(),
+			Some("photo (3).png")
+		);
+	}
+
+	#[test]
 	fn removal_animation_ends() {
 		assert_eq!(removal_progress(0.0), 0.0);
 		assert_eq!(removal_progress(10.0), 1.0);
@@ -400,13 +463,13 @@ mod tests {
 	}
 
 	#[test]
-	fn select_all_visible_fills_in_order_up_to_delete_cap() {
-		let ordered = vec![Id(9), Id(3), Id(7), Id(1), Id(5), Id(2), Id(8)];
+	fn select_all_visible_fills_in_order_up_to_select_cap() {
+		let ordered: Vec<Id> = (1..=20).map(Id).collect();
 		let mut sel = BTreeSet::new();
 		sel.insert(Id(3));
 		let added = select_all_visible(&ordered, &mut sel);
-		assert_eq!(added, MAX_DELETE - 1);
-		assert_eq!(sel.len(), MAX_DELETE);
+		assert_eq!(added, MAX_SELECT - 1);
+		assert_eq!(sel.len(), MAX_SELECT);
 		assert!(sel.contains(&Id(9)));
 		let added2 = select_all_visible(&ordered, &mut sel);
 		assert_eq!(added2, 0);

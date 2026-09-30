@@ -8,6 +8,7 @@ use std::sync::{
 };
 
 const READY: &str = "Global voice keybinds are enabled.";
+const DISABLED: &str = "Global shortcuts are off. Turn them on under Settings, Keybinds.";
 #[cfg(target_os = "linux")]
 const WAYLAND_PENDING: &str = "Approve the global voice keybinds in your desktop's dialog.";
 #[cfg(target_os = "linux")]
@@ -85,7 +86,19 @@ impl Hotkeys {
 		}
 	}
 
-	pub fn sync(&mut self, keybinds: &Keybinds, _runtime: &tokio::runtime::Runtime) {
+	pub fn sync(&mut self, keybinds: &Keybinds, enabled: bool, _runtime: &tokio::runtime::Runtime) {
+		if !enabled {
+			if self.bindings.is_some() {
+				self.unregister_all();
+				self.bindings = None;
+				self.ptt_down = false;
+				self.mute_down = false;
+				self.deafen_down = false;
+				self.pending_toggles = 0;
+			}
+			self.status = DISABLED;
+			return;
+		}
 		let next = [
 			keybinds.chord(KeybindAction::PushToTalk).clone(),
 			keybinds.chord(KeybindAction::ToggleMute).clone(),

@@ -364,6 +364,7 @@ async fn run_inner(
 	let mut waiting_announced = false;
 	let mut resuming = false;
 	let mut resume_attempts = 0u8;
+	let mut resume_since: Option<Instant> = None;
 	let mut heard = false;
 	let mut speaking = false;
 	let mut silence = 0u8;
@@ -373,6 +374,10 @@ async fn run_inner(
 	encoder
 		.set_bitrate(Bitrate::Bits(64_000))
 		.map_err(|_| "Opus bitrate configuration failed")?;
+	// FEC stays on. Expected loss stays small so a clean network does not spend the bitrate.
+	let _ = encoder.set_inband_fec(true);
+	let _ = encoder.set_packet_loss_perc(5);
+	let _ = encoder.set_dtx(true);
 	let mut random = [0; 6];
 	getrandom::fill(&mut random).map_err(|_| "Voice random initialization failed")?;
 	let mut sequence = u16::from_be_bytes([random[0], random[1]]);
@@ -411,7 +416,8 @@ async fn run_inner(
 					next_udp_ping=now+Duration::from_secs(5);
 				}
 				if let Some(interval)=heartbeat_ms && now>=heartbeat_at {
-					if awaiting_ack.is_some() {return Err("Discord voice heartbeat was not acknowledged; rejoin the call");}
+					// A missed ack used to end the call. Send the next beat instead; a dead
+					// socket still resumes on the close path.
 					heartbeat_nonce=heartbeat_nonce.wrapping_add(1);
 					let sent=Instant::now();
 					json_send(&mut ws,json!({"op":3,"d":{"t":heartbeat_nonce,"seq_ack":seq_ack}})).await?;
@@ -420,7 +426,12 @@ async fn run_inner(
 				if secured_at.is_some_and(|at| now>=at+PEER_GRACE) && !discovering && !resuming && dave.should_wait_for_peer() {dave.enter_sole_member_waiting()?;}
 				let enabled=dave.ready && encryption.is_some() && !discovering && !resuming;
 				let waiting=dave.waiting && encryption.is_some() && !discovering && !resuming;
-				if (!enabled && ready_announced) || (!waiting && waiting_announced) {ready_announced=false;waiting_announced=false;emit(Status::Securing).map_err(|_|"Call interface closed")?;}
+				// A resume that returns inside 5s keeps the connected indicator. Longer than that, say so.
+				if resuming && resume_since.is_some_and(|at| now.duration_since(at) >= Duration::from_secs(5)) && ready_announced {
+					ready_announced=false;
+					emit(Status::Securing).map_err(|_|"Call interface closed")?;
+				}
+				if (!enabled && ready_announced && !resuming) || (!waiting && waiting_announced) {ready_announced=false;waiting_announced=false;emit(Status::Securing).map_err(|_|"Call interface closed")?;}
 				if waiting && !waiting_announced {deadline=None;waiting_announced=true;emit(Status::WaitingForPeer).map_err(|_|"Call interface closed")?;}
 				if !waiting {waiting_announced=false;}
 				if enabled && !ready_announced {
@@ -495,7 +506,11 @@ async fn run_inner(
 						let frame=latest.unwrap();
 						for (sample,out) in frame.iter().zip(mono.iter_mut()) {*out=if sample.is_finite(){sample.clamp(-1.0,1.0)}else{0.0};}
 						let length=encoder.encode_float(&mono,&mut encoded).map_err(|_|"Opus encoding failed")?;
-						dave.session.encrypt_opus(&encoded[..length]).map_err(|_|"DAVE audio encryption failed")?.into_owned()
+						if dave.transport_only {
+							encoded[..length].to_vec()
+						} else {
+							dave.session.encrypt_opus(&encoded[..length]).map_err(|_|"DAVE audio encryption failed")?.into_owned()
+						}
 					} else {silence-=1;davey::OPUS_SILENCE_PACKET.to_vec()};
 					let mut header=[0;12];header[0]=0x80;header[1]=120;header[2..4].copy_from_slice(&sequence.to_be_bytes());header[4..8].copy_from_slice(&timestamp.to_be_bytes());header[8..12].copy_from_slice(&ssrc.to_be_bytes());
 					let wire=encryption.as_mut().ok_or("Missing voice transport key")?.seal(&header,&data)?;
@@ -583,8 +598,7 @@ async fn run_inner(
 					_=>{
 						if encryption.is_none() || resume_attempts>=2 {return Err("Voice socket failed; rejoin the call");}
 						video.clear();video.announced=false;
-						resume_attempts+=1;resuming=true;ready_announced=false;waiting_announced=false;capture_reset=true;
-						emit(Status::Securing).map_err(|_|"Call interface closed")?;
+						resume_attempts+=1;resuming=true;resume_since=Some(Instant::now());capture_reset=true;
 						deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;awaiting_ack=None;heartbeat_sent=None;
 						let config=WebSocketConfig::default().max_message_size(Some(MAX_SIGNAL)).max_frame_size(Some(MAX_SIGNAL)).write_buffer_size(0).max_write_buffer_size(MAX_SIGNAL*2);
 						let (replacement,_)=timeout(Duration::from_secs(15),tokio_tungstenite::connect_async_with_config(&url,Some(config),false)).await.map_err(|_|"Voice resume timed out; rejoin the call")?.map_err(|_|"Voice resume failed; rejoin the call")?;
@@ -681,49 +695,117 @@ async fn run_inner(
 										waiting_announced=true;
 										ready_announced=false;
 										emit(Status::WaitingForPeer).map_err(|_|"Call interface closed")?;
+									} else if was_ready {
+										// Keep the current epoch key. The removal commit applies on opcode 22.
+										dave.ready=true;
+										deadline=None;
 									} else if was_group_member {
 										video.clear();
 										deadline=Some(Instant::now()+Duration::from_secs(30));
 										capture_reset=true;
 										mixer.clear();
-									} else if was_ready {
-										dave.ready=true;
-										deadline=None;
 									}
 								}
 							},
 							21=>{
-								video.clear();
-								if number(data,"protocol_version")?!=1 {return Err("Discord requested a voice encryption downgrade; call stopped");}
-								capture_reset=true;dave.pending=Some(transition(data)?);
-								if dave.pending==Some(0) {
-									if dave.session.is_ready(){
-										dave.execute(0)?;
-									} else if dave.alone(){
-										dave.enter_sole_member_waiting()?;
-										deadline=None;
-										waiting_announced=true;
-										ready_announced=false;
-										emit(Status::WaitingForPeer).map_err(|_|"Call interface closed")?;
+								let version=number(data,"protocol_version")?;
+								let id=transition(data)?;
+								if version>1 {return Err("Unsupported DAVE protocol version; call stopped");}
+								if version==0 {
+									// Official clients accept a non-DAVE member and keep the call up.
+									dave.downgrade_pending=true;
+									dave.pending=Some(id);
+									if id==0 {
+										dave.finish_downgrade();
+										emit(Status::TransportOnly).map_err(|_|"Call interface closed")?;
 									} else {
-										dave.pending=None;dave.ready=false;
+										json_send(&mut ws,json!({"op":23,"d":{"transition_id":id}})).await?;
 									}
 								} else {
-									json_send(&mut ws,json!({"op":23,"d":{"transition_id":dave.pending}})).await?;
+									if !dave.ready {video.clear();capture_reset=true;}
+									dave.downgrade_pending=false;
+									dave.pending=Some(id);
+									if dave.pending==Some(0) {
+										if dave.session.is_ready(){
+											let was_open=dave.transport_only;
+											dave.execute(0)?;
+											if was_open {ready_announced=false;}
+										} else if dave.alone(){
+											dave.enter_sole_member_waiting()?;
+											deadline=None;
+											waiting_announced=true;
+											ready_announced=false;
+											emit(Status::WaitingForPeer).map_err(|_|"Call interface closed")?;
+										} else if !dave.ready {
+											dave.pending=None;dave.ready=false;
+										}
+									} else {
+										json_send(&mut ws,json!({"op":23,"d":{"transition_id":dave.pending}})).await?;
+									}
 								}
 							},
-							22=>{video.clear();dave.execute(transition(data)?)?;},
+							22=>{
+								let id=transition(data)?;
+								if dave.downgrade_pending {
+									dave.finish_downgrade();
+									emit(Status::TransportOnly).map_err(|_|"Call interface closed")?;
+								} else if let Some((opcode,payload))=dave.take_deferred() {
+									match dave.group_changed(opcode,&payload) {
+										Ok(transition_id)=>{
+											if transition_id!=0 && dave.pending==Some(transition_id) {
+												let was_open=dave.transport_only;
+												dave.execute(transition_id)?;
+												if was_open {ready_announced=false;}
+											}
+										}
+										Err(_)=>{
+											let bad=u16::from_be_bytes([payload[0],payload[1]]);
+											json_send(&mut ws,json!({"op":31,"d":{"transition_id":bad}})).await?;
+											if !dave.ready {
+												dave.reset()?;
+												send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;
+												emit(Status::Securing).map_err(|_|"Call interface closed")?;
+											}
+										}
+									}
+									if dave.pending==Some(id) && dave.session.is_ready() {
+										let was_open=dave.transport_only;
+										dave.execute(id)?;
+										if was_open {ready_announced=false;}
+									}
+								} else {
+									let was_open=dave.transport_only;
+									dave.execute(id)?;
+									if was_open {ready_announced=false;}
+								}
+							},
 							24=>{
-								video.clear();
-								if number(data,"protocol_version")?!=1 {return Err("Unsupported DAVE protocol version; call stopped");}
-								if number(data,"epoch")?==1 {capture_reset=true;dave.reinitialize()?;deadline=Some(Instant::now()+Duration::from_secs(30));send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;}
+								let version=number(data,"protocol_version")?;
+								if version>1 {return Err("Unsupported DAVE protocol version; call stopped");}
+								if version==0 {
+									dave.downgrade_pending=true;
+								} else if number(data,"epoch")?==1 {
+									let stay=dave.ready||dave.transport_only;
+									if !stay {capture_reset=true;}
+									dave.reinitialize()?;
+									if stay {
+										dave.transport_only=true;
+										dave.ready=true;
+										deadline=None;
+										emit(Status::TransportOnly).map_err(|_|"Call interface closed")?;
+									} else {
+										deadline=Some(Instant::now()+Duration::from_secs(30));
+									}
+									send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;
+								}
 							},
 							9=>{
 								if !resuming{return Err("Unexpected voice resumption");}
 								if camera.is_some(){json_send(&mut ws,video.announcement(ssrc,false)).await?;}
 								json_send(&mut ws,json!({"op":5,"d":{"speaking":0,"delay":0,"ssrc":ssrc}})).await?;
 								speaking=false;silence=0;
-								resuming=false;
+								resuming=false;resume_since=None;ready_announced=true;
+								emit(Status::Ready{privacy_code:dave.session.voice_privacy_code().unwrap_or_default().into()}).map_err(|_|"Call interface closed")?;
 							},
 							12=>{
 								let user=id(data,"user_id")?;
@@ -744,25 +826,37 @@ async fn run_inner(
 						match opcode {
 							25=>dave.session.set_external_sender(data).map_err(|_|"DAVE external sender validation failed")?,
 							27=>{
-								if let Some(response)=dave.proposals(data)? {send(&mut ws,Message::Binary(response.into())).await?;}
+								// A proposal from another member is not applied and does not end the call.
+								if let Ok(Some(response))=dave.proposals(data) {send(&mut ws,Message::Binary(response.into())).await?;}
 							},
 							29|30=>{
-								video.clear();
-								ready_announced=false;waiting_announced=false;capture_reset=true;mixer.clear();
-								match dave.group_changed(opcode,data){
-									Ok(id)=>{if id!=0 {json_send(&mut ws,json!({"op":23,"d":{"transition_id":id}})).await?;}},
-									Err(_)=>{
-										if data.len()<2 {return Err("Truncated DAVE transition");}
-										let id=u16::from_be_bytes([data[0],data[1]]);
-										json_send(&mut ws,json!({"op":31,"d":{"transition_id":id}})).await?;
-										dave.reset()?;send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;
-									}
-								}
-								if dave.ready {
-									deadline=None;
+								if data.len()<2 {return Err("Truncated DAVE transition");}
+								let transition_id=u16::from_be_bytes([data[0],data[1]]);
+								if dave.ready && dave.session.is_ready() && transition_id!=0 {
+									dave.hold(opcode,data)?;
+									json_send(&mut ws,json!({"op":23,"d":{"transition_id":transition_id}})).await?;
 								} else {
-									deadline=Some(Instant::now()+Duration::from_secs(30));
-									emit(Status::Securing).map_err(|_|"Call interface closed")?;
+									let was_ready=dave.ready;
+									if !was_ready {
+										video.clear();
+										ready_announced=false;waiting_announced=false;capture_reset=true;mixer.clear();
+									}
+									match dave.group_changed(opcode,data){
+										Ok(id)=>{if id!=0 {json_send(&mut ws,json!({"op":23,"d":{"transition_id":id}})).await?;}},
+										Err(_)=>{
+											let id=u16::from_be_bytes([data[0],data[1]]);
+											json_send(&mut ws,json!({"op":31,"d":{"transition_id":id}})).await?;
+											if !dave.ready {
+												dave.reset()?;send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;
+											}
+										}
+									}
+									if dave.ready {
+										deadline=None;
+									} else if !was_ready {
+										deadline=Some(Instant::now()+Duration::from_secs(30));
+										emit(Status::Securing).map_err(|_|"Call interface closed")?;
+									}
 								}
 							},
 							_=>return Err("Unsupported DAVE opcode; call stopped"),
@@ -1231,7 +1325,7 @@ async fn run_stream_inner(
 					next_udp_ping=now+Duration::from_secs(5);
 				}
 				if let Some(interval)=heartbeat_ms && now>=heartbeat_at {
-					if awaiting_ack.is_some() {return Err("Discord stream heartbeat was not acknowledged");}
+					let _ = awaiting_ack.take();
 					heartbeat_nonce=heartbeat_nonce.wrapping_add(1);
 					json_send(&mut ws,json!({"op":3,"d":{"t":heartbeat_nonce,"seq_ack":seq_ack}})).await?;
 					awaiting_ack=Some(heartbeat_nonce); heartbeat_at=now+Duration::from_millis(interval);
@@ -1243,7 +1337,7 @@ async fn run_stream_inner(
 					emit(if waiting {Status::WaitingForPeer} else {Status::Securing}).map_err(|_|"Stream interface closed")?;
 					waiting_announced=waiting;
 				}
-				let secure=dave.ready&&dave.session.is_ready()&&dave.pending.is_none()&&encryption.is_some()&&!discovering;
+				let secure=(dave.transport_only||dave.session.is_ready())&&dave.ready&&encryption.is_some()&&!discovering;
 				if secure && let Some(video)=&video && let Some(target)=rate.tick(now) {
 					video.bitrate.store(target,Ordering::Release);
 				}
@@ -1313,7 +1407,7 @@ async fn run_stream_inner(
 					}
 					let start=metrics.start();
 					let length=shared.encoder.encode_float(&frame,&mut audio_encoded).map_err(|_|"Stream audio encoding failed")?;
-					let data=dave.session.encrypt_opus(&audio_encoded[..length]).map_err(|_|"DAVE stream audio encryption failed")?.into_owned();
+					let data=if dave.transport_only {audio_encoded[..length].to_vec()} else {dave.session.encrypt_opus(&audio_encoded[..length]).map_err(|_|"DAVE stream audio encryption failed")?.into_owned()};
 					let mut header=[0;12];header[0]=0x80;header[1]=120;header[2..4].copy_from_slice(&audio_sequence.to_be_bytes());header[4..8].copy_from_slice(&audio_timestamp.to_be_bytes());header[8..12].copy_from_slice(&audio_ssrc.to_be_bytes());
 					let crypto=encryption.as_mut().ok_or("Missing stream transport key")?;
 					let socket=udp.as_ref().ok_or("Missing stream UDP socket")?;
@@ -1332,7 +1426,7 @@ async fn run_stream_inner(
 			frame=async {match video.as_mut() {Some(video)=>video.frames.recv().await,None=>std::future::pending().await}}, if outgoing.is_empty()=>{
 				let Some(frame)=frame else {return Ok(());};
 				if frame.data.len()>2*1024*1024 {return Err("Encoded stream frame exceeds the sharing limit");}
-				let secure=announced&&dave.ready&&dave.session.is_ready()&&dave.pending.is_none()&&encryption.is_some()&&!discovering&&video.as_ref().is_some_and(|video|video.ready.load(Ordering::Acquire));
+				let secure=announced&&dave.ready&&(dave.transport_only||dave.session.is_ready())&&encryption.is_some()&&!discovering&&video.as_ref().is_some_and(|video|video.ready.load(Ordering::Acquire));
 				if !secure {awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
 					};continue;}
@@ -1445,25 +1539,24 @@ async fn run_stream_inner(
 							},
 							13=>{let user=id(data,"user_id")?;receivers.remove(user);if let Some(decoder)=decoder.as_ref(){remove_decoder(decoder,user);}mixer.remove(user);let was_group_member=dave.is_group_member(user);let was_ready=dave.ready;if dave.disconnect(user)?{if dave.alone(){announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
-					};dave.enter_sole_member_waiting()?;deadline=None;}else if was_group_member{deadline=Some(Instant::now()+Duration::from_secs(30));announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
+					};dave.enter_sole_member_waiting()?;deadline=None;}else if was_ready{dave.ready=true;deadline=None;}else if was_group_member{deadline=Some(Instant::now()+Duration::from_secs(30));announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
-					};}else if was_ready{dave.ready=true;deadline=None;}}},
-							21=>{if number(data,"protocol_version")?!=1{return Err("Discord requested a stream encryption downgrade");}announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
+					};}}},
+							21=>{let version=number(data,"protocol_version")?;if version>1{return Err("Unsupported stream DAVE version");}if version==0{dave.downgrade_pending=true;dave.transport_only=true;dave.ready=true;}else{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
-					};dave.pending=Some(transition(data)?);if dave.pending==Some(0){if dave.session.is_ready(){dave.execute(0)?;}else if dave.alone(){dave.enter_sole_member_waiting()?;deadline=None;}else{dave.pending=None;dave.ready=false;}}else{json_send(&mut ws,json!({"op":23,"d":{"transition_id":dave.pending}})).await?;}},
-							22=>{dave.execute(transition(data)?)?;},
-							24=>{if number(data,"protocol_version")?!=1{return Err("Unsupported stream DAVE version");}
-							if number(data,"epoch")?==1{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
+					};dave.pending=Some(transition(data)?);if dave.pending==Some(0){if dave.session.is_ready(){dave.execute(0)?;}else if dave.alone(){dave.enter_sole_member_waiting()?;deadline=None;}else{dave.pending=None;dave.ready=false;}}else{json_send(&mut ws,json!({"op":23,"d":{"transition_id":dave.pending}})).await?;}}},
+							22=>{let id=transition(data)?;if dave.downgrade_pending{dave.finish_downgrade();}else{let was_open=dave.transport_only;dave.execute(id)?;if was_open{dave.transport_only=false;}}},
+							24=>{let version=number(data,"protocol_version")?;if version>1{return Err("Unsupported stream DAVE version");}if version==0{dave.downgrade_pending=true;dave.transport_only=true;dave.ready=true;}else if number(data,"epoch")?==1{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
-					};dave.reinitialize()?;send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;}},
+					};let stay=dave.ready||dave.transport_only;dave.reinitialize()?;if stay{dave.transport_only=true;dave.ready=true;}send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;}},
 							// Watching a stream receives signaling the sender never does; unknown
 							// opcodes are ignored under the bounded rate above, never fatal.
 							_=>{},
 						}
 					},
-					Message::Binary(bytes)=>{if bytes.len()<3{return Err("Truncated stream DAVE signaling");}seq_ack=i64::from(u16::from_be_bytes([bytes[0],bytes[1]]));metrics.signal(Signal::Binary,1);metrics.signal(match bytes[2]{25=>Signal::ExternalSender,27=>Signal::Proposals,29|30=>Signal::Commit,_=>Signal::Other},1);match bytes[2]{25=>dave.session.set_external_sender(&bytes[3..]).map_err(|_|"Stream DAVE external sender validation failed")?,27=>if let Some(response)=dave.proposals(&bytes[3..])?{send(&mut ws,Message::Binary(response.into())).await?;},29|30=>{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
+					Message::Binary(bytes)=>{if bytes.len()<3{return Err("Truncated stream DAVE signaling");}seq_ack=i64::from(u16::from_be_bytes([bytes[0],bytes[1]]));metrics.signal(Signal::Binary,1);metrics.signal(match bytes[2]{25=>Signal::ExternalSender,27=>Signal::Proposals,29|30=>Signal::Commit,_=>Signal::Other},1);match bytes[2]{25=>dave.session.set_external_sender(&bytes[3..]).map_err(|_|"Stream DAVE external sender validation failed")?,27=>if let Ok(Some(response))=dave.proposals(&bytes[3..]){send(&mut ws,Message::Binary(response.into())).await?;},29|30=>{if bytes.len()>=5 && dave.ready && dave.session.is_ready() && u16::from_be_bytes([bytes[3],bytes[4]])!=0 {dave.hold(bytes[2],&bytes[3..])?;json_send(&mut ws,json!({"op":23,"d":{"transition_id":u16::from_be_bytes([bytes[3],bytes[4]])}})).await?;}else{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
-					};match dave.group_changed(bytes[2],&bytes[3..]){Ok(id)=>if id!=0{json_send(&mut ws,json!({"op":23,"d":{"transition_id":id}})).await?;metrics.signal(Signal::TransitionReadySent,1);},Err(_)=>{if bytes.len()<5{return Err("Truncated stream DAVE transition");}let id=u16::from_be_bytes([bytes[3],bytes[4]]);json_send(&mut ws,json!({"op":31,"d":{"transition_id":id}})).await?;dave.reset()?;send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;metrics.signal(Signal::KeyPackageSent,1);}}},_=>return Err("Unsupported stream DAVE opcode")}},
+					};match dave.group_changed(bytes[2],&bytes[3..]){Ok(id)=>if id!=0{json_send(&mut ws,json!({"op":23,"d":{"transition_id":id}})).await?;metrics.signal(Signal::TransitionReadySent,1);},Err(_)=>{if bytes.len()<5{return Err("Truncated stream DAVE transition");}let id=u16::from_be_bytes([bytes[3],bytes[4]]);json_send(&mut ws,json!({"op":31,"d":{"transition_id":id}})).await?;if !dave.ready{dave.reset()?;send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;metrics.signal(Signal::KeyPackageSent,1);}}}}},_=>return Err("Unsupported stream DAVE opcode")}},
 					Message::Ping(data)=>send(&mut ws,Message::Pong(data)).await?, Message::Close(_)=>return Err("Discord stream connection closed"), _=>{}
 				}
 			}
@@ -2251,7 +2344,7 @@ mod tests {
 						}
 						Status::Connecting | Status::Discovering | Status::Securing
 						| Status::TransportReady | Status::Speaking(_) | Status::CameraAvailable(_)
-						| Status::Ping(_) => {}
+						| Status::Ping(_) | Status::TransportOnly => {}
 					},
 					result = &mut captured_rx, if !captured => {
 						result.unwrap();
@@ -2488,6 +2581,386 @@ mod tests {
 		drop(control_tx);
 		let res = task.await.unwrap();
 		assert!(res.is_ok());
+		server.await.unwrap();
+	}
+
+	/// Joins, leaves, a non-DAVE downgrade and a bad commit must not stop outbound audio.
+	#[tokio::test]
+	async fn roster_downgrade_and_bad_commit_keep_audio_without_reconnect() {
+		use client_core::voice::Secret;
+		use model::Id;
+		use opus2::Decoder;
+		use tokio::net::TcpListener;
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let address = listener.local_addr().unwrap();
+		let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+		let port = udp.local_addr().unwrap().port();
+		let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+		let server = tokio::spawn(async move {
+			let (tcp, _) = listener.accept().await.unwrap();
+			let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+			let identify: Value =
+				serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+			assert_eq!(identify["op"], 0);
+			assert_eq!(identify["d"]["server_id"], "30");
+			ws.send(Message::Text(
+				json!({"op":8,"d":{"heartbeat_interval":60000}})
+					.to_string()
+					.into(),
+			))
+			.await
+			.unwrap();
+			ws.send(Message::Text(
+				json!({"op":2,"d":{"ssrc":42,"ip":"127.0.0.1","port":port,"modes":[MODE]}})
+					.to_string()
+					.into(),
+			))
+			.await
+			.unwrap();
+			loop {
+				let event: Value =
+					serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
+						.unwrap();
+				if event["op"] == 3 {
+					ws.send(Message::Text(
+						json!({"op":6,"d":{"t":event["d"]["t"]}}).to_string().into(),
+					))
+					.await
+					.unwrap();
+					continue;
+				}
+				assert_eq!(event["op"], 12);
+				break;
+			}
+			let mut probe = [0; 4096];
+			let (n, client) = udp.recv_from(&mut probe).await.unwrap();
+			assert_eq!(n, 74);
+			probe[..4].copy_from_slice(&[0, 2, 0, 70]);
+			probe[8..17].copy_from_slice(b"127.0.0.1");
+			probe[72..74].copy_from_slice(&client.port().to_be_bytes());
+			udp.send_to(&probe[..74], client).await.unwrap();
+			let delivery = crate::test_mls::Delivery::new();
+			let mut bob = Dave::new(2, None, 3).unwrap();
+			let mut charlie = Dave::new(4, None, 3).unwrap();
+			bob.session.set_external_sender(&delivery.external).unwrap();
+			charlie
+				.session
+				.set_external_sender(&delivery.external)
+				.unwrap();
+			bob.connect(&[1, 2, 4]).unwrap();
+			charlie.connect(&[1, 2, 4]).unwrap();
+			let (commit, welcome) = delivery.add(&mut bob, &charlie.key_package().unwrap());
+			bob.group_changed(29, &[&[0, 0], commit.as_slice()].concat())
+				.unwrap();
+			charlie
+				.group_changed(30, &[&[0, 0], welcome.as_slice()].concat())
+				.unwrap();
+			let mut external = vec![0, 1, 25];
+			external.extend(&delivery.external);
+			ws.send(Message::Binary(external.into())).await.unwrap();
+			ws.send(Message::Text(
+				json!({"op":4,"d":{"mode":MODE,"secret_key":vec![7;32],"dave_protocol_version":1}})
+					.to_string()
+					.into(),
+			))
+			.await
+			.unwrap();
+			ws.send(Message::Text(
+				json!({"op":11,"d":{"user_ids":["1","2","4"]}})
+					.to_string()
+					.into(),
+			))
+			.await
+			.unwrap();
+			let package = loop {
+				match ws.next().await.unwrap().unwrap() {
+					Message::Binary(bytes) => break bytes,
+					Message::Text(text) => {
+						let value: Value = serde_json::from_str(&text).unwrap();
+						if value["op"] == 3 {
+							ws.send(Message::Text(
+								json!({"op":6,"d":{"t":value["d"]["t"]}}).to_string().into(),
+							))
+							.await
+							.unwrap();
+						}
+					}
+					_ => panic!("unexpected frame before the key package"),
+				}
+			};
+			assert_eq!(package[0], 26);
+			let (commit, welcome) = delivery.add(&mut bob, &package);
+			bob.group_changed(29, &[&[0, 0], commit.as_slice()].concat())
+				.unwrap();
+			let mut welcome_frame = vec![0, 2, 30, 0, 0];
+			welcome_frame.extend(welcome);
+			ws.send(Message::Binary(welcome_frame.into()))
+				.await
+				.unwrap();
+			ready_rx.await.unwrap();
+			let transport = Encryption::new(&[7; 32]);
+			let mut dave_ok = false;
+			let mut plain_ok = false;
+			let started = tokio::time::Instant::now();
+			let mut stamps = Vec::new();
+			while stamps.len() < 8 && started.elapsed() < Duration::from_secs(3) {
+				let (n, _) = timeout(Duration::from_millis(200), udp.recv_from(&mut probe))
+					.await
+					.unwrap()
+					.unwrap();
+				if n == 8 {
+					continue;
+				}
+				let now = tokio::time::Instant::now();
+				if let Some(previous) = stamps.last() {
+					assert!(
+						now.duration_since(*previous) <= Duration::from_millis(100),
+						"send gap before roster churn"
+					);
+				}
+				stamps.push(now);
+				let opened = transport.open(&probe[..n]).unwrap();
+				if bob
+					.session
+					.decrypt(1, davey::MediaType::AUDIO, &opened.payload)
+					.is_ok()
+				{
+					dave_ok = true;
+				}
+			}
+			assert!(dave_ok, "expected DAVE audio before anyone else joined");
+			let mut previous = tokio::time::Instant::now();
+			let mut churn_packets = 0u32;
+			let note = |previous: &mut tokio::time::Instant, when: tokio::time::Instant| {
+				assert!(
+					when.duration_since(*previous) <= Duration::from_millis(100),
+					"audio send gap {} ms",
+					when.duration_since(*previous).as_millis()
+				);
+				*previous = when;
+			};
+			for _ in 0..10 {
+				ws.send(Message::Text(
+					json!({"op":13,"d":{"user_id":"4"}}).to_string().into(),
+				))
+				.await
+				.unwrap();
+				ws.send(Message::Text(
+					json!({"op":11,"d":{"user_ids":["1","2","4"]}})
+						.to_string()
+						.into(),
+				))
+				.await
+				.unwrap();
+				let (n, _) = timeout(Duration::from_millis(150), udp.recv_from(&mut probe))
+					.await
+					.unwrap()
+					.unwrap();
+				if n == 8 {
+					continue;
+				}
+				note(&mut previous, tokio::time::Instant::now());
+				churn_packets += 1;
+			}
+			ws.send(Message::Text(
+				json!({"op":21,"d":{"protocol_version":0,"transition_id":9}})
+					.to_string()
+					.into(),
+			))
+			.await
+			.unwrap();
+			loop {
+				match timeout(Duration::from_secs(2), ws.next())
+					.await
+					.unwrap()
+					.unwrap()
+					.unwrap()
+				{
+					Message::Text(text) => {
+						let value: Value = serde_json::from_str(&text).unwrap();
+						if value["op"] == 3 {
+							ws.send(Message::Text(
+								json!({"op":6,"d":{"t":value["d"]["t"]}}).to_string().into(),
+							))
+							.await
+							.unwrap();
+							continue;
+						}
+						if value["op"] == 5 {
+							continue;
+						}
+						assert_eq!(value["op"], 23);
+						break;
+					}
+					Message::Ping(_) => {}
+					other => panic!("unexpected frame during downgrade: {other:?}"),
+				}
+			}
+			ws.send(Message::Text(
+				json!({"op":22,"d":{"transition_id":9}}).to_string().into(),
+			))
+			.await
+			.unwrap();
+			previous = tokio::time::Instant::now();
+			while !plain_ok && churn_packets < 40 {
+				let (n, _) = timeout(Duration::from_millis(150), udp.recv_from(&mut probe))
+					.await
+					.unwrap()
+					.unwrap();
+				if n == 8 {
+					continue;
+				}
+				note(&mut previous, tokio::time::Instant::now());
+				churn_packets += 1;
+				let opened = transport.open(&probe[..n]).unwrap();
+				let mut decoder = Decoder::new(48_000, Channels::Mono).unwrap();
+				let mut pcm = [0.0; 960];
+				if decoder
+					.decode_float(&opened.payload, &mut pcm, false)
+					.is_ok()
+				{
+					plain_ok = true;
+				}
+			}
+			let mut bad = vec![0, 9, 29, 0, 6];
+			bad.extend_from_slice(&[0xAB; 24]);
+			ws.send(Message::Binary(bad.into())).await.unwrap();
+			loop {
+				match timeout(Duration::from_secs(2), ws.next())
+					.await
+					.unwrap()
+					.unwrap()
+					.unwrap()
+				{
+					Message::Text(text) => {
+						let value: Value = serde_json::from_str(&text).unwrap();
+						if value["op"] == 3 {
+							ws.send(Message::Text(
+								json!({"op":6,"d":{"t":value["d"]["t"]}}).to_string().into(),
+							))
+							.await
+							.unwrap();
+							continue;
+						}
+						if value["op"] == 5 {
+							continue;
+						}
+						assert_eq!(value["op"], 23);
+						break;
+					}
+					Message::Ping(_) => {}
+					other => panic!("unexpected frame after a bad commit: {other:?}"),
+				}
+			}
+			ws.send(Message::Text(
+				json!({"op":22,"d":{"transition_id":6}}).to_string().into(),
+			))
+			.await
+			.unwrap();
+			loop {
+				match timeout(Duration::from_secs(2), ws.next())
+					.await
+					.unwrap()
+					.unwrap()
+					.unwrap()
+				{
+					Message::Text(text) => {
+						let value: Value = serde_json::from_str(&text).unwrap();
+						if value["op"] == 3 {
+							ws.send(Message::Text(
+								json!({"op":6,"d":{"t":value["d"]["t"]}}).to_string().into(),
+							))
+							.await
+							.unwrap();
+							continue;
+						}
+						if value["op"] == 5 {
+							continue;
+						}
+						assert_eq!(value["op"], 31);
+						break;
+					}
+					Message::Ping(_) => {}
+					other => panic!("unexpected frame after execute of a bad commit: {other:?}"),
+				}
+			}
+			assert!(plain_ok, "transport-only audio did not continue");
+			assert!(churn_packets >= 10, "too few packets during roster churn");
+			ws.send(Message::Close(None)).await.unwrap();
+		});
+		let credentials = VoiceConnection {
+			channel: Id(3),
+			user: Id(1),
+			peer: None,
+			guild: Some(Id(30)),
+			session: Secret::new("synthetic-session".into()).unwrap(),
+			token: Secret::new("synthetic-token".into()).unwrap(),
+			endpoint: "not-used-in-test".into(),
+			request: 1,
+		};
+		let (capture_tx, capture) = std::sync::mpsc::sync_channel(8);
+		capture_tx.try_send([0.2; 960]).unwrap();
+		let (playback, _playback_rx) = std::sync::mpsc::sync_channel(8);
+		let (control_tx, control_rx) = watch::channel(Controls::default());
+		let (_camera_tx, camera_rx) = std::sync::mpsc::sync_channel(1);
+		let (status_tx, mut status_rx) = tokio::sync::mpsc::channel(32);
+		let task = tokio::spawn(run_inner(
+			credentials,
+			capture,
+			playback,
+			control_rx,
+			Some(camera_rx),
+			None,
+			None,
+			move |status| status_tx.try_send(status).map_err(|_| ()),
+			Identity::generate(),
+			format!("ws://{address}"),
+			true,
+		));
+		let mut ready = false;
+		let mut transport_only = false;
+		let mut securing_after_ready = false;
+		let mut ready_tx = Some(ready_tx);
+		let mut capture_tick = tokio::time::interval(Duration::from_millis(20));
+		capture_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+		let observe = timeout(Duration::from_secs(8), async {
+			loop {
+				tokio::select! {
+					status = status_rx.recv() => match status {
+						None => break,
+						Some(Status::Ready { .. }) => {
+							ready = true;
+							if let Some(sender) = ready_tx.take() {
+								sender.send(()).unwrap();
+							}
+						}
+						Some(Status::TransportOnly) => transport_only = true,
+						Some(Status::Securing) if ready => securing_after_ready = true,
+						Some(
+							Status::Connecting | Status::Discovering | Status::Securing
+							| Status::TransportReady | Status::Speaking(_) | Status::CameraAvailable(_)
+							| Status::Ping(_) | Status::WaitingForPeer | Status::RemoteAudio,
+						) => {}
+					},
+					_ = capture_tick.tick(), if ready => {
+						let _ = capture_tx.try_send([0.2; 960]);
+					}
+				}
+			}
+		});
+		let _ = observe.await;
+		drop(control_tx);
+		let result = timeout(Duration::from_secs(3), task)
+			.await
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			result,
+			Err("Discord voice connection closed; rejoin the call")
+		);
+		assert!(ready);
+		assert!(transport_only);
+		assert!(!securing_after_ready);
 		server.await.unwrap();
 	}
 }

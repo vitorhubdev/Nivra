@@ -315,6 +315,12 @@ pub(crate) struct Dave {
 	epochs: u16,
 	identity: Arc<Identity>,
 	pending_commit: Option<Vec<u8>>,
+	/// Commit or welcome kept until opcode 22 so sends stay on the current epoch key.
+	deferred: Option<(u8, Vec<u8>)>,
+	/// A non-DAVE participant is in the call: transport encryption only, no MLS frames.
+	pub transport_only: bool,
+	/// Opcode 21 or 24 announced protocol version 0. Applied on execute_transition.
+	pub downgrade_pending: bool,
 }
 impl Dave {
 	#[cfg(test)]
@@ -342,6 +348,9 @@ impl Dave {
 			epochs: 0,
 			identity,
 			pending_commit: None,
+			deferred: None,
+			transport_only: false,
+			downgrade_pending: false,
 		})
 	}
 	pub fn contains(&self, user: u64) -> bool {
@@ -395,8 +404,10 @@ impl Dave {
 		if changed {
 			self.participants = next;
 			self.announced = announced;
-			self.ready = false;
-			self.waiting = false;
+			// A live epoch keeps sending. Pausing here is what blinked the call on every join.
+			if !self.ready {
+				self.waiting = false;
+			}
 		}
 		Ok(changed)
 	}
@@ -409,7 +420,8 @@ impl Dave {
 		self.participants.retain(|id| *id != user);
 		self.announced.retain(|id| *id != user);
 		let changed = before != self.participants.len() + self.announced.len();
-		if changed {
+		// Another person leaving does not drop the epoch. An empty room still waits.
+		if changed && self.alone() {
 			self.ready = false;
 			self.waiting = false;
 		}
@@ -452,6 +464,9 @@ impl Dave {
 		self.waiting = false;
 		self.pending = None;
 		self.pending_commit = None;
+		self.deferred = None;
+		self.downgrade_pending = false;
+		self.transport_only = false;
 		self.session
 			.reinit(
 				NonZeroU16::new(1).unwrap(),
@@ -542,12 +557,36 @@ impl Dave {
 			}
 		}
 	}
+	/// Hold one MLS commit or welcome until `dave_protocol_execute_transition`.
+	pub fn hold(&mut self, opcode: u8, payload: &[u8]) -> Result<(), &'static str> {
+		if payload.len() < 2 || payload.len() > MAX_SIGNAL {
+			return Err("Truncated DAVE group transition");
+		}
+		self.deferred = Some((opcode, payload.to_vec()));
+		Ok(())
+	}
+	pub fn take_deferred(&mut self) -> Option<(u8, Vec<u8>)> {
+		self.deferred.take()
+	}
+	/// Stop MLS frame encryption and keep the XChaCha20 transport key.
+	pub fn finish_downgrade(&mut self) {
+		self.downgrade_pending = false;
+		self.pending = None;
+		self.deferred = None;
+		self.transport_only = true;
+		self.ready = true;
+		self.waiting = false;
+	}
 	pub fn group_changed(&mut self, opcode: u8, payload: &[u8]) -> Result<u16, &'static str> {
 		if payload.len() < 3 || payload.len() > MAX_SIGNAL {
 			return Err("Truncated DAVE group transition");
 		}
-		self.ready = false;
-		self.waiting = false;
+		// A working epoch stays usable when this commit/welcome is rejected.
+		let keep_media = self.ready && self.session.is_ready();
+		if !keep_media {
+			self.ready = false;
+			self.waiting = false;
+		}
 		self.transition_budget()?;
 		let transition = u16::from_be_bytes([payload[0], payload[1]]);
 		if opcode == 29 {
@@ -611,6 +650,8 @@ impl Dave {
 		self.validate_group()?;
 		self.pending = None;
 		self.ready = true;
+		self.transport_only = false;
+		self.downgrade_pending = false;
 		Ok(())
 	}
 }

@@ -83,5 +83,12 @@ mod tests {
 		}
 		jitter.push(1000, vec![0; 1276]);
 		assert!(jitter.packets.len() <= SLOTS);
+		// 15s at 20 ms is 750 packets. A stall that far ahead drops the old audio
+		// instead of playing it in a burst; the next pop is the new packet.
+		jitter.push(1750, vec![7]);
+		assert_eq!(jitter.packets, vec![(1750, vec![7])]);
+		assert!(jitter.pop().is_none());
+		assert!(jitter.pop().is_none());
+		assert_eq!(jitter.pop(), Some(vec![7]));
 	}
 }

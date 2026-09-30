@@ -8,6 +8,8 @@ use std::future::Future;
 struct Resolution {
 	#[cfg(target_os = "windows")]
 	raised: bool,
+	#[cfg(target_os = "windows")]
+	task: Option<windows::Win32::Foundation::HANDLE>,
 }
 
 impl Resolution {
@@ -16,9 +18,34 @@ impl Resolution {
 		#[allow(unsafe_code)]
 		// SAFETY: A process-scoped request, balanced by timeEndPeriod in Drop on success.
 		let raised = unsafe { windows::Win32::Media::timeBeginPeriod(1) } == 0;
+		#[cfg(target_os = "windows")]
+		#[allow(unsafe_code)]
+		// SAFETY: Registers this media thread with MMCSS. Reverted in Drop. Failure leaves the call up.
+		let task = unsafe {
+			use std::os::windows::ffi::OsStrExt;
+			let name: Vec<u16> = std::ffi::OsStr::new("Pro Audio")
+				.encode_wide()
+				.chain(std::iter::once(0))
+				.collect();
+			let mut index = 0u32;
+			windows::Win32::System::Threading::AvSetMmThreadCharacteristicsW(
+				windows::core::PCWSTR(name.as_ptr()),
+				&mut index,
+			)
+			.ok()
+		};
+		#[cfg(not(target_os = "windows"))]
+		#[allow(unsafe_code)]
+		// SAFETY: Best-effort real-time scheduling. A refusal (no permission) leaves the call up.
+		unsafe {
+			let param = libc::sched_param { sched_priority: 20 };
+			let _ = libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_RR, &param);
+		}
 		Self {
 			#[cfg(target_os = "windows")]
 			raised,
+			#[cfg(target_os = "windows")]
+			task,
 		}
 	}
 }
@@ -31,6 +58,14 @@ impl Drop for Resolution {
 			// SAFETY: Balances the successful timeBeginPeriod(1) in acquire.
 			unsafe {
 				windows::Win32::Media::timeEndPeriod(1);
+			}
+		}
+		#[cfg(target_os = "windows")]
+		if let Some(task) = self.task.take() {
+			#[allow(unsafe_code)]
+			// SAFETY: Balances AvSetMmThreadCharacteristicsW in acquire.
+			unsafe {
+				let _ = windows::Win32::System::Threading::AvRevertMmThreadCharacteristics(task);
 			}
 		}
 	}

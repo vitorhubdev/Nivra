@@ -69,6 +69,7 @@ enum Notice {
 	Ping(u32),
 	DeviceReady,
 	RemoteAudio,
+	TransportOnly,
 }
 struct Live {
 	generation: u64,
@@ -658,7 +659,13 @@ impl Voice {
 					}
 					Notice::MediaReady(code) => {
 						ui.voice_privacy_code = Some(code);
+						ui.voice_unencrypted = false;
 						live.audio.set_ready(true);
+					}
+					Notice::TransportOnly => {
+						// The call stays connected. This is a quiet warning, not a reconnect.
+						ui.voice_privacy_code = None;
+						ui.voice_unencrypted = true;
 					}
 					Notice::Ping(ms) => ui.voice_ping_ms = Some(ms),
 					// Notices wake the UI; only the current device configuration can be ready.
@@ -1311,6 +1318,7 @@ impl Voice {
 							return Ok(());
 						}
 						Status::RemoteAudio => Notice::RemoteAudio,
+						Status::TransportOnly => Notice::TransportOnly,
 						Status::Speaking(snapshot) => {
 							speaking.send_replace(snapshot);
 							status_wake.request_repaint();

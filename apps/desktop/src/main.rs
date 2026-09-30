@@ -1906,7 +1906,7 @@ impl Desktop {
 			move || ctx.request_repaint()
 		});
 		if !demo {
-			hotkeys.sync(&messaging.keybinds, &runtime);
+			hotkeys.sync(&messaging.keybinds, messaging.global_hotkeys, &runtime);
 		}
 		let window = cc
 			.winit_window()
@@ -5781,7 +5781,11 @@ impl eframe::App for Desktop {
 		);
 		self.messaging.sync_reading_zoom(ctx);
 		self.poll(ctx);
-		self.hotkeys.sync(&self.messaging.keybinds, &self.runtime);
+		self.hotkeys.sync(
+			&self.messaging.keybinds,
+			self.messaging.global_hotkeys,
+			&self.runtime,
+		);
 		self.messaging.global_keybind_status = self.hotkeys.status();
 		self.hotkeys.poll();
 		let voice_toggles = self.hotkeys.take_toggle_pending()

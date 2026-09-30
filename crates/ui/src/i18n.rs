@@ -116,6 +116,10 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Game Activity" => "Atividade de jogos",
 		"Voice & Video" => "Voz e vídeo",
 		"Keybinds" => "Atalhos de teclado",
+		"Enable global shortcuts" => "Ativar atalhos globais",
+		"Mute, deafen and push-to-talk stay off until you turn this on. They then work even when Nivra is in the background." => {
+			"Mudo, ensurdecer e push-to-talk ficam desligados até você ativar isto. Depois funcionam mesmo com o Nivra em segundo plano."
+		}
 		"Data & Privacy" => "Dados e privacidade",
 		"Updates" => "Atualizações",
 		"Extensions" => "Extensões",
@@ -578,6 +582,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		}
 		"Camera" => "Câmera",
 		"Voice privacy code" => "Código de privacidade da voz",
+		"Call without end-to-end encryption" => "Chamada sem criptografia de ponta a ponta",
 		"Compare with the other participants. This code changes with the encrypted call group." => {
 			"Compare com os outros participantes. Este código muda com o grupo criptografado da chamada."
 		}
@@ -1533,6 +1538,10 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Game Activity" => "Actividad de juegos",
 		"Voice & Video" => "Voz y video",
 		"Keybinds" => "Atajos de teclado",
+		"Enable global shortcuts" => "Activar atajos globales",
+		"Mute, deafen and push-to-talk stay off until you turn this on. They then work even when Nivra is in the background." => {
+			"Silencio, ensordecer y pulsar para hablar siguen apagados hasta que actives esto. Después funcionan aunque Nivra esté en segundo plano."
+		}
 		"Data & Privacy" => "Datos y privacidad",
 		"Updates" => "Actualizaciones",
 		"Extensions" => "Extensiones",
@@ -1999,6 +2008,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		}
 		"Camera" => "Cámara",
 		"Voice privacy code" => "Código de privacidad de voz",
+		"Call without end-to-end encryption" => "Llamada sin cifrado de extremo a extremo",
 		"Compare with the other participants. This code changes with the encrypted call group." => {
 			"Compáralo con los demás participantes. Este código cambia con el grupo cifrado de la llamada."
 		}
@@ -3190,6 +3200,7 @@ mod tests {
 			"Microphone unavailable · still connected. Choose another input in Audio settings.",
 			"Camera",
 			"Voice privacy code",
+			"Call without end-to-end encryption",
 			"Compare with the other participants. This code changes with the encrypted call group.",
 			"Audio preferences are saved on this device. Your microphone starts only when you join a call or start testing.",
 			"Install a voice-enabled build to use these controls.",
@@ -3254,6 +3265,8 @@ mod tests {
 			"Text Formatting",
 			"Apply or remove formatting in the composer.",
 			"Global availability",
+			"Enable global shortcuts",
+			"Mute, deafen and push-to-talk stay off until you turn this on. They then work even when Nivra is in the background.",
 			"Show Keyboard Shortcuts List",
 			"Switch Conversation",
 			"Close Settings or Dialog",

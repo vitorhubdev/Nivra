@@ -3393,6 +3393,16 @@ impl MessagingUi {
 			.show(ui, |ui| {
 				ui.set_width(ui.available_width());
 				ui.spacing_mut().item_spacing.y = 8.0;
+				if self.voice_unencrypted {
+					ui.label(
+						RichText::new(crate::i18n::text(
+							self.language,
+							"Call without end-to-end encryption",
+						))
+						.size(12.0)
+						.color(colors.warning),
+					);
+				}
 				if self.voice_microphone_unavailable {
 					ui.label(
 						RichText::new(crate::i18n::text(

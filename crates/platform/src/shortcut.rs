@@ -41,15 +41,20 @@ pub fn normalize_target(path: &Path) -> PathBuf {
 }
 
 /// Case-insensitive comparison: Windows paths compare without regard to case.
+/// Canonical forms win when both sides exist (resolving 8.3 short names like
+/// `RUNNER~1`, junctions and prefix variants); otherwise fall back to the
+/// normalized text so stale targets still compare.
 pub fn same_target(left: &Path, right: &Path) -> bool {
-	normalize_target(left)
-		.as_os_str()
-		.to_string_lossy()
-		.to_lowercase()
-		== normalize_target(right)
-			.as_os_str()
-			.to_string_lossy()
-			.to_lowercase()
+	if let (Ok(canonical_left), Ok(canonical_right)) =
+		(std::fs::canonicalize(left), std::fs::canonicalize(right))
+	{
+		return folded(&normalize_target(&canonical_left))
+			== folded(&normalize_target(&canonical_right));
+	}
+	folded(&normalize_target(left)) == folded(&normalize_target(right))
+}
+fn folded(path: &Path) -> String {
+	path.as_os_str().to_string_lossy().to_lowercase()
 }
 
 /// Create the link if missing, rewrite it when it points elsewhere or lacks

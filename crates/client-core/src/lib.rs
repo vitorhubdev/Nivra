@@ -5300,7 +5300,7 @@ mod tests {
 				channel: Id(1),
 				request,
 				older: false,
-				messages: (100..150).map(message).collect(),
+				messages: (100..200).map(message).collect(),
 			},
 		);
 		let positions = state.timeline.row_ids().collect::<Vec<_>>();
@@ -5323,13 +5323,20 @@ mod tests {
 		);
 		assert_eq!(state.reply, None);
 		state.reply = Some(Reply::to(Id(101)));
-		let mut ids: Vec<_> = (101..150).map(Id).collect();
-		ids.extend([Id(101), Id(999)]); // Duplicate and unknown IDs create no extra rows.
+		let mut ids: Vec<_> = (101..200).map(Id).collect();
+		ids.push(Id(101)); // A duplicate stays inside the 100-id bulk cap.
 		apply(
 			&mut state,
 			Event::DeleteBulk {
 				channel: Id(1),
 				ids,
+			},
+		);
+		apply(
+			&mut state,
+			Event::DeleteBulk {
+				channel: Id(1),
+				ids: vec![Id(999)],
 			},
 		);
 		assert_eq!(state.reply, None);
@@ -5365,7 +5372,7 @@ mod tests {
 			},
 		);
 		assert_eq!(state.timeline.len(), 1);
-		assert_eq!(state.timeline.row_count(), 51);
+		assert_eq!(state.timeline.row_count(), 101);
 		assert_eq!(state.timeline.row_ids().next(), Some(Id(99)));
 		state.history(None);
 		let request = state.request;
@@ -5382,16 +5389,16 @@ mod tests {
 				channel: Id(1),
 				request,
 				older: false,
-				messages: vec![message(99), message(150)],
+				messages: vec![message(99), message(200)],
 			},
 		);
 		assert_eq!(
 			state.timeline.row_ids().collect::<Vec<_>>(),
-			[Id(99), Id(150)]
+			[Id(99), Id(200)]
 		);
 		assert!(state.timeline.get(Id(99)).is_none());
 		assert!(state.timeline.get_display(Id(99)).is_none());
-		assert!(state.timeline.get(Id(150)).is_some());
+		assert!(state.timeline.get(Id(200)).is_some());
 		state.history(None);
 		let request = state.request;
 		apply(&mut state, Event::Resync);
@@ -5995,7 +6002,7 @@ mod tests {
 				channel: Id(1),
 				request,
 				older: false,
-				messages: (51..101).map(message).collect(),
+				messages: (51..151).map(message).collect(),
 			},
 		);
 		assert_eq!(state.freshness, Freshness::Fresh);
@@ -6027,7 +6034,7 @@ mod tests {
 				messages: vec![message(50)],
 			},
 		);
-		assert_eq!(state.timeline.len(), 51);
+		assert_eq!(state.timeline.len(), 101);
 		assert!(!state.can_load_older()); // short final page
 		apply(
 			&mut state,
@@ -6036,7 +6043,7 @@ mod tests {
 				ids: vec![Id(50), Id(51)],
 			},
 		);
-		assert_eq!(state.timeline.len(), 49);
+		assert_eq!(state.timeline.len(), 99);
 		assert!(state.timeline.get(Id(50)).is_none());
 
 		state.history(None);

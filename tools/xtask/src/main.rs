@@ -274,13 +274,6 @@ fn package() -> Result<(), String> {
 	} else {
 		root.join(exe)
 	};
-	if cfg!(windows) {
-		std::fs::copy(
-			"packaging/windows/install-notifications.ps1",
-			root.join("install-notifications.ps1"),
-		)
-		.map_err(|e| e.to_string())?;
-	}
 	let source = std::env::var_os("CARGO_TARGET_DIR")
 		.map_or_else(|| PathBuf::from("target"), PathBuf::from)
 		.join("release")
@@ -299,14 +292,19 @@ fn package() -> Result<(), String> {
 	} else {
 		std::fs::copy(&source, &destination).map_err(|e| e.to_string())?;
 	}
-	for file in [
-		"README.md",
-		"LICENSE-MIT",
-		"LICENSE-APACHE",
-		"THIRD_PARTY_NOTICES.md",
-	] {
-		std::fs::copy(file, root.join(file)).map_err(|e| e.to_string())?;
+	// Windows ships as one self-registering executable; the licenses ride inside
+	// the binary (Configurações > Licenças), so no loose files are staged there.
+	if !cfg!(windows) {
+		for file in [
+			"README.md",
+			"LICENSE-MIT",
+			"LICENSE-APACHE",
+			"THIRD_PARTY_NOTICES.md",
+		] {
+			std::fs::copy(file, root.join(file)).map_err(|e| e.to_string())?;
+		}
 	}
+	#[cfg_attr(target_os = "windows", allow(unused_variables))]
 	let resources = if cfg!(target_os = "macos") {
 		root.join("Nivra.app/Contents/Resources")
 	} else {
@@ -322,75 +320,77 @@ fn package() -> Result<(), String> {
 			return Err("macOS app icon compilation failed".into());
 		}
 	}
-	std::fs::create_dir_all(resources.join("licenses")).map_err(|e| e.to_string())?;
-	std::fs::copy(
-		"assets/sounds/README.md",
-		resources.join("licenses/notification-sounds.md"),
-	)
-	.map_err(|e| e.to_string())?;
-	for file in [
-		"NotoSansCJK-LICENSE.txt",
-		"NotoSansArabic-OFL.txt",
-		"NotoSansMath-OFL.txt",
-		"Inter-OFL.txt",
-	] {
+	if !cfg!(windows) {
+		std::fs::create_dir_all(resources.join("licenses")).map_err(|e| e.to_string())?;
 		std::fs::copy(
-			PathBuf::from("assets/fonts").join(file),
-			resources.join("licenses").join(file),
+			"assets/sounds/README.md",
+			resources.join("licenses/notification-sounds.md"),
 		)
 		.map_err(|e| e.to_string())?;
-	}
-	std::fs::copy(
-		"assets/twemoji/LICENSE-GRAPHICS",
-		resources.join("licenses/Twemoji-CC-BY-4.0.txt"),
-	)
-	.map_err(|e| e.to_string())?;
-	std::fs::copy(
-		"assets/twemoji/LICENSE-UNICODE",
-		resources.join("licenses/Unicode-LICENSE.txt"),
-	)
-	.map_err(|e| e.to_string())?;
-	std::fs::copy(
-		"assets/icons/LICENSE",
-		resources.join("licenses/Phosphor-Icons-MIT.txt"),
-	)
-	.map_err(|e| e.to_string())?;
-	std::fs::copy(
-		"assets/icons/LICENSE-SIMPLE-ICONS",
-		resources.join("licenses/Simple-Icons-CC0.txt"),
-	)
-	.map_err(|e| e.to_string())?;
-	copy_directory(
-		std::path::Path::new("assets/licenses/files"),
-		&resources.join("licenses/files"),
-	)?;
-	copy_directory(
-		std::path::Path::new("assets/licenses/notifications"),
-		&resources.join("licenses/notifications"),
-	)?;
-	copy_directory(
-		std::path::Path::new("assets/licenses/login"),
-		&resources.join("licenses/login"),
-	)?;
-	copy_directory(
-		std::path::Path::new("assets/licenses/voice"),
-		&resources.join("licenses/voice"),
-	)?;
-	copy_directory(
-		std::path::Path::new("assets/licenses/audio"),
-		&resources.join("licenses/audio"),
-	)?;
-	copy_directory(
-		std::path::Path::new("assets/licenses/dependencies"),
-		&resources.join("licenses/dependencies"),
-	)?;
-	for file in [
-		"README.md",
-		"LICENSE-MIT",
-		"LICENSE-APACHE",
-		"THIRD_PARTY_NOTICES.md",
-	] {
-		std::fs::copy(file, resources.join(file)).map_err(|e| e.to_string())?;
+		for file in [
+			"NotoSansCJK-LICENSE.txt",
+			"NotoSansArabic-OFL.txt",
+			"NotoSansMath-OFL.txt",
+			"Inter-OFL.txt",
+		] {
+			std::fs::copy(
+				PathBuf::from("assets/fonts").join(file),
+				resources.join("licenses").join(file),
+			)
+			.map_err(|e| e.to_string())?;
+		}
+		std::fs::copy(
+			"assets/twemoji/LICENSE-GRAPHICS",
+			resources.join("licenses/Twemoji-CC-BY-4.0.txt"),
+		)
+		.map_err(|e| e.to_string())?;
+		std::fs::copy(
+			"assets/twemoji/LICENSE-UNICODE",
+			resources.join("licenses/Unicode-LICENSE.txt"),
+		)
+		.map_err(|e| e.to_string())?;
+		std::fs::copy(
+			"assets/icons/LICENSE",
+			resources.join("licenses/Phosphor-Icons-MIT.txt"),
+		)
+		.map_err(|e| e.to_string())?;
+		std::fs::copy(
+			"assets/icons/LICENSE-SIMPLE-ICONS",
+			resources.join("licenses/Simple-Icons-CC0.txt"),
+		)
+		.map_err(|e| e.to_string())?;
+		copy_directory(
+			std::path::Path::new("assets/licenses/files"),
+			&resources.join("licenses/files"),
+		)?;
+		copy_directory(
+			std::path::Path::new("assets/licenses/notifications"),
+			&resources.join("licenses/notifications"),
+		)?;
+		copy_directory(
+			std::path::Path::new("assets/licenses/login"),
+			&resources.join("licenses/login"),
+		)?;
+		copy_directory(
+			std::path::Path::new("assets/licenses/voice"),
+			&resources.join("licenses/voice"),
+		)?;
+		copy_directory(
+			std::path::Path::new("assets/licenses/audio"),
+			&resources.join("licenses/audio"),
+		)?;
+		copy_directory(
+			std::path::Path::new("assets/licenses/dependencies"),
+			&resources.join("licenses/dependencies"),
+		)?;
+		for file in [
+			"README.md",
+			"LICENSE-MIT",
+			"LICENSE-APACHE",
+			"THIRD_PARTY_NOTICES.md",
+		] {
+			std::fs::copy(file, resources.join(file)).map_err(|e| e.to_string())?;
+		}
 	}
 	if cfg!(target_os = "macos") {
 		// Seal only after every bundle resource has been staged. Ad-hoc signing

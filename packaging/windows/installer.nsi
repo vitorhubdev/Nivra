@@ -108,8 +108,8 @@ Section "MainSection" SEC01
   CreateDirectory "$SMPROGRAMS"
   CreateShortcut "$SMPROGRAMS\${PRODUCT_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
 
-  ; Register AUMID on Start Menu shortcut for native toast notifications
-  nsExec::Exec 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\install-notifications.ps1" -Force'
+  ; No notification script: the executable registers its own Start Menu
+  ; shortcut with the AUMID on first run (platform::shortcut).
 
   ; Write Add/Remove Programs uninstall registry keys
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "DisplayName" "${PRODUCT_NAME}"

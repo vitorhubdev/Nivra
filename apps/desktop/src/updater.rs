@@ -933,7 +933,10 @@ mod tests {
 
 	#[test]
 	fn windows_update_looks_for_the_single_exe() {
-		let name = asset_name("v1.0.6").expect("supported platform has an asset");
+		let Some(name) = asset_name("v1.0.6") else {
+			// No installable asset by design (e.g. Linux outside an AppImage).
+			return;
+		};
 		if cfg!(windows) {
 			let arch = if cfg!(target_arch = "aarch64") {
 				"ARM64"

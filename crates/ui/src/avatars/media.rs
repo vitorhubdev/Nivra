@@ -1040,6 +1040,15 @@ impl Avatars {
 			return StandIn::ThumbHash;
 		}
 		ui.painter().rect_filled(rect, 5, colors.canvas);
+		if failed {
+			// A missing image has no filename row in galleries, invites and inline attachments.
+			ui.painter().rect_stroke(
+				rect,
+				5,
+				egui::Stroke::new(1.0, colors.warning),
+				egui::StrokeKind::Inside,
+			);
+		}
 		#[cfg(any(test, feature = "demo"))]
 		if demo {
 			let ridge = vec![
@@ -1059,14 +1068,7 @@ impl Avatars {
 				colors.accent,
 			);
 		}
-		let caption = if demo {
-			"Synthetic preview"
-		} else if failed {
-			// The bytes are missing. The file row keeps the name and download; no fake preview caption.
-			""
-		} else {
-			"Image preview"
-		};
+		let caption = stand_in_caption(demo, failed);
 		if !caption.is_empty() && rect.width() >= 100.0 && rect.height() >= 32.0 {
 			ui.painter().text(
 				rect.center(),
@@ -1077,5 +1079,26 @@ impl Avatars {
 			);
 		}
 		StandIn::Label
+	}
+}
+
+fn stand_in_caption(demo: bool, failed: bool) -> &'static str {
+	if demo {
+		"Synthetic preview"
+	} else if failed {
+		"Couldn't load"
+	} else {
+		"Image preview"
+	}
+}
+
+#[cfg(test)]
+mod stand_in_tests {
+	#[test]
+	fn failed_fetch_without_a_thumbhash_is_not_a_blank_caption() {
+		assert_eq!(super::stand_in_caption(false, true), "Couldn't load");
+		assert!(!super::stand_in_caption(false, true).is_empty());
+		assert_eq!(super::stand_in_caption(false, false), "Image preview");
+		assert_eq!(super::stand_in_caption(true, true), "Synthetic preview");
 	}
 }

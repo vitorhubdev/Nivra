@@ -1,4 +1,5 @@
 //! Optional local codec conversion; the helper receives private files, never service URLs.
+#![cfg(target_os = "macos")]
 use std::{
 	fs::{self, File, OpenOptions},
 	io::{Read, Write},

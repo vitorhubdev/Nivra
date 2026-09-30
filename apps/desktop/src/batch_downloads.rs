@@ -69,7 +69,9 @@ fn unique_dest(folder: &Path, filename: &str, reserved: &mut Vec<String>) -> (Pa
 
 pub fn open_folder(folder: &Path) {
 	#[cfg(target_os = "windows")]
-	let _ = std::process::Command::new("explorer").arg(folder).spawn();
+	let _ = platform::processes::hidden_command("explorer")
+		.arg(folder)
+		.spawn();
 	#[cfg(target_os = "macos")]
 	let _ = std::process::Command::new("open").arg(folder).spawn();
 	#[cfg(target_os = "linux")]

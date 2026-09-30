@@ -4,12 +4,15 @@ use std::{
 	fs,
 	io::{Read, Seek, SeekFrom, Write},
 	path::{Component, Path, PathBuf},
-	process::{Child, Command, Stdio},
+	process::{Child, Stdio},
 	sync::{
 		Arc,
 		atomic::{AtomicBool, Ordering},
 	},
 };
+#[cfg(not(windows))]
+use std::process::Command;
+
 const MAX_FILES: usize = 8192;
 const MAX_UNPACKED: u64 = 1024 * 1024 * 1024;
 const WINDOWS_FILES: &[&str] = &[
@@ -305,7 +308,7 @@ fn process_alive(pid: u32) -> bool {
 	}
 	#[cfg(windows)]
 	{
-		powershell()
+		platform::processes::powershell_hidden()
 			.args([
 				"-NoProfile",
 				"-NonInteractive",
@@ -652,56 +655,61 @@ pub(super) fn unpack(
 	Ok(())
 }
 fn verify_mac(candidate: &Path, installed: &Path) -> Result<(), String> {
-	if !cfg!(target_os = "macos") {
+	#[cfg(not(target_os = "macos"))]
+	{
+		let _ = (candidate, installed);
 		return Ok(());
 	}
-	let status = Command::new("/usr/bin/codesign")
-		.args(["--verify", "--deep", "--strict"])
-		.arg(candidate)
-		.stdout(Stdio::null())
-		.stderr(Stdio::null())
-		.status()
-		.map_err(|_| "Cannot verify the update's code signature.".to_owned())?;
-	if !status.success() {
-		return Err("The update's macOS signature is invalid.".into());
-	}
-	fn identity(app: &Path) -> Result<(String, String), String> {
-		let output = Command::new("/usr/bin/codesign")
-			.args(["-d", "--verbose=4"])
-			.arg(app)
-			.output()
-			.map_err(|_| "Cannot inspect the application signing identity.".to_owned())?;
-		if !output.status.success() || output.stderr.len() > 64 * 1024 {
-			return Err("Cannot inspect the application signing identity.".into());
+	#[cfg(target_os = "macos")]
+	{
+		let status = Command::new("/usr/bin/codesign")
+			.args(["--verify", "--deep", "--strict"])
+			.arg(candidate)
+			.stdout(Stdio::null())
+			.stderr(Stdio::null())
+			.status()
+			.map_err(|_| "Cannot verify the update's code signature.".to_owned())?;
+		if !status.success() {
+			return Err("The update's macOS signature is invalid.".into());
 		}
-		let text = String::from_utf8_lossy(&output.stderr);
-		let team = text
-			.lines()
-			.find_map(|line| line.strip_prefix("TeamIdentifier="))
-			.filter(|team| team.len() == 10 && team.bytes().all(|b| b.is_ascii_alphanumeric()))
-			.ok_or("In-app installation requires a Developer ID signed release of Nivra.")?;
-		let identifier = text
-			.lines()
-			.find_map(|line| line.strip_prefix("Identifier="))
-			.ok_or("The update has no bundle signing identifier.")?;
-		Ok((team.into(), identifier.into()))
+		fn identity(app: &Path) -> Result<(String, String), String> {
+			let output = Command::new("/usr/bin/codesign")
+				.args(["-d", "--verbose=4"])
+				.arg(app)
+				.output()
+				.map_err(|_| "Cannot inspect the application signing identity.".to_owned())?;
+			if !output.status.success() || output.stderr.len() > 64 * 1024 {
+				return Err("Cannot inspect the application signing identity.".into());
+			}
+			let text = String::from_utf8_lossy(&output.stderr);
+			let team = text
+				.lines()
+				.find_map(|line| line.strip_prefix("TeamIdentifier="))
+				.filter(|team| team.len() == 10 && team.bytes().all(|b| b.is_ascii_alphanumeric()))
+				.ok_or("In-app installation requires a Developer ID signed release of Nivra.")?;
+			let identifier = text
+				.lines()
+				.find_map(|line| line.strip_prefix("Identifier="))
+				.ok_or("The update has no bundle signing identifier.")?;
+			Ok((team.into(), identifier.into()))
+		}
+		let old = identity(installed)?;
+		let new = identity(candidate)?;
+		if old != new || new.1 != "io.github.vitorhubdev.Nivra" {
+			return Err("The update was not signed by this Nivra publisher.".into());
+		}
+		let status = Command::new("/usr/sbin/spctl")
+			.args(["--assess", "--type", "execute"])
+			.arg(candidate)
+			.stdout(Stdio::null())
+			.stderr(Stdio::null())
+			.status()
+			.map_err(|_| "Cannot assess the update with macOS Gatekeeper.".to_owned())?;
+		if !status.success() {
+			return Err("macOS Gatekeeper did not accept the update.".into());
+		}
+		Ok(())
 	}
-	let old = identity(installed)?;
-	let new = identity(candidate)?;
-	if old != new || new.1 != "io.github.vitorhubdev.Nivra" {
-		return Err("The update was not signed by this Nivra publisher.".into());
-	}
-	let status = Command::new("/usr/sbin/spctl")
-		.args(["--assess", "--type", "execute"])
-		.arg(candidate)
-		.stdout(Stdio::null())
-		.stderr(Stdio::null())
-		.status()
-		.map_err(|_| "Cannot assess the update with macOS Gatekeeper.".to_owned())?;
-	if !status.success() {
-		return Err("macOS Gatekeeper did not accept the update.".into());
-	}
-	Ok(())
 }
 
 pub(super) struct Prepared {
@@ -791,7 +799,7 @@ pub(super) fn prepare_restart(
 			serde_json::to_vec(&plan).map_err(|_| "Cannot encode the update plan.".to_owned())?,
 		)
 		.map_err(|_| "Cannot save the update plan.".to_owned())?;
-		powershell()
+		platform::processes::powershell_hidden()
 			.args([
 				"-NoProfile",
 				"-NonInteractive",
@@ -824,17 +832,6 @@ pub(super) fn prepare_restart(
 		let _ = child.wait();
 		Err("The update helper did not start. Nivra will remain open.".into())
 	}
-}
-
-#[cfg(windows)]
-fn powershell() -> Command {
-	use std::os::windows::process::CommandExt;
-	let root = std::env::var_os("SystemRoot")
-		.map(PathBuf::from)
-		.unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-	let mut command = Command::new(root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe"));
-	command.creation_flags(0x0800_0000);
-	command
 }
 
 #[cfg(target_os = "macos")]

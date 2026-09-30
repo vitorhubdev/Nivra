@@ -1597,6 +1597,13 @@ fn show_system(
 		});
 	}
 }
+
+struct CarriedExport {
+	job: Option<crate::batch_select::ExportJob>,
+	cancelled: bool,
+	save: Option<(String, Vec<u8>)>,
+}
+
 impl TimelineView {
 	pub(super) fn show_fullscreen_video(&mut self, ctx: &egui::Context, state: &State) -> bool {
 		if self.video.is_fullscreen() {
@@ -1743,24 +1750,18 @@ impl TimelineView {
 	}
 
 	/// A finished snapshot keeps formatting after a channel change. An unfinished copy is cancelled.
-	fn take_export_across_channel(
-		&mut self,
-	) -> (
-		Option<crate::batch_select::ExportJob>,
-		bool,
-		Option<(String, Vec<u8>)>,
-	) {
+	fn take_export_across_channel(&mut self) -> CarriedExport {
 		let cancelled = self.export_job.as_ref().is_some_and(|job| job.capturing());
 		let job = if cancelled {
 			None
 		} else {
 			self.export_job.take()
 		};
-		(
+		CarriedExport {
 			job,
-			cancelled || self.export_cancelled,
-			self.save_txt_request.take(),
-		)
+			cancelled: cancelled || self.export_cancelled,
+			save: self.save_txt_request.take(),
+		}
 	}
 
 	#[cfg(test)]
@@ -1827,8 +1828,11 @@ impl TimelineView {
 			}
 			let restored = state.selected.and_then(|id| state.reading(id));
 			let following = restored.is_none_or(|cursor| cursor.message.is_none());
-			let (export_job, export_cancelled, save_txt_request) =
-				self.take_export_across_channel();
+			let CarriedExport {
+				job: export_job,
+				cancelled: export_cancelled,
+				save: save_txt_request,
+			} = self.take_export_across_channel();
 			*self = Self {
 				extension_actions: self.extension_actions.clone(),
 				hide_media_links: self.hide_media_links,
@@ -4700,29 +4704,33 @@ mod tests {
 
 	#[test]
 	fn channel_change_cancels_an_unfinished_export_and_keeps_a_copied_one() {
-		let mut view = TimelineView::default();
-		view.export_job = Some(crate::batch_select::ExportJob::open(false));
-		let (job, cancelled, saved) = view.take_export_across_channel();
-		assert!(job.is_none());
-		assert!(cancelled);
-		assert!(saved.is_none());
+		let mut view = TimelineView {
+			export_job: Some(crate::batch_select::ExportJob::open(false)),
+			..TimelineView::default()
+		};
+		let carried = view.take_export_across_channel();
+		assert!(carried.job.is_none());
+		assert!(carried.cancelled);
+		assert!(carried.save.is_none());
 
-		let mut view = TimelineView::default();
-		view.export_job = Some(crate::batch_select::ExportJob::start(
-			vec![crate::batch_select::TxtMessage {
-				author: "A".into(),
-				when: "12:00".into(),
-				text: "kept".into(),
-				attachments: vec![],
-				links: vec![],
-			}],
-			false,
-		));
-		view.save_txt_request = Some(("chat.txt".into(), b"kept".to_vec()));
-		let (job, cancelled, saved) = view.take_export_across_channel();
-		assert!(job.is_some());
-		assert!(!cancelled);
-		assert_eq!(saved.unwrap().0, "chat.txt");
+		let mut view = TimelineView {
+			export_job: Some(crate::batch_select::ExportJob::start(
+				vec![crate::batch_select::TxtMessage {
+					author: "A".into(),
+					when: "12:00".into(),
+					text: "kept".into(),
+					attachments: vec![],
+					links: vec![],
+				}],
+				false,
+			)),
+			save_txt_request: Some(("chat.txt".into(), b"kept".to_vec())),
+			..TimelineView::default()
+		};
+		let carried = view.take_export_across_channel();
+		assert!(carried.job.is_some());
+		assert!(!carried.cancelled);
+		assert_eq!(carried.save.unwrap().0, "chat.txt");
 	}
 
 	#[test]

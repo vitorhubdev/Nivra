@@ -6574,7 +6574,11 @@ mod tests {
 		}
 		assert!(view.select_mode, "select mode stays on while the bar is up");
 		let (painted, _) = render(&mut view, &mut state, vec![]);
-		let sample: Vec<_> = painted.iter().map(|(text, _)| text.clone()).take(40).collect();
+		let sample: Vec<_> = painted
+			.iter()
+			.map(|(text, _)| text.clone())
+			.take(40)
+			.collect();
 		let rows: Vec<egui::Rect> = painted
 			.iter()
 			.filter(|(text, _)| {
@@ -6605,11 +6609,7 @@ mod tests {
 			&mut state,
 			vec![egui::Event::PointerMoved(from + egui::vec2(0.0, 20.0))],
 		);
-		render(
-			&mut view,
-			&mut state,
-			vec![egui::Event::PointerMoved(to)],
-		);
+		render(&mut view, &mut state, vec![egui::Event::PointerMoved(to)]);
 		assert!(
 			view.batch_delete.len() >= 2,
 			"dragging paints every row the pointer crosses, got {}",

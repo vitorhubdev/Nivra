@@ -37,8 +37,11 @@ impl Resolution {
 		#[cfg(not(target_os = "windows"))]
 		#[allow(unsafe_code)]
 		// SAFETY: Best-effort real-time scheduling. A refusal (no permission) leaves the call up.
+		// macOS sched_param has a private padding field, so the value is zeroed then the
+		// public priority is set. Linux accepts the same construction.
 		unsafe {
-			let param = libc::sched_param { sched_priority: 20 };
+			let mut param: libc::sched_param = std::mem::zeroed();
+			param.sched_priority = 20;
 			let _ = libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_RR, &param);
 		}
 		Self {

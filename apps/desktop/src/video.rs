@@ -66,6 +66,13 @@ impl Video {
 			player.state = update.state;
 			player.position = update.position;
 			player.duration = update.duration;
+			// The decoder caught up with the dragged bar: stop previewing.
+			if player
+				.seek_preview
+				.is_some_and(|target| update.position >= target - 0.1)
+			{
+				player.seek_preview = None;
+			}
 			let frame = update.frame.take();
 			drop(update);
 			if let Some((width, height, rgba)) = frame {
@@ -449,7 +456,9 @@ fn play_decoded(
 						height,
 						rgba,
 					})) => {
-						if pts >= target - 0.01 {
+						// Frames before the target are dropped (the decoder went back to
+						// the previous keyframe); the first one at or after it shows.
+						if ui::VideoUi::frame_reaches(pts, target) {
 							seek_preview = None;
 							frames.push_back((pts, width, height, rgba));
 						} else {

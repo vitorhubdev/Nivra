@@ -264,7 +264,7 @@ fn user_picker(
 			ui.add(
 				egui::TextEdit::singleline(needle)
 					.char_limit(64)
-					.hint_text("Search users"),
+					.hint_text(crate::tr_ui!(ui, "Search users")),
 			);
 			let mut count = 0;
 			for user in users
@@ -278,7 +278,7 @@ fn user_picker(
 				}
 			}
 			if count == 0 {
-				ui.label("No matching users");
+				ui.label(crate::tr_ui!(ui, "No matching users"));
 			}
 		});
 }
@@ -431,7 +431,7 @@ impl Draft {
 										.desired_width(f32::INFINITY),
 								);
 							}
-							if ui.button("Remove dates").clicked() {
+							if ui.button(crate::tr_ui!(ui, "Remove dates")).clicked() {
 								self.after.clear();
 								self.before.clear();
 								self.date_open = false;
@@ -482,7 +482,8 @@ impl Draft {
 						if ui
 							.add(
 								egui::Button::new(
-									RichText::new("Clear Filters").color(colors.accent),
+									RichText::new(crate::tr_ui!(ui, "Clear Filters"))
+										.color(colors.accent),
 								)
 								.frame(false),
 							)

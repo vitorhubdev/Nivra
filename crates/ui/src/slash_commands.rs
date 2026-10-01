@@ -1270,7 +1270,7 @@ fn argument(
 				egui::TextEdit::singleline(value)
 					.id(id)
 					.frame(egui::Frame::NONE)
-					.hint_text("ID or choose…")
+					.hint_text(crate::tr_ui!(ui, "ID or choose…"))
 					.char_limit(22)
 					.desired_width((ui.available_width() - 25.0).max(24.0)),
 			);
@@ -1322,7 +1322,10 @@ fn argument(
 		.inner
 	} else if option.kind == 11 {
 		ui.add(egui::Label::new("Unavailable").truncate())
-			.on_hover_text("Attachment arguments are not supported yet.")
+			.on_hover_text(crate::tr_ui!(
+				ui,
+				"Attachment arguments are not supported yet."
+			))
 	} else {
 		ui.add(
 			egui::TextEdit::singleline(value)

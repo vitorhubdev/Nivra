@@ -67,7 +67,7 @@ impl ArchivesUi {
 											.desired_width(f32::INFINITY)
 											.frame(egui::Frame::NONE)
 											.char_limit(100)
-											.hint_text("Search for thread name"),
+											.hint_text(crate::tr_ui!(ui, "Search for thread name")),
 									)
 								})
 								.inner
@@ -177,7 +177,7 @@ impl ArchivesUi {
 					if view.loading {
 						ui.horizontal(|ui| {
 							ui.spinner();
-							ui.label("Loading older threads…");
+							ui.label(crate::tr_ui!(ui, "Loading older threads…"));
 						});
 					}
 					if let Some(page) = &view.page {
@@ -288,7 +288,7 @@ fn thread_card(
 						avatars.show_plain(ui, &starter.author, 18.0, state.demo);
 						ui.add(
 							egui::Label::new(
-								egui::RichText::new("Started by")
+								egui::RichText::new(crate::tr_ui!(ui, "Started by"))
 									.size(13.0)
 									.color(colors.muted),
 							)

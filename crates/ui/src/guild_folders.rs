@@ -513,17 +513,20 @@ impl MessagingUi {
 							ui.close();
 						}
 						ui.add_enabled_ui(enabled, |ui| {
-							if ui.button("Move up").clicked() {
+							if ui.button(crate::tr_ui!(ui, "Move up")).clicked() {
 								change = Some(Edit::Shift(item, false));
 								ui.close();
 							}
-							if ui.button("Move down").clicked() {
+							if ui.button(crate::tr_ui!(ui, "Move down")).clicked() {
 								change = Some(Edit::Shift(item, true));
 								ui.close();
 							}
 							match item {
 								Item::Folder(id) => {
-									if ui.button("Folder name and color…").clicked() {
+									if ui
+										.button(crate::tr_ui!(ui, "Folder name and color…"))
+										.clicked()
+									{
 										let f = state
 											.guild_folders
 											.as_ref()
@@ -540,13 +543,16 @@ impl MessagingUi {
 										));
 										ui.close();
 									}
-									if ui.button("Ungroup servers").clicked() {
+									if ui.button(crate::tr_ui!(ui, "Ungroup servers")).clicked() {
 										change = Some(Edit::Dissolve(id));
 										ui.close();
 									}
 								}
 								Item::Server(id) => {
-									if ui.button("Move outside folders").clicked() {
+									if ui
+										.button(crate::tr_ui!(ui, "Move outside folders"))
+										.clicked()
+									{
 										change = Some(Edit::Outside(id));
 										ui.close();
 									}
@@ -689,11 +695,14 @@ impl MessagingUi {
 				});
 		}
 		if state.folders_pending {
-			ui.label(egui::RichText::new("Sync…").small())
-				.on_hover_text("Syncing server folders with Discord");
+			ui.label(egui::RichText::new(crate::tr_ui!(ui, "Sync…")).small())
+				.on_hover_text(crate::tr_ui!(ui, "Syncing server folders with Discord"));
 		}
 		if let Some(error) = state.folders_error
-			&& ui.small_button("Retry").on_hover_text(error).clicked()
+			&& ui
+				.small_button(crate::tr_ui!(ui, "Retry"))
+				.on_hover_text(error)
+				.clicked()
 			&& let Some(command) = state.load_guild_folders()
 		{
 			commands.push(command);
@@ -709,7 +718,7 @@ impl MessagingUi {
 						crate::dialog::input(
 							ui,
 							egui::TextEdit::singleline(name)
-								.hint_text("Folder name")
+								.hint_text(crate::tr_ui!(ui, "Folder name"))
 								.char_limit(100),
 						)
 						.labelled_by(label.id);

@@ -9,7 +9,7 @@
 //! let response = dialog::Dialog::new("delete-channel", "Delete channel?")
 //!     .danger()
 //!     .show(ctx, |d| {
-//!         d.content(|ui| { ui.label("This cannot be undone."); });
+//!         d.content(|ui| { ui.label(crate::tr_ui!(ui, "This cannot be undone.")); });
 //!         d.footer(|ui| {
 //!             confirmed = dialog::action(ui, "Delete", dialog::Action::Danger).clicked();
 //!             cancelled = dialog::action(ui, "Cancel", dialog::Action::Neutral).clicked();
@@ -527,7 +527,9 @@ mod tests {
 					},
 					|ui| {
 						Dialog::new("footer-height", "Title").show(ui.ctx(), |d| {
-							d.content(|ui| (0..lines).for_each(|_| _ = ui.label("Line")));
+							d.content(|ui| {
+								(0..lines).for_each(|_| _ = ui.label(crate::tr_ui!(ui, "Line")))
+							});
 							d.footer(|ui| action(ui, "Confirm", Action::Primary));
 						});
 						height = ui.ctx().memory(|memory| {

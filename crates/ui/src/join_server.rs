@@ -329,11 +329,11 @@ impl JoinDialog {
 			}
 			ui.add_space(8.0);
 			ui.horizontal_wrapped(|ui| {
-				ui.label("Not sure?");
+				ui.label(crate::tr_ui!(ui, "Not sure?"));
 				if ui.link("Skip this question").clicked() {
 					self.begin_customize(state);
 				}
-				ui.label("for now.");
+				ui.label(crate::tr_ui!(ui, "for now."));
 			});
 		});
 		d.footer(|ui| {
@@ -415,7 +415,7 @@ impl JoinDialog {
 				ui,
 				egui::TextEdit::singleline(&mut self.name)
 					.char_limit(100)
-					.hint_text("My server"),
+					.hint_text(crate::tr_ui!(ui, "My server")),
 			)
 			.labelled_by(label.id);
 			if std::mem::take(&mut self.name_focus) {
@@ -507,7 +507,7 @@ impl JoinDialog {
 		ui.add_space(10.0);
 		ui.add(
 			egui::Label::new(
-				egui::RichText::new("Invites look like")
+				egui::RichText::new(crate::tr_ui!(ui, "Invites look like"))
 					.size(12.0)
 					.color(colors.muted),
 			)
@@ -697,11 +697,18 @@ impl JoinDialog {
 			.show(ui, |ui| {
 				ui.set_width(ui.available_width());
 				ui.spacing_mut().item_spacing.y = 4.0;
-				ui.label(design::semibold(ui, "Don't have an invite?", 15.0));
+				ui.label(design::semibold(
+					ui,
+					crate::tr_ui!(ui, "Don't have an invite?"),
+					15.0,
+				));
 				ui.hyperlink_to(
-					egui::RichText::new("Explore discoverable communities in Discord ↗")
-						.size(13.0)
-						.color(colors.link),
+					egui::RichText::new(crate::tr_ui!(
+						ui,
+						"Explore discoverable communities in Discord ↗"
+					))
+					.size(13.0)
+					.color(colors.link),
 					"https://discord.com/servers",
 				);
 			});

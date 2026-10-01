@@ -296,7 +296,7 @@ impl StickersUi {
 												"Sticker actions",
 											);
 											egui::Popup::menu(&button).show(|ui| {
-												if ui.button("Edit").clicked() {
+												if ui.button(crate::tr_ui!(ui, "Edit")).clicked() {
 													self.dialog = Some(Dialog::Edit {
 														id: row.sticker.id,
 														name: row.sticker.name.clone(),

@@ -1679,6 +1679,204 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 			"· Salvamento pedido, confira a conexão antes de tentar de novo"
 		}
 		"↪ Forwarded" => "↪ Encaminhada",
+		"A custom emoji." => "Um emoji próprio.",
+		"Action" => "Ação",
+		"Add an optional message…" => "Adicionar uma mensagem opcional…",
+		"Additional embed content is not supported" => "Conteúdo extra do embed não é suportado",
+		"Advanced permissions" => "Permissões avançadas",
+		"Attachment arguments are not supported yet." => {
+			"Argumentos de anexo ainda não são suportados."
+		}
+		"Camera capture is unavailable on this platform." => {
+			"A câmera não está disponível neste sistema."
+		}
+		"Cancel download" => "Cancelar o download",
+		"Change group icon" => "Mudar o ícone do grupo",
+		"Change profile picture" => "Mudar a foto de perfil",
+		"Channel unavailable or unsupported in this session" => {
+			"Canal indisponível ou sem suporte nesta sessão"
+		}
+		"Check the conversation before sending again." => {
+			"Confira a conversa antes de enviar de novo."
+		}
+		"Choose camera" => "Escolher a câmera",
+		"Choose emoji" => "Escolher um emoji",
+		"Choose files…" => "Escolher arquivos…",
+		"Choose profile color" => "Escolher a cor do perfil",
+		"Choose where to save this file · up to 100 MiB" => {
+			"Escolha onde salvar este arquivo · até 100 MiB"
+		}
+		"Choosing image…" => "Escolhendo a imagem…",
+		"Clear Filters" => "Limpar os filtros",
+		"Clear selection" => "Limpar a seleção",
+		"Click a GIF to send it right away" => "Clique em um GIF para enviar na hora",
+		"Copy User ID" => "Copiar o ID do usuário",
+		"Copy activity" => "Copiar a atividade",
+		"Copy emoji" => "Copiar o emoji",
+		"Copy link" => "Copiar o link",
+		"Copy webhook ID" => "Copiar o ID do webhook",
+		"Don't have a username? Discover public communities in Discord." => {
+			"Não tem um nome de usuário? Descubra comunidades públicas no Discord."
+		}
+		"Don't have an invite?" => "Não tem um convite?",
+		"Edit Role" => "Editar o cargo",
+		"Edit link." => "Editar o link.",
+		"Embed display limited" => "Exibição do embed limitada",
+		"Explore discoverable communities in Discord ↗" => {
+			"Explore comunidades públicas no Discord ↗"
+		}
+		"FREQUENTLY USED" => "USADOS COM FREQUÊNCIA",
+		"Filters" => "Filtros",
+		"Finish composing text before opening or closing." => {
+			"Termine de escrever antes de abrir ou fechar."
+		}
+		"Folder name" => "Nome da pasta",
+		"Folder name and color…" => "Nome e cor da pasta…",
+		"Group actions unavailable while disconnected or busy." => {
+			"Ações de grupo indisponíveis sem conexão ou enquanto ocupado."
+		}
+		"Group name" => "Nome do grupo",
+		"Hex color: #RRGGBB. Click to type or paste." => {
+			"Cor hexadecimal: #RRGGBB. Clique para digitar ou colar."
+		}
+		"Hover a sticker to preview it" => "Passe o mouse sobre um adesivo para ver a prévia",
+		"Hover an emoji to preview it" => "Passe o mouse sobre um emoji para ver a prévia",
+		"ID or choose…" => "ID ou escolha…",
+		"Image unavailable" => "Imagem indisponível",
+		"Indexing is incomplete; results may be missing." => {
+			"A indexação está incompleta; alguns resultados podem faltar."
+		}
+		"Invites look like" => "Convites parecem assim",
+		"Last known participants · reconnect to refresh" => {
+			"Últimos participantes conhecidos · reconecte para atualizar"
+		}
+		"Leave blank to use your username." => "Deixe em branco para usar seu nome de usuário.",
+		"Let everyone know how to use this channel" => "Avise a todos sobre como usar este canal",
+		"Line" => "Linha",
+		"Load Invites" => "Carregar os convites",
+		"Load channel" => "Carregar o canal",
+		"Loading audio…" => "Carregando o áudio…",
+		"Loading channel settings…" => "Carregando as configurações do canal…",
+		"Loading note…" => "Carregando a nota…",
+		"Loading older threads…" => "Carregando tópicos antigos…",
+		"Loading reactions…" => "Carregando as reações…",
+		"Loading sticker details…" => "Carregando os detalhes do adesivo…",
+		"Loading sticker packs…" => "Carregando os pacotes de adesivos…",
+		"Loading trending categories…" => "Carregando as categorias em alta…",
+		"Loading your profile…" => "Carregando seu perfil…",
+		"Members use the color of the highest role they have on this list. Drag roles to reorder them." => {
+			"Os membros usam a cor do cargo mais alto que têm nesta lista. Arraste os cargos para reordenar."
+		}
+		"More pins may exist, but this page has no usable continuation." => {
+			"Pode haver mais mensagens fixadas, mas esta página não tem continuação."
+		}
+		"Move Down" => "Mover para baixo",
+		"Move Up" => "Mover para cima",
+		"Move down" => "Mover para baixo",
+		"Move outside folders" => "Mover para fora das pastas",
+		"Move up" => "Mover para cima",
+		"Mute notifications until you unmute this conversation." => {
+			"Silencie as notificações até tirar o silenciamento desta conversa."
+		}
+		"My server" => "Meu servidor",
+		"No conversations available here." => "Nenhuma conversa disponível aqui.",
+		"No conversations or friends match" => "Nenhuma conversa ou amigo corresponde",
+		"No matching destinations" => "Nenhum destino correspondente",
+		"No matching options loaded" => "Nenhuma opção correspondente carregada",
+		"No matching users" => "Nenhum usuário correspondente",
+		"No matching users in this conversation." => {
+			"Nenhum usuário correspondente nesta conversa."
+		}
+		"No stickers found." => "Nenhum adesivo encontrado.",
+		"Not sure?" => "Não tem certeza?",
+		"Offline preview · synthetic" => "Prévia offline · sintética",
+		"Open channel" => "Abrir o canal",
+		"Open image…" => "Abrir a imagem…",
+		"Open link…" => "Abrir o link…",
+		"Open media" => "Abrir a mídia",
+		"Open original…" => "Abrir o original…",
+		"Open user profile" => "Abrir o perfil do usuário",
+		"Open voice" => "Abrir a voz",
+		"Order on this page" => "Ordem nesta página",
+		"Other Places to Make Friends" => "Outros lugares para fazer amigos",
+		"Participant list unavailable with the current access." => {
+			"Lista de participantes indisponível com o acesso atual."
+		}
+		"Pinned Messages" => "Mensagens fixadas",
+		"Pinned messages are unavailable while disconnected or without channel access." => {
+			"Mensagens fixadas indisponíveis sem conexão ou sem acesso ao canal."
+		}
+		"Recipients will land in" => "Os destinatários vão chegar em",
+		"Refine your search to see more results" => "Aperte a busca para ver mais resultados",
+		"Remove Role / Member" => "Remover cargo / membro",
+		"Remove dates" => "Remover as datas",
+		"Remove emoji" => "Remover o emoji",
+		"Rename" => "Renomear",
+		"Restore to composer" => "Voltar para o compositor",
+		"Retry profile" => "Tentar o perfil de novo",
+		"Retry sticker details" => "Tentar os detalhes do adesivo de novo",
+		"Retry sticker packs" => "Tentar os pacotes de adesivos de novo",
+		"Reveal spoiler" => "Mostrar o spoiler",
+		"Reveal spoiler attachment" => "Mostrar o anexo com spoiler",
+		"Reveal spoiler component" => "Mostrar o componente com spoiler",
+		"Saving profile…" => "Salvando o perfil…",
+		"Scroll to zoom · Drag to pan · Double-click to reset" => {
+			"Role para ampliar · Arraste para mover · Duplo clique para restaurar"
+		}
+		"Search emoji" => "Buscar emoji",
+		"Search for friends" => "Buscar amigos",
+		"Search for thread name" => "Buscar pelo nome do tópico",
+		"Search options" => "Opções de busca",
+		"Search requests" => "Buscar solicitações",
+		"Search roles or loaded members" => "Buscar cargos ou membros carregados",
+		"Search users" => "Buscar usuários",
+		"Seek" => "Mover",
+		"Seek voice message" => "Mover a mensagem de voz",
+		"Show remaining roles" => "Mostrar os cargos restantes",
+		"Showing the first 1,000 custom emoji. Refine your search for more." => {
+			"Mostrando os primeiros 1.000 emojis próprios. Aperte a busca para ver mais."
+		}
+		"Showing the first 500 stickers. Search to narrow the results." => {
+			"Mostrando os primeiros 500 adesivos. Busque para refinar o resultado."
+		}
+		"Silence this person on this device only. Nobody else is affected." => {
+			"Silencie esta pessoa só neste dispositivo. Ninguém mais é afetado."
+		}
+		"Source message is no longer available" => "A mensagem original não está mais disponível",
+		"Spoiler media - open the message to reveal it." => {
+			"Mídia com spoiler - abra a mensagem para ver."
+		}
+		"Started by" => "Iniciada por",
+		"Streaming" => "Transmitindo",
+		"Submitting…" => "Enviando…",
+		"Syncing server folders with Discord" => {
+			"Sincronizando as pastas de servidor com o Discord"
+		}
+		"Sync…" => "Sincronizando…",
+		"Text display limited" => "Exibição do texto limitada",
+		"The message may already have reached Discord. Check the conversation before sending again." => {
+			"A mensagem pode já ter chegado ao Discord. Confira a conversa antes de enviar de novo."
+		}
+		"This account was deleted. The conversation stays so you can read it." => {
+			"Esta conta foi apagada. A conversa continua para você ler."
+		}
+		"This cannot be undone." => "Isto não pode ser desfeito.",
+		"This server has no stickers yet." => "Este servidor ainda não tem adesivos.",
+		"Try a channel, server or person name." => "Tente o nome de um canal, servidor ou pessoa.",
+		"Type to search members; available roles and channels are listed" => {
+			"Digite para buscar membros; os cargos e canais disponíveis aparecem na lista"
+		}
+		"Ungroup servers" => "Tirar os servidores dos grupos",
+		"Use #RRGGBB or #RRGGBBAA" => "Use #RRGGBB ou #RRGGBBAA",
+		"Video volume" => "Volume do vídeo",
+		"View banner" => "Ver o banner",
+		"View profile picture" => "Ver a foto de perfil",
+		"Watch this screen share in full screen" => "Ver esta tela compartilhada em tela cheia",
+		"Where would you like to go?" => "Para onde você quer ir?",
+		"You have unsaved changes." => "Você tem mudanças não salvas.",
+		"for now." => "por enquanto.",
+		"← Back to Roles" => "← Voltar para os cargos",
+		"↑↓ choose · Tab/Enter insert · Esc" => "↑↓ escolher · Tab/Enter inserir · Esc",
 		_ => return None,
 	})
 }
@@ -3278,6 +3476,210 @@ fn spanish(key: &str) -> Option<&'static str> {
 			"· Guardado solicitado, revisa la conexión antes de reintentar"
 		}
 		"↪ Forwarded" => "↪ Reenviado",
+		"A custom emoji." => "Un emoji propio.",
+		"Action" => "Acción",
+		"Add an optional message…" => "Añadir un mensaje opcional…",
+		"Additional embed content is not supported" => {
+			"No se admite contenido adicional en la vista incrustada"
+		}
+		"Advanced permissions" => "Permisos avanzados",
+		"Attachment arguments are not supported yet." => {
+			"Los argumentos de archivo adjunto aún no son compatibles."
+		}
+		"Camera capture is unavailable on this platform." => {
+			"La cámara no está disponible en este sistema."
+		}
+		"Cancel download" => "Cancelar la descarga",
+		"Change group icon" => "Cambiar el icono del grupo",
+		"Change profile picture" => "Cambiar la foto de perfil",
+		"Channel unavailable or unsupported in this session" => {
+			"Canal no disponible o sin compatibilidad en esta sesión"
+		}
+		"Check the conversation before sending again." => {
+			"Revisa la conversación antes de enviar otra vez."
+		}
+		"Choose camera" => "Elegir la cámara",
+		"Choose emoji" => "Elegir un emoji",
+		"Choose files…" => "Elegir archivos…",
+		"Choose profile color" => "Elegir el color del perfil",
+		"Choose where to save this file · up to 100 MiB" => {
+			"Elige dónde guardar este archivo · hasta 100 MiB"
+		}
+		"Choosing image…" => "Eligiendo la imagen…",
+		"Clear Filters" => "Borrar los filtros",
+		"Clear selection" => "Borrar la selección",
+		"Click a GIF to send it right away" => "Haz clic en un GIF para enviarlo al instante",
+		"Copy User ID" => "Copiar el ID de usuario",
+		"Copy activity" => "Copiar la actividad",
+		"Copy emoji" => "Copiar el emoji",
+		"Copy link" => "Copiar el enlace",
+		"Copy webhook ID" => "Copiar el ID del webhook",
+		"Don't have a username? Discover public communities in Discord." => {
+			"¿No tienes nombre de usuario? Descubre comunidades públicas en Discord."
+		}
+		"Don't have an invite?" => "¿No tienes una invitación?",
+		"Edit Role" => "Editar el rol",
+		"Edit link." => "Editar el enlace.",
+		"Embed display limited" => "Vista incrustada limitada",
+		"Explore discoverable communities in Discord ↗" => {
+			"Explora comunidades públicas en Discord ↗"
+		}
+		"FREQUENTLY USED" => "USADOS A MENUDO",
+		"Filters" => "Filtros",
+		"Finish composing text before opening or closing." => {
+			"Termina de escribir antes de abrir o cerrar."
+		}
+		"Folder name" => "Nombre de la carpeta",
+		"Folder name and color…" => "Nombre y color de la carpeta…",
+		"Group actions unavailable while disconnected or busy." => {
+			"Acciones de grupo no disponibles sin conexión o mientras está ocupado."
+		}
+		"Group name" => "Nombre del grupo",
+		"Hex color: #RRGGBB. Click to type or paste." => {
+			"Color hexadecimal: #RRGGBB. Haz clic para escribir o pegar."
+		}
+		"Hover a sticker to preview it" => "Pasa el cursor sobre un adhesivo para verlo",
+		"Hover an emoji to preview it" => "Pasa el cursor sobre un emoji para verlo",
+		"ID or choose…" => "ID o elige…",
+		"Image unavailable" => "Imagen no disponible",
+		"Indexing is incomplete; results may be missing." => {
+			"La indexación está incompleta; pueden faltar resultados."
+		}
+		"Invites look like" => "Las invitaciones se ven así",
+		"Last known participants · reconnect to refresh" => {
+			"Últimos participantes conocidos · reconéctate para actualizar"
+		}
+		"Leave blank to use your username." => "Déjalo en blanco para usar tu nombre de usuario.",
+		"Let everyone know how to use this channel" => "Informa a todos sobre cómo usar este canal",
+		"Line" => "Línea",
+		"Load Invites" => "Cargar las invitaciones",
+		"Load channel" => "Cargar el canal",
+		"Loading audio…" => "Cargando el audio…",
+		"Loading channel settings…" => "Cargando los ajustes del canal…",
+		"Loading note…" => "Cargando la nota…",
+		"Loading older threads…" => "Cargando hilos antiguos…",
+		"Loading reactions…" => "Cargando las reacciones…",
+		"Loading sticker details…" => "Cargando los detalles del adhesivo…",
+		"Loading sticker packs…" => "Cargando los packs de adhesivos…",
+		"Loading trending categories…" => "Cargando las categorías en tendencia…",
+		"Loading your profile…" => "Cargando tu perfil…",
+		"Members use the color of the highest role they have on this list. Drag roles to reorder them." => {
+			"Los miembros usan el color del rol más alto que tengan en esta lista. Arrastra los roles para reordenarlos."
+		}
+		"More pins may exist, but this page has no usable continuation." => {
+			"Puede haber más mensajes fijados, pero esta página no tiene continuación."
+		}
+		"Move Down" => "Mover abajo",
+		"Move Up" => "Mover arriba",
+		"Move down" => "Mover abajo",
+		"Move outside folders" => "Mover fuera de las carpetas",
+		"Move up" => "Mover arriba",
+		"Mute notifications until you unmute this conversation." => {
+			"Silencia las notificaciones hasta que quites el silencio de esta conversación."
+		}
+		"My server" => "Mi servidor",
+		"No conversations available here." => "No hay conversaciones disponibles aquí.",
+		"No conversations or friends match" => "Ninguna conversación o amigo coincide",
+		"No matching destinations" => "Ningún destino coincide",
+		"No matching options loaded" => "Ninguna opción coincidente cargada",
+		"No matching users" => "Ningún usuario coincide",
+		"No matching users in this conversation." => {
+			"Ningún usuario coincide en esta conversación."
+		}
+		"No stickers found." => "No se encontraron adhesivos.",
+		"Not sure?" => "¿No estás seguro?",
+		"Offline preview · synthetic" => "Vista sin conexión · sintética",
+		"Open channel" => "Abrir el canal",
+		"Open image…" => "Abrir la imagen…",
+		"Open link…" => "Abrir el enlace…",
+		"Open media" => "Abrir el archivo",
+		"Open original…" => "Abrir el original…",
+		"Open user profile" => "Abrir el perfil del usuario",
+		"Open voice" => "Abrir la voz",
+		"Order on this page" => "Orden en esta página",
+		"Other Places to Make Friends" => "Otros lugares para hacer amigos",
+		"Participant list unavailable with the current access." => {
+			"La lista de participantes no está disponible con el acceso actual."
+		}
+		"Pinned Messages" => "Mensajes fijados",
+		"Pinned messages are unavailable while disconnected or without channel access." => {
+			"Los mensajes fijados no están disponibles sin conexión o sin acceso al canal."
+		}
+		"Recipients will land in" => "Los destinatarios llegarán a",
+		"Refine your search to see more results" => "Ajusta la búsqueda para ver más resultados",
+		"Remove Role / Member" => "Quitar rol / miembro",
+		"Remove dates" => "Quitar las fechas",
+		"Remove emoji" => "Quitar el emoji",
+		"Rename" => "Renombrar",
+		"Restore to composer" => "Volver al cuadro de mensaje",
+		"Retry profile" => "Reintentar el perfil",
+		"Retry sticker details" => "Reintentar los detalles del adhesivo",
+		"Retry sticker packs" => "Reintentar los packs de adhesivos",
+		"Reveal spoiler" => "Mostrar el spoiler",
+		"Reveal spoiler attachment" => "Mostrar el archivo adjunto con spoiler",
+		"Reveal spoiler component" => "Mostrar el componente con spoiler",
+		"Saving profile…" => "Guardando el perfil…",
+		"Scroll to zoom · Drag to pan · Double-click to reset" => {
+			"Desplaza para ampliar · Arrastra para mover · Doble clic para restablecer"
+		}
+		"Search emoji" => "Buscar emoji",
+		"Search for friends" => "Buscar amigos",
+		"Search for thread name" => "Buscar por nombre del hilo",
+		"Search options" => "Opciones de búsqueda",
+		"Search requests" => "Buscar solicitudes",
+		"Search roles or loaded members" => "Buscar roles o miembros cargados",
+		"Search users" => "Buscar usuarios",
+		"Seek" => "Mover",
+		"Seek voice message" => "Mover el mensaje de voz",
+		"Show remaining roles" => "Mostrar los roles restantes",
+		"Showing the first 1,000 custom emoji. Refine your search for more." => {
+			"Mostrando los primeros 1.000 emojis propios. Ajusta la búsqueda para ver más."
+		}
+		"Showing the first 500 stickers. Search to narrow the results." => {
+			"Mostrando los primeros 500 adhesivos. Busca para filtrar el resultado."
+		}
+		"Silence this person on this device only. Nobody else is affected." => {
+			"Silencia a esta persona solo en este dispositivo. No afecta a nadie más."
+		}
+		"Source message is no longer available" => "El mensaje original ya no está disponible",
+		"Spoiler media - open the message to reveal it." => {
+			"Archivo con spoiler - abre el mensaje para verlo."
+		}
+		"Started by" => "Iniciado por",
+		"Streaming" => "Transmitiendo",
+		"Submitting…" => "Enviando…",
+		"Syncing server folders with Discord" => {
+			"Sincronizando las carpetas del servidor con Discord"
+		}
+		"Sync…" => "Sincronizando…",
+		"Text display limited" => "Vista del texto limitada",
+		"The message may already have reached Discord. Check the conversation before sending again." => {
+			"El mensaje puede haber llegado ya a Discord. Revisa la conversación antes de enviar otra vez."
+		}
+		"This account was deleted. The conversation stays so you can read it." => {
+			"Esta cuenta se eliminó. La conversación se conserva para que puedas leerla."
+		}
+		"This cannot be undone." => "Esto no se puede deshacer.",
+		"This server has no stickers yet." => "Este servidor todavía no tiene adhesivos.",
+		"Try a channel, server or person name." => {
+			"Prueba el nombre de un canal, servidor o persona."
+		}
+		"Type to search members; available roles and channels are listed" => {
+			"Escribe para buscar miembros; los roles y canales disponibles se listan"
+		}
+		"Ungroup servers" => "Sacar los servidores de los grupos",
+		"Use #RRGGBB or #RRGGBBAA" => "Usa #RRGGBB o #RRGGBBAA",
+		"Video volume" => "Volumen del video",
+		"View banner" => "Ver el banner",
+		"View profile picture" => "Ver la foto de perfil",
+		"Watch this screen share in full screen" => {
+			"Ver esta pantalla compartida a pantalla completa"
+		}
+		"Where would you like to go?" => "¿A dónde quieres ir?",
+		"You have unsaved changes." => "Tienes cambios sin guardar.",
+		"for now." => "por ahora.",
+		"← Back to Roles" => "← Volver a los roles",
+		"↑↓ choose · Tab/Enter insert · Esc" => "↑↓ elegir · Tab/Enter insertar · Esc",
 		_ => return None,
 	})
 }
@@ -4288,6 +4690,171 @@ mod tests {
 			"used",
 			"· Save requested, check the connection before retrying",
 			"↪ Forwarded",
+			"A custom emoji.",
+			"Action",
+			"Add an optional message…",
+			"Additional embed content is not supported",
+			"Advanced permissions",
+			"Attachment arguments are not supported yet.",
+			"Camera capture is unavailable on this platform.",
+			"Cancel download",
+			"Change Nickname",
+			"Change group icon",
+			"Change profile picture",
+			"Channel unavailable or unsupported in this session",
+			"Check the conversation before sending again.",
+			"Choose camera",
+			"Choose emoji",
+			"Choose files…",
+			"Choose profile color",
+			"Choose where to save this file · up to 100 MiB",
+			"Choosing image…",
+			"Clear Filters",
+			"Clear selection",
+			"Click a GIF to send it right away",
+			"Close",
+			"Copy",
+			"Copy User ID",
+			"Copy activity",
+			"Copy download link",
+			"Copy emoji",
+			"Copy link",
+			"Copy webhook ID",
+			"Dismiss",
+			"Don't have a username? Discover public communities in Discord.",
+			"Don't have an invite?",
+			"Edit",
+			"Edit Role",
+			"Edit link.",
+			"Edit profile",
+			"Embed display limited",
+			"Explore discoverable communities in Discord ↗",
+			"FREQUENTLY USED",
+			"Favorites are saved on this device.",
+			"Filters",
+			"Finish composing text before opening or closing.",
+			"Folder name",
+			"Folder name and color…",
+			"Forget this account on this device",
+			"Group actions unavailable while disconnected or busy.",
+			"Group name",
+			"Hex color: #RRGGBB. Click to type or paste.",
+			"Hover a sticker to preview it",
+			"Hover an emoji to preview it",
+			"ID or choose…",
+			"Image unavailable",
+			"Indexing is incomplete; results may be missing.",
+			"Invites look like",
+			"Last known participants · reconnect to refresh",
+			"Leave blank to use your username.",
+			"Let everyone know how to use this channel",
+			"Line",
+			"Load Invites",
+			"Load channel",
+			"Loading audio…",
+			"Loading channel settings…",
+			"Loading note…",
+			"Loading older threads…",
+			"Loading profile…",
+			"Loading reactions…",
+			"Loading sticker details…",
+			"Loading sticker packs…",
+			"Loading trending categories…",
+			"Loading your profile…",
+			"Members use the color of the highest role they have on this list. Drag roles to reorder them.",
+			"Message",
+			"More pins may exist, but this page has no usable continuation.",
+			"Move Down",
+			"Move Up",
+			"Move down",
+			"Move outside folders",
+			"Move up",
+			"Mute notifications until you unmute this conversation.",
+			"Mute this direct message's notifications until you unmute it.",
+			"My server",
+			"No conversations available here.",
+			"No conversations or friends match",
+			"No matching destinations",
+			"No matching options loaded",
+			"No matching users",
+			"No matching users in this conversation.",
+			"No stickers found.",
+			"Not sure?",
+			"Offline preview · synthetic",
+			"Open channel",
+			"Open image…",
+			"Open link…",
+			"Open media",
+			"Open original…",
+			"Open user profile",
+			"Open voice",
+			"Order on this page",
+			"Other Places to Make Friends",
+			"Participant list unavailable with the current access.",
+			"Pinned Messages",
+			"Pinned direct messages are saved on this device.",
+			"Pinned messages are unavailable while disconnected or without channel access.",
+			"Preview",
+			"Profile",
+			"Recipients will land in",
+			"Refine your search to see more results",
+			"Remove Icon",
+			"Remove Role / Member",
+			"Remove dates",
+			"Remove emoji",
+			"Rename",
+			"Restore to composer",
+			"Retry",
+			"Retry profile",
+			"Retry sticker details",
+			"Retry sticker packs",
+			"Reveal spoiler",
+			"Reveal spoiler attachment",
+			"Reveal spoiler component",
+			"Reveal spoiler media",
+			"Save .txt",
+			"Saving profile…",
+			"Scroll to zoom · Drag to pan · Double-click to reset",
+			"Search",
+			"Search emoji",
+			"Search for friends",
+			"Search for thread name",
+			"Search options",
+			"Search requests",
+			"Search roles or loaded members",
+			"Search users",
+			"Seek",
+			"Seek voice message",
+			"Show remaining roles",
+			"Showing the first 1,000 custom emoji. Refine your search for more.",
+			"Showing the first 500 stickers. Search to narrow the results.",
+			"Silence this person on this device only. Nobody else is affected.",
+			"Source message is no longer available",
+			"Spoiler media - open the message to reveal it.",
+			"Started by",
+			"Streaming",
+			"Submitting…",
+			"Syncing server folders with Discord",
+			"Sync…",
+			"Text display limited",
+			"The message may already have reached Discord. Check the conversation before sending again.",
+			"This account was deleted. The conversation stays so you can read it.",
+			"This cannot be undone.",
+			"This server has no stickers yet.",
+			"Try a channel, server or person name.",
+			"Type to search members; available roles and channels are listed",
+			"Ungroup servers",
+			"Use #RRGGBB or #RRGGBBAA",
+			"Video volume",
+			"View banner",
+			"View profile picture",
+			"View source",
+			"Watch this screen share in full screen",
+			"Where would you like to go?",
+			"You have unsaved changes.",
+			"for now.",
+			"← Back to Roles",
+			"↑↓ choose · Tab/Enter insert · Esc",
 		];
 		for key in KEYS {
 			assert!(portuguese_brazil(key).is_some(), "missing pt-BR: {key}");

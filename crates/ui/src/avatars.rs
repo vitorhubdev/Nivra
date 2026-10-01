@@ -449,7 +449,9 @@ impl Avatars {
 			let placeholder = rect.shrink(8.0);
 			ui.painter().rect_filled(placeholder, 8, colors.raised);
 			if failed || !supported {
-				response.clone().on_hover_text("Image unavailable");
+				response
+					.clone()
+					.on_hover_text(crate::tr_ui!(ui, "Image unavailable"));
 			}
 			if !demo && supported {
 				// Retry uses the shared bounded cooldown, including when the pointer is idle.

@@ -190,9 +190,10 @@ impl MessagingUi {
 					let muted = self.voice_user_locally_muted(entry.participant.user);
 					if ui
 						.button(if muted { "Unmute" } else { "Mute" })
-						.on_hover_text(
-							"Silence this person on this device only. Nobody else is affected.",
-						)
+						.on_hover_text(crate::tr_ui!(
+							ui,
+							"Silence this person on this device only. Nobody else is affected."
+						))
 						.clicked()
 					{
 						self.set_voice_user_locally_muted(entry.participant.user, !muted);
@@ -574,8 +575,11 @@ impl MessagingUi {
 		);
 		if !state.can_view(channel) {
 			body_ui.label(
-				RichText::new("Participant list unavailable with the current access.")
-					.color(STAGE_MUTED),
+				RichText::new(crate::tr_ui!(
+					ui,
+					"Participant list unavailable with the current access."
+				))
+				.color(STAGE_MUTED),
 			);
 		} else {
 			let entries = stage_participants(state, channel);
@@ -598,9 +602,12 @@ impl MessagingUi {
 			} else {
 				if !state.demo && !state.gateway_connected {
 					body_ui.label(
-						RichText::new("Last known participants · reconnect to refresh")
-							.small()
-							.color(STAGE_MUTED),
+						RichText::new(crate::tr_ui!(
+							ui,
+							"Last known participants · reconnect to refresh"
+						))
+						.small()
+						.color(STAGE_MUTED),
 					);
 				}
 				self.participant_tiles(&mut body_ui, state, channel, &entries, false);
@@ -1075,7 +1082,7 @@ impl MessagingUi {
 					.fill(egui::Color32::from_black_alpha(170))
 					.corner_radius(6),
 			)
-			.on_hover_text("Watch this screen share in full screen")
+			.on_hover_text(crate::tr_ui!(ui, "Watch this screen share in full screen"))
 			.clicked()
 		{
 			self.voice_stream_fullscreen_previous =
@@ -2069,7 +2076,10 @@ impl MessagingUi {
 			target_os = "macos",
 			target_os = "linux"
 		)) {
-			ui.label("Camera capture is unavailable on this platform.");
+			ui.label(crate::tr_ui!(
+				ui,
+				"Camera capture is unavailable on this platform."
+			));
 			return;
 		}
 		if demo && self.voice_cameras.is_empty() {
@@ -4808,7 +4818,7 @@ fn live_badge(ui: &mut egui::Ui) {
 		egui::Color32::WHITE,
 	);
 	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Live"));
-	response.on_hover_text("Streaming");
+	response.on_hover_text(crate::tr_ui!(ui, "Streaming"));
 }
 
 fn device_combo(
@@ -5748,7 +5758,7 @@ mod tests {
 					..Default::default()
 				},
 				|ui| {
-					let trigger = ui.button("Choose camera");
+					let trigger = ui.button(crate::tr_ui!(ui, "Choose camera"));
 					messaging.camera_settings_popup(&trigger, true);
 				},
 			);
@@ -6068,7 +6078,7 @@ mod tests {
 					..Default::default()
 				},
 				|ui| {
-					let trigger = ui.button("Open voice");
+					let trigger = ui.button(crate::tr_ui!(ui, "Open voice"));
 					messaging.voice_settings_popup(&trigger, demo, false, true);
 				},
 			);

@@ -315,7 +315,7 @@ fn file_card(
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					ui.spacing_mut().item_spacing.x = 6.0;
 					if previewable {
-						let preview = ui.small_button("Preview");
+						let preview = ui.small_button(crate::tr_ui!(ui, "Preview"));
 						if preview.clicked() {
 							download.preview_request = Some(attachment.clone());
 						}
@@ -355,7 +355,7 @@ fn file_card(
 				.as_deref()
 				.or(attachment.media.proxy_url.as_deref())
 				.and_then(external_url)
-				&& ui.button("Copy download link").clicked()
+				&& ui.button(crate::tr_ui!(ui, "Copy download link")).clicked()
 			{
 				ui.ctx().copy_text(url);
 				ui.close();
@@ -532,7 +532,7 @@ fn open_original(
 	opening: &mut Option<String>,
 ) -> Option<egui::Response> {
 	let target = attachment.media.url.as_deref().and_then(external_url)?;
-	let response = ui.small_button("Open original…");
+	let response = ui.small_button(crate::tr_ui!(ui, "Open original…"));
 	if response.clicked() {
 		*opening = Some(target);
 	}
@@ -638,11 +638,11 @@ fn media_menu(
 			}
 		}
 		if let Some(url) = url.and_then(external_url) {
-			if video && ui.button("Open original…").clicked() {
+			if video && ui.button(crate::tr_ui!(ui, "Open original…")).clicked() {
 				*opening = Some(url.clone());
 				ui.close();
 			}
-			if ui.button("Copy link").clicked() {
+			if ui.button(crate::tr_ui!(ui, "Copy link")).clicked() {
 				ui.ctx().copy_text(url);
 				ui.close();
 			}
@@ -661,10 +661,14 @@ impl DownloadUi {
 		if !self.status.is_empty() {
 			ui.horizontal_wrapped(|ui| {
 				ui.small(&self.status);
-				if self.active && ui.small_button("Cancel download").clicked() {
+				if self.active
+					&& ui
+						.small_button(crate::tr_ui!(ui, "Cancel download"))
+						.clicked()
+				{
 					self.cancel_requested = true;
 				}
-				if !self.active && ui.small_button("Dismiss").clicked() {
+				if !self.active && ui.small_button(crate::tr_ui!(ui, "Dismiss")).clicked() {
 					self.dismiss_requested = true;
 				}
 			});
@@ -679,7 +683,10 @@ fn download_button(
 ) -> egui::Response {
 	let response = ui
 		.add_enabled(!demo && !download.busy(), egui::Button::new("Download"))
-		.on_hover_text("Choose where to save this file · up to 100 MiB")
+		.on_hover_text(crate::tr_ui!(
+			ui,
+			"Choose where to save this file · up to 100 MiB"
+		))
 		.on_disabled_hover_text(if demo {
 			"Downloads are disabled for synthetic attachments"
 		} else {
@@ -911,7 +918,10 @@ pub fn viewer(
 					} else {
 						egui::CursorIcon::ZoomIn
 					})
-					.on_hover_text("Scroll to zoom · Drag to pan · Double-click to reset")
+					.on_hover_text(crate::tr_ui!(
+						ui,
+						"Scroll to zoom · Drag to pan · Double-click to reset"
+					))
 					.on_hover_text(
 						attachment
 							.description

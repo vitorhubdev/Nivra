@@ -646,7 +646,10 @@ impl VideoUi {
 							});
 							controls_focused |= volume.has_focus();
 							response |= volume.clone();
-							if volume.on_hover_text("Video volume").changed() && !context_click {
+							if volume
+								.on_hover_text(crate::tr_ui!(ui, "Video volume"))
+								.changed() && !context_click
+							{
 								self.volume = volume_value;
 								self.command = Some(VideoCommand::Volume(self.volume));
 							}

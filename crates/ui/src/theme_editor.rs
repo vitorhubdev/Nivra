@@ -1439,7 +1439,7 @@ fn color_input(ui: &mut egui::Ui, value: &mut String) -> bool {
 					rect,
 					design::palette(ui).danger,
 				);
-				response.on_hover_text("Use #RRGGBB or #RRGGBBAA");
+				response.on_hover_text(crate::tr_ui!(ui, "Use #RRGGBB or #RRGGBBAA"));
 			}
 			changed
 		},

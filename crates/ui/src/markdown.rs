@@ -1227,7 +1227,9 @@ impl Formatted {
 							.take_while(|(_, style)| style.spoiler == spoiler)
 							.count();
 						let response = ui
-							.push_id(("spoiler", region), |ui| ui.button("Reveal spoiler"))
+							.push_id(("spoiler", region), |ui| {
+								ui.button(crate::tr_ui!(ui, "Reveal spoiler"))
+							})
 							.inner;
 						render.surface.keep(&response);
 						if response.clicked() {
@@ -1256,7 +1258,7 @@ impl Formatted {
 										.color(colors.mention_text)
 										.background_color(colors.mention_bg),
 								))
-								.on_hover_text("Open channel");
+								.on_hover_text(crate::tr_ui!(ui, "Open channel"));
 							render.surface.keep(&response);
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
@@ -1277,7 +1279,7 @@ impl Formatted {
 										.color(colors.mention_text)
 										.background_color(colors.mention_bg),
 								))
-								.on_hover_text("Load channel");
+								.on_hover_text(crate::tr_ui!(ui, "Load channel"));
 							render.surface.keep(&response);
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
@@ -1295,9 +1297,10 @@ impl Formatted {
 							let (galley_pos, galley, response) = egui::Label::new(&spans[start].0)
 								.selectable(true)
 								.layout_in_ui(ui);
-							let response = response.on_hover_text(
-								"Channel unavailable or unsupported in this session",
-							);
+							let response = response.on_hover_text(crate::tr_ui!(
+								ui,
+								"Channel unavailable or unsupported in this session"
+							));
 							render.surface.keep(&response);
 							render.surface.embed(&response, galley_pos, galley);
 						}
@@ -1316,7 +1319,7 @@ impl Formatted {
 									.color(colors.mention_text)
 									.background_color(colors.mention_bg),
 							))
-							.on_hover_text("Open user profile");
+							.on_hover_text(crate::tr_ui!(ui, "Open user profile"));
 						render.surface.keep(&response);
 						response.widget_info(|| {
 							egui::WidgetInfo::labeled(
@@ -1875,7 +1878,7 @@ impl Formatted {
 		}
 		if let Some(text) = ui.data(|data| data.get_temp::<Option<String>>(menu).flatten()) {
 			egui::Popup::context_menu(&response).id(menu).show(|ui| {
-				if ui.button("Copy emoji").clicked() {
+				if ui.button(crate::tr_ui!(ui, "Copy emoji")).clicked() {
 					ui.ctx().copy_text(text);
 					ui.close();
 				}

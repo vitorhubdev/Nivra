@@ -226,7 +226,7 @@ impl AudioUi {
 								.handle_shape(egui::style::HandleShape::Circle),
 						);
 						seek.widget_info(|| egui::WidgetInfo::slider(can_seek, position, "Seek"));
-						let seek = seek.on_hover_text("Seek");
+						let seek = seek.on_hover_text(crate::tr_ui!(ui, "Seek"));
 						if seek.changed() {
 							self.command = Some(AudioCommand::Seek(position));
 						}
@@ -286,7 +286,7 @@ impl AudioUi {
 				});
 				match state {
 					AudioState::Loading => {
-						ui.small("Loading audio…");
+						ui.small(crate::tr_ui!(ui, "Loading audio…"));
 					}
 					AudioState::Failed(error) => {
 						ui.colored_label(colors.danger, error);
@@ -382,7 +382,7 @@ fn waveform(
 	response.widget_info(|| {
 		egui::WidgetInfo::slider(enabled && ui.is_enabled(), *position, "Seek voice message")
 	});
-	response.on_hover_text("Seek voice message");
+	response.on_hover_text(crate::tr_ui!(ui, "Seek voice message"));
 	*position != before
 }
 

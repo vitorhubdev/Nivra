@@ -65,7 +65,10 @@ impl GroupMenu {
 				row(ui, if pinned { "Unpin DM" } else { "Pin DM" }, colors.text)
 			})
 			.inner
-			.on_hover_text("Pinned direct messages are saved on this device.")
+			.on_hover_text(crate::tr_ui!(
+				ui,
+				"Pinned direct messages are saved on this device."
+			))
 			.clicked()
 		{
 			self.pin_requested = Some(view.toggle(Shortcut::Pinned, channel.id));
@@ -88,7 +91,10 @@ impl GroupMenu {
 				},
 				colors.text,
 			)
-			.on_hover_text("Mute notifications until you unmute this conversation.")
+			.on_hover_text(crate::tr_ui!(
+				ui,
+				"Mute notifications until you unmute this conversation."
+			))
 			.clicked()
 			{
 				self.mute = Some((channel.id, !muted));
@@ -101,7 +107,10 @@ impl GroupMenu {
 			}
 		});
 		if !enabled {
-			ui.small("Group actions unavailable while disconnected or busy.");
+			ui.small(crate::tr_ui!(
+				ui,
+				"Group actions unavailable while disconnected or busy."
+			));
 		}
 	}
 	pub fn context(
@@ -262,7 +271,10 @@ impl GroupMenu {
 									"Change group icon",
 								)
 							});
-							if response.on_hover_text("Change group icon").clicked() {
+							if response
+								.on_hover_text(crate::tr_ui!(ui, "Change group icon"))
+								.clicked()
+							{
 								dialog.choosing = true;
 								dialog.error = None;
 								self.icon_request =
@@ -270,7 +282,7 @@ impl GroupMenu {
 							}
 						});
 						if dialog.choosing {
-							ui.label("Choosing image…");
+							ui.label(crate::tr_ui!(ui, "Choosing image…"));
 						}
 						if (dialog.preview.is_some()
 							|| state
@@ -295,7 +307,7 @@ impl GroupMenu {
 							ui,
 							egui::TextEdit::singleline(&mut dialog.name)
 								.char_limit(100)
-								.hint_text("Group name")
+								.hint_text(crate::tr_ui!(ui, "Group name"))
 								.id(egui::Id::unique(("group-name", self.revision))),
 						)
 						.labelled_by(label.id);

@@ -15,6 +15,84 @@ const CHUNK: usize = 256 * 1024;
 const CACHE_CHUNKS: usize = 8;
 const INVALID: &str = "Video download failed or changed; reload the conversation";
 const UNSUPPORTED: &str = "Video server does not support buffering; download to play externally";
+const EXPIRED: &str = "Video link expired; reload the conversation";
+#[cfg(test)]
+pub(super) static OFFLINE_PROBE: AtomicBool = AtomicBool::new(false);
+
+pub(super) fn resolve_media_url(
+	primary: url::Url,
+	fallback: Option<url::Url>,
+	cancelled: Arc<AtomicBool>,
+	runtime: Handle,
+) -> Result<url::Url, &'static str> {
+	if cancelled.load(Ordering::Acquire) {
+		return Err("Cancelled");
+	}
+	if !primary.username().is_empty() || primary.password().is_some() {
+		return Err(INVALID);
+	}
+	let client = media_client()?;
+	match probe(&client, &primary, &cancelled, &runtime) {
+		Ok(()) => Ok(primary),
+		Err(EXPIRED) => {
+			let fallback = fallback.ok_or(EXPIRED)?;
+			if !fallback.username().is_empty() || fallback.password().is_some() {
+				return Err(INVALID);
+			}
+			probe(&client, &fallback, &cancelled, &runtime)?;
+			Ok(fallback)
+		}
+		Err(error) => Err(error),
+	}
+}
+fn media_client() -> Result<reqwest::Client, &'static str> {
+	reqwest::Client::builder()
+		.no_proxy()
+		.no_gzip()
+		.no_brotli()
+		.no_deflate()
+		.no_zstd()
+		.redirect(reqwest::redirect::Policy::none())
+		.http1_only()
+		.timeout(Duration::from_secs(15))
+		.build()
+		.map_err(|_| INVALID)
+}
+fn probe(
+	client: &reqwest::Client,
+	url: &url::Url,
+	cancelled: &AtomicBool,
+	runtime: &Handle,
+) -> Result<(), &'static str> {
+	runtime.block_on(async {
+		let cancelled_wait = async {
+			while !cancelled.load(Ordering::Acquire) {
+				tokio::time::sleep(Duration::from_millis(20)).await;
+			}
+		};
+		let transfer = async {
+			let response = client
+				.get(url.clone())
+				.header(reqwest::header::ACCEPT_ENCODING, "identity")
+				.header(reqwest::header::RANGE, "bytes=0-0")
+				.send()
+				.await
+				.map_err(|_| INVALID)?;
+			let status = response.status();
+			if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::GONE {
+				return Err(EXPIRED);
+			}
+			if status == reqwest::StatusCode::PARTIAL_CONTENT || status == reqwest::StatusCode::OK {
+				return Ok(());
+			}
+			Err(INVALID)
+		};
+		tokio::select! { biased;
+			_ = cancelled_wait => Err("Cancelled"),
+			result = transfer => result,
+		}
+	})
+}
 
 pub(super) fn source(
 	url: Option<url::Url>,
@@ -30,16 +108,7 @@ pub(super) fn source(
 		if !url.username().is_empty() || url.password().is_some() {
 			return Err(INVALID);
 		}
-		let client = reqwest::Client::builder()
-			.no_proxy()
-			.no_gzip()
-			.no_brotli()
-			.no_deflate()
-			.no_zstd()
-			.redirect(reqwest::redirect::Policy::none())
-			.timeout(Duration::from_secs(15))
-			.build()
-			.map_err(|_| INVALID)?;
+		let client = media_client()?;
 		(
 			Input::Http {
 				client,
@@ -464,5 +533,65 @@ mod tests {
 			)
 			.is_err()
 		);
+	}
+
+	#[test]
+	fn expired_link_uses_the_proxy_url() {
+		discord_api::ensure_tls_provider();
+		let primary = TcpListener::bind("127.0.0.1:0").unwrap();
+		let fallback_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let primary_url = url::Url::parse(&format!(
+			"http://{}/attachments/1/2/clip.mp4?ex=1&is=1&hm=abc&backend=b2",
+			primary.local_addr().unwrap()
+		))
+		.unwrap();
+		let fallback_url = url::Url::parse(&format!(
+			"http://{}/attachments/1/2/clip.mp4?ex=1&is=1&hm=abc",
+			fallback_listener.local_addr().unwrap()
+		))
+		.unwrap();
+		let expected = fallback_url.clone();
+		let server = std::thread::spawn(move || {
+			fn answer(listener: TcpListener, body: &str) {
+				let (mut socket, _) = listener.accept().unwrap();
+				socket
+					.set_read_timeout(Some(Duration::from_secs(2)))
+					.unwrap();
+				let mut header = Vec::new();
+				while !header.ends_with(b"\r\n\r\n") && header.len() < 8192 {
+					let mut byte = [0];
+					if socket.read_exact(&mut byte).is_err() {
+						return;
+					}
+					header.push(byte[0]);
+				}
+				let header = String::from_utf8_lossy(&header).to_ascii_lowercase();
+				assert!(header.contains("range: bytes=0-0"), "{header}");
+				write!(socket, "{body}").unwrap();
+				let _ = socket.shutdown(std::net::Shutdown::Both);
+			}
+			answer(
+				primary,
+				"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+			);
+			answer(
+				fallback_listener,
+				"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/1\r\nContent-Length: 1\r\nConnection: close\r\n\r\nX",
+			);
+		});
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.unwrap();
+		let chosen = resolve_media_url(
+			primary_url,
+			Some(fallback_url),
+			Arc::new(AtomicBool::new(false)),
+			runtime.handle().clone(),
+		)
+		.unwrap();
+		assert_eq!(chosen.as_str(), expected.as_str());
+		server.join().unwrap();
 	}
 }

@@ -318,6 +318,46 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 			"Continue com uma conta salva ou entre com outra."
 		}
 		"Sign in with Discord." => "Entre com o Discord.",
+		"Early preview" => "Prévia inicial",
+		"Checking your saved login" => "Conferindo o login salvo",
+		"Connecting to Discord" => "Conectando ao Discord",
+		"Sign in to Discord" => "Entrar no Discord",
+		"discord.com · temporary login window · passwords and 2FA never leave the page" => {
+			"discord.com · janela temporária de login · a senha e o 2FA não saem da página"
+		}
+		"Sign in with a session token" => "Entrar com um token de sessão",
+		"For owners who already hold a valid Discord session token, for example from another signed-in Nivra install. Passwords and 2FA are never used here; this bypasses Discord's hosted login page entirely." => {
+			"Para quem já tem um token de sessão do Discord, por exemplo de outra instalação do Nivra. Senha e 2FA não são usados aqui; a página de login do Discord não abre."
+		}
+		"Session token" => "Token de sessão",
+		"Connect with this token" => "Conectar com este token",
+		"About Nivra" => "Sobre o Nivra",
+		"Forget saved login" => "Esquecer o login salvo",
+		"Messaging, reactions, search and read markers have offline tests. Real Discord interoperability is still unverified; attachment uploads and advanced search remain incomplete." => {
+			"Mensagens, reações, busca e marcadores de leitura têm testes offline. A interoperabilidade real com o Discord ainda não foi verificada; envio de anexos e busca avançada seguem incompletos."
+		}
+		"Messages and drafts are cached locally. Login tokens use the operating system credential store." => {
+			"Mensagens e rascunhos ficam em cache local. Tokens de login usam o cofre de credenciais do sistema."
+		}
+		"Unofficial clients may put your Discord account at risk." => {
+			"Clientes não oficiais podem colocar sua conta do Discord em risco."
+		}
+		"Explore the offline preview" => "Ver a prévia offline",
+		"Sample conversations. No Discord connection." => {
+			"Conversas de exemplo. Sem conexão com o Discord."
+		}
+		"or" => "ou",
+		"Sign in again" => "Entrar de novo",
+		"Sign in before calling" => "Entre antes de ligar",
+		"Sign in before changing your profile picture" => "Entre antes de trocar a foto",
+		"Sign in through Discord; saved-login lookup stopped" => {
+			"Entrando pelo Discord; a busca do login salvo parou"
+		}
+		"Waiting for Discord login" => "Esperando o login do Discord",
+		"Platform login webview unavailable; see platform-support.md" => {
+			"A janela de login não abriu; veja platform-support.md"
+		}
+		"Platform login webview unavailable" => "A janela de login não abriu",
 		"Saved accounts" => "Contas salvas",
 		"This is my account" => "Esta é a minha conta",
 		"Check this to continue." => "Marque isto para continuar.",

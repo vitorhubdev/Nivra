@@ -132,6 +132,8 @@ mod timeline;
 #[cfg(test)]
 mod title_bar_tests;
 pub mod toasts;
+#[cfg(test)]
+mod translation_coverage;
 mod typing;
 pub mod updates;
 mod user_menu;

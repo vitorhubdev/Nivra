@@ -133,7 +133,10 @@ impl Components {
 			if c.spoiler {
 				let revealed = self.revealed.contains(&id.value());
 				if !revealed {
-					if ui.button("Reveal spoiler component").clicked() {
+					if ui
+						.button(crate::tr_ui!(ui, "Reveal spoiler component"))
+						.clicked()
+					{
 						if self.revealed.len() >= 256 {
 							self.revealed.clear();
 						}
@@ -424,7 +427,10 @@ impl Components {
 						let key = id.with(("gallery", index));
 						let revealed = self.revealed.contains(&key.value());
 						if item.spoiler && !revealed {
-							if ui.button("Reveal spoiler media").clicked() {
+							if ui
+								.button(crate::tr_ui!(ui, "Reveal spoiler media"))
+								.clicked()
+							{
 								if self.revealed.len() >= 256 {
 									self.revealed.clear();
 								}
@@ -547,7 +553,7 @@ impl Components {
 					ui.colored_label(design::palette(ui).danger, error);
 				}
 				if busy {
-					ui.label("Submitting…");
+					ui.label(crate::tr_ui!(ui, "Submitting…"));
 				}
 			});
 			dialog.footer(|ui| {
@@ -688,7 +694,7 @@ fn select(
 			ui.set_min_width((width - 16.0).max(40.0));
 			if (c.min_values == Some(0) || !c.required)
 				&& !values.is_empty()
-				&& ui.button("Clear selection").clicked()
+				&& ui.button(crate::tr_ui!(ui, "Clear selection")).clicked()
 			{
 				values.clear();
 				changed = true;
@@ -699,7 +705,7 @@ fn select(
 				&& ui
 					.add(
 						egui::TextEdit::singleline(query)
-							.hint_text("Search options")
+							.hint_text(crate::tr_ui!(ui, "Search options"))
 							.char_limit(64),
 					)
 					.changed()
@@ -824,14 +830,17 @@ fn select(
 				}
 			}
 			if options.is_empty() {
-				ui.label("No matching options loaded");
+				ui.label(crate::tr_ui!(ui, "No matching options loaded"));
 			}
 			if options.len() == 100 {
-				ui.small("Refine your search to see more results");
+				ui.small(crate::tr_ui!(ui, "Refine your search to see more results"));
 			}
 		});
 	if matches!(c.kind, 5..=8) {
-		ui.small("Type to search members; available roles and channels are listed");
+		ui.small(crate::tr_ui!(
+			ui,
+			"Type to search members; available roles and channels are listed"
+		));
 	}
 	changed
 }
@@ -1003,7 +1012,7 @@ fn field(
 				if !c.file_types.is_empty() {
 					ui.small(format!("Allowed files: {}", c.file_types.join(", ")));
 				}
-				if ui.button("Choose files…").clicked() {
+				if ui.button(crate::tr_ui!(ui, "Choose files…")).clicked() {
 					*file_request = c.custom_id.clone();
 				}
 				if let Some((_, selected)) = files
@@ -1065,7 +1074,10 @@ fn show_media(
 		))
 		.value();
 		if attachment.spoiler && !revealed.contains(&reveal_id) {
-			if ui.button("Reveal spoiler attachment").clicked() {
+			if ui
+				.button(crate::tr_ui!(ui, "Reveal spoiler attachment"))
+				.clicked()
+			{
 				if revealed.len() >= 256 {
 					revealed.clear();
 				}
@@ -1143,7 +1155,7 @@ fn show_media(
 	if let Some(description) = description {
 		ui.small(description);
 	}
-	if ui.small_button("Open media").clicked() {
+	if ui.small_button(crate::tr_ui!(ui, "Open media")).clicked() {
 		*opening = resolve_media(&media.url, message).and_then(markdown::external_url);
 	}
 }

@@ -89,7 +89,7 @@ pub(crate) fn activity_card(
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					let more = icons::button(ui, Icon::More, 20.0, "Activity options");
 					egui::Popup::menu(&more).show(|ui| {
-						if ui.button("Copy activity").clicked() {
+						if ui.button(crate::tr_ui!(ui, "Copy activity")).clicked() {
 							let mut text = activity.summary();
 							for line in [&activity.details, &activity.state].into_iter().flatten() {
 								text.push('\n');
@@ -444,7 +444,7 @@ fn more_menu(
 	ui.spacing_mut().button_padding = vec2(8.0, 6.0);
 	let own_profile = state.user.as_ref().is_some_and(|own| own.id == user.id);
 	// Message is the card's own footer button, so the menu does not repeat it.
-	if user.webhook && ui.button("Copy webhook ID").clicked() {
+	if user.webhook && ui.button(crate::tr_ui!(ui, "Copy webhook ID")).clicked() {
 		ui.ctx().copy_text(user.id.to_string());
 		ui.close();
 	}
@@ -486,7 +486,10 @@ fn more_menu(
 				enabled,
 				egui::Button::new(if muted { "Unmute" } else { "Mute" }),
 			)
-			.on_hover_text("Mute this direct message's notifications until you unmute it.")
+			.on_hover_text(crate::tr_ui!(
+				ui,
+				"Mute this direct message's notifications until you unmute it."
+			))
 			.clicked()
 		{
 			action = Some(Action::Menu(crate::user_menu::Action::Mute {
@@ -1029,7 +1032,10 @@ fn role_chips(
 			);
 			response
 				.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label.clone()));
-			if response.on_hover_text("Show remaining roles").clicked() {
+			if response
+				.on_hover_text(crate::tr_ui!(ui, "Show remaining roles"))
+				.clicked()
+			{
 				ui.data_mut(|data| data.insert_temp(expanded_id, true));
 			}
 		}
@@ -1296,7 +1302,7 @@ pub fn show(
 				let banner_response = if !pointer_in_subwidgets {
 					banner_response
 						.on_hover_cursor(egui::CursorIcon::ZoomIn)
-						.on_hover_text("View banner")
+						.on_hover_text(crate::tr_ui!(ui, "View banner"))
 				} else {
 					banner_response
 				};
@@ -1336,7 +1342,7 @@ pub fn show(
 				});
 				if response
 					.on_hover_cursor(egui::CursorIcon::ZoomIn)
-					.on_hover_text("View profile picture")
+					.on_hover_text(crate::tr_ui!(ui, "View profile picture"))
 					.clicked()
 				{
 					let mut url = data.map_or(user, |data| &data.user).avatar_url();
@@ -1589,9 +1595,10 @@ pub fn show(
 							if deleted {
 								ui.add_space(4.0);
 								ui.label(
-									RichText::new(
-										"This account was deleted. The conversation stays so you can read it.",
-									)
+									RichText::new(crate::tr_ui!(
+										ui,
+										"This account was deleted. The conversation stays so you can read it."
+									))
 									.size(13.0)
 									.color(theme.muted),
 								);
@@ -1600,7 +1607,7 @@ pub fn show(
 								ui.horizontal(|ui| {
 									ui.spinner();
 									ui.label(
-										RichText::new("Loading profile…")
+										RichText::new(crate::tr_ui!(ui, "Loading profile…"))
 											.size(13.0)
 											.color(theme.muted),
 									);
@@ -1609,7 +1616,7 @@ pub fn show(
 							if !deleted && let Some(error) = view.and_then(|v| v.error) {
 								ui.add_space(4.0);
 								if ui
-									.small_button("Retry profile")
+									.small_button(crate::tr_ui!(ui, "Retry profile"))
 									.on_hover_text(error)
 									.clicked()
 								{
@@ -1770,7 +1777,8 @@ pub fn show(
 							.add_sized(
 								[ui.available_width(), 32.0],
 								egui::Button::new(
-									RichText::new("Edit profile").color(colors.accent_text),
+									RichText::new(crate::tr_ui!(ui, "Edit profile"))
+										.color(colors.accent_text),
 								)
 								.fill(colors.accent)
 								.stroke(Stroke::NONE)
@@ -1804,7 +1812,9 @@ pub fn show(
 							.add_sized(
 								[ui.available_width(), 32.0],
 								egui::Button::new(
-									RichText::new("Copy webhook ID").size(13.0).strong(),
+									RichText::new(crate::tr_ui!(ui, "Copy webhook ID"))
+										.size(13.0)
+										.strong(),
 								)
 								.corner_radius(RADIUS),
 							)
@@ -1814,7 +1824,7 @@ pub fn show(
 					}
 					if state.demo {
 						ui.label(
-							RichText::new("Offline preview · synthetic")
+							RichText::new(crate::tr_ui!(ui, "Offline preview · synthetic"))
 								.size(11.0)
 								.color(theme.muted),
 						);

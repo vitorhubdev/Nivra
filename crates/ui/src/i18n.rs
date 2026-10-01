@@ -1686,25 +1686,16 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		}
 		"Clear selection" => "Limpar a seleção",
 		"Copy activity" => "Copiar a atividade",
-		"Copy download link" => "Copiar o link de download",
 		"Copy link" => "Copiar o link",
 		"Copy webhook ID" => "Copiar o ID do webhook",
-		"Dismiss" => "Dispensar",
-		"Edit profile" => "Editar o perfil",
-		"Loading profile…" => "Carregando o perfil…",
-		"Mute this direct message's notifications until you unmute it." => {
-			"Silencie as notificações desta mensagem direta até tirar o silenciamento."
-		}
 		"No matching options loaded" => "Nenhuma opção correspondente carregada",
 		"Offline preview · synthetic" => "Prévia offline · sintética",
 		"Open media" => "Abrir a mídia",
 		"Open original…" => "Abrir o original…",
-		"Preview" => "Prévia",
 		"Refine your search to see more results" => "Aperte a busca para ver mais resultados",
 		"Retry profile" => "Tentar o perfil de novo",
 		"Reveal spoiler attachment" => "Mostrar o anexo com spoiler",
 		"Reveal spoiler component" => "Mostrar o componente com spoiler",
-		"Reveal spoiler media" => "Mostrar a mídia com spoiler",
 		"Scroll to zoom · Drag to pan · Double-click to reset" => {
 			"Role para ampliar · Arraste para mover · Duplo clique para restaurar"
 		}
@@ -3325,25 +3316,16 @@ fn spanish(key: &str) -> Option<&'static str> {
 		}
 		"Clear selection" => "Borrar la selección",
 		"Copy activity" => "Copiar la actividad",
-		"Copy download link" => "Copiar el enlace de descarga",
 		"Copy link" => "Copiar el enlace",
 		"Copy webhook ID" => "Copiar el ID del webhook",
-		"Dismiss" => "Descartar",
-		"Edit profile" => "Editar el perfil",
-		"Loading profile…" => "Cargando el perfil…",
-		"Mute this direct message's notifications until you unmute it." => {
-			"Silencia las notificaciones de este mensaje directo hasta que quites el silencio."
-		}
 		"No matching options loaded" => "Ninguna opción coincidente cargada",
 		"Offline preview · synthetic" => "Vista sin conexión · sintética",
 		"Open media" => "Abrir el archivo",
 		"Open original…" => "Abrir el original…",
-		"Preview" => "Vista previa",
 		"Refine your search to see more results" => "Ajusta la búsqueda para ver más resultados",
 		"Retry profile" => "Reintentar el perfil",
 		"Reveal spoiler attachment" => "Mostrar el archivo adjunto con spoiler",
 		"Reveal spoiler component" => "Mostrar el componente con spoiler",
-		"Reveal spoiler media" => "Mostrar el archivo con spoiler",
 		"Scroll to zoom · Drag to pan · Double-click to reset" => {
 			"Desplaza para ampliar · Arrastra para mover · Doble clic para restablecer"
 		}

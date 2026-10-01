@@ -1889,7 +1889,10 @@ synthetic snapshot; it does not measure this collector reduction.
 returns `StoreError::Full` and a later read of the existing channel still
 succeeds. `secure_delete=ON` stays: each freed page is overwritten before
 reuse, so a delete costs about one extra page write, and message text does
-not remain in free pages. The CI test
-`page_cache_covers_the_file_and_a_full_database_still_reads` prints the load
-and the rejected-write times. This is an in-memory synthetic check, not a
-native RSS or frame-time measurement.
+not remain in free pages. CI run 36817239730 printed, for 20 loads of 50
+rows and a rejected write: macOS 5.524875 ms and 68.334 µs, Ubuntu
+10.755904 ms and 104.756 µs, Windows x64 9.7182 ms and 128 µs, Windows
+ARM 10.0717 ms and 134.8 µs. The synthetic file was 110,592 bytes. This
+is an in-memory check, not native RSS or frame time. Text preview of
+20,000 ASCII characters in CI run 36819481221: macOS 557.708 µs, Ubuntu
+889.729 µs, Windows x64 924.6 µs, Windows ARM 1.0856 ms.

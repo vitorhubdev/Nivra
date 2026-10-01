@@ -289,6 +289,13 @@ impl LocalStore {
 		if version > READABLE_SCHEMA {
 			return Err(StoreError::Incompatible);
 		}
+		// cache_size=-2048 keeps a 2 MiB page cache. The observed client.sqlite3
+		// is about 252 KiB, so this already holds the file. A larger cache would
+		// only add RAM. max_page_count=65536 stops the file at 256 MiB; a write
+		// past that returns StoreError::Full and the caller reclaims one channel
+		// instead of failing the process. secure_delete=ON overwrites a page
+		// before it is reused, so a delete pays about one extra page write.
+		// That cost stays: freed pages must not keep message text.
 		connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=65536; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=256; PRAGMA journal_size_limit=8388608; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=INCREMENTAL;
             CREATE TABLE IF NOT EXISTS messages(account TEXT NOT NULL,channel TEXT NOT NULL,id TEXT NOT NULL,author TEXT NOT NULL,name TEXT NOT NULL,content TEXT NOT NULL,edited INTEGER NOT NULL,reply TEXT,unsupported INTEGER NOT NULL,PRIMARY KEY(account,channel,id));
             CREATE INDEX IF NOT EXISTS messages_channel_order ON messages(account,channel,length(id),id);
@@ -1670,6 +1677,80 @@ mod tests {
 				samples[2], samples
 			);
 		}
+	}
+
+	#[test]
+	fn page_cache_covers_the_file_and_a_full_database_still_reads() {
+		use std::{hint::black_box, time::Instant};
+		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+		let cache: i64 = store
+			.0
+			.pragma_query_value(None, "cache_size", |row| row.get(0))
+			.unwrap();
+		let secure: i64 = store
+			.0
+			.pragma_query_value(None, "secure_delete", |row| row.get(0))
+			.unwrap();
+		assert_eq!(
+			cache, -2048,
+			"2 MiB cache, kept because the file is ~252 KiB"
+		);
+		assert_eq!(secure, 1, "secure_delete stays on");
+		for id in 1..=50 {
+			store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES('1','2',?1,'4','Synthetic','synthetic cache row',0,0)", [id.to_string()]).unwrap();
+		}
+		let started = Instant::now();
+		for _ in 0..20 {
+			let loaded = store
+				.load_channel(black_box(Id(1)), black_box(Id(2)))
+				.unwrap();
+			assert_eq!(loaded.len(), 50);
+			black_box(loaded);
+		}
+		let load = started.elapsed();
+		let page_size: i64 = store
+			.0
+			.pragma_query_value(None, "page_size", |row| row.get(0))
+			.unwrap();
+		let pages: i64 = store
+			.0
+			.pragma_query_value(None, "page_count", |row| row.get(0))
+			.unwrap();
+		let file_bytes = page_size.saturating_mul(pages);
+		let cache_bytes = 2048_i64 * 1024;
+		assert!(
+			file_bytes > 0 && file_bytes <= cache_bytes,
+			"page cache must cover this file: {file_bytes} bytes, cache {cache_bytes}"
+		);
+		store
+			.0
+			.pragma_update(None, "max_page_count", pages)
+			.unwrap();
+		let mut saw_full = false;
+		let write_started = Instant::now();
+		for id in 0..32 {
+			let body = "x".repeat(3500);
+			match store.0.execute(
+				"INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES('9','8',?1,'4','Synthetic',?2,0,0)",
+				rusqlite::params![id.to_string(), body],
+			) {
+				Ok(_) => {}
+				Err(error) => {
+					assert_eq!(StoreError::from(error), StoreError::Full);
+					saw_full = true;
+					break;
+				}
+			}
+		}
+		let write = write_started.elapsed();
+		assert!(
+			saw_full,
+			"the page cap must reject a write instead of growing"
+		);
+		assert!(store.load_channel(Id(1), Id(2)).unwrap().len() == 50);
+		println!(
+			"sqlite cache_size={cache} (negative means KiB, so 2 MiB) file_bytes={file_bytes} secure_delete={secure}; 20 loads of 50 rows: {load:?}; full-file write rejected in {write:?}"
+		);
 	}
 
 	#[test]

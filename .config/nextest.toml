@@ -8,3 +8,7 @@ slow-timeout = { period = "30s", terminate-after = 2 }
 [[profile.ci.overrides]]
 filter = 'test(page_cache_covers_the_file_and_a_full_database_still_reads)'
 success-output = "immediate"
+
+[[profile.ci.overrides]]
+filter = 'test(a_long_preview_opens_one_window_at_a_time)'
+success-output = "immediate"

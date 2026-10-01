@@ -718,6 +718,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Leave Server" => "Sair do servidor",
 		"Close" => "Fechar",
 		"Showing the beginning of a large file." => "Mostrando o início de um arquivo grande.",
+		"Show more" => "Mostrar mais",
 		"Offline preview · no server changes" => "Prévia offline · nenhuma mudança no servidor",
 		"Remove From Favorites" => "Remover dos favoritos",
 		"Add To Favorites" => "Adicionar aos favoritos",
@@ -2150,6 +2151,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Leave Server" => "Salir del servidor",
 		"Close" => "Cerrar",
 		"Showing the beginning of a large file." => "Mostrando el comienzo de un archivo grande.",
+		"Show more" => "Mostrar más",
 		"Offline preview · no server changes" => {
 			"Vista previa sin conexión · sin cambios en el servidor"
 		}
@@ -3251,6 +3253,7 @@ mod tests {
 			"Leave Server",
 			"Close",
 			"Showing the beginning of a large file.",
+			"Show more",
 			"Offline preview · no server changes",
 			"Remove From Favorites",
 			"Add To Favorites",

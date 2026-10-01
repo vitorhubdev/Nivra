@@ -910,6 +910,130 @@ impl ActiveMembers {
 	}
 }
 
+async fn dispatch_voice_command(
+	command: client_core::voice::Command,
+	calls: &mut voice::Calls,
+	owner_id: Option<Id>,
+	voice_controls: &mut mpsc::Receiver<client_core::voice::Command>,
+	voice_held: &mut std::collections::VecDeque<client_core::voice::Command>,
+	socket: &mut (impl SinkExt<Frame> + Unpin),
+	emit: &impl Fn(Event) -> Result<(), Failure>,
+) -> Result<bool, Failure> {
+	if let client_core::voice::Command::Join {
+		channel, request, ..
+	} = command
+	{
+		let mut cancelled = false;
+		while let Ok(next) = voice_controls.try_recv() {
+			match next {
+				client_core::voice::Command::Leave {
+					channel: left,
+					request: left_request,
+				} if left == channel && left_request == request => {
+					cancelled = true;
+				}
+				other => voice_held.push_back(other),
+			}
+		}
+		if cancelled {
+			emit(Event::Voice(client_core::voice::Event::Departed {
+				channel,
+				request,
+			}))?;
+			return Ok(false);
+		}
+	}
+	let connect = if let client_core::voice::Command::Join { channel, .. } = command {
+		Some(channel)
+	} else {
+		None
+	};
+	let stream = matches!(
+		command,
+		client_core::voice::Command::StartStream { .. }
+			| client_core::voice::Command::StopStream { .. }
+			| client_core::voice::Command::WatchStream { .. }
+			| client_core::voice::Command::StopWatching { .. }
+	);
+	let packet = match if stream {
+		calls.stream_packet(command, owner_id)
+	} else {
+		calls.packet(command)
+	} {
+		Ok(packet) => packet,
+		Err(_) => {
+			if let Some(event) = calls.take_replaced_departure() {
+				emit(event)?;
+			}
+			match command {
+				client_core::voice::Command::Join {
+					channel, request, ..
+				} => emit(Event::Voice(client_core::voice::Event::Failed {
+					channel,
+					request,
+					message: "Previous call is still leaving, or the channel is unavailable; wait for departure or reconnect",
+				}))?,
+				client_core::voice::Command::StartStream {
+					channel,
+					request,
+					stream_request,
+				} => emit(Event::Voice(client_core::voice::Event::Stream {
+					channel,
+					request,
+					stream_request,
+					event: client_core::screen::Event::Failed(
+						"A screen share is already active, stopping, or the call is unavailable",
+					),
+				}))?,
+				client_core::voice::Command::WatchStream {
+					channel,
+					request,
+					stream_request,
+					streamer,
+				} => emit(Event::Voice(client_core::voice::Event::Watch {
+					channel,
+					request,
+					stream_request,
+					streamer,
+					event: client_core::screen::Event::Failed(
+						"Another stream is already being watched, or the call is unavailable",
+					),
+				}))?,
+				_ => {}
+			}
+			return Ok(false);
+		}
+	};
+	if let Some(event) = calls.take_replaced_departure() {
+		emit(event)?;
+	}
+	if let client_core::voice::Command::Leave { channel, request } = command
+		&& packet.is_none()
+		&& !calls.has_call()
+	{
+		emit(Event::Voice(client_core::voice::Event::Departed {
+			channel,
+			request,
+		}))?;
+	}
+	if let Some(channel) = connect
+		&& let Some(packet) = calls.packet(client_core::voice::Command::Sync { channel })?
+		&& !matches!(
+			timeout(Duration::from_secs(5), socket.send(packet)).await,
+			Ok(Ok(()))
+		) {
+		return Ok(true);
+	}
+	if let Some(packet) = packet
+		&& !matches!(
+			timeout(Duration::from_secs(5), socket.send(packet)).await,
+			Ok(Ok(()))
+		) {
+		return Ok(true);
+	}
+	Ok(false)
+}
+
 pub async fn run(
 	secret: Arc<SessionSecret>,
 	initial_url: String,
@@ -1077,6 +1201,10 @@ async fn run_inner(
 	let mut voice_open = true;
 	let mut gateway_outage = false;
 	let mut reconnect_announced = false;
+	// Held across reconnects. A send failure used to drop Leave/SetMute that had
+	// already been taken out of the channel.
+	let mut voice_held: std::collections::VecDeque<client_core::voice::Command> =
+		std::collections::VecDeque::new();
 	// Initial login is bounded, but an established session must survive long outages.
 	while was_ready || attempt < 6 {
 		if attempt > 0 {
@@ -1290,6 +1418,22 @@ async fn run_inner(
 			} else {
 				None
 			};
+			if voice_open
+				&& ready_at.is_some()
+				&& let Some(command) = voice_held.pop_front()
+				&& dispatch_voice_command(
+					command,
+					&mut calls,
+					owner_id,
+					&mut voice_controls,
+					&mut voice_held,
+					&mut socket,
+					&emit,
+				)
+				.await?
+			{
+				break;
+			}
 			tokio::select! {
 				changed = own_presence.changed(), if presence_open => {
 					presence_open = changed.is_ok();
@@ -1314,35 +1458,9 @@ async fn run_inner(
 				_=tokio::time::sleep_until(direct_presence.deadline.unwrap_or(ready_deadline)), if direct_presence.deadline.is_some() && ready_at.is_some() => {
 					if let Some(event)=direct_presence.take() { emit(event)?; }
 				}
-				command=voice_controls.recv(), if voice_open && ready_at.is_some() => {
+				command=voice_controls.recv(), if voice_open && ready_at.is_some() && voice_held.is_empty() => {
 					let Some(command)=command else {voice_open=false;continue;};
-					let connect=if let client_core::voice::Command::Join{channel,..}=command {Some(channel)}else{None};
-					let stream=matches!(command,client_core::voice::Command::StartStream{..}|client_core::voice::Command::StopStream{..}|client_core::voice::Command::WatchStream{..}|client_core::voice::Command::StopWatching{..});
-					let packet=match if stream {calls.stream_packet(command,owner_id)} else {calls.packet(command)} {
-						Ok(packet)=>packet,
-						Err(_) => {
-							if let Some(event) = calls.take_replaced_departure() {
-								emit(event)?;
-							}
-							match command {
-								client_core::voice::Command::Join{channel,request,..} => emit(Event::Voice(client_core::voice::Event::Failed{channel,request,message:"Previous call is still leaving, or the channel is unavailable; wait for departure or reconnect"}))?,
-								client_core::voice::Command::StartStream{channel,request,stream_request} => emit(Event::Voice(client_core::voice::Event::Stream{channel,request,stream_request,event:client_core::screen::Event::Failed("A screen share is already active, stopping, or the call is unavailable")}))?,
-								client_core::voice::Command::WatchStream{channel,request,stream_request,streamer} => emit(Event::Voice(client_core::voice::Event::Watch{channel,request,stream_request,streamer,event:client_core::screen::Event::Failed("Another stream is already being watched, or the call is unavailable")}))?,
-								_=>{}
-							}
-							continue;
-						}
-					};
-					if let Some(event) = calls.take_replaced_departure() {
-						emit(event)?;
-					}
-					if let client_core::voice::Command::Leave { channel, request } = command
-						&& packet.is_none() && !calls.has_call() {
-						emit(Event::Voice(client_core::voice::Event::Departed { channel, request }))?;
-					}
-					if let Some(channel)=connect && let Some(packet)=calls.packet(client_core::voice::Command::Sync { channel })?
-						&& !matches!(timeout(Duration::from_secs(5),socket.send(packet)).await,Ok(Ok(()))) {break;}
-					if let Some(packet)=packet && !matches!(timeout(Duration::from_secs(5),socket.send(packet)).await,Ok(Ok(()))) {break;}
+					if dispatch_voice_command(command,&mut calls,owner_id,&mut voice_controls,&mut voice_held,&mut socket,&emit).await? {break;}
 				}
 
 				_=tokio::time::sleep_until(calls.departure_deadline.unwrap_or(ready_deadline)), if calls.departure_deadline.is_some() => {
@@ -2145,6 +2263,101 @@ mod tests {
 		})
 		.await
 		.expect("queued join was not delivered after reconnect");
+	}
+
+	#[tokio::test]
+	async fn cancelled_join_is_not_replayed_after_reconnect() {
+		timeout(Duration::from_secs(15), async {
+			let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+			let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+			let (controls_tx, controls_rx) = mpsc::channel(4);
+			controls_tx
+				.try_send(client_core::voice::Command::Join {
+					channel: Id(2),
+					request: 7,
+					ring: false,
+					mute: false,
+					deaf: false,
+				})
+				.unwrap();
+			controls_tx
+				.try_send(client_core::voice::Command::Leave {
+					channel: Id(2),
+					request: 7,
+				})
+				.unwrap();
+			let skip = Arc::new(Notify::new());
+			skip.notify_one();
+			let server = async {
+				for attempt in 0..2 {
+					let (stream, _) = listener.accept().await.unwrap();
+					let mut socket = accept_async(stream).await.unwrap();
+					send(
+						&mut socket,
+						json!({"op":10,"d":{"heartbeat_interval":45000}}),
+					)
+					.await;
+					assert_eq!(packet(&mut socket).await["op"], 2);
+					if attempt == 0 {
+						let _ = socket
+							.close(Some(CloseFrame {
+								code: CloseCode::Library(4000),
+								reason: "synthetic drop".into(),
+							}))
+							.await;
+						continue;
+					}
+					send(
+						&mut socket,
+						json!({"op":0,"t":"READY","s":1,"d":{
+							"user":{"id":"1","username":"synthetic"},
+							"session_id":"synthetic-voice-cancel",
+							"resume_gateway_url":"wss://gateway.discord.gg/",
+							"guilds":[{"id":"10","owner_id":"1","name":"Synthetic","roles":[],
+								"channels":[{"id":"2","type":2,"name":"voice","permission_overwrites":[]}]}],
+							"private_channels":[]
+						}}),
+					)
+					.await;
+					let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+					while tokio::time::Instant::now() < deadline {
+						match timeout(Duration::from_millis(200), packet(&mut socket)).await {
+							Ok(value) => {
+								if value["op"] == 1 {
+									send(&mut socket, json!({"op":11,"d":null})).await;
+									continue;
+								}
+								assert_ne!(
+									value["d"]["channel_id"], "2",
+									"a cancelled join must not be replayed"
+								);
+							}
+							Err(_) => break,
+						}
+					}
+					let _ = socket
+						.close(Some(CloseFrame {
+							code: CloseCode::Library(4004),
+							reason: "synthetic stop".into(),
+						}))
+						.await;
+				}
+			};
+			let client = run_inner(
+				Arc::new(SessionSecret::from_owner_input("synthetic-voice-cancel".into()).unwrap()),
+				"wss://gateway.discord.gg/".into(),
+				watch::channel(None).1,
+				controls_rx,
+				None,
+				|_| Ok(()),
+				skip,
+				Some(&endpoint),
+			);
+			let ((), result) = tokio::join!(server, client);
+			assert_eq!(result, Err(Failure::Expired));
+		})
+		.await
+		.expect("cancelled join was replayed after reconnect");
 	}
 
 	#[test]

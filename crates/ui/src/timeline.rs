@@ -65,6 +65,8 @@ pub struct TimelineView {
 	/// Ids leaving together. Hidden in one layout pass after the short fade.
 	pub(super) batch_hold: BTreeSet<Id>,
 	batch_hold_at: Option<f64>,
+	/// Failure clock for a grouped delete. Starts when the last request is sent.
+	batch_fail_at: Option<f64>,
 	batch_collapsed: bool,
 	batch_anchored: bool,
 	/// A held row was still in the timeline after the hold window.
@@ -780,6 +782,9 @@ pub(super) struct InlineEdit {
 	pub channel: Id,
 	pub message: Id,
 	pub text: String,
+	/// Content when the editor opened. A delete of this message keeps `text` only
+	/// when the user has changed it.
+	pub original: String,
 	pub focus_requested: bool,
 }
 
@@ -808,6 +813,7 @@ impl TimelineView {
 		self.inline_edit = Some(InlineEdit {
 			channel,
 			message,
+			original: text.clone(),
 			text,
 			focus_requested: true,
 		});
@@ -952,6 +958,7 @@ impl TimelineView {
 	/// leave the layout together so each server echo cannot shift the list.
 	pub(super) fn begin_group_removal(&mut self, ids: &[Id], now: f64) {
 		self.batch_hold.clear();
+		self.batch_fail_at = None;
 		for id in ids {
 			self.batch_hold.insert(*id);
 			self.removing.insert(*id, now);
@@ -979,8 +986,16 @@ impl TimelineView {
 		}
 		if self.batch_hold.is_empty() {
 			self.batch_hold_at = None;
+			self.batch_fail_at = None;
 			self.batch_collapsed = false;
 			self.batch_anchored = false;
+		}
+	}
+
+	/// The 5s failure window starts once every delete in the batch has been sent.
+	pub(super) fn note_deletes_dispatched(&mut self, now: f64) {
+		if !self.batch_hold.is_empty() {
+			self.batch_fail_at = Some(now);
 		}
 	}
 
@@ -992,6 +1007,7 @@ impl TimelineView {
 		}
 		self.batch_hold.clear();
 		self.batch_hold_at = None;
+		self.batch_fail_at = None;
 		self.batch_collapsed = false;
 		self.batch_anchored = false;
 		self.revision = u64::MAX;
@@ -1240,6 +1256,7 @@ fn message_actions(
 			*inline_edit = Some(InlineEdit {
 				channel: message.channel,
 				message: message.id,
+				original: message.content.clone(),
 				text: message.content.clone(),
 				focus_requested: true,
 			});
@@ -1718,6 +1735,7 @@ impl TimelineView {
 				pending_viewer: self.pending_viewer.take(),
 				jump: following,
 				leave_read: self.channel.zip(self.seen_latest),
+				inline_edit: self.inline_edit.take(),
 				..Self::default()
 			};
 		}
@@ -1728,7 +1746,10 @@ impl TimelineView {
 				self.batch_collapsed = true;
 				self.revision = u64::MAX;
 			}
-			if elapsed >= crate::batch_select::REMOVAL_HOLD_SECS {
+			if self
+				.batch_fail_at
+				.is_some_and(|started| now - started >= crate::batch_select::REMOVAL_HOLD_SECS)
+			{
 				let stuck: Vec<Id> = self
 					.batch_hold
 					.iter()
@@ -1738,6 +1759,7 @@ impl TimelineView {
 				if stuck.is_empty() {
 					self.batch_hold.clear();
 					self.batch_hold_at = None;
+					self.batch_fail_at = None;
 					self.batch_collapsed = false;
 					self.batch_anchored = false;
 				} else {
@@ -1751,6 +1773,7 @@ impl TimelineView {
 					self.revision = u64::MAX;
 					if self.batch_hold.is_empty() {
 						self.batch_hold_at = None;
+						self.batch_fail_at = None;
 					}
 				}
 			} else if !self.batch_collapsed {
@@ -3900,7 +3923,12 @@ impl TimelineView {
 		}
 		let show_bar =
 			self.select_mode || !self.batch_delete.is_empty() || self.batch_progress.is_some();
+		let editor_focused = ui
+			.ctx()
+			.memory(|memory| memory.focused())
+			.is_some_and(|id| egui::text_edit::TextEditState::load(ui.ctx(), id).is_some());
 		if show_bar
+			&& !editor_focused
 			&& ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::A))
 		{
 			let ordered = self.last_visible.clone();
@@ -4521,6 +4549,15 @@ mod pending_tests;
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn grouped_delete_failure_waits_until_the_last_request() {
+		let mut view = TimelineView::default();
+		view.begin_group_removal(&[Id(1), Id(2), Id(3), Id(4), Id(5)], 0.0);
+		assert!(view.batch_fail_at.is_none());
+		view.note_deletes_dispatched(9.0);
+		assert_eq!(view.batch_fail_at, Some(9.0));
+	}
 
 	#[test]
 	fn batch_delete_selection_is_bounded_and_toggleable() {
@@ -5481,6 +5518,7 @@ mod tests {
 					Some(InlineEdit {
 						channel: message.channel,
 						message: message.id,
+						original: message.content.clone(),
 						text: message.content.clone(),
 						focus_requested: true,
 					})
@@ -5505,6 +5543,7 @@ mod tests {
 			Some(InlineEdit {
 				channel: Id(7),
 				message: Id(2),
+				original: "hi".into(),
 				text: "hi".into(),
 				focus_requested: true,
 			})

@@ -1097,12 +1097,17 @@ impl MessagingUi {
 		}
 	}
 	pub fn has_edit(&self) -> bool {
-		self.editing.is_some()
+		self.editing.is_some() || self.timeline.inline_edit.is_some()
 	}
 	pub fn has_edit_in(&self, channel: Option<Id>) -> bool {
 		self.editing
 			.as_ref()
 			.is_some_and(|(edit_channel, _, _)| Some(*edit_channel) == channel)
+			|| self
+				.timeline
+				.inline_edit
+				.as_ref()
+				.is_some_and(|edit| Some(edit.channel) == channel)
 	}
 	pub fn messages_deleted(&mut self, ctx: &egui::Context, channel: Id, ids: &[Id]) {
 		if ids.len() > 100 {
@@ -1135,6 +1140,11 @@ impl MessagingUi {
 		};
 		if clear_batch {
 			self.deleting_batch = None;
+		}
+		if self.timeline.inline_edit.as_ref().is_some_and(|edit| {
+			edit.channel == channel && ids.contains(&edit.message) && edit.text == edit.original
+		}) {
+			self.timeline.cancel_inline_edit();
 		}
 		let Some((edit_channel, message, _)) = &self.editing else {
 			return;
@@ -3925,6 +3935,9 @@ impl MessagingUi {
 			if self.batch_delete_queue.is_empty() {
 				self.batch_delete_next = None;
 				self.timeline.batch_progress = None;
+				// The failure clock starts after the last request, not at confirmation.
+				self.timeline
+					.note_deletes_dispatched(ui.input(|input| input.time));
 			} else {
 				self.batch_delete_next =
 					Some(ui.input(|input| input.time) + batch_delete_gap_secs());

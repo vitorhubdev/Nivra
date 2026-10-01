@@ -269,6 +269,41 @@ fn stable_title_bar_draws_no_version_circle() {
 }
 
 #[test]
+fn narrow_title_bar_hides_update_chip_but_keeps_signal() {
+	fn chip_text(output: &egui::FullOutput) -> bool {
+		output.shapes.iter().any(|clipped| {
+			matches!(
+				&clipped.shape,
+				egui::Shape::Text(text) if text.galley.text().contains("Update available")
+			)
+		})
+	}
+	let state = connected_gateway_state();
+	for width in [320.0, 480.0] {
+		let ctx = egui::Context::default();
+		let mut view = MessagingUi::default();
+		view.updates.available = true;
+		let output = frame_output(&ctx, &mut view, &state, width, vec![]);
+		assert!(
+			gateway_signal_point(&output).is_some(),
+			"signal keeps its space at {width}"
+		);
+		assert!(
+			!chip_text(&output),
+			"update chip hides instead of clipping the signal at {width}"
+		);
+		output.drop_without_applying_deltas();
+	}
+	let ctx = egui::Context::default();
+	let mut view = MessagingUi::default();
+	view.updates.available = true;
+	let wide = frame_output(&ctx, &mut view, &state, 1200.0, vec![]);
+	assert!(chip_text(&wide), "update chip still shows at 1200");
+	assert!(gateway_signal_point(&wide).is_some());
+	wide.drop_without_applying_deltas();
+}
+
+#[test]
 fn title_bar_layout_is_identical_with_and_without_gateway_hover() {
 	let ctx = egui::Context::default();
 	let state = connected_gateway_state();

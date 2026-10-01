@@ -1330,6 +1330,12 @@ impl MessagingUi {
 					|ui| {
 						design::window_controls(ui);
 						ui.spacing_mut().item_spacing.x = 10.0;
+						// The connection signal is always visible, so it takes its
+						// space first; the update chip and build badge hide when
+						// the window gets too narrow instead of clipping it.
+						if !state.demo {
+							self.title_bar_gateway_status(ui, state);
+						}
 						if self.updates.available || self.updates.ready {
 							let (label, icon) = if self.updates.ready {
 								("Restart to update", icons::Icon::Reload)
@@ -1349,38 +1355,40 @@ impl MessagingUi {
 								galley.size().x + icon_size + gap + pad.x * 2.0,
 								galley.size().y.max(icon_size) + pad.y * 2.0,
 							);
-							let (rect, response) =
-								ui.allocate_exact_size(size, egui::Sense::click());
-							ui.painter().rect_filled(
-								rect,
-								255,
-								colors.accent.gamma_multiply(if response.hovered() {
-									0.24
-								} else {
-									0.16
-								}),
-							);
-							let icon_rect = egui::Rect::from_center_size(
-								egui::pos2(rect.left() + pad.x + icon_size / 2.0, rect.center().y),
-								egui::Vec2::splat(icon_size),
-							);
-							icons::paint(ui.painter(), icon, icon_rect, colors.accent);
-							ui.painter().galley(
-								egui::pos2(
-									icon_rect.right() + gap,
-									rect.center().y - galley.size().y / 2.0,
-								),
-								galley,
-								colors.accent,
-							);
-							if response.on_hover_text(&self.updates.status).clicked() {
-								self.open_update_settings();
+							if ui.available_width() >= size.x {
+								let (rect, response) =
+									ui.allocate_exact_size(size, egui::Sense::click());
+								ui.painter().rect_filled(
+									rect,
+									255,
+									colors.accent.gamma_multiply(if response.hovered() {
+										0.24
+									} else {
+										0.16
+									}),
+								);
+								let icon_rect = egui::Rect::from_center_size(
+									egui::pos2(
+										rect.left() + pad.x + icon_size / 2.0,
+										rect.center().y,
+									),
+									egui::Vec2::splat(icon_size),
+								);
+								icons::paint(ui.painter(), icon, icon_rect, colors.accent);
+								ui.painter().galley(
+									egui::pos2(
+										icon_rect.right() + gap,
+										rect.center().y - galley.size().y / 2.0,
+									),
+									galley,
+									colors.accent,
+								);
+								if response.on_hover_text(&self.updates.status).clicked() {
+									self.open_update_settings();
+								}
 							}
 						} else {
 							design::build_badge(ui, self.build);
-						}
-						if !state.demo {
-							self.title_bar_gateway_status(ui, state);
 						}
 						if state.demo && !self.updates.available && !self.updates.ready {
 							egui::Frame::new()

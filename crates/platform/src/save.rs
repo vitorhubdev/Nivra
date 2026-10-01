@@ -164,7 +164,18 @@ pub fn text_destination(
 		.set_parent(parent.as_ref())
 		.set_title("Save text file")
 		.set_file_name(safe_filename(filename))
-		.add_filter("Text", &["txt"])
+		.add_filter(
+			if filename.ends_with(".md") {
+				"Markdown"
+			} else {
+				"Text"
+			},
+			&[if filename.ends_with(".md") {
+				"md"
+			} else {
+				"txt"
+			}],
+		)
 		.save_file();
 	async move {
 		let file = dialog.await?;

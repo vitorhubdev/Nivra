@@ -2356,6 +2356,33 @@ impl MessagingUi {
 								}
 							}
 							if state.selected.is_some() && !selected_voice {
+								if let Some((done, total)) = self.timeline.export_progress() {
+									ui.label(format!(
+										"{} {done}/{total}",
+										crate::i18n::text(self.language, "Exporting chat")
+									));
+								} else if self.timeline.export_cancelled {
+									ui.label(crate::i18n::text(self.language, "Export cancelled"));
+								}
+								ui.menu_button(
+									crate::i18n::text(self.language, "Export chat"),
+									|ui| {
+										if ui
+											.button(crate::i18n::text(self.language, "Save .txt"))
+											.clicked()
+										{
+											self.timeline.begin_chat_export(state, false);
+											ui.close();
+										}
+										if ui
+											.button(crate::i18n::text(self.language, "Save .md"))
+											.clicked()
+										{
+											self.timeline.begin_chat_export(state, true);
+											ui.close();
+										}
+									},
+								);
 								let select_label = if self.timeline.select_mode {
 									crate::i18n::text(self.language, "Cancel")
 								} else {

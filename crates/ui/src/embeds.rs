@@ -46,6 +46,21 @@ fn play_embed_file(
 	video.begin(message, &embed_video_attachment(url, media));
 }
 
+/// True when this attachment is one of the message's direct embed videos. Those have
+/// no attachment record, so the fullscreen resolver must recognise them explicitly.
+pub fn is_embed_video(message: &Message, attachment: &model::Attachment) -> bool {
+	attachment.size == 0
+		&& !message.embeds_suppressed
+		&& message.embeds.iter().any(|embed| {
+			let media = embed.video.as_ref();
+			model::web_media::direct_embed_video(
+				media.and_then(|video| video.proxy_url.as_deref()),
+				media.and_then(|video| video.url.as_deref()),
+			)
+			.is_some_and(|file| attachment.media.url.as_deref() == Some(file))
+		})
+}
+
 pub fn has_spoilers(message: &Message) -> bool {
 	has_media_spoilers(message) || message.content.contains("||")
 }
@@ -1334,11 +1349,54 @@ mod tests {
 			message.embeds[0].video.as_ref().unwrap(),
 		);
 		let command = video.command.take().expect("play command");
-		assert!(matches!(
-			command,
-			crate::VideoCommand::Play(attachment)
-				if attachment.media.url.as_deref() == Some(file) && attachment.size == 0
+		let crate::VideoCommand::Play(synthetic) = command else {
+			panic!("play command");
+		};
+		assert_eq!(synthetic.media.url.as_deref(), Some(file));
+		assert_eq!(synthetic.size, 0);
+		// The fullscreen resolver must recognise the synthetic attachment, or playback
+		// stops the moment the user asks for fullscreen.
+		assert!(is_embed_video(&message, &synthetic));
+		assert!(!is_embed_video(
+			&test_support::message(2, model::Id(3)),
+			&synthetic
 		));
+	}
+
+	#[test]
+	fn synthetic_embed_video_offers_no_download_action() {
+		let mut message = test_support::message(1, model::Id(2));
+		message.embeds = vec![Embed {
+			kind: "video".into(),
+			url: Some("https://x.com/user/status/1".into()),
+			video: Some(model::EmbedMedia {
+				proxy_url: Some(
+					"https://media.discordapp.net/external/video.twimg.com/ext/clip.mp4".into(),
+				),
+				..Default::default()
+			}),
+			..Default::default()
+		}];
+		let synthetic = embed_video_attachment(
+			"https://media.discordapp.net/external/video.twimg.com/ext/clip.mp4",
+			message.embeds[0].video.as_ref().unwrap(),
+		);
+		let mut download = DownloadUi::default();
+		let ctx = egui::Context::default();
+		ctx.run_ui(egui::RawInput::default(), |ui| {
+			let (_, response) =
+				ui.allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::click());
+			crate::attachments::media_context_menu(
+				&response,
+				&synthetic,
+				&mut download,
+				&mut None,
+				false,
+			);
+		})
+		.drop_without_applying_deltas();
+		assert!(download.request.is_none(), "{:?}", download.request);
+		assert!(download.copy_request.is_none());
 	}
 
 	#[test]

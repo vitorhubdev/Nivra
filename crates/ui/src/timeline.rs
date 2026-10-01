@@ -1625,7 +1625,8 @@ impl TimelineView {
 						.filter(|message| {
 							state.selected == Some(*channel)
 								&& message.channel == *channel
-								&& message.attachments.contains(attachment)
+								&& (message.attachments.contains(attachment)
+									|| crate::embeds::is_embed_video(message, attachment))
 								&& (self.component_viewing
 									== Some((
 										message.id,

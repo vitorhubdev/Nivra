@@ -557,6 +557,10 @@ pub(super) fn media_context_menu(
 	opening: &mut Option<String>,
 	demo: bool,
 ) {
+	// A synthetic embed-video attachment has no attachment record to download from.
+	if attachment.size == 0 {
+		return;
+	}
 	if let Some(copy) = media_menu(
 		response,
 		attachment.is_video(),

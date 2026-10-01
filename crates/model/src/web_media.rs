@@ -172,13 +172,20 @@ pub fn classify_embed_video<'a>(
 	if let Some(file) = direct_embed_video(proxy, video_url) {
 		return Some(EmbedVideo::File(file));
 	}
-	let page = page.or(video_url)?;
-	let url = parse_https(page)?;
-	match provider_host(&url.host) {
-		"youtu.be" | "youtube.com" | "m.youtube.com" => Some(EmbedVideo::YouTube(page)),
-		"vimeo.com" | "player.vimeo.com" => Some(EmbedVideo::Vimeo(page)),
-		_ => None,
-	}
+	// Both candidates can carry the provider page: an ordinary embed URL plus a
+	// provider URL in `video.url` must still offer the provider action.
+	[page, video_url]
+		.into_iter()
+		.flatten()
+		.find_map(
+			|candidate| match provider_host(&parse_https(candidate)?.host) {
+				"youtu.be" | "youtube.com" | "m.youtube.com" => {
+					Some(EmbedVideo::YouTube(candidate))
+				}
+				"vimeo.com" | "player.vimeo.com" => Some(EmbedVideo::Vimeo(candidate)),
+				_ => None,
+			},
+		)
 }
 
 #[cfg(test)]
@@ -287,6 +294,24 @@ mod tests {
 			classify_embed_video(Some("https://vimeo.com/123456"), None, None),
 			Some(EmbedVideo::Vimeo(_))
 		));
+		// An ordinary page plus a provider URL in video.url still offers the provider.
+		assert!(matches!(
+			classify_embed_video(
+				Some("https://example.com/article"),
+				Some("https://youtu.be/dQw4w9WgXcQ"),
+				None
+			),
+			Some(EmbedVideo::YouTube(url)) if url == "https://youtu.be/dQw4w9WgXcQ"
+		));
+		assert!(matches!(
+			classify_embed_video(
+				Some("https://x.com/user/status/1"),
+				Some("https://vimeo.com/123456"),
+				None
+			),
+			Some(EmbedVideo::Vimeo(_))
+		));
+		assert!(classify_embed_video(Some("https://example.com/article"), None, None).is_none());
 		assert!(direct_embed_video(Some("https://evil.test/clip.mp4"), None).is_none());
 		assert!(direct_embed_video(Some("https://user@video.twimg.com/clip.mp4"), None).is_none());
 		assert!(

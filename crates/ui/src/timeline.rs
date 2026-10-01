@@ -3015,6 +3015,7 @@ impl TimelineView {
 													&mut self.opening,
 													&mut self.download,
 													profile,
+													&mut self.video,
 													state,
 												) {
 													self.gif_favorite = Some(gif);
@@ -9162,6 +9163,7 @@ mod tests {
 					&mut None,
 					&mut crate::attachments::DownloadUi::default(),
 					&mut profile,
+					&mut crate::VideoUi::default(),
 					&State {
 						demo: true,
 						..Default::default()

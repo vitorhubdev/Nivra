@@ -187,6 +187,72 @@ pub fn normalize(value: &str) -> Option<String> {
 	}
 }
 
+fn video_file(path: &str) -> bool {
+	path.rsplit('/')
+		.next()
+		.unwrap_or(path)
+		.rsplit_once('.')
+		.is_some_and(|(_, extension)| {
+			matches!(
+				extension.to_ascii_lowercase().as_str(),
+				"mp4" | "webm" | "mov" | "m4v"
+			)
+		})
+}
+
+fn is_direct_video_url(value: &str) -> bool {
+	if value.len() > 2048 || value.contains('#') || value.contains('\\') {
+		return false;
+	}
+	let Some(url) = parse_https(value) else {
+		return false;
+	};
+	let path = url.path.to_ascii_lowercase();
+	if path.contains("%2f") || path.contains("%5c") || !video_file(&path) {
+		return false;
+	}
+	match provider_host(&url.host) {
+		"media.discordapp.net" => {
+			path.starts_with("/external/") || path.starts_with("/attachments/")
+		}
+		"cdn.discordapp.com" => path.starts_with("/attachments/"),
+		"video.twimg.com" => true,
+		_ => false,
+	}
+}
+
+/// Direct video file on the embed allowlist. Proxy URL wins over the provider page.
+pub fn direct_embed_video<'a>(proxy: Option<&'a str>, url: Option<&'a str>) -> Option<&'a str> {
+	[proxy, url]
+		.into_iter()
+		.flatten()
+		.find(|value| is_direct_video_url(value))
+}
+
+/// What an embed card should do. A direct file plays in-app; YouTube and Vimeo open outside.
+pub enum EmbedVideo<'a> {
+	File(&'a str),
+	YouTube(&'a str),
+	Vimeo(&'a str),
+}
+
+pub fn classify_embed_video<'a>(
+	page: Option<&'a str>,
+	video_url: Option<&'a str>,
+	proxy: Option<&'a str>,
+) -> Option<EmbedVideo<'a>> {
+	if let Some(file) = direct_embed_video(proxy, video_url) {
+		return Some(EmbedVideo::File(file));
+	}
+	let page = page.or(video_url)?;
+	let url = parse_https(page)?;
+	match provider_host(&url.host) {
+		"youtu.be" | "youtube.com" | "m.youtube.com" => Some(EmbedVideo::YouTube(page)),
+		"vimeo.com" | "player.vimeo.com" => Some(EmbedVideo::Vimeo(page)),
+		_ => None,
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -347,5 +413,32 @@ mod tests {
 		assert!(!navigation_allowed(
 			"https://youtube-nocookie.com:444/embed/x"
 		));
+	}
+
+	#[test]
+	fn direct_mp4_plays_in_app_and_youtube_stays_outside() {
+		let file = "https://media.discordapp.net/external/video.twimg.com/ext/oobe-intro.mp4?backend=b2";
+		assert_eq!(direct_embed_video(Some(file), None), Some(file));
+		assert!(matches!(
+			classify_embed_video(Some("https://x.com/user/status/1"), None, Some(file)),
+			Some(EmbedVideo::File(url)) if url == file
+		));
+		assert!(matches!(
+			classify_embed_video(Some("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), None, None),
+			Some(EmbedVideo::YouTube(_))
+		));
+		assert!(matches!(
+			classify_embed_video(Some("https://vimeo.com/123456"), None, None),
+			Some(EmbedVideo::Vimeo(_))
+		));
+		assert!(direct_embed_video(Some("https://evil.test/clip.mp4"), None).is_none());
+		assert!(direct_embed_video(Some("https://user@video.twimg.com/clip.mp4"), None).is_none());
+		assert!(
+			direct_embed_video(
+				Some("https://media.discordapp.net/external/video.twimg.com/ext/%2fclip.mp4"),
+				None
+			)
+			.is_none()
+		);
 	}
 }

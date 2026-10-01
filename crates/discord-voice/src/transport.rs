@@ -2664,6 +2664,23 @@ mod tests {
 			probe[8..17].copy_from_slice(b"127.0.0.1");
 			probe[72..74].copy_from_slice(&client.port().to_be_bytes());
 			udp.send_to(&probe[..74], client).await.unwrap();
+			// Opcode 4 is only valid after discovery. Wait for the client's select-protocol
+			// so a fast WebSocket cannot deliver the session key while discovery is still open.
+			loop {
+				let event: Value =
+					serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
+						.unwrap();
+				if event["op"] == 3 {
+					ws.send(Message::Text(
+						json!({"op":6,"d":{"t":event["d"]["t"]}}).to_string().into(),
+					))
+					.await
+					.unwrap();
+					continue;
+				}
+				assert_eq!(event["op"], 1);
+				break;
+			}
 			let delivery = crate::test_mls::Delivery::new();
 			let mut bob = Dave::new(2, None, 3).unwrap();
 			let mut charlie = Dave::new(4, None, 3).unwrap();

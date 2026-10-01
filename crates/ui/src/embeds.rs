@@ -37,7 +37,12 @@ fn embed_video_attachment(url: &str, media: &model::EmbedMedia) -> model::Attach
 	}
 }
 
-fn play_embed_file(video: &mut crate::VideoUi, message: &Message, url: &str, media: &model::EmbedMedia) {
+fn play_embed_file(
+	video: &mut crate::VideoUi,
+	message: &Message,
+	url: &str,
+	media: &model::EmbedMedia,
+) {
 	video.begin(message, &embed_video_attachment(url, media));
 }
 
@@ -603,21 +608,34 @@ pub fn show(
 							let playback = model::web_media::classify_embed_video(
 								embed.url.as_deref(),
 								embed.video.as_ref().and_then(|media| media.url.as_deref()),
-								embed.video.as_ref().and_then(|media| media.proxy_url.as_deref()),
+								embed
+									.video
+									.as_ref()
+									.and_then(|media| media.proxy_url.as_deref()),
 							);
 							match playback {
 								Some(model::web_media::EmbedVideo::File(url)) => {
-									let media = embed.video.as_ref().expect("file comes from video");
+									let media =
+										embed.video.as_ref().expect("file comes from video");
 									let attachment = embed_video_attachment(url, media);
-									let active = video.active.as_ref().is_some_and(|(channel, id, file)| {
-										*channel == message.channel
-											&& *id == message.id
-											&& file == &attachment
-									});
+									let active =
+										video.active.as_ref().is_some_and(|(channel, id, file)| {
+											*channel == message.channel
+												&& *id == message.id && file == &attachment
+										});
 									if active {
-										video.show(ui, message, &attachment, download, opening, demo);
+										video.show(
+											ui,
+											message,
+											&attachment,
+											download,
+											opening,
+											demo,
+										);
 									} else {
-										if let Some(thumb) = embed.thumbnail.as_ref().or(embed.image.as_ref()) {
+										if let Some(thumb) =
+											embed.thumbnail.as_ref().or(embed.image.as_ref())
+										{
 											image_preview(
 												ui,
 												thumb,
@@ -636,7 +654,9 @@ pub fn show(
 									}
 								}
 								Some(model::web_media::EmbedVideo::YouTube(url)) => {
-									if let Some(thumb) = model::web_media::youtube_thumbnail_url(url) {
+									if let Some(thumb) =
+										model::web_media::youtube_thumbnail_url(url)
+									{
 										let poster = model::EmbedMedia {
 											url: Some(thumb),
 											width: 480,
@@ -831,6 +851,7 @@ mod tests {
 									&mut opening,
 									&mut download,
 									&mut profile,
+									&mut crate::VideoUi::default(),
 									&client_core::State::default()
 								)
 								.is_none()
@@ -985,6 +1006,7 @@ mod tests {
 							&mut None,
 							&mut DownloadUi::default(),
 							&mut profile,
+							&mut crate::VideoUi::default(),
 							&client_core::State::default(),
 						);
 					},
@@ -1295,8 +1317,15 @@ mod tests {
 			..Default::default()
 		}];
 		let labels = embed_labels(&message);
-		assert!(labels.iter().any(|label| label.contains("Watch")), "{labels:?}");
-		assert!(labels.iter().all(|label| !label.contains("Open with login") && !label.contains("Post on X")));
+		assert!(
+			labels.iter().any(|label| label.contains("Watch")),
+			"{labels:?}"
+		);
+		assert!(
+			labels
+				.iter()
+				.all(|label| !label.contains("Open with login") && !label.contains("Post on X"))
+		);
 		let mut video = crate::VideoUi::default();
 		play_embed_file(
 			&mut video,
@@ -1304,7 +1333,12 @@ mod tests {
 			file,
 			message.embeds[0].video.as_ref().unwrap(),
 		);
-		assert!(matches!(video.command, Some(crate::VideoCommand::Play(file)) if file.media.url.as_deref() == Some(file) && file.size == 0));
+		let command = video.command.take().expect("play command");
+		assert!(matches!(
+			command,
+			crate::VideoCommand::Play(attachment)
+				if attachment.media.url.as_deref() == Some(file) && attachment.size == 0
+		));
 	}
 
 	#[test]
@@ -1322,7 +1356,9 @@ mod tests {
 			"{labels:?}"
 		);
 		assert!(labels.iter().all(|label| {
-			!label.contains("Open with login") && !label.contains("Watch") && !label.contains("Post on X")
+			!label.contains("Open with login")
+				&& !label.contains("Watch")
+				&& !label.contains("Post on X")
 		}));
 	}
 

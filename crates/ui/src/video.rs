@@ -82,11 +82,6 @@ impl VideoUi {
 		self.seen = false;
 		self.command = Some(VideoCommand::Stop);
 	}
-	/// A frame at or after `target` may be shown; older ones are dropped so image and
-	/// sound start together at the seek point instead of replaying stale frames.
-	pub fn frame_reaches(pts: f64, target: f64) -> bool {
-		pts >= target - 0.01
-	}
 	fn exit_fullscreen(&mut self) {
 		if let Some((ctx, previous, focus)) = self.fullscreen.take() {
 			self.fullscreen_request = Some(previous);
@@ -978,19 +973,6 @@ mod tests {
 				matches!(video.command.take(), Some(VideoCommand::Seek(_))),
 				"one jump per drag at {x}"
 			);
-		}
-	}
-
-	#[test]
-	fn frames_before_the_seek_target_are_dropped() {
-		// The decoder comes back from the previous keyframe; only the frame at or
-		// after the target may show, so image and sound start together.
-		assert!(!VideoUi::frame_reaches(4.98, 5.0));
-		assert!(VideoUi::frame_reaches(5.0, 5.0));
-		assert!(VideoUi::frame_reaches(5.04, 5.0));
-		for target in [3.0, 30.0, 300.0, 3000.0] {
-			assert!(!VideoUi::frame_reaches(target - 0.05, target));
-			assert!(VideoUi::frame_reaches(target + 0.01, target));
 		}
 	}
 

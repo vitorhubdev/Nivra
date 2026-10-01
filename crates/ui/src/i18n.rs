@@ -294,6 +294,18 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Videos longer than two hours are not supported." => {
 			"Vídeos com mais de duas horas não são suportados."
 		}
+		"This video cannot seek to that position." => {
+			"Este vídeo não pode mudar para essa posição."
+		}
+		"This video format or codec is not supported by Windows." => {
+			"Este formato ou codec de vídeo não é suportado pelo Windows."
+		}
+		"This video format or codec is not supported by macOS." => {
+			"Este formato ou codec de vídeo não é suportado pelo macOS."
+		}
+		"This video format or codec is not supported by GStreamer." => {
+			"Este formato ou codec de vídeo não é suportado pelo GStreamer."
+		}
 		"Nivra does not collect telemetry or upload diagnostics. Discord retains service-side data according to its own policies." => {
 			"O Nivra não coleta telemetria nem envia diagnósticos. O Discord mantém dados do serviço de acordo com as próprias políticas."
 		}
@@ -1772,6 +1784,16 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Videos longer than two hours are not supported." => {
 			"Los videos de más de dos horas no son compatibles."
 		}
+		"This video cannot seek to that position." => "Este video no puede saltar a esa posición.",
+		"This video format or codec is not supported by Windows." => {
+			"Windows no admite este formato o códec de video."
+		}
+		"This video format or codec is not supported by macOS." => {
+			"macOS no admite este formato o códec de video."
+		}
+		"This video format or codec is not supported by GStreamer." => {
+			"GStreamer no admite este formato o códec de video."
+		}
 		"Nivra does not collect telemetry or upload diagnostics. Discord retains service-side data according to its own policies." => {
 			"Nivra no recopila telemetría ni envía diagnósticos. Discord conserva los datos del servicio según sus propias políticas."
 		}
@@ -3128,6 +3150,10 @@ mod tests {
 			"The video could not be decoded safely.",
 			"Inline playback supports videos up to 1080p.",
 			"Videos longer than two hours are not supported.",
+			"This video cannot seek to that position.",
+			"This video format or codec is not supported by Windows.",
+			"This video format or codec is not supported by macOS.",
+			"This video format or codec is not supported by GStreamer.",
 			"Nivra does not collect telemetry or upload diagnostics. Discord retains service-side data according to its own policies.",
 			"Offline preview · changes stay in this session and are never sent.",
 			"Closing the window keeps Nivra in the menu bar. Quit from its menu to exit.",

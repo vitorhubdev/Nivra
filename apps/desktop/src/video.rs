@@ -66,13 +66,8 @@ impl Video {
 			player.state = update.state;
 			player.position = update.position;
 			player.duration = update.duration;
-			// The decoder caught up with the dragged bar: stop previewing.
-			if player
-				.seek_preview
-				.is_some_and(|target| update.position >= target - 0.1)
-			{
-				player.seek_preview = None;
-			}
+			// The drag preview belongs to the UI: it is cleared when the seek is issued,
+			// never by position, or a backward drag would snap back to the old position.
 			let frame = update.frame.take();
 			drop(update);
 			if let Some((width, height, rgba)) = frame {
@@ -200,6 +195,13 @@ impl Drop for Video {
 	fn drop(&mut self) {
 		self.stop();
 	}
+}
+
+/// Frames decoded before a seek target are dropped: the decoder came back from the
+/// previous keyframe, and only the frame at or after the target may be shown, so the
+/// image and the sound start together.
+fn frame_reaches(pts: f64, target: f64) -> bool {
+	pts >= target - 0.01
 }
 
 fn play(
@@ -458,7 +460,7 @@ fn play_decoded(
 					})) => {
 						// Frames before the target are dropped (the decoder went back to
 						// the previous keyframe); the first one at or after it shows.
-						if ui::VideoUi::frame_reaches(pts, target) {
+						if frame_reaches(pts, target) {
 							seek_preview = None;
 							frames.push_back((pts, width, height, rgba));
 						} else {
@@ -606,6 +608,19 @@ mod tests {
 #[cfg(test)]
 mod attachment_url_tests {
 	use super::*;
+
+	#[test]
+	fn frames_before_the_seek_target_are_dropped() {
+		// The decoder comes back from the previous keyframe; only the frame at or
+		// after the target may show, so image and sound start together.
+		assert!(!frame_reaches(4.98, 5.0));
+		assert!(frame_reaches(5.0, 5.0));
+		assert!(frame_reaches(5.04, 5.0));
+		for target in [3.0, 30.0, 300.0, 3000.0] {
+			assert!(!frame_reaches(target - 0.05, target));
+			assert!(frame_reaches(target + 0.01, target));
+		}
+	}
 
 	#[test]
 	fn play_accepts_attachment_url_with_backend() {

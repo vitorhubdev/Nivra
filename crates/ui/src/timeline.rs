@@ -3124,10 +3124,10 @@ impl TimelineView {
 											if state.interactions.pending.as_ref().is_some_and(
 												|pending| pending.message == Some(message.id),
 											) {
-												crate::tr_ui!(
+												ui.small(crate::tr_ui!(
 													ui,
 													"Application interaction pending…"
-												);
+												));
 											}
 											if !message.components.is_empty()
 												&& let Some(error) = state.interactions.error

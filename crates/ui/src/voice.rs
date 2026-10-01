@@ -4362,17 +4362,20 @@ fn speaking_avatar(
 
 fn call_failure(ui: &mut egui::Ui, error: Option<&str>, color: egui::Color32) {
 	let Some(error) = error else { return };
+	// Runtime reasons (voice failures, decoder errors) are catalog keys when they are
+	// known, and stay in English when they are not.
+	let reason = crate::tr_str!(ui, error);
 	ui.horizontal_top(|ui| {
 		ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
 			if crate::icons::button(ui, crate::icons::Icon::Copy, 28.0, "Copy failure reason")
 				.clicked()
 			{
 				ui.ctx()
-					.copy_text(format!("Nivra call failed\nReason: {error}"));
+					.copy_text(format!("Nivra call failed\nReason: {}", reason.as_ref()));
 			}
 			ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
 				ui.add(
-					egui::Label::new(RichText::new(error).size(12.0).color(color))
+					egui::Label::new(RichText::new(reason.as_ref()).size(12.0).color(color))
 						.wrap()
 						.selectable(true),
 				);

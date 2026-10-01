@@ -118,9 +118,17 @@ impl Toasts {
 											|ui| {
 												ui.add(
 													egui::Label::new(
-														RichText::new(&toast.text)
-															.size(13.0)
-															.color(colors.text),
+														RichText::new(
+															crate::i18n::text_str(
+																crate::i18n::interface_language(
+																	ui.ctx(),
+																),
+																&toast.text,
+															)
+															.as_ref(),
+														)
+														.size(13.0)
+														.color(colors.text),
 													)
 													.wrap(),
 												);

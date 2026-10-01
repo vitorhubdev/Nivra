@@ -1405,7 +1405,9 @@ impl MessagingUi {
 						}
 						if !state.demo
 							&& state.auth != client_core::auth::AuthState::Authenticated
-							&& ui.small_button("Sign in again").clicked()
+							&& ui
+								.small_button(crate::tr_ui!(ui, "Sign in again"))
+								.clicked()
 						{
 							self.reconnect_requested = true;
 						}

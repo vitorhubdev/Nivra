@@ -279,7 +279,10 @@ fn narrow_title_bar_hides_update_chip_but_keeps_signal() {
 		})
 	}
 	let state = connected_gateway_state();
-	for width in [320.0, 480.0] {
+	// 300-320 px leave no room for the ~140 px chip on any OS (Windows caption
+	// buttons are the widest; Linux draws none), while 480 px still fits it on
+	// macOS/Linux. The signal is unconditional, so it stays at every width.
+	for width in [300.0, 320.0] {
 		let ctx = egui::Context::default();
 		let mut view = MessagingUi::default();
 		view.updates.available = true;

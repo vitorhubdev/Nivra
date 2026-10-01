@@ -12,10 +12,17 @@ pub fn text(language: Language, english: &'static str) -> &'static str {
 		Some(text) => text,
 		None => {
 			#[cfg(test)]
-			UNTRANSLATED_KEYS.with(|keys| keys.borrow_mut().push(english));
+			UNTRANSLATED_KEYS.with(|keys| keys.borrow_mut().push(english.to_owned()));
 			english
 		}
 	}
+}
+
+/// True when any bundled language knows this key, so a missing translation of a known
+/// string is reported instead of silently passing through.
+#[cfg(test)]
+fn is_catalog_key(key: &str) -> bool {
+	portuguese_brazil(key).is_some() || spanish(key).is_some()
 }
 
 /// Fixed egui temp key holding the current interface language. `MessagingUi`
@@ -41,6 +48,35 @@ macro_rules! tr_ui {
 	};
 }
 
+/// Translate a runtime string (an error or a status that only exists at run time).
+/// Known keys come from the catalog; anything else is returned unchanged.
+pub fn text_str(language: Language, english: &str) -> std::borrow::Cow<'_, str> {
+	let translated = match language {
+		Language::English => return std::borrow::Cow::Borrowed(english),
+		Language::PortugueseBrazil => portuguese_brazil(english),
+		Language::Spanish => spanish(english),
+	};
+	match translated {
+		Some(text) => std::borrow::Cow::Borrowed(text),
+		None => {
+			#[cfg(test)]
+			if is_catalog_key(english) {
+				// Only known keys are recorded, so runtime statuses stay quiet.
+				UNTRANSLATED_KEYS.with(|keys| keys.borrow_mut().push(english.to_owned()));
+			}
+			std::borrow::Cow::Borrowed(english)
+		}
+	}
+}
+
+/// Translate a runtime string using the language stored on the current egui context.
+#[macro_export]
+macro_rules! tr_str {
+	($ui:expr, $english:expr) => {
+		$crate::i18n::text_str($crate::i18n::interface_language($ui.ctx()), $english)
+	};
+}
+
 /// Translate using the language stored on an egui context (dialogs without `Ui`).
 #[macro_export]
 macro_rules! tr_ctx {
@@ -52,13 +88,13 @@ macro_rules! tr_ctx {
 /// Keys that fell back to English on this thread since the last drain. Tests
 /// render surfaces in another language and require this list to stay empty.
 #[cfg(test)]
-pub fn drain_untranslated_keys() -> Vec<&'static str> {
+pub fn drain_untranslated_keys() -> Vec<String> {
 	UNTRANSLATED_KEYS.with(|keys| std::mem::take(&mut *keys.borrow_mut()))
 }
 
 #[cfg(test)]
 thread_local! {
-	static UNTRANSLATED_KEYS: std::cell::RefCell<Vec<&'static str>> =
+	static UNTRANSLATED_KEYS: std::cell::RefCell<Vec<String>> =
 		const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -366,11 +402,53 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Use another account" => "Usar outra conta",
 		"Continue with Discord" => "Continuar com o Discord",
 		"Welcome back" => "Bem-vindo de volta",
+		"Interface language" => "Idioma da interface",
+		"Loading discord.com…" => "Abrindo discord.com…",
 		"Welcome to Nivra" => "Bem-vindo ao Nivra",
 		"Continue with a saved account, or sign in with another one." => {
 			"Continue com uma conta salva ou entre com outra."
 		}
 		"Sign in with Discord." => "Entre com o Discord.",
+		"Early preview" => "Prévia inicial",
+		"Checking your saved login" => "Conferindo o login salvo",
+		"Connecting to Discord" => "Conectando ao Discord",
+		"Sign in to Discord" => "Entrar no Discord",
+		"discord.com · temporary login window · passwords and 2FA never leave the page" => {
+			"discord.com · janela temporária de login · a senha e o 2FA não saem da página"
+		}
+		"Sign in with a session token" => "Entrar com um token de sessão",
+		"For owners who already hold a valid Discord session token, for example from another signed-in Nivra install. Passwords and 2FA are never used here; this bypasses Discord's hosted login page entirely." => {
+			"Para quem já tem um token de sessão do Discord, por exemplo de outra instalação do Nivra. Senha e 2FA não são usados aqui; a página de login do Discord não abre."
+		}
+		"Session token" => "Token de sessão",
+		"Connect with this token" => "Conectar com este token",
+		"About Nivra" => "Sobre o Nivra",
+		"Forget saved login" => "Esquecer o login salvo",
+		"Messaging, reactions, search and read markers have offline tests. Real Discord interoperability is still unverified; attachment uploads and advanced search remain incomplete." => {
+			"Mensagens, reações, busca e marcadores de leitura têm testes offline. A interoperabilidade real com o Discord ainda não foi verificada; envio de anexos e busca avançada seguem incompletos."
+		}
+		"Messages and drafts are cached locally. Login tokens use the operating system credential store." => {
+			"Mensagens e rascunhos ficam em cache local. Tokens de login usam o cofre de credenciais do sistema."
+		}
+		"Unofficial clients may put your Discord account at risk." => {
+			"Clientes não oficiais podem colocar sua conta do Discord em risco."
+		}
+		"Explore the offline preview" => "Ver a prévia offline",
+		"Sample conversations. No Discord connection." => {
+			"Conversas de exemplo. Sem conexão com o Discord."
+		}
+		"or" => "ou",
+		"Sign in again" => "Entrar de novo",
+		"Sign in before calling" => "Entre antes de ligar",
+		"Sign in before changing your profile picture" => "Entre antes de trocar a foto",
+		"Sign in through Discord; saved-login lookup stopped" => {
+			"Entrando pelo Discord; a busca do login salvo parou"
+		}
+		"Waiting for Discord login" => "Esperando o login do Discord",
+		"Platform login webview unavailable; see platform-support.md" => {
+			"A janela de login não abriu; veja platform-support.md"
+		}
+		"Platform login webview unavailable" => "A janela de login não abriu",
 		"Saved accounts" => "Contas salvas",
 		"This is my account" => "Esta é a minha conta",
 		"Check this to continue." => "Marque isto para continuar.",
@@ -1851,6 +1929,50 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Waiting for Discord…" => "Esperando a Discord…",
 		"Use another account" => "Usar otra cuenta",
 		"Continue with Discord" => "Continuar con Discord",
+		"Early preview" => "Vista previa",
+		"Checking your saved login" => "Revisando tu inicio de sesión guardado",
+		"Connecting to Discord" => "Conectando a Discord",
+		"Sign in to Discord" => "Iniciar sesión en Discord",
+		"discord.com · temporary login window · passwords and 2FA never leave the page" => {
+			"discord.com · ventana temporal de inicio de sesión · la contraseña y el 2FA nunca salen de la página"
+		}
+		"Sign in with a session token" => "Iniciar sesión con un token de sesión",
+		"For owners who already hold a valid Discord session token, for example from another signed-in Nivra install. Passwords and 2FA are never used here; this bypasses Discord's hosted login page entirely." => {
+			"Para quien ya tiene un token de sesión válido de Discord, por ejemplo de otra instalación de Nivra con la sesión iniciada. Aquí nunca se usa la contraseña ni el 2FA; esto evita por completo la página de inicio de sesión de Discord."
+		}
+		"Session token" => "Token de sesión",
+		"Connect with this token" => "Conectar con este token",
+		"About Nivra" => "Acerca de Nivra",
+		"Forget saved login" => "Olvidar el inicio de sesión guardado",
+		"Messaging, reactions, search and read markers have offline tests. Real Discord interoperability is still unverified; attachment uploads and advanced search remain incomplete." => {
+			"Los mensajes, las reacciones, la búsqueda y las marcas de lectura tienen pruebas sin conexión. La interoperabilidad real con Discord todavía no está verificada; el envío de archivos adjuntos y la búsqueda avanzada siguen incompletos."
+		}
+		"Messages and drafts are cached locally. Login tokens use the operating system credential store." => {
+			"Los mensajes y borradores se guardan en caché local. Los tokens de inicio de sesión usan el almacén de credenciales del sistema."
+		}
+		"Unofficial clients may put your Discord account at risk." => {
+			"Los clientes no oficiales pueden poner tu cuenta de Discord en riesgo."
+		}
+		"Explore the offline preview" => "Explorar la vista previa sin conexión",
+		"Sample conversations. No Discord connection." => {
+			"Conversaciones de ejemplo. Sin conexión con Discord."
+		}
+		"or" => "o",
+		"Sign in again" => "Iniciar sesión de nuevo",
+		"Sign in before calling" => "Inicia sesión antes de llamar",
+		"Sign in before changing your profile picture" => {
+			"Inicia sesión antes de cambiar tu foto de perfil"
+		}
+		"Sign in through Discord; saved-login lookup stopped" => {
+			"Iniciando sesión con Discord; se detuvo la búsqueda de la sesión guardada"
+		}
+		"Waiting for Discord login" => "Esperando el inicio de sesión de Discord",
+		"Platform login webview unavailable; see platform-support.md" => {
+			"La ventana de inicio de sesión no abrió; mira platform-support.md"
+		}
+		"Platform login webview unavailable" => "La ventana de inicio de sesión no abrió",
+		"Interface language" => "Idioma de la interfaz",
+		"Loading discord.com…" => "Abriendo discord.com…",
 		"Welcome back" => "Bienvenido de nuevo",
 		"Welcome to Nivra" => "Bienvenido a Nivra",
 		"Continue with a saved account, or sign in with another one." => {
@@ -3169,6 +3291,33 @@ mod tests {
 			"Welcome to Nivra",
 			"Continue with a saved account, or sign in with another one.",
 			"Sign in with Discord.",
+			"Early preview",
+			"Checking your saved login",
+			"Connecting to Discord",
+			"Sign in to Discord",
+			"discord.com · temporary login window · passwords and 2FA never leave the page",
+			"Sign in with a session token",
+			"For owners who already hold a valid Discord session token, for example from another signed-in Nivra install. Passwords and 2FA are never used here; this bypasses Discord's hosted login page entirely.",
+			"Session token",
+			"Connect with this token",
+			"About Nivra",
+			"Forget saved login",
+			"Messaging, reactions, search and read markers have offline tests. Real Discord interoperability is still unverified; attachment uploads and advanced search remain incomplete.",
+			"Messages and drafts are cached locally. Login tokens use the operating system credential store.",
+			"Unofficial clients may put your Discord account at risk.",
+			"Explore the offline preview",
+			"Sample conversations. No Discord connection.",
+			"or",
+			"Sign in again",
+			"Sign in before calling",
+			"Sign in before changing your profile picture",
+			"Sign in through Discord; saved-login lookup stopped",
+			"Waiting for Discord login",
+			"Platform login webview unavailable; see platform-support.md",
+			"Platform login webview unavailable",
+			"Interface language",
+			"Language",
+			"Loading discord.com…",
 			"Saved accounts",
 			"This is my account",
 			"Check this to continue.",

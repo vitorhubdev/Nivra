@@ -3987,9 +3987,12 @@ impl Desktop {
 					);
 					ui.add_space(6.0);
 					ui.label(
-						egui::RichText::new(format!("{stage}…"))
-							.size(15.0)
-							.color(p.muted),
+						egui::RichText::new(format!(
+							"{}…",
+							ui::i18n::text(self.messaging.language, stage)
+						))
+						.size(15.0)
+						.color(p.muted),
 					);
 					ui.add_space(22.0);
 					// Indeterminate track: progress is unknown, so a sweeping segment.
@@ -4757,7 +4760,9 @@ impl Desktop {
 					] {
 						ui.add(
 							egui::Label::new(
-								egui::RichText::new(line).size(12.0).color(p.muted),
+								egui::RichText::new(ui::i18n::text(self.messaging.language, line))
+									.size(12.0)
+									.color(p.muted),
 							)
 							.wrap(),
 						);

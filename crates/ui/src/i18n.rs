@@ -1849,7 +1849,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		}
 		"Explore the offline preview" => "Explorar la vista previa sin conexión",
 		"Sample conversations. No Discord connection." => {
-			"Conversas de ejemplo. Sin conexión con Discord."
+			"Conversaciones de ejemplo. Sin conexión con Discord."
 		}
 		"or" => "o",
 		"Sign in again" => "Iniciar sesión de nuevo",

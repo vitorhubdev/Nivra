@@ -166,3 +166,52 @@ impl Toasts {
 		}
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	#[test]
+	fn a_known_reason_is_translated_and_an_unknown_one_stays_quiet() {
+		for language in [model::Language::PortugueseBrazil, model::Language::Spanish] {
+			let _ = crate::i18n::drain_untranslated_keys();
+			// A toast paints whatever `text_str` returns for its stored reason.
+			assert_eq!(
+				crate::i18n::text_str(language, "Sign in before calling"),
+				crate::i18n::text(language, "Sign in before calling"),
+				"{language:?}"
+			);
+			assert_ne!(
+				crate::i18n::text_str(language, "Sign in before calling"),
+				"Sign in before calling",
+				"{language:?} still in English"
+			);
+			// An unknown runtime reason passes through untouched and is not reported.
+			let unknown = "A runtime reason nobody translated";
+			assert_eq!(crate::i18n::text_str(language, unknown), unknown);
+			let missing = crate::i18n::drain_untranslated_keys();
+			assert!(missing.is_empty(), "{language:?} missing {missing:?}");
+		}
+	}
+
+	#[test]
+	fn toasts_keep_their_text_when_drawn() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut toasts = Toasts::default();
+		toasts.push(design::Level::Error, "Sign in before calling");
+		ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(640.0, 480.0),
+				)),
+				focused: true,
+				..Default::default()
+			},
+			|ui| toasts.show(ui.ctx(), 8.0),
+		)
+		.drop_without_applying_deltas();
+		assert_eq!(toasts.items.len(), 1);
+		assert_eq!(toasts.items[0].text, "Sign in before calling");
+	}
+}

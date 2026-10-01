@@ -250,6 +250,9 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 			"Mensagens e rascunhos ficam em cache neste dispositivo em arquivos limitados e isolados por conta. Os dados de cache não são criptografados pelo Nivra; tokens de login salvos usam o armazenamento de credenciais do sistema."
 		}
 		"Your privacy" => "Sua privacidade",
+		"Watch" => "Assistir",
+		"Open on YouTube" => "Abrir no YouTube",
+		"Open on Vimeo" => "Abrir no Vimeo",
 		"Nivra does not collect telemetry or upload diagnostics. Discord retains service-side data according to its own policies." => {
 			"O Nivra não coleta telemetria nem envia diagnósticos. O Discord mantém dados do serviço de acordo com as próprias políticas."
 		}
@@ -1682,6 +1685,9 @@ fn spanish(key: &str) -> Option<&'static str> {
 			"Los mensajes y borradores se guardan en caché en este dispositivo, en archivos limitados y aislados por cuenta. Nivra no cifra los datos de caché; los tokens de inicio de sesión guardados usan el almacén de credenciales del sistema."
 		}
 		"Your privacy" => "Tu privacidad",
+		"Watch" => "Ver",
+		"Open on YouTube" => "Abrir en YouTube",
+		"Open on Vimeo" => "Abrir en Vimeo",
 		"Nivra does not collect telemetry or upload diagnostics. Discord retains service-side data according to its own policies." => {
 			"Nivra no recopila telemetría ni envía diagnósticos. Discord conserva los datos del servicio según sus propias políticas."
 		}
@@ -3010,6 +3016,9 @@ mod tests {
 			"Removes cached messages and media. Drafts and your login stay.",
 			"Messages and drafts are cached on this device inside bounded, account-isolated files. Cache data is not encrypted by Nivra; saved login tokens use the OS credential store.",
 			"Your privacy",
+			"Watch",
+			"Open on YouTube",
+			"Open on Vimeo",
 			"Nivra does not collect telemetry or upload diagnostics. Discord retains service-side data according to its own policies.",
 			"Offline preview · changes stay in this session and are never sent.",
 			"Closing the window keeps Nivra in the menu bar. Quit from its menu to exit.",

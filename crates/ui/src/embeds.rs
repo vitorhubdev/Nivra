@@ -8,47 +8,57 @@ use egui::RichText;
 use model::{Embed, Gif, Message};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-const WEB_MEDIA_REQUEST: &str = "nivra-web-media-request";
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct WebMediaRequest {
-	pub url: String,
-	pub persist: bool,
+fn embed_video_attachment(url: &str, media: &model::EmbedMedia) -> model::Attachment {
+	let filename = url
+		.rsplit(['/', '?'])
+		.find(|part| part.contains('.'))
+		.filter(|part| part.len() <= 128)
+		.unwrap_or("video.mp4");
+	let mut id = 0xcbf29ce484222325u64;
+	for byte in url.bytes() {
+		id ^= u64::from(byte);
+		id = id.wrapping_mul(0x100000001b3);
+	}
+	model::Attachment {
+		id: model::Id(id.max(1)),
+		filename: filename.to_owned(),
+		description: None,
+		content_type: Some("video/mp4".into()),
+		size: 0,
+		media: model::EmbedMedia {
+			url: Some(url.to_owned()),
+			width: media.width,
+			height: media.height,
+			..Default::default()
+		},
+		spoiler: false,
+		duration_ms: None,
+		waveform: Vec::new(),
+	}
 }
 
-fn web_media_target(embed: &Embed) -> Option<&str> {
-	[
-		embed.url.as_deref(),
-		embed.video.as_ref().and_then(|media| media.url.as_deref()),
-	]
-	.into_iter()
-	.flatten()
-	.find(|url| model::web_media::is_supported_host(url))
+fn play_embed_file(
+	video: &mut crate::VideoUi,
+	message: &Message,
+	url: &str,
+	media: &model::EmbedMedia,
+) {
+	video.begin(message, &embed_video_attachment(url, media));
 }
 
-fn youtube_thumb(value: &str) -> Option<model::EmbedMedia> {
-	Some(model::EmbedMedia {
-		url: Some(model::web_media::youtube_thumbnail_url(value)?),
-		width: 480,
-		height: 360,
-		..Default::default()
-	})
-}
-
-pub fn request_web_media(ctx: &egui::Context, url: &str, persist: bool) {
-	ctx.data_mut(|data| {
-		data.insert_temp(
-			egui::Id::unique(WEB_MEDIA_REQUEST),
-			WebMediaRequest {
-				url: url.to_owned(),
-				persist,
-			},
-		)
-	});
-}
-
-pub fn take_web_media_request(ctx: &egui::Context) -> Option<WebMediaRequest> {
-	ctx.data_mut(|data| data.remove_temp(egui::Id::unique(WEB_MEDIA_REQUEST)))
+/// True when this attachment is one of the message's direct embed videos. Those have
+/// no attachment record, so the fullscreen resolver must recognise them explicitly.
+pub fn is_embed_video(message: &Message, attachment: &model::Attachment) -> bool {
+	attachment.size == 0
+		&& !message.embeds_suppressed
+		&& message.embeds.iter().any(|embed| {
+			let media = embed.video.as_ref();
+			model::web_media::direct_embed_video(
+				media.and_then(|video| video.proxy_url.as_deref()),
+				media.and_then(|video| video.url.as_deref()),
+			)
+			.is_some_and(|file| attachment.media.url.as_deref() == Some(file))
+		})
 }
 
 pub fn has_spoilers(message: &Message) -> bool {
@@ -341,6 +351,7 @@ pub fn show(
 	opening: &mut Option<String>,
 	download: &mut DownloadUi,
 	profile: &mut crate::profiles::ProfileSession,
+	video: &mut crate::VideoUi,
 	state: &client_core::State,
 ) -> Option<Gif> {
 	if message.embeds_suppressed {
@@ -609,78 +620,92 @@ pub fn show(
 									demo,
 								);
 							}
-							let web_media = web_media_target(embed);
-							if let Some(target) = web_media {
-								if let Some(thumb) = youtube_thumb(target) {
-									let painted = images
-										.show_media(
+							let playback = model::web_media::classify_embed_video(
+								embed.url.as_deref(),
+								embed.video.as_ref().and_then(|media| media.url.as_deref()),
+								embed
+									.video
+									.as_ref()
+									.and_then(|media| media.proxy_url.as_deref()),
+							);
+							match playback {
+								Some(model::web_media::EmbedVideo::File(url)) => {
+									let media =
+										embed.video.as_ref().expect("file comes from video");
+									let attachment = embed_video_attachment(url, media);
+									let active =
+										video.active.as_ref().is_some_and(|(channel, id, file)| {
+											*channel == message.channel
+												&& *id == message.id && file == &attachment
+										});
+									if active {
+										video.show(
 											ui,
-											&thumb,
+											message,
+											&attachment,
+											download,
+											opening,
+											demo,
+										);
+									} else {
+										if let Some(thumb) =
+											embed.thumbnail.as_ref().or(embed.image.as_ref())
+										{
+											image_preview(
+												ui,
+												thumb,
+												egui::vec2(
+													ui.available_width(),
+													crate::avatars::media::MEDIA_MAX_HEIGHT,
+												),
+												images,
+												download,
+												demo,
+											);
+										}
+										if ui.button(crate::tr_ui!(ui, "Watch")).clicked() {
+											play_embed_file(video, message, url, media);
+										}
+									}
+								}
+								Some(model::web_media::EmbedVideo::YouTube(url)) => {
+									if let Some(thumb) =
+										model::web_media::youtube_thumbnail_url(url)
+									{
+										let poster = model::EmbedMedia {
+											url: Some(thumb),
+											width: 480,
+											height: 360,
+											..Default::default()
+										};
+										image_preview(
+											ui,
+											&poster,
 											egui::vec2(
 												ui.available_width(),
 												crate::avatars::media::MEDIA_MAX_HEIGHT,
 											),
+											images,
+											download,
 											demo,
-											Surface::Inline,
-										)
-										.response;
-									let play = ui.interact(
-										painted.rect,
-										painted.id.with("youtube-preview"),
-										egui::Sense::click(),
-									);
-									if play.hovered() {
-										ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+										);
 									}
-									if play.on_hover_text("Play in chat").clicked() {
-										request_web_media(ui.ctx(), target, false);
+									if ui.button(crate::tr_ui!(ui, "Open on YouTube")).clicked() {
+										*opening = Some(url.to_owned());
 									}
-									if ui
-										.button("Open with login")
-										.on_hover_text("Play using a signed-in browser profile")
-										.clicked()
-									{
-										request_web_media(ui.ctx(), target, true);
-									}
-								} else {
-									let label = if target.contains("x.com")
-										|| target.contains("twitter.com")
-									{
-										"Post on X"
-									} else {
-										"Video"
-									};
-									ui.horizontal(|ui| {
-										if ui.button(label).on_hover_text("Play in chat").clicked()
-										{
-											request_web_media(ui.ctx(), target, false);
-										}
-										if ui
-											.button("Open with login")
-											.on_hover_text("Play using a signed-in browser profile")
-											.clicked()
-										{
-											request_web_media(ui.ctx(), target, true);
-										}
-									});
 								}
-							} else if embed.video.is_some()
-								|| matches!(embed.kind.as_str(), "video" | "gifv")
-							{
-								ui.small("Video preview · playback opens in your browser");
-								link(
-									ui,
-									"Open video…",
-									embed.url.as_deref().or_else(|| {
-										embed.video.as_ref().and_then(|v| v.url.as_deref())
-									}),
-									opening,
-									false,
-								);
-							} else if embed.title.is_none()
-								&& let Some(url) = embed.url.as_deref()
-							{
-								link(ui, "Open source…", Some(url), opening, false);
+								Some(model::web_media::EmbedVideo::Vimeo(url)) => {
+									if ui.button(crate::tr_ui!(ui, "Open on Vimeo")).clicked() {
+										*opening = Some(url.to_owned());
+									}
+								}
+								None => {
+									if embed.title.is_none()
+										&& let Some(url) = embed.url.as_deref()
+									{
+										link(ui, "Open source…", Some(url), opening, false);
+									}
+								}
 							}
 							if let Some(footer) = &embed.footer {
 								ui.horizontal_wrapped(|ui| {
@@ -841,6 +866,7 @@ mod tests {
 									&mut opening,
 									&mut download,
 									&mut profile,
+									&mut crate::VideoUi::default(),
 									&client_core::State::default()
 								)
 								.is_none()
@@ -995,6 +1021,7 @@ mod tests {
 							&mut None,
 							&mut DownloadUi::default(),
 							&mut profile,
+							&mut crate::VideoUi::default(),
 							&client_core::State::default(),
 						);
 					},
@@ -1275,6 +1302,7 @@ mod tests {
 					&mut opening,
 					&mut download,
 					&mut profile,
+					&mut crate::VideoUi::default(),
 					&client_core::State::default(),
 				);
 			},
@@ -1291,44 +1319,135 @@ mod tests {
 		output.drop_without_applying_deltas();
 	}
 	#[test]
-	fn web_media_hosts_are_explicitly_bounded() {
-		for url in [
-			"https://youtube.com/watch?v=dQw4w9WgXcQ",
-			"https://youtu.be/dQw4w9WgXcQ",
-			"https://x.com/example/status/123",
-			"https://twitter.com/example/status/123",
-			"https://vimeo.com/123456",
-		] {
-			assert!(model::web_media::is_supported_host(url), "{url}");
-		}
-		for url in [
-			"http://youtube.com/watch?v=dQw4w9WgXcQ",
-			"https://youtube.com.evil.test/watch?v=dQw4w9WgXcQ",
-			"https://user@x.com/example/status/123",
-			"https://example.com/video",
-		] {
-			assert!(!model::web_media::is_supported_host(url), "{url}");
-		}
+	fn x_mp4_embed_queues_the_native_player() {
+		let file = "https://media.discordapp.net/external/video.twimg.com/ext/oobe-intro.mp4";
+		let mut message = test_support::message(1, model::Id(2));
+		message.embeds = vec![Embed {
+			kind: "video".into(),
+			url: Some("https://x.com/user/status/1".into()),
+			video: Some(model::EmbedMedia {
+				proxy_url: Some(file.into()),
+				..Default::default()
+			}),
+			..Default::default()
+		}];
+		let labels = embed_labels(&message);
+		assert!(
+			labels.iter().any(|label| label.contains("Watch")),
+			"{labels:?}"
+		);
+		assert!(
+			labels
+				.iter()
+				.all(|label| !label.contains("Open with login") && !label.contains("Post on X"))
+		);
+		let mut video = crate::VideoUi::default();
+		play_embed_file(
+			&mut video,
+			&message,
+			file,
+			message.embeds[0].video.as_ref().unwrap(),
+		);
+		let command = video.command.take().expect("play command");
+		let crate::VideoCommand::Play(synthetic) = command else {
+			panic!("play command");
+		};
+		assert_eq!(synthetic.media.url.as_deref(), Some(file));
+		assert_eq!(synthetic.size, 0);
+		// The fullscreen resolver must recognise the synthetic attachment, or playback
+		// stops the moment the user asks for fullscreen.
+		assert!(is_embed_video(&message, &synthetic));
+		assert!(!is_embed_video(
+			&test_support::message(2, model::Id(3)),
+			&synthetic
+		));
 	}
 
 	#[test]
-	fn web_media_request_carries_persist_flag() {
+	fn synthetic_embed_video_offers_no_download_action() {
+		let mut message = test_support::message(1, model::Id(2));
+		message.embeds = vec![Embed {
+			kind: "video".into(),
+			url: Some("https://x.com/user/status/1".into()),
+			video: Some(model::EmbedMedia {
+				proxy_url: Some(
+					"https://media.discordapp.net/external/video.twimg.com/ext/clip.mp4".into(),
+				),
+				..Default::default()
+			}),
+			..Default::default()
+		}];
+		let synthetic = embed_video_attachment(
+			"https://media.discordapp.net/external/video.twimg.com/ext/clip.mp4",
+			message.embeds[0].video.as_ref().unwrap(),
+		);
+		let mut download = DownloadUi::default();
 		let ctx = egui::Context::default();
-		request_web_media(&ctx, "https://youtu.be/dQw4w9WgXcQ", false);
-		assert_eq!(
-			take_web_media_request(&ctx),
-			Some(WebMediaRequest {
-				url: "https://youtu.be/dQw4w9WgXcQ".into(),
-				persist: false,
-			})
+		ctx.run_ui(egui::RawInput::default(), |ui| {
+			let (_, response) =
+				ui.allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::click());
+			crate::attachments::media_context_menu(
+				&response,
+				&synthetic,
+				&mut download,
+				&mut None,
+				false,
+			);
+		})
+		.drop_without_applying_deltas();
+		assert!(download.request.is_none(), "{:?}", download.request);
+		assert!(download.copy_request.is_none());
+	}
+
+	#[test]
+	fn youtube_embed_only_offers_the_system_browser() {
+		let mut message = test_support::message(1, model::Id(2));
+		message.embeds = vec![Embed {
+			kind: "video".into(),
+			url: Some("https://www.youtube.com/watch?v=dQw4w9WgXcQ".into()),
+			title: Some("A talk".into()),
+			..Default::default()
+		}];
+		let labels = embed_labels(&message);
+		assert!(
+			labels.iter().any(|label| label.contains("Open on YouTube")),
+			"{labels:?}"
 		);
-		request_web_media(&ctx, "https://x.com/user/status/1", true);
-		assert_eq!(
-			take_web_media_request(&ctx),
-			Some(WebMediaRequest {
-				url: "https://x.com/user/status/1".into(),
-				persist: true,
-			})
-		);
+		assert!(labels.iter().all(|label| {
+			!label.contains("Open with login")
+				&& !label.contains("Watch")
+				&& !label.contains("Post on X")
+		}));
+	}
+
+	fn embed_labels(message: &Message) -> Vec<String> {
+		let ctx = egui::Context::default();
+		let mut images = Avatars::default();
+		let mut cache = FormatCache::default();
+		let mut opening = None;
+		let mut download = DownloadUi::default();
+		let mut profile = crate::profiles::ProfileSession::default();
+		let mut video = crate::VideoUi::default();
+		let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+			show(
+				ui,
+				message,
+				&mut cache,
+				&mut images,
+				&mut opening,
+				&mut download,
+				&mut profile,
+				&mut video,
+				&client_core::State::default(),
+			);
+		});
+		let mut labels = Vec::new();
+		for shape in &output.shapes {
+			if let egui::epaint::Shape::Text(text) = &shape.shape {
+				labels.push(text.galley.job.text.clone());
+			}
+		}
+		output.drop_without_applying_deltas();
+		labels
 	}
 }

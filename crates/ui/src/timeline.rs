@@ -1625,7 +1625,8 @@ impl TimelineView {
 						.filter(|message| {
 							state.selected == Some(*channel)
 								&& message.channel == *channel
-								&& message.attachments.contains(attachment)
+								&& (message.attachments.contains(attachment)
+									|| crate::embeds::is_embed_video(message, attachment))
 								&& (self.component_viewing
 									== Some((
 										message.id,
@@ -3015,6 +3016,7 @@ impl TimelineView {
 													&mut self.opening,
 													&mut self.download,
 													profile,
+													&mut self.video,
 													state,
 												) {
 													self.gif_favorite = Some(gif);
@@ -9162,6 +9164,7 @@ mod tests {
 					&mut None,
 					&mut crate::attachments::DownloadUi::default(),
 					&mut profile,
+					&mut crate::VideoUi::default(),
 					&State {
 						demo: true,
 						..Default::default()

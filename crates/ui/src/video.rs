@@ -180,15 +180,20 @@ impl VideoUi {
 			VideoState::Playing => VideoCommand::Pause(true),
 			VideoState::Paused => VideoCommand::Pause(false),
 			_ => {
-				self.active = Some((message.channel, message.id, attachment.clone()));
-				self.texture = None;
-				self.frame = None;
-				self.state = VideoState::Loading;
-				self.position = 0.0;
-				self.duration = 0.0;
-				VideoCommand::Play(attachment.clone())
+				self.begin(message, attachment);
+				return;
 			}
 		});
+	}
+	pub fn begin(&mut self, message: &Message, attachment: &Attachment) {
+		self.active = Some((message.channel, message.id, attachment.clone()));
+		self.texture = None;
+		self.frame = None;
+		self.state = VideoState::Loading;
+		self.position = 0.0;
+		self.duration = 0.0;
+		self.seen = true;
+		self.command = Some(VideoCommand::Play(attachment.clone()));
 	}
 	fn shade(&mut self, ctx: &egui::Context) -> egui::TextureId {
 		self.shade

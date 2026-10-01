@@ -120,11 +120,26 @@ impl Video {
 		ctx: &eframe::egui::Context,
 		demo: bool,
 	) -> Result<(), &'static str> {
-		if !attachment.is_video() || attachment.size == 0 || attachment.size > 100 * 1024 * 1024 {
+		if !attachment.is_video() {
+			return Err("This file is not a video");
+		}
+		// An embed preview has no attachment record, so it carries the direct file URL
+		// and no size: the allowlist accepts it and the source learns the length.
+		let embed = attachment.size == 0;
+		if !embed && attachment.size > 100 * 1024 * 1024 {
 			return Err("Video preview limit: 100 MiB");
 		}
-		let (url, fallback) = if demo {
-			(None, None)
+		let (url, fallback, size) = if demo {
+			(None, None, 0)
+		} else if embed {
+			let raw = model::web_media::direct_embed_video(
+				attachment.media.proxy_url.as_deref(),
+				attachment.media.url.as_deref(),
+			)
+			.ok_or("Unsupported embed video provider or URL")?;
+			let url =
+				url::Url::parse(raw).map_err(|_| "Unsupported embed video provider or URL")?;
+			(Some(url), None, 0)
 		} else {
 			(
 				Some(
@@ -132,6 +147,7 @@ impl Video {
 						.ok_or("Video attachment unavailable")?,
 				),
 				crate::downloads::proxy_attachment_url(&attachment),
+				attachment.size as usize,
 			)
 		};
 		if self.requests.is_none() {
@@ -167,7 +183,7 @@ impl Video {
 			session: session.clone(),
 			url,
 			fallback,
-			size: attachment.size as usize,
+			size,
 		}));
 		self.session = Some(session);
 		Ok(())
@@ -628,6 +644,93 @@ mod attachment_url_tests {
 		drop(video);
 		std::thread::sleep(std::time::Duration::from_millis(50));
 		source::OFFLINE_PROBE.store(false, Ordering::Release);
+		drop(runtime);
+	}
+
+	#[test]
+	fn embed_video_plays_in_app_without_a_webview() {
+		let file = "https://media.discordapp.net/external/video.twimg.com/ext/oobe-intro.mp4";
+		let attachment = model::Attachment {
+			id: model::Id(1),
+			filename: "oobe-intro.mp4".into(),
+			description: None,
+			content_type: Some("video/mp4".into()),
+			// An embed preview has no attachment record, so it carries no size.
+			size: 0,
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+			media: model::EmbedMedia {
+				url: Some(file.into()),
+				..Default::default()
+			},
+		};
+		source::OFFLINE_PROBE.store(true, Ordering::Release);
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.unwrap();
+		let mut player = VideoUi::default();
+		let mut video = Video::default();
+		video.command(
+			VideoCommand::Play(attachment),
+			&mut player,
+			runtime.handle(),
+			&eframe::egui::Context::default(),
+			false,
+		);
+		assert!(
+			!matches!(
+				player.state,
+				VideoState::Failed("Video attachment unavailable")
+					| VideoState::Failed("Video preview limit: 100 MiB")
+			),
+			"{:?}",
+			player.state
+		);
+		video.stop();
+		drop(video);
+		std::thread::sleep(std::time::Duration::from_millis(50));
+		source::OFFLINE_PROBE.store(false, Ordering::Release);
+		drop(runtime);
+	}
+
+	#[test]
+	fn embed_from_a_host_outside_the_allowlist_is_refused_by_name() {
+		let attachment = model::Attachment {
+			id: model::Id(1),
+			filename: "clip.mp4".into(),
+			description: None,
+			content_type: Some("video/mp4".into()),
+			size: 0,
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+			media: model::EmbedMedia {
+				url: Some("https://evil.test/external/clip.mp4".into()),
+				..Default::default()
+			},
+		};
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.unwrap();
+		let mut player = VideoUi::default();
+		let mut video = Video::default();
+		video.command(
+			VideoCommand::Play(attachment),
+			&mut player,
+			runtime.handle(),
+			&eframe::egui::Context::default(),
+			false,
+		);
+		assert_eq!(
+			player.state,
+			VideoState::Failed("Unsupported embed video provider or URL")
+		);
+		drop(video);
 		drop(runtime);
 	}
 }

@@ -14,7 +14,6 @@ pub mod shortcut;
 pub mod startup;
 pub mod tray;
 pub mod video;
-pub mod web_media;
 #[cfg(target_os = "macos")]
 pub mod window;
 pub mod window_effects;

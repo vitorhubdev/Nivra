@@ -33,7 +33,7 @@ pub(super) fn resolve_media_url(
 	}
 	let client = media_client()?;
 	match probe(&client, &primary, &cancelled, &runtime) {
-		Ok(()) => Ok(primary),
+		Ok(_) => Ok(primary),
 		Err(EXPIRED) => {
 			let fallback = fallback.ok_or(EXPIRED)?;
 			if !fallback.username().is_empty() || fallback.password().is_some() {
@@ -63,7 +63,7 @@ fn probe(
 	url: &url::Url,
 	cancelled: &AtomicBool,
 	runtime: &Handle,
-) -> Result<(), &'static str> {
+) -> Result<Probe, &'static str> {
 	runtime.block_on(async {
 		let cancelled_wait = async {
 			while !cancelled.load(Ordering::Acquire) {
@@ -82,10 +82,89 @@ fn probe(
 			if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::GONE {
 				return Err(EXPIRED);
 			}
-			if status == reqwest::StatusCode::PARTIAL_CONTENT || status == reqwest::StatusCode::OK {
-				return Ok(());
+			if status == reqwest::StatusCode::PARTIAL_CONTENT {
+				// `Content-Range: bytes 0-0/12345` is the only length the server states
+				// while also proving it serves byte ranges.
+				let total = response
+					.headers()
+					.get(reqwest::header::CONTENT_RANGE)
+					.and_then(|value| value.to_str().ok())
+					.and_then(|value| value.rsplit_once('/'))
+					.and_then(|(_, total)| total.trim().parse::<u64>().ok());
+				return Ok(Probe {
+					len: total.and_then(|total| usize::try_from(total).ok()),
+					ranges: true,
+				});
+			}
+			if status == reqwest::StatusCode::OK {
+				// The server ignored the range, so it cannot stream: play from memory.
+				return Ok(Probe {
+					len: response
+						.content_length()
+						.and_then(|len| usize::try_from(len).ok()),
+					ranges: false,
+				});
 			}
 			Err(INVALID)
+		};
+		tokio::select! { biased;
+			_ = cancelled_wait => Err("Cancelled"),
+			result = transfer => result,
+		}
+	})
+}
+
+/// What one `Range: bytes=0-0` request told us about a media URL.
+struct Probe {
+	/// `None` when the server stated no length at all.
+	len: Option<usize>,
+	/// Whether the server honoured the range request.
+	ranges: bool,
+}
+
+/// Whole-body download for servers without byte ranges, bounded by the same 100 MiB cap.
+fn download_whole(
+	client: &reqwest::Client,
+	url: &url::Url,
+	expected: usize,
+	cancelled: &AtomicBool,
+	runtime: &Handle,
+) -> Result<Vec<u8>, &'static str> {
+	runtime.block_on(async {
+		let cancelled_wait = async {
+			while !cancelled.load(Ordering::Acquire) {
+				tokio::time::sleep(Duration::from_millis(20)).await;
+			}
+		};
+		let transfer = async {
+			let mut response = client
+				.get(url.clone())
+				.header(reqwest::header::ACCEPT_ENCODING, "identity")
+				.send()
+				.await
+				.map_err(|_| INVALID)?;
+			if !response.status().is_success() {
+				return Err(INVALID);
+			}
+			if response
+				.headers()
+				.get(reqwest::header::CONTENT_ENCODING)
+				.is_some_and(|value| value != "identity")
+			{
+				return Err(INVALID);
+			}
+			let mut bytes = Vec::new();
+			while let Some(chunk) = response.chunk().await.map_err(|_| INVALID)? {
+				// Never grow past the length the server stated, whatever it sends.
+				if bytes.len() + chunk.len() > expected {
+					return Err(INVALID);
+				}
+				bytes.extend_from_slice(&chunk);
+			}
+			if bytes.is_empty() {
+				return Err(INVALID);
+			}
+			Ok(bytes)
 		};
 		tokio::select! { biased;
 			_ = cancelled_wait => Err("Cancelled"),
@@ -100,24 +179,48 @@ pub(super) fn source(
 	cancelled: Arc<AtomicBool>,
 	runtime: Handle,
 ) -> Result<Box<dyn platform::video::ReadSeek>, &'static str> {
-	if expected == 0 || expected > MAX_BYTES {
-		return Err("Video preview limit: 100 MiB");
-	}
 	let (input, len) = if let Some(url) = url {
 		// The caller has validated the service URL; never let URL userinfo add credentials.
 		if !url.username().is_empty() || url.password().is_some() {
 			return Err(INVALID);
 		}
 		let client = media_client()?;
-		(
-			Input::Http {
-				client,
-				url,
-				runtime,
-			},
-			expected,
-		)
+		// Embed previews carry no attachment size: ask the server once, then either
+		// stream ranges or play the bounded whole body from memory.
+		let (len, ranges) = if expected == 0 {
+			if cancelled.load(Ordering::Acquire) {
+				return Err("Cancelled");
+			}
+			let probe = probe(&client, &url, &cancelled, &runtime)?;
+			let len = probe.len.filter(|len| *len > 0).ok_or(INVALID)?;
+			if len > MAX_BYTES {
+				return Err("Video preview limit: 100 MiB");
+			}
+			(len, probe.ranges)
+		} else {
+			if expected > MAX_BYTES {
+				return Err("Video preview limit: 100 MiB");
+			}
+			(expected, true)
+		};
+		if ranges {
+			(
+				Input::Http {
+					client,
+					url,
+					runtime,
+				},
+				len,
+			)
+		} else {
+			let bytes = download_whole(&client, &url, len, &cancelled, &runtime)?;
+			let len = bytes.len();
+			(Input::Memory(bytes), len)
+		}
 	} else {
+		if expected > MAX_BYTES {
+			return Err("Video preview limit: 100 MiB");
+		}
 		#[cfg(not(feature = "demo"))]
 		return Err(INVALID);
 		#[cfg(feature = "demo")]
@@ -144,6 +247,8 @@ enum Input {
 		url: url::Url,
 		runtime: Handle,
 	},
+	/// Servers without byte ranges are buffered whole, still under the 100 MiB cap.
+	Memory(Vec<u8>),
 	#[cfg(feature = "demo")]
 	Demo(&'static [u8]),
 }
@@ -181,6 +286,7 @@ impl Source {
 				url,
 				runtime,
 			} => (client, url, runtime),
+			Input::Memory(_) => return Err(invalid()),
 			#[cfg(feature = "demo")]
 			Input::Demo(_) => return Err(invalid()),
 		};
@@ -257,6 +363,11 @@ impl Read for Source {
 		}
 		#[cfg(feature = "demo")]
 		if let Input::Demo(bytes) = self.input {
+			output[..count].copy_from_slice(&bytes[self.position..self.position + count]);
+			self.position += count;
+			return Ok(count);
+		}
+		if let Input::Memory(bytes) = &self.input {
 			output[..count].copy_from_slice(&bytes[self.position..self.position + count]);
 			self.position += count;
 			return Ok(count);
@@ -533,6 +644,132 @@ mod tests {
 			)
 			.is_err()
 		);
+	}
+
+	#[test]
+	fn embed_video_without_a_size_streams_or_buffers_the_whole_file() {
+		discord_api::ensure_tls_provider();
+		for ranged in [true, false] {
+			let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+			let address = listener.local_addr().unwrap();
+			let url = url::Url::parse(&format!("http://{address}/external/clip.mp4")).unwrap();
+			let clip = vec![7u8; 4096];
+			let expected = clip.len();
+			let body = clip.clone();
+			let stop = Arc::new(AtomicBool::new(false));
+			let stopped = stop.clone();
+			let server = std::thread::spawn(move || {
+				loop {
+					let (mut socket, _) = match listener.accept() {
+						Ok(pair) => pair,
+						Err(_) => break,
+					};
+					if stopped.load(Ordering::Acquire) {
+						break;
+					}
+					socket
+						.set_read_timeout(Some(Duration::from_secs(2)))
+						.unwrap();
+					let mut header = Vec::new();
+					while !header.ends_with(b"\r\n\r\n") && header.len() < 8192 {
+						let mut byte = [0];
+						if socket.read_exact(&mut byte).is_err() {
+							break;
+						}
+						header.push(byte[0]);
+					}
+					let header = String::from_utf8_lossy(&header).to_ascii_lowercase();
+					if ranged {
+						let range = header
+							.lines()
+							.find_map(|line| line.strip_prefix("range: bytes="))
+							.expect("ranged server answers ranges");
+						let (start, end) = range.split_once('-').unwrap();
+						let start: usize = start.parse().unwrap();
+						let end: usize = end.parse().unwrap();
+						assert!(end < expected, "{start}-{end} of {expected}");
+						write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{expected}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n", end - start + 1).unwrap();
+						socket.write_all(&body[start..=end]).unwrap();
+					} else {
+						// A server without range support ignores the probe's Range header
+						// and always answers 200 with the whole file.
+						write!(
+							socket,
+							"HTTP/1.1 200 OK\r\nContent-Length: {expected}\r\nConnection: close\r\n\r\n"
+						)
+						.unwrap();
+						socket.write_all(&body).unwrap();
+					}
+				}
+			});
+			let runtime = tokio::runtime::Builder::new_multi_thread()
+				.worker_threads(1)
+				.enable_all()
+				.build()
+				.unwrap();
+			let mut input = source(
+				Some(url),
+				0,
+				Arc::new(AtomicBool::new(false)),
+				runtime.handle().clone(),
+			)
+			.expect("embed preview without a size");
+			assert_eq!(input.seek(SeekFrom::End(0)).unwrap(), expected as u64);
+			input.seek(SeekFrom::Start(0)).unwrap();
+			let mut head = [0; 4];
+			input.read_exact(&mut head).unwrap();
+			assert_eq!(head, [7; 4]);
+			input.seek(SeekFrom::Start(2048)).unwrap();
+			let mut middle = [0; 8];
+			input.read_exact(&mut middle).unwrap();
+			assert_eq!(middle, [7; 8]);
+			drop(input);
+			stop.store(true, Ordering::Release);
+			let _ = std::net::TcpStream::connect(address);
+			server.join().unwrap();
+		}
+	}
+
+	#[test]
+	fn embed_preview_without_a_length_is_refused() {
+		discord_api::ensure_tls_provider();
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let url = url::Url::parse(&format!(
+			"http://{}/external/clip.mp4",
+			listener.local_addr().unwrap()
+		))
+		.unwrap();
+		let server = std::thread::spawn(move || {
+			let (mut socket, _) = listener.accept().unwrap();
+			socket
+				.set_read_timeout(Some(Duration::from_secs(2)))
+				.unwrap();
+			let mut header = Vec::new();
+			while !header.ends_with(b"\r\n\r\n") && header.len() < 8192 {
+				let mut byte = [0];
+				if socket.read_exact(&mut byte).is_err() {
+					return;
+				}
+				header.push(byte[0]);
+			}
+			// 206 without a parsable total length: nothing bounded to stream.
+			write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/*\r\nContent-Length: 1\r\nConnection: close\r\n\r\n").unwrap();
+		});
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.unwrap();
+		assert!(
+			source(
+				Some(url),
+				0,
+				Arc::new(AtomicBool::new(false)),
+				runtime.handle().clone()
+			)
+			.is_err()
+		);
+		server.join().unwrap();
 	}
 
 	#[test]

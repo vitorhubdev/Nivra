@@ -61,11 +61,15 @@ pub const PREVIEW_WINDOW_CHARS: usize = 8_000;
 /// Decode a preview body from raw bytes. Returns `None` when the body is empty,
 /// effectively blank, or looks binary (a NUL in the first block of a file that
 /// is not UTF-16). A UTF-8, UTF-16 LE or UTF-16 BE BOM selects that encoding.
-/// Valid UTF-8 is kept. Other bytes are Windows-1252, so a legacy `.txt` does
-/// not turn into replacement characters. The result is capped by input bytes
-/// and character count.
+/// Valid UTF-8 is kept. A UTF-8 BOM keeps that choice even when one later byte
+/// is invalid. A UTF-32 BOM is rejected. Other bytes are Windows-1252, so a
+/// legacy `.txt` does not turn into replacement characters. The result is
+/// capped by input bytes and character count.
 pub fn decode_preview(bytes: &[u8]) -> Option<(String, bool)> {
-	if bytes.is_empty() {
+	if bytes.is_empty()
+		|| bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00])
+		|| bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF])
+	{
 		return None;
 	}
 	let (text, consumed_all) = if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
@@ -73,15 +77,17 @@ pub fn decode_preview(bytes: &[u8]) -> Option<(String, bool)> {
 	} else if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
 		decode_utf16(rest, false)
 	} else {
-		let raw = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+		let had_utf8_bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
+		let raw = if had_utf8_bom { &bytes[3..] } else { bytes };
 		if raw.is_empty() || raw.iter().take(BINARY_SNIFF_BYTES).any(|byte| *byte == 0) {
 			return None;
 		}
 		let over_cap = raw.len() > MAX_PREVIEW_BYTES as usize;
 		let slice = &raw[..raw.len().min(MAX_PREVIEW_BYTES as usize)];
 		// A cut at the byte cap can split a UTF-8 character. Lossy keeps the
-		// valid prefix. A short file that is not UTF-8 is Windows-1252.
-		let text = if over_cap || std::str::from_utf8(slice).is_ok() {
+		// valid prefix. A UTF-8 BOM means the file is UTF-8 even if one byte
+		// is invalid. A short file with no BOM that is not UTF-8 is Windows-1252.
+		let text = if had_utf8_bom || over_cap || std::str::from_utf8(slice).is_ok() {
 			String::from_utf8_lossy(slice).into_owned()
 		} else {
 			slice.iter().copied().map(windows_1252).collect()
@@ -266,6 +272,28 @@ mod tests {
 		let (text, truncated) = decode_preview(&[b'c', b'a', b'f', 0xE9, 0x80]).unwrap();
 		assert_eq!(text, "caf\u{e9}\u{20AC}");
 		assert!(!truncated);
+	}
+
+	#[test]
+	fn utf8_bom_keeps_utf8_when_one_byte_is_invalid() {
+		let mut bytes = vec![0xEF, 0xBB, 0xBF];
+		bytes.extend("é".as_bytes());
+		bytes.push(0xFF);
+		let (text, _) = decode_preview(&bytes).unwrap();
+		assert!(text.starts_with('é'), "{text:?}");
+		assert!(text.contains('\u{FFFD}'));
+	}
+
+	#[test]
+	fn utf32_bom_is_rejected() {
+		assert_eq!(
+			decode_preview(&[0xFF, 0xFE, 0x00, 0x00, b'A', 0, 0, 0]),
+			None
+		);
+		assert_eq!(
+			decode_preview(&[0x00, 0x00, 0xFE, 0xFF, 0, 0, 0, b'A']),
+			None
+		);
 	}
 
 	#[test]

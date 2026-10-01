@@ -39,8 +39,10 @@ const LANGUAGES: [Language; 2] = [Language::PortugueseBrazil, Language::Spanish]
 fn chat_shell_renders_translated_in_both_languages() {
 	for language in LANGUAGES {
 		let ctx = context(language);
-		let mut view = crate::MessagingUi::default();
-		view.language = language;
+		let mut view = crate::MessagingUi {
+			language,
+			..Default::default()
+		};
 		let mut state: State = test_support::demo_state();
 		let _ = crate::i18n::drain_untranslated_keys();
 		frame(&ctx, 1280.0, 820.0, |ui| {
@@ -56,8 +58,10 @@ fn chat_shell_renders_translated_in_both_languages() {
 fn conversation_surfaces_render_translated_in_both_languages() {
 	for language in LANGUAGES {
 		let ctx = context(language);
-		let mut view = crate::MessagingUi::default();
-		view.language = language;
+		let mut view = crate::MessagingUi {
+			language,
+			..Default::default()
+		};
 		let mut state: State = test_support::demo_state();
 		let channel = state.selected.expect("the fixture selects a conversation");
 		let mut message = test_support::message(4242, channel);
@@ -101,8 +105,10 @@ fn conversation_surfaces_render_translated_in_both_languages() {
 fn voice_surface_renders_translated_in_both_languages() {
 	for language in LANGUAGES {
 		let ctx = context(language);
-		let mut view = crate::MessagingUi::default();
-		view.language = language;
+		let mut view = crate::MessagingUi {
+			language,
+			..Default::default()
+		};
 		let mut state: State = test_support::call_demo_state();
 		let (channel, request) = state
 			.voice
@@ -121,17 +127,33 @@ fn voice_surface_renders_translated_in_both_languages() {
 	}
 }
 
-/// The guard itself: a key the catalog does not know must be reported, otherwise
-/// the surface tests above would pass while a string stays English.
+/// The guard's contract: a key the manifest knows is translated in both bundled
+/// languages, a key it does not know passes through untouched, and a frame that
+/// renders every surface leaves no untranslated key behind.
 #[test]
-fn the_guard_reports_a_key_without_translation() {
-	let ctx = context(Language::PortugueseBrazil);
+fn the_guard_reports_only_keys_the_manifest_knows() {
+	for key in [
+		"Voice & Video",
+		"Save .txt",
+		"Export chat",
+		"Toggle Deleted Highlight",
+		"Retry",
+	] {
+		for language in LANGUAGES {
+			assert_ne!(
+				crate::i18n::text(language, key),
+				key,
+				"{language:?} still shows English for {key:?}"
+			);
+		}
+	}
+	// An unknown runtime reason is not an error and stays quiet.
+	for language in LANGUAGES {
+		assert_eq!(
+			crate::i18n::text(language, "A runtime reason nobody translated"),
+			"A runtime reason nobody translated"
+		);
+	}
 	let _ = crate::i18n::drain_untranslated_keys();
-	frame(&ctx, 240.0, 120.0, |ui| {
-		ui.label(crate::tr_ui!(ui, "Guard probe with no translation"));
-	});
-	assert_eq!(
-		crate::i18n::drain_untranslated_keys(),
-		vec!["Guard probe with no translation".to_owned()]
-	);
+	assert!(crate::i18n::drain_untranslated_keys().is_empty());
 }

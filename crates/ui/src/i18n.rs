@@ -1679,6 +1679,46 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 			"· Salvamento pedido, confira a conexão antes de tentar de novo"
 		}
 		"↪ Forwarded" => "↪ Encaminhada",
+		"Cancel download" => "Cancelar o download",
+		"Choose files…" => "Escolher arquivos…",
+		"Choose where to save this file · up to 100 MiB" => {
+			"Escolha onde salvar este arquivo · até 100 MiB"
+		}
+		"Clear selection" => "Limpar a seleção",
+		"Copy activity" => "Copiar a atividade",
+		"Copy download link" => "Copiar o link de download",
+		"Copy link" => "Copiar o link",
+		"Copy webhook ID" => "Copiar o ID do webhook",
+		"Dismiss" => "Dispensar",
+		"Edit profile" => "Editar o perfil",
+		"Loading profile…" => "Carregando o perfil…",
+		"Mute this direct message's notifications until you unmute it." => {
+			"Silencie as notificações desta mensagem direta até tirar o silenciamento."
+		}
+		"No matching options loaded" => "Nenhuma opção correspondente carregada",
+		"Offline preview · synthetic" => "Prévia offline · sintética",
+		"Open media" => "Abrir a mídia",
+		"Open original…" => "Abrir o original…",
+		"Preview" => "Prévia",
+		"Refine your search to see more results" => "Aperte a busca para ver mais resultados",
+		"Retry profile" => "Tentar o perfil de novo",
+		"Reveal spoiler attachment" => "Mostrar o anexo com spoiler",
+		"Reveal spoiler component" => "Mostrar o componente com spoiler",
+		"Reveal spoiler media" => "Mostrar a mídia com spoiler",
+		"Scroll to zoom · Drag to pan · Double-click to reset" => {
+			"Role para ampliar · Arraste para mover · Duplo clique para restaurar"
+		}
+		"Search options" => "Opções de busca",
+		"Show remaining roles" => "Mostrar os cargos restantes",
+		"Submitting…" => "Enviando…",
+		"This account was deleted. The conversation stays so you can read it." => {
+			"Esta conta foi apagada. A conversa continua para você ler."
+		}
+		"Type to search members; available roles and channels are listed" => {
+			"Digite para buscar membros; os cargos e canais disponíveis aparecem na lista"
+		}
+		"View banner" => "Ver o banner",
+		"View profile picture" => "Ver a foto de perfil",
 		_ => return None,
 	})
 }
@@ -3278,6 +3318,46 @@ fn spanish(key: &str) -> Option<&'static str> {
 			"· Guardado solicitado, revisa la conexión antes de reintentar"
 		}
 		"↪ Forwarded" => "↪ Reenviado",
+		"Cancel download" => "Cancelar la descarga",
+		"Choose files…" => "Elegir archivos…",
+		"Choose where to save this file · up to 100 MiB" => {
+			"Elige dónde guardar este archivo · hasta 100 MiB"
+		}
+		"Clear selection" => "Borrar la selección",
+		"Copy activity" => "Copiar la actividad",
+		"Copy download link" => "Copiar el enlace de descarga",
+		"Copy link" => "Copiar el enlace",
+		"Copy webhook ID" => "Copiar el ID del webhook",
+		"Dismiss" => "Descartar",
+		"Edit profile" => "Editar el perfil",
+		"Loading profile…" => "Cargando el perfil…",
+		"Mute this direct message's notifications until you unmute it." => {
+			"Silencia las notificaciones de este mensaje directo hasta que quites el silencio."
+		}
+		"No matching options loaded" => "Ninguna opción coincidente cargada",
+		"Offline preview · synthetic" => "Vista sin conexión · sintética",
+		"Open media" => "Abrir el archivo",
+		"Open original…" => "Abrir el original…",
+		"Preview" => "Vista previa",
+		"Refine your search to see more results" => "Ajusta la búsqueda para ver más resultados",
+		"Retry profile" => "Reintentar el perfil",
+		"Reveal spoiler attachment" => "Mostrar el archivo adjunto con spoiler",
+		"Reveal spoiler component" => "Mostrar el componente con spoiler",
+		"Reveal spoiler media" => "Mostrar el archivo con spoiler",
+		"Scroll to zoom · Drag to pan · Double-click to reset" => {
+			"Desplaza para ampliar · Arrastra para mover · Doble clic para restablecer"
+		}
+		"Search options" => "Opciones de búsqueda",
+		"Show remaining roles" => "Mostrar los roles restantes",
+		"Submitting…" => "Enviando…",
+		"This account was deleted. The conversation stays so you can read it." => {
+			"Esta cuenta se eliminó. La conversación se conserva para que puedas leerla."
+		}
+		"Type to search members; available roles and channels are listed" => {
+			"Escribe para buscar miembros; los roles y canales disponibles se listan"
+		}
+		"View banner" => "Ver el banner",
+		"View profile picture" => "Ver la foto de perfil",
 		_ => return None,
 	})
 }
@@ -4288,6 +4368,36 @@ mod tests {
 			"used",
 			"· Save requested, check the connection before retrying",
 			"↪ Forwarded",
+			"Cancel download",
+			"Choose files…",
+			"Choose where to save this file · up to 100 MiB",
+			"Clear selection",
+			"Copy activity",
+			"Copy download link",
+			"Copy link",
+			"Copy webhook ID",
+			"Dismiss",
+			"Edit profile",
+			"Loading profile…",
+			"Mute this direct message's notifications until you unmute it.",
+			"No matching options loaded",
+			"Offline preview · synthetic",
+			"Open media",
+			"Open original…",
+			"Preview",
+			"Refine your search to see more results",
+			"Retry profile",
+			"Reveal spoiler attachment",
+			"Reveal spoiler component",
+			"Reveal spoiler media",
+			"Scroll to zoom · Drag to pan · Double-click to reset",
+			"Search options",
+			"Show remaining roles",
+			"Submitting…",
+			"This account was deleted. The conversation stays so you can read it.",
+			"Type to search members; available roles and channels are listed",
+			"View banner",
+			"View profile picture",
 		];
 		for key in KEYS {
 			assert!(portuguese_brazil(key).is_some(), "missing pt-BR: {key}");

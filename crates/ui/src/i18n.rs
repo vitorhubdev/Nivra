@@ -1692,7 +1692,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Offline preview · synthetic" => "Prévia offline · sintética",
 		"Open media" => "Abrir a mídia",
 		"Open original…" => "Abrir o original…",
-		"Refine your search to see more results" => "Aperte a busca para ver mais resultados",
+		"Refine your search to see more results" => "Refine sua busca para ver mais resultados",
 		"Retry profile" => "Tentar o perfil de novo",
 		"Reveal spoiler attachment" => "Mostrar o anexo com spoiler",
 		"Reveal spoiler component" => "Mostrar o componente com spoiler",

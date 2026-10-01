@@ -15,6 +15,7 @@ mod preview_tests {
 			format: text_preview::PreviewFormat::Markdown,
 			text: "# Title\n\nBody text".into(),
 			truncated: false,
+			shown: text_preview::PREVIEW_WINDOW_CHARS,
 		}
 	}
 
@@ -3531,6 +3532,7 @@ impl MessagingUi {
 		}
 		let language = self.language;
 		let mut close = false;
+		let mut more = false;
 		// Move the pending external link out so the shared borrow of `preview`
 		// cannot overlap a mutable borrow of the timeline.
 		let mut opening = self.timeline.opening.take();
@@ -3560,22 +3562,35 @@ impl MessagingUi {
 							if preview.format == text_preview::PreviewFormat::Markdown {
 								let mut images = crate::avatars::Avatars::default();
 								let mut profile = crate::profiles::ProfileSession::default();
-								markdown::Formatted::parse(&preview.text).show_with_images(
-									ui,
-									&mut opening,
-									&[],
-									None,
-									&mut profile,
-									(&mut images, false, &[]),
-								);
+								markdown::Formatted::parse(preview.visible_text())
+									.show_with_images(
+										ui,
+										&mut opening,
+										&[],
+										None,
+										&mut profile,
+										(&mut images, false, &[]),
+									);
 							} else {
 								ui.add(
 									egui::Label::new(
-										RichText::new(preview.text.as_str()).monospace().size(12.0),
+										RichText::new(preview.visible_text())
+											.monospace()
+											.size(12.0),
 									)
 									.wrap()
 									.selectable(true),
 								);
+							}
+							if preview.has_more()
+								&& crate::dialog::action(
+									ui,
+									crate::i18n::text(language, "Show more"),
+									crate::dialog::Action::Neutral,
+								)
+								.clicked()
+							{
+								more = true;
 							}
 						});
 				});
@@ -3593,6 +3608,9 @@ impl MessagingUi {
 			});
 		if opening.is_some() {
 			self.timeline.opening = opening;
+		}
+		if more && let Some(preview) = self.preview.as_mut() {
+			preview.show_more();
 		}
 		if close {
 			self.preview = None;

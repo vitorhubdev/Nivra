@@ -6813,6 +6813,7 @@ impl eframe::App for Desktop {
 										format,
 										text,
 										truncated,
+										shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
 									})
 								});
 								let _ = send.send(result);

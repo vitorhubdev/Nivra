@@ -443,6 +443,7 @@ impl MessagingUi {
 										ui,
 										&mut self.keybinds,
 										&mut self.keybind_capture,
+										&mut self.global_hotkeys,
 										self.global_keybind_status,
 										self.language,
 									),

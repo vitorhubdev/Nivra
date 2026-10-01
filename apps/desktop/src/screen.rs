@@ -509,7 +509,8 @@ impl Screen {
 					Status::RemoteAudio
 					| Status::Speaking(_)
 					| Status::CameraAvailable(_)
-					| Status::Ping(_) => {
+					| Status::Ping(_)
+					| Status::TransportOnly => {
 						return Ok(());
 					}
 				};

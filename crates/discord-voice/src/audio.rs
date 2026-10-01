@@ -63,6 +63,7 @@ pub struct Gate {
 	failed_revision: AtomicU64,
 	input_failed_revision: AtomicU64,
 	input_callbacks: AtomicU64,
+	output_callbacks: AtomicU64,
 	revision: AtomicU64,
 	acknowledged_revision: AtomicU64,
 	media_generation: AtomicU64,
@@ -84,6 +85,7 @@ impl Default for Gate {
 			failed_revision: AtomicU64::new(0),
 			input_failed_revision: AtomicU64::new(0),
 			input_callbacks: AtomicU64::new(0),
+			output_callbacks: AtomicU64::new(0),
 			revision: AtomicU64::new(1),
 			acknowledged_revision: AtomicU64::new(0),
 			media_generation: AtomicU64::new(0),
@@ -334,6 +336,18 @@ impl Audio {
 						worker_gate.echo_reset.store(true, Ordering::Release);
 						emit(Ok(())); // Wake the UI for the recoverable microphone warning.
 					}
+					let output_callbacks = worker_gate.output_callbacks.load(Ordering::Acquire);
+					if output_callbacks != active.output_callbacks {
+						active.output_callbacks = output_callbacks;
+						active.output_activity = Instant::now();
+					} else if active.output_activity.elapsed() >= Duration::from_secs(2)
+						&& worker_gate.ready.load(Ordering::Acquire)
+					{
+						// The playback callback stalled. Reopen the device, not the call.
+						worker_gate
+							.failed_revision
+							.fetch_max(revision, Ordering::AcqRel);
+					}
 					if active._input.is_none()
 						&& worker_gate.input_enabled.load(Ordering::Acquire)
 						&& worker_gate.ready.load(Ordering::Acquire)
@@ -566,6 +580,8 @@ struct Streams {
 	input_gate: crate::activity::InputGate,
 	input_callbacks: u64,
 	input_activity: Instant,
+	output_callbacks: u64,
+	output_activity: Instant,
 	_input: Option<cpal::Stream>,
 	_output: cpal::Stream,
 	input: rtrb::Consumer<Frame>,
@@ -708,6 +724,8 @@ impl Streams {
 		Ok(Self {
 			input_callbacks: gate.input_callbacks.load(Ordering::Acquire),
 			input_activity: Instant::now(),
+			output_callbacks: gate.output_callbacks.load(Ordering::Acquire),
+			output_activity: Instant::now(),
 			_input: input_stream,
 			_output: output_stream,
 			input: input_read,
@@ -909,6 +927,7 @@ where
 		.build_output_stream(
 			*config,
 			move |data: &mut [T], _| {
+				gate.output_callbacks.fetch_add(1, Ordering::Release);
 				output.render(data, channels, &gate);
 			},
 			move |error| {

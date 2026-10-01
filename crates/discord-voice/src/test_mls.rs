@@ -207,7 +207,8 @@ fn guild_three_party_join_remove_and_empty_room_fail_closed() {
 	let proposal = server.remove_proposal(&alice, 4);
 	alice.disconnect(4).unwrap();
 	bob.disconnect(4).unwrap();
-	assert!(!alice.ready);
+	// Charlie left, but Alice and Bob are still in the call. The current epoch keeps sending.
+	assert!(alice.ready);
 	let result = alice.proposals(&proposal).unwrap().unwrap();
 	bob.proposals(&proposal).unwrap();
 	let (commit, welcome) = Delivery::split(&result);

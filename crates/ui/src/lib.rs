@@ -521,12 +521,16 @@ pub struct MessagingUi {
 	pub voice_preview_status: &'static str,
 	/// Device-local application shortcuts; the desktop host mirrors the global binding.
 	pub keybinds: model::Keybinds,
+	/// System-wide mute, deafen and push-to-talk. Off until turned on in Settings.
+	pub global_hotkeys: bool,
 	keybind_capture: Option<model::KeybindAction>,
 	pub global_keybind_status: &'static str,
 	/// Server folders the owner left open; restored from device preferences at startup.
 	pub expanded_folders: Vec<u64>,
 	pub voice_ptt_active: bool,
 	pub voice_privacy_code: Option<String>,
+	/// A non-DAVE participant removed end-to-end encryption. The call itself stays up.
+	pub voice_unencrypted: bool,
 	/// Latest voice-server heartbeat round trip, when a call is connected.
 	pub voice_ping_ms: Option<u32>,
 	/// English place name for the connected voice server, translated at draw time.

@@ -8,6 +8,7 @@ use std::sync::{
 };
 
 const READY: &str = "Global voice keybinds are enabled.";
+const DISABLED: &str = "Global shortcuts are off. Turn them on under Settings, Keybinds.";
 #[cfg(target_os = "linux")]
 const WAYLAND_PENDING: &str = "Approve the global voice keybinds in your desktop's dialog.";
 #[cfg(target_os = "linux")]
@@ -85,7 +86,29 @@ impl Hotkeys {
 		}
 	}
 
-	pub fn sync(&mut self, keybinds: &Keybinds, _runtime: &tokio::runtime::Runtime) {
+	pub fn sync(&mut self, keybinds: &Keybinds, enabled: bool, _runtime: &tokio::runtime::Runtime) {
+		if !enabled {
+			if self.bindings.is_some() {
+				self.unregister_all();
+				self.bindings = None;
+			}
+			self.ptt_down = false;
+			self.mute_down = false;
+			self.deafen_down = false;
+			self.pending_toggles = 0;
+			#[cfg(target_os = "linux")]
+			{
+				if let Some(task) = self.portal.take() {
+					task.abort();
+				}
+				self.portal_pending.store(0, Ordering::Relaxed);
+				self.portal_registered.store(0, Ordering::Relaxed);
+				self.portal_ptt_down.store(false, Ordering::Relaxed);
+				self.portal_status.store(0, Ordering::Relaxed);
+			}
+			self.status = DISABLED;
+			return;
+		}
 		let next = [
 			keybinds.chord(KeybindAction::PushToTalk).clone(),
 			keybinds.chord(KeybindAction::ToggleMute).clone(),
@@ -252,6 +275,9 @@ impl Hotkeys {
 	}
 
 	pub fn status(&self) -> &'static str {
+		if self.status == DISABLED {
+			return DISABLED;
+		}
 		#[cfg(target_os = "linux")]
 		if std::env::var_os("WAYLAND_DISPLAY").is_some() {
 			return match self.portal_status.load(Ordering::Relaxed) {
@@ -535,5 +561,33 @@ mod tests {
 			0,
 			"a second mute inside 400 ms is ignored"
 		);
+	}
+
+	#[test]
+	fn disabled_shortcuts_release_presses_and_the_wayland_portal() {
+		let runtime = tokio::runtime::Builder::new_current_thread()
+			.enable_all()
+			.build()
+			.unwrap();
+		let mut hotkeys = Hotkeys::new(|| {});
+		hotkeys.bindings = Some([
+			KeyChord::default(),
+			KeyChord::default(),
+			KeyChord::default(),
+		]);
+		hotkeys.ptt_down = true;
+		hotkeys.pending_toggles = 1;
+		#[cfg(target_os = "linux")]
+		{
+			hotkeys.portal_ptt_down.store(true, Ordering::Relaxed);
+			hotkeys.portal_registered.store(0b110, Ordering::Relaxed);
+			hotkeys.portal_pending.store(1, Ordering::Relaxed);
+		}
+		hotkeys.sync(&Keybinds::default(), false, &runtime);
+		assert_eq!(hotkeys.status(), DISABLED);
+		assert!(hotkeys.bindings.is_none());
+		assert!(!hotkeys.push_to_talk_down());
+		assert_eq!(hotkeys.global_toggle_mask(), 0);
+		assert_eq!(hotkeys.take_toggle_pending(), 0);
 	}
 }

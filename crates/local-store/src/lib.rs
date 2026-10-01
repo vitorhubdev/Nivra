@@ -72,6 +72,9 @@ pub struct AppPreferences {
 	pub gpu_preference: model::GpuPreference,
 	/// Device-local, account-independent keyboard bindings.
 	pub keybinds: model::Keybinds,
+	/// Global mute, deafen and push-to-talk. Off until the owner turns them on.
+	#[serde(default)]
+	pub global_hotkeys: bool,
 	/// Expanded server folders, bounded so one device preference stays small.
 	pub expanded_folders: Vec<u64>,
 	/// Per-user voice volume overrides, bounded so one device preference stays small.
@@ -161,6 +164,7 @@ impl Default for AppPreferences {
 			output_percent: 100,
 			gpu_preference: Default::default(),
 			keybinds: Default::default(),
+			global_hotkeys: false,
 			expanded_folders: Vec::new(),
 			user_volumes: Vec::new(),
 			muted_users: Vec::new(),
@@ -1935,6 +1939,9 @@ mod tests {
 			serde_json::from_str(r#"{"voice_noise_suppression":true}"#).unwrap();
 		assert!(legacy.voice_processing.is_none());
 		assert!(legacy.voice_noise_suppression);
+		assert!(!legacy.global_hotkeys);
+		let enabled: AppPreferences = serde_json::from_str(r#"{"global_hotkeys":true}"#).unwrap();
+		assert!(enabled.global_hotkeys);
 		let mut value = AppPreferences {
 			notifications_enabled: true,
 			hide_title_bar: true,

@@ -32,6 +32,7 @@ pub(super) fn show(
 	ui: &mut egui::Ui,
 	bindings: &mut Keybinds,
 	capturing: &mut Option<KeybindAction>,
+	global_hotkeys: &mut bool,
 	global_status: &str,
 	language: model::Language,
 ) {
@@ -66,6 +67,13 @@ pub(super) fn show(
 	);
 	voice_section(ui, bindings, capturing, language);
 	ui.add_space(10.0);
+	ui.checkbox(global_hotkeys, t("Enable global shortcuts"));
+	design::hint(
+		ui,
+		t(
+			"Mute, deafen and push-to-talk stay off until you turn this on. They then work even when Nivra is in the background.",
+		),
+	);
 	ui.label(design::eyebrow(ui, t("Global availability"), colors.muted));
 	design::hint(ui, global_status);
 

@@ -65,6 +65,8 @@ pub enum Status {
 	RemoteAudio,
 	/// Latest active user IDs and smoothed energy levels, zero-padded to 64 slots.
 	Speaking(SpeakingState),
+	/// A non-DAVE participant joined. The call stays up on transport encryption only.
+	TransportOnly,
 }
 
 /// Parallel user IDs and `0..=255` energy levels indexed by voice slot.

@@ -25,7 +25,7 @@ Credentials are non-serializable, non-Clone, redacted, zeroized in owned Rust bu
 
 Threats addressed: redirected Authorization leakage, header injection, bot-session substitution, oversized REST/WebSocket input, partial-update corruption, stale session callbacks, uncontrolled queues, automatic ambiguous-write retries, disk account mixing, plaintext-token files and background data collection.
 
-Open risks: unofficial Discord account policy; third-party login page or platform-engine compromise; native dependency supply chain; untested embedded challenge/QR handoff; local users/backups reading unencrypted SQLite; sophisticated permissions/event gaps; incomplete event/subscription coverage; Markdown/font/accessibility coverage; and OS keychain denial/unavailability. No encryption is downgraded for voice; voice is unavailable.
+Open risks: unofficial Discord account policy; third-party login page or platform-engine compromise; native dependency supply chain; untested embedded challenge/QR handoff; local users/backups reading unencrypted SQLite; sophisticated permissions/event gaps; incomplete event/subscription coverage; Markdown/font/accessibility coverage; and OS keychain denial/unavailability. A voice downgrade to transport-only encryption stays connected and is shown to the user; unauthenticated members still fail closed.
 
 Do not report secrets or raw HTTP/Gateway payloads. Error UI uses fixed categories. Default tests use synthetic markers and local transports. No live network account testing in CI.
 

@@ -40,6 +40,7 @@ openmls_basic_credential = "=0.5.0"
 deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "978576aa8400552a4ce9730838c635aa30db5e61", default-features = false, features = ["tract", "default-model"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+libc = "=0.2.189"
 screencapturekit = { version = "=10.0.3", default-features = false, features = ["macos_14_0"] }
 objc2 = "=0.6.4"
 block2 = "=0.6.2"

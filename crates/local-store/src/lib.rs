@@ -1708,10 +1708,20 @@ mod tests {
 			black_box(loaded);
 		}
 		let load = started.elapsed();
+		let page_size: i64 = store
+			.0
+			.pragma_query_value(None, "page_size", |row| row.get(0))
+			.unwrap();
 		let pages: i64 = store
 			.0
 			.pragma_query_value(None, "page_count", |row| row.get(0))
 			.unwrap();
+		let file_bytes = page_size.saturating_mul(pages);
+		let cache_bytes = 2048_i64 * 1024;
+		assert!(
+			file_bytes > 0 && file_bytes <= cache_bytes,
+			"page cache must cover this file: {file_bytes} bytes, cache {cache_bytes}"
+		);
 		store
 			.0
 			.pragma_update(None, "max_page_count", pages)
@@ -1739,7 +1749,7 @@ mod tests {
 		);
 		assert!(store.load_channel(Id(1), Id(2)).unwrap().len() == 50);
 		println!(
-			"sqlite cache_size={cache} (negative means KiB, so 2 MiB) secure_delete={secure}; 20 loads of 50 rows: {load:?}; full-file write rejected in {write:?}"
+			"sqlite cache_size={cache} (negative means KiB, so 2 MiB) file_bytes={file_bytes} secure_delete={secure}; 20 loads of 50 rows: {load:?}; full-file write rejected in {write:?}"
 		);
 	}
 

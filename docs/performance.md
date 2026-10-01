@@ -1885,9 +1885,10 @@ synthetic snapshot; it does not measure this collector reduction.
 
 `cache_size=-2048` stays at 2 MiB. The observed `client.sqlite3` is about
 252 KiB, so the cache already holds the file; raising it would only add RAM.
-`max_page_count=65536` still caps the file at 256 MiB. A write past that cap
-returns `StoreError::Full` and a later read of the existing channel still
-succeeds. `secure_delete=ON` stays: each freed page is overwritten before
+`max_page_count=65536` still caps the file at 256 MiB. A raw write past
+that cap returns `StoreError::Full`, and a later read of another channel
+still succeeds. The normal save path is different: it drops the oldest
+cached channel to make room, then retries. `secure_delete=ON` stays: each freed page is overwritten before
 reuse, so a delete costs about one extra page write, and message text does
 not remain in free pages. CI run 36817239730 printed, for 20 loads of 50
 rows and a rejected write: macOS 5.524875 ms and 68.334 µs, Ubuntu

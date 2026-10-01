@@ -29,6 +29,9 @@ pub struct VideoUi {
 	pub state: VideoState,
 	pub position: f64,
 	pub duration: f64,
+	/// Where the user dragged the bar to. The decoder jumps once, on release; this
+	/// keeps the bar and the clock showing the target in the meantime.
+	pub seek_preview: Option<f64>,
 	pub command: Option<VideoCommand>,
 	pub seen: bool,
 	pub volume: f32,
@@ -53,6 +56,7 @@ impl Default for VideoUi {
 			state: VideoState::Idle,
 			position: 0.0,
 			duration: 0.0,
+			seek_preview: None,
 			command: None,
 			seen: false,
 			volume: 1.0,
@@ -74,6 +78,7 @@ impl VideoUi {
 		self.state = VideoState::Idle;
 		self.position = 0.0;
 		self.duration = 0.0;
+		self.seek_preview = None;
 		self.seen = false;
 		self.command = Some(VideoCommand::Stop);
 	}
@@ -192,6 +197,7 @@ impl VideoUi {
 		self.state = VideoState::Loading;
 		self.position = 0.0;
 		self.duration = 0.0;
+		self.seek_preview = None;
 		self.seen = true;
 		self.command = Some(VideoCommand::Play(attachment.clone()));
 	}
@@ -251,12 +257,12 @@ impl VideoUi {
 			return response;
 		}
 		let label = match state {
-			VideoState::Loading => "Cancel",
-			VideoState::Playing => "Pause",
-			VideoState::Paused => "Resume",
-			VideoState::Ended => "Replay",
-			VideoState::Failed(_) => "Retry",
-			VideoState::Idle => "Play",
+			VideoState::Loading => crate::tr_ui!(ui, "Cancel"),
+			VideoState::Playing => crate::tr_ui!(ui, "Pause"),
+			VideoState::Paused => crate::tr_ui!(ui, "Resume"),
+			VideoState::Ended => crate::tr_ui!(ui, "Replay"),
+			VideoState::Failed(_) => crate::tr_ui!(ui, "Retry"),
+			VideoState::Idle => crate::tr_ui!(ui, "Play"),
 		};
 		let painter = ui.painter().with_clip_rect(stage);
 		painter.rect_filled(stage, CORNER, egui::Color32::BLACK);
@@ -292,7 +298,7 @@ impl VideoUi {
 			egui::WidgetInfo::labeled(
 				egui::Role::Button,
 				ui.is_enabled(),
-				format!("{label} video {}", attachment.filename),
+				format!("{} {}", label, attachment.filename),
 			)
 		});
 		let center = if show_controls {
@@ -348,6 +354,9 @@ impl VideoUi {
 			}
 		}
 		if let VideoState::Failed(error) = state {
+			// A real reason, translated, with the two ways out: try again, or keep
+			// the file. A synthetic embed attachment has nothing to download.
+			let reason = crate::tr_ui!(ui, error);
 			let text_rect = egui::Rect::from_min_max(
 				egui::pos2(stage.left() + 12.0, center.y + 38.0),
 				egui::pos2(stage.right() - 12.0, stage.bottom()),
@@ -359,13 +368,29 @@ impl VideoUi {
 				|ui| {
 					ui.add(
 						egui::Label::new(
-							egui::RichText::new(error)
+							egui::RichText::new(reason)
 								.size(12.0)
 								.color(egui::Color32::from_white_alpha(230)),
 						)
 						.wrap(),
 					)
-					.on_hover_text(error);
+					.on_hover_text(reason);
+					ui.horizontal(|ui| {
+						if ui.small_button(crate::tr_ui!(ui, "Retry")).clicked() {
+							self.toggle(message, attachment, state);
+						}
+						if attachment.size > 0
+							&& ui
+								.small_button(crate::tr_ui!(ui, "Download video"))
+								.on_hover_text(crate::tr_ui!(
+									ui,
+									"Save this video to your computer"
+								))
+								.clicked()
+						{
+							download.request = Some(attachment.clone());
+						}
+					});
 				},
 			);
 		}
@@ -454,18 +479,31 @@ impl VideoUi {
 					ui.spacing_mut().slider_rail_height = 4.0;
 					ui.spacing_mut().interact_size.y = 18.0;
 					ui.spacing_mut().slider_width = ui.available_width().max(16.0);
-					let mut position = self.position.max(0.0);
+					let mut position = self.seek_preview.unwrap_or(self.position).max(0.0);
 					let seek = ui.add_enabled(
 						can_seek,
 						egui::Slider::new(&mut position, 0.0..=duration)
 							.show_value(false)
 							.trailing_fill(true),
 					);
-					seek.widget_info(|| egui::WidgetInfo::slider(can_seek, position, "Seek video"));
+					seek.widget_info(|| {
+						egui::WidgetInfo::slider(
+							can_seek,
+							position,
+							crate::tr_ui!(ui, "Seek video"),
+						)
+					});
 					controls_focused |= seek.has_focus();
 					response |= seek.clone();
-					if seek.on_hover_text("Seek video").changed() && !context_click {
-						self.command = Some(VideoCommand::Seek(position));
+					if can_seek && !context_click && (seek.changed() || seek.drag_stopped()) {
+						// Dragging only moves the bar; the decoder jumps once, on release,
+						// so a long drag cannot queue dozens of native seeks.
+						if seek.is_pointer_button_down_on() {
+							self.seek_preview = Some(position);
+						} else {
+							self.seek_preview = None;
+							self.command = Some(VideoCommand::Seek(position));
+						}
 					}
 					ui.horizontal(|ui| {
 						ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
@@ -521,7 +559,7 @@ impl VideoUi {
 						ui.label(
 							egui::RichText::new(format!(
 								"{} / {}",
-								timestamp(self.position),
+								timestamp(self.seek_preview.unwrap_or(self.position)),
 								if self.duration > 0.0 {
 									timestamp(self.duration)
 								} else {
@@ -844,5 +882,152 @@ mod tests {
 			assert!(video.active.is_none() && video.texture.is_none());
 			assert!(matches!(video.command, Some(VideoCommand::Stop)));
 		}
+	}
+
+	#[test]
+	fn dragging_the_bar_previews_and_jumps_once_on_release() {
+		let mut message = test_support::message(1, Id(2));
+		let attachment = Attachment {
+			id: Id(3),
+			filename: "clip.mp4".into(),
+			description: None,
+			content_type: Some("video/mp4".into()),
+			size: 4096,
+			media: model::EmbedMedia {
+				width: 640,
+				height: 360,
+				..Default::default()
+			},
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+		};
+		message.attachments.push(attachment.clone());
+		let mut video = VideoUi::default();
+		video.begin(&message, &attachment);
+		video.state = VideoState::Playing;
+		video.duration = 100.0;
+		video.position = 10.0;
+		let width = 420.0;
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let frame = |video: &mut VideoUi, events: Vec<egui::Event>| {
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(width + 16.0, 600.0),
+					)),
+					focused: true,
+					events,
+					..Default::default()
+				},
+				|ui| {
+					ui.set_width(width);
+					video.show(
+						ui,
+						&message,
+						&attachment,
+						&mut crate::attachments::DownloadUi::default(),
+						&mut None,
+						false,
+					);
+				},
+			)
+			.drop_without_applying_deltas();
+		};
+		let y = stage_size(&attachment, width).y - BAR_HEIGHT + 15.0;
+		let at = |x: f32| egui::pos2(x, y);
+		let press = |pos: egui::Pos2, pressed: bool| {
+			vec![egui::Event::PointerButton {
+				pos,
+				button: egui::PointerButton::Primary,
+				pressed,
+				modifiers: egui::Modifiers::NONE,
+			}]
+		};
+		frame(&mut video, vec![egui::Event::PointerMoved(at(40.0))]);
+		video.command = None;
+		frame(&mut video, press(at(40.0), true));
+		assert!(video.command.is_none(), "pressing the bar must not seek");
+		let mut previewed = 0.;
+		for x in [120.0, 200.0, 280.0] {
+			frame(&mut video, vec![egui::Event::PointerMoved(at(x))]);
+			previewed = video.seek_preview.expect("drag previews the target");
+			assert!(video.command.is_none(), "dragging must not seek at {x}");
+			assert!(previewed > 10.0, "{previewed}");
+		}
+		frame(&mut video, press(at(280.0), false));
+		assert!(
+			matches!(video.command.take(), Some(VideoCommand::Seek(target)) if (target - previewed).abs() < 1.0),
+			"releasing seeks once to the dragged target"
+		);
+		assert!(video.seek_preview.is_none());
+		for x in [60.0, 300.0, 140.0] {
+			frame(&mut video, press(at(x), true));
+			frame(&mut video, vec![egui::Event::PointerMoved(at(x + 40.0))]);
+			assert!(video.seek_preview.is_some(), "preview at {x}");
+			assert!(video.command.is_none(), "no seek while dragging at {x}");
+			frame(&mut video, press(at(x + 40.0), false));
+			assert!(
+				matches!(video.command.take(), Some(VideoCommand::Seek(_))),
+				"one jump per drag at {x}"
+			);
+		}
+	}
+
+	#[test]
+	fn a_failure_shows_the_reason_with_retry_and_download() {
+		let mut message = test_support::message(1, Id(2));
+		let attachment = Attachment {
+			id: Id(3),
+			filename: "clip.mp4".into(),
+			description: None,
+			content_type: Some("video/mp4".into()),
+			size: 4096,
+			media: model::EmbedMedia {
+				width: 640,
+				height: 360,
+				..Default::default()
+			},
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+		};
+		message.attachments.push(attachment.clone());
+		let mut video = VideoUi::default();
+		video.begin(&message, &attachment);
+		video.state =
+			VideoState::Failed("This video format or codec is not supported on this system.");
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut download = crate::attachments::DownloadUi::default();
+		let output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(436.0, 600.0),
+				)),
+				focused: true,
+				..Default::default()
+			},
+			|ui| {
+				video.show(ui, &message, &attachment, &mut download, &mut None, false);
+			},
+		);
+		let shown = output
+			.shapes
+			.iter()
+			.filter_map(|shape| match &shape.shape {
+				egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+				_ => None,
+			})
+			.collect::<Vec<_>>()
+			.join(" | ");
+		output.drop_without_applying_deltas();
+		assert!(shown.contains("codec"), "{shown}");
+		assert!(shown.contains("Retry"), "{shown}");
+		assert!(shown.contains("Download video"), "{shown}");
+		assert!(download.request.is_none(), "no click, no request");
 	}
 }

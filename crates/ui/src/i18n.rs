@@ -253,6 +253,59 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Watch" => "Assistir",
 		"Open on YouTube" => "Abrir no YouTube",
 		"Open on Vimeo" => "Abrir no Vimeo",
+		"Play" => "Reproduzir",
+		"Pause" => "Pausar",
+		"Resume" => "Continuar",
+		"Replay" => "Assistir de novo",
+		"Retry" => "Tentar de novo",
+		"Cancel" => "Cancelar",
+		"Fullscreen" => "Tela cheia",
+		"Exit fullscreen (Esc)" => "Sair da tela cheia (Esc)",
+		"Seek video" => "Mover no vídeo",
+		"Download video" => "Baixar vídeo",
+		"Save this video to your computer" => "Salvar este vídeo no seu computador",
+		"Video attachment unavailable" => "O anexo de vídeo não está disponível",
+		"This file is not a video" => "Este arquivo não é um vídeo",
+		"Unsupported embed video provider or URL" => "Este vídeo não pode ser reproduzido aqui",
+		"Video preview limit: 100 MiB" => "Limite de prévia de vídeo: 100 MiB",
+		"Video server does not support buffering; download to play externally" => {
+			"O servidor de vídeo não permite tocar aqui; baixe o arquivo para assistir"
+		}
+		"Video download failed or changed; reload the conversation" => {
+			"O download do vídeo falhou ou mudou; recarregue a conversa"
+		}
+		"Video link expired; reload the conversation" => {
+			"O link do vídeo expirou; recarregue a conversa"
+		}
+		"Video worker stopped; restart Nivra" => "O player de vídeo parou; reinicie o Nivra",
+		"Could not start video worker" => "Não foi possível iniciar o player de vídeo",
+		"Video audio output stopped" => "A saída de áudio do vídeo parou",
+		"Unsupported video audio timing" => "O áudio deste vídeo não pode ser sincronizado",
+		"Video buffering stalled; retry or download to play externally" => {
+			"O vídeo travou ao carregar; tente de novo ou baixe o arquivo"
+		}
+		"This video format or codec is not supported on this system." => {
+			"Este formato ou codec de vídeo não funciona neste computador."
+		}
+		"The video could not be decoded safely." => {
+			"Este vídeo não pôde ser reproduzido com segurança."
+		}
+		"Inline playback supports videos up to 1080p." => "A reprodução aqui funciona até 1080p.",
+		"Videos longer than two hours are not supported." => {
+			"Vídeos com mais de duas horas não são suportados."
+		}
+		"This video cannot seek to that position." => {
+			"Este vídeo não pode mudar para essa posição."
+		}
+		"This video format or codec is not supported by Windows." => {
+			"Este formato ou codec de vídeo não é suportado pelo Windows."
+		}
+		"This video format or codec is not supported by macOS." => {
+			"Este formato ou codec de vídeo não é suportado pelo macOS."
+		}
+		"This video format or codec is not supported by GStreamer." => {
+			"Este formato ou codec de vídeo não é suportado pelo GStreamer."
+		}
 		"Nivra does not collect telemetry or upload diagnostics. Discord retains service-side data according to its own policies." => {
 			"O Nivra não coleta telemetria nem envia diagnósticos. O Discord mantém dados do serviço de acordo com as próprias políticas."
 		}
@@ -385,7 +438,6 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Done" => "Pronto",
 		"Failed" => "Falhou",
 		"Cancelled" => "Cancelado",
-		"Retry" => "Tentar de novo",
 		"Open folder" => "Abrir pasta",
 		"Selection copied" => "Seleção copiada",
 		"Selection saved" => "Seleção salva",
@@ -1225,7 +1277,6 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Show cursor" => "Mostrar cursor",
 		"Include the pointer in the shared video." => "Inclui o ponteiro no vídeo compartilhado.",
 		"Share Screen" => "Compartilhar tela",
-		"Cancel" => "Cancelar",
 		"Before you use Nivra" => "Antes de usar o Nivra",
 		"Nivra is an unofficial app for your own Discord account: it is not Discord, it is not endorsed by Discord, and Discord's rules still apply to your account. It also includes other people's work (libraries, fonts and icons) under their own licenses, and accepting here does not waive those licenses or shift their copyright. Continuing confirms that you understand both points." => {
 			"O Nivra é um aplicativo não oficial para a sua própria conta do Discord: não é o Discord, não é endossado pelo Discord, e as regras do Discord continuam valendo para a sua conta. Ele também inclui trabalho de outras pessoas (bibliotecas, fontes e ícones) sob as licenças delas, e aceitar aqui não anula essas licenças nem transfere o direito autoral delas. Ao continuar, você confirma que entendeu esses dois pontos."
@@ -1688,6 +1739,61 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Watch" => "Ver",
 		"Open on YouTube" => "Abrir en YouTube",
 		"Open on Vimeo" => "Abrir en Vimeo",
+		"Play" => "Reproducir",
+		"Pause" => "Pausar",
+		"Resume" => "Continuar",
+		"Replay" => "Ver de nuevo",
+		"Retry" => "Reintentar",
+		"Cancel" => "Cancelar",
+		"Fullscreen" => "Pantalla completa",
+		"Exit fullscreen (Esc)" => "Salir de pantalla completa (Esc)",
+		"Seek video" => "Mover en el video",
+		"Download video" => "Descargar video",
+		"Save this video to your computer" => "Guardar este video en tu computadora",
+		"Video attachment unavailable" => "El archivo adjunto de video no está disponible",
+		"This file is not a video" => "Este archivo no es un video",
+		"Unsupported embed video provider or URL" => "Este video no se puede reproducir aquí",
+		"Video preview limit: 100 MiB" => "Límite de vista previa de video: 100 MiB",
+		"Video server does not support buffering; download to play externally" => {
+			"El servidor de video no permite reproducirlo aquí; descarga el archivo para verlo"
+		}
+		"Video download failed or changed; reload the conversation" => {
+			"La descarga del video falló o cambió; recarga la conversación"
+		}
+		"Video link expired; reload the conversation" => {
+			"El enlace del video expiró; recarga la conversación"
+		}
+		"Video worker stopped; restart Nivra" => {
+			"El reproductor de video se detuvo; reinicia Nivra"
+		}
+		"Could not start video worker" => "No se pudo iniciar el reproductor de video",
+		"Video audio output stopped" => "La salida de audio del video se detuvo",
+		"Unsupported video audio timing" => "El audio de este video no se puede sincronizar",
+		"Video buffering stalled; retry or download to play externally" => {
+			"El video se atascó al cargar; reintenta o descarga el archivo"
+		}
+		"This video format or codec is not supported on this system." => {
+			"Este formato o códec de video no funciona en esta computadora."
+		}
+		"The video could not be decoded safely." => {
+			"Este video no se pudo decodificar de forma segura."
+		}
+		"Inline playback supports videos up to 1080p." => {
+			"La reproducción aquí funciona hasta 1080p."
+		}
+		"Videos longer than two hours are not supported." => {
+			"Los videos de más de dos horas no son compatibles."
+		}
+		"This video cannot seek to that position." => "Este video no puede saltar a esa posición.",
+		"This video format or codec is not supported by Windows." => {
+			"Windows no admite este formato o códec de video."
+		}
+		"This video format or codec is not supported by macOS." => {
+			"macOS no admite este formato o códec de video."
+		}
+		"This video format or codec is not supported by GStreamer." => {
+			"GStreamer no admite este formato o códec de video."
+		}
 		"Nivra does not collect telemetry or upload diagnostics. Discord retains service-side data according to its own policies." => {
 			"Nivra no recopila telemetría ni envía diagnósticos. Discord conserva los datos del servicio según sus propias políticas."
 		}
@@ -1818,7 +1924,6 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Done" => "Listo",
 		"Failed" => "Falló",
 		"Cancelled" => "Cancelado",
-		"Retry" => "Reintentar",
 		"Open folder" => "Abrir carpeta",
 		"Selection copied" => "Selección copiada",
 		"Selection saved" => "Selección guardada",
@@ -2666,7 +2771,6 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Show cursor" => "Mostrar cursor",
 		"Include the pointer in the shared video." => "Incluye el puntero en el video compartido.",
 		"Share Screen" => "Compartir pantalla",
-		"Cancel" => "Cancelar",
 		"Before you use Nivra" => "Antes de usar Nivra",
 		"Nivra is an unofficial app for your own Discord account: it is not Discord, it is not endorsed by Discord, and Discord's rules still apply to your account. It also includes other people's work (libraries, fonts and icons) under their own licenses, and accepting here does not waive those licenses or shift their copyright. Continuing confirms that you understand both points." => {
 			"Nivra es una aplicación no oficial para tu propia cuenta de Discord: no es Discord, Discord no la respalda y las reglas de Discord siguen aplicando a tu cuenta. También incluye trabajo de otras personas (bibliotecas, fuentes e iconos) bajo sus propias licencias, y aceptar aquí no deja sin efecto esas licencias ni transfiere sus derechos de autor. Al continuar, confirmas que entiendes ambos puntos."
@@ -3019,6 +3123,37 @@ mod tests {
 			"Watch",
 			"Open on YouTube",
 			"Open on Vimeo",
+			"Play",
+			"Pause",
+			"Resume",
+			"Replay",
+			"Retry",
+			"Cancel",
+			"Fullscreen",
+			"Exit fullscreen (Esc)",
+			"Seek video",
+			"Download video",
+			"Save this video to your computer",
+			"Video attachment unavailable",
+			"This file is not a video",
+			"Unsupported embed video provider or URL",
+			"Video preview limit: 100 MiB",
+			"Video server does not support buffering; download to play externally",
+			"Video download failed or changed; reload the conversation",
+			"Video link expired; reload the conversation",
+			"Video worker stopped; restart Nivra",
+			"Could not start video worker",
+			"Video audio output stopped",
+			"Unsupported video audio timing",
+			"Video buffering stalled; retry or download to play externally",
+			"This video format or codec is not supported on this system.",
+			"The video could not be decoded safely.",
+			"Inline playback supports videos up to 1080p.",
+			"Videos longer than two hours are not supported.",
+			"This video cannot seek to that position.",
+			"This video format or codec is not supported by Windows.",
+			"This video format or codec is not supported by macOS.",
+			"This video format or codec is not supported by GStreamer.",
 			"Nivra does not collect telemetry or upload diagnostics. Discord retains service-side data according to its own policies.",
 			"Offline preview · changes stay in this session and are never sent.",
 			"Closing the window keeps Nivra in the menu bar. Quit from its menu to exit.",

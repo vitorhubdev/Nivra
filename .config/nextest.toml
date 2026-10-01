@@ -4,3 +4,7 @@
 retries = 0
 fail-fast = false
 slow-timeout = { period = "30s", terminate-after = 2 }
+
+[[profile.ci.overrides]]
+filter = 'test(page_cache_covers_the_file_and_a_full_database_still_reads)'
+success-output = "immediate"

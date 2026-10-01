@@ -1880,3 +1880,16 @@ Timeline-only reads retain 50 rows, metadata-only reads retain 20. The unchanged
 real-Wasm demo regression test and all ten desktop SDK integration tests pass
 with the same 5,000,000-fuel limit. The timing table above uses its original fixed
 synthetic snapshot; it does not measure this collector reduction.
+
+# SQLite page cache - October 1, 2026
+
+`cache_size=-2048` stays at 2 MiB. The observed `client.sqlite3` is about
+252 KiB, so the cache already holds the file; raising it would only add RAM.
+`max_page_count=65536` still caps the file at 256 MiB. A write past that cap
+returns `StoreError::Full` and a later read of the existing channel still
+succeeds. `secure_delete=ON` stays: each freed page is overwritten before
+reuse, so a delete costs about one extra page write, and message text does
+not remain in free pages. The CI test
+`page_cache_covers_the_file_and_a_full_database_still_reads` prints the load
+and the rejected-write times. This is an in-memory synthetic check, not a
+native RSS or frame-time measurement.

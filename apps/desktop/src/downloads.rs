@@ -401,16 +401,31 @@ fn copy_media(
 }
 
 pub(crate) fn original_url(attachment: &Attachment) -> Option<url::Url> {
+	attachment_cdn_url(
+		attachment.media.url.as_deref()?,
+		attachment,
+		"cdn.discordapp.com",
+	)
+}
+/// Discord's media proxy for the same attachment. Used when the signed CDN link is expired.
+pub(crate) fn proxy_attachment_url(attachment: &Attachment) -> Option<url::Url> {
+	attachment_cdn_url(
+		attachment.media.proxy_url.as_deref()?,
+		attachment,
+		"media.discordapp.net",
+	)
+}
+fn attachment_cdn_url(raw: &str, attachment: &Attachment, host: &str) -> Option<url::Url> {
 	if !model::valid_attachments(std::slice::from_ref(attachment))
 		|| attachment.size == 0
 		|| attachment.size > MAX_BYTES
 	{
 		return None;
 	}
-	let url = url::Url::parse(attachment.media.url.as_deref()?).ok()?;
+	let url = url::Url::parse(raw).ok()?;
 	let path: Vec<_> = url.path_segments()?.collect();
 	(url.scheme() == "https"
-		&& url.host_str() == Some("cdn.discordapp.com")
+		&& url.host_str() == Some(host)
 		&& url.port_or_known_default() == Some(443)
 		&& url.username().is_empty()
 		&& url.password().is_none()
@@ -424,10 +439,33 @@ pub(crate) fn original_url(attachment: &Attachment) -> Option<url::Url> {
 		&& !["%2f", "%5c"]
 			.iter()
 			.any(|escape| path[3].to_ascii_lowercase().contains(escape))
-		&& url
-			.query_pairs()
-			.all(|(name, _)| matches!(name.as_ref(), "ex" | "is" | "hm")))
+		&& signed_attachment_query(&url))
 	.then_some(url)
+}
+/// `ex`, `is` and `hm` are the signed-link signature. Extra short names (such as `backend`)
+/// stay on the URL; anything else is refused.
+fn signed_attachment_query(url: &url::Url) -> bool {
+	let mut ex = false;
+	let mut is_param = false;
+	let mut hm = false;
+	for (name, _) in url.query_pairs() {
+		let name = name.as_ref();
+		if name.is_empty()
+			|| name.len() > 32
+			|| !name
+				.bytes()
+				.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+		{
+			return false;
+		}
+		match name {
+			"ex" => ex = true,
+			"is" => is_param = true,
+			"hm" => hm = true,
+			_ => {}
+		}
+	}
+	ex && is_param && hm
 }
 
 struct Partial<'a> {
@@ -785,6 +823,38 @@ mod tests {
             content_type: Some("image/png".into()), size: 1024, spoiler: false,
             media: model::EmbedMedia { url: Some("https://cdn.discordapp.com/attachments/1/2/synthetic%20image.png?ex=123&is=123&hm=abc".into()), ..Default::default() } }
 	}
+	#[test]
+	fn signed_attachment_url_keeps_backend_parameter() {
+		let mut image = attachment();
+		image.filename = "oobe-intro.mp4".into();
+		image.content_type = Some("video/mp4".into());
+		let raw = "https://cdn.discordapp.com/attachments/1395223214048673894/2/oobe-intro.mp4?ex=68dc&is=68db&hm=abc&backend=b2";
+		image.media.url = Some(raw.into());
+		let url = original_url(&image).expect("backend stays on the signed link");
+		assert!(url.as_str().contains("backend=b2"));
+		assert!(
+			url.query_pairs()
+				.any(|(name, value)| name == "backend" && value == "b2")
+		);
+		image.media.url = Some(
+			"https://cdn.discordapp.com/attachments/1395223214048673894/2/oobe-intro.mp4?ex=68dc&is=68db"
+				.into(),
+		);
+		assert!(original_url(&image).is_none(), "missing hm");
+		image.media.url = Some(
+			"https://user@cdn.discordapp.com/attachments/1395223214048673894/2/oobe-intro.mp4?ex=68dc&is=68db&hm=abc&backend=b2"
+				.into(),
+		);
+		assert!(original_url(&image).is_none(), "userinfo");
+		image.media.url = Some(raw.into());
+		image.media.proxy_url = Some(
+			"https://media.discordapp.net/attachments/1395223214048673894/2/oobe-intro.mp4?ex=68dc&is=68db&hm=abc&backend=b2"
+				.into(),
+		);
+		let proxy = proxy_attachment_url(&image).expect("proxy");
+		assert_eq!(proxy.host_str(), Some("media.discordapp.net"));
+		assert!(proxy.as_str().contains("backend=b2"));
+	}
 	async fn endpoint(
 		body: Vec<u8>,
 		chunked: bool,
@@ -1011,6 +1081,8 @@ mod tests {
 			"https://cdn.discordapp.com/attachments/1/2/a.png#fragment",
 			"https://127.0.0.1/attachments/1/2/a.png",
 			"https://media.discordapp.net/attachments/1/2/a.png",
+			"https://cdn.discordapp.com/attachments/1/2/a.png?ex=123&is=123",
+			"https://cdn.discordapp.com/attachments/1/2/a.png?ex=123&is=123&hm=abc&bad.name=1",
 		] {
 			image.media.url = Some(url.into());
 			assert!(original_url(&image).is_none());

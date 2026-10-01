@@ -41,6 +41,7 @@ impl Session {
 struct Request {
 	session: Arc<Session>,
 	url: Option<url::Url>,
+	fallback: Option<url::Url>,
 	size: usize,
 }
 #[derive(Default)]
@@ -122,12 +123,15 @@ impl Video {
 		if !attachment.is_video() || attachment.size == 0 || attachment.size > 100 * 1024 * 1024 {
 			return Err("Video preview limit: 100 MiB");
 		}
-		let url = if demo {
-			None
+		let (url, fallback) = if demo {
+			(None, None)
 		} else {
-			Some(
-				crate::downloads::original_url(&attachment)
-					.ok_or("Video attachment unavailable")?,
+			(
+				Some(
+					crate::downloads::original_url(&attachment)
+						.ok_or("Video attachment unavailable")?,
+				),
+				crate::downloads::proxy_attachment_url(&attachment),
 			)
 		};
 		if self.requests.is_none() {
@@ -162,6 +166,7 @@ impl Video {
 		requests.send_replace(Some(Request {
 			session: session.clone(),
 			url,
+			fallback,
 			size: attachment.size as usize,
 		}));
 		self.session = Some(session);
@@ -181,8 +186,29 @@ fn play(
 ) -> Result<(), &'static str> {
 	use platform::video::Decoder;
 	let session = &request.session;
+	if session.cancelled.load(Ordering::Acquire) {
+		return Ok(());
+	}
+	#[cfg(test)]
+	if source::OFFLINE_PROBE.load(Ordering::Acquire) {
+		return Ok(());
+	}
+	let url = if let Some(primary) = request.url.clone() {
+		match source::resolve_media_url(
+			primary,
+			request.fallback.clone(),
+			session.cancelled.clone(),
+			runtime.clone(),
+		) {
+			Ok(url) => Some(url),
+			Err(_) if session.cancelled.load(Ordering::Acquire) => return Ok(()),
+			Err(error) => return Err(error),
+		}
+	} else {
+		None
+	};
 	let source = source::source(
-		request.url.clone(),
+		url.clone(),
 		request.size,
 		session.cancelled.clone(),
 		runtime.clone(),
@@ -192,7 +218,7 @@ fn play(
 	let decoder = match decoder {
 		Err(platform::video::UNSUPPORTED | platform::video::INVALID) => {
 			let source = source::source(
-				request.url.clone(),
+				url.clone(),
 				request.size,
 				session.cancelled.clone(),
 				runtime.clone(),
@@ -201,6 +227,7 @@ fn play(
 		}
 		result => result,
 	};
+	let _ = url;
 	let decoder = decoder?;
 	let result = play_decoded(decoder, session, ctx);
 	// Cancellation aborts in-flight source reads; that is a clean stop, not a decode failure.
@@ -484,6 +511,7 @@ mod tests {
 		let request = Request {
 			session: session.clone(),
 			url: None,
+			fallback: None,
 			size: 120000,
 		};
 		let handle = runtime.handle().clone();
@@ -547,5 +575,59 @@ mod tests {
 			assert_eq!(session.update.lock().unwrap().state, VideoState::Ended);
 			assert!(session.update.lock().unwrap().position > 2.8);
 		}
+	}
+}
+
+#[cfg(test)]
+mod attachment_url_tests {
+	use super::*;
+
+	#[test]
+	fn play_accepts_attachment_url_with_backend() {
+		let raw = "https://cdn.discordapp.com/attachments/1395223214048673894/2/oobe-intro.mp4?ex=68dc&is=68db&hm=abc&backend=b2";
+		let attachment = model::Attachment {
+			id: model::Id(2),
+			filename: "oobe-intro.mp4".into(),
+			description: None,
+			content_type: Some("video/mp4".into()),
+			size: 1024,
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+			media: model::EmbedMedia {
+				url: Some(raw.into()),
+				..Default::default()
+			},
+		};
+		let resolved = crate::downloads::original_url(&attachment).expect("signed url");
+		assert!(resolved.as_str().contains("backend=b2"));
+		source::OFFLINE_PROBE.store(true, Ordering::Release);
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.unwrap();
+		let mut player = VideoUi::default();
+		let mut video = Video::default();
+		video.command(
+			VideoCommand::Play(attachment),
+			&mut player,
+			runtime.handle(),
+			&eframe::egui::Context::default(),
+			false,
+		);
+		assert!(
+			!matches!(
+				player.state,
+				VideoState::Failed("Video attachment unavailable")
+			),
+			"{:?}",
+			player.state
+		);
+		video.stop();
+		drop(video);
+		std::thread::sleep(std::time::Duration::from_millis(50));
+		source::OFFLINE_PROBE.store(false, Ordering::Release);
+		drop(runtime);
 	}
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## Nivra 1.0.6
+
+A call stays up when someone joins or leaves, through a short resume, and while the PC is stalled. Global shortcuts are off until they are turned on under Settings, Keybinds. Chat can be exported as text or Markdown. The Windows build remains one executable, without a notification install script, and these builds are unsigned.
+
 ## Nivra 1.0.5
 
 SereinExt is now Nivra.

@@ -161,3 +161,51 @@ jobs:
           path: target/fuzz-smoke/*.crash
           if-no-files-found: ignore
           retention-days: 7
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [native, extension-sdk, security, licenses, fuzz]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: nivra-*
+          path: release-assets
+      - name: Publish the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          cd release-assets
+          for dir in nivra-*; do
+            [ -d "$dir" ] || continue
+            rest="${dir#nivra-}"
+            rest="${rest%-unsigned}"
+            os="${rest%-*}"
+            arch="${rest##*-}"
+            case "$os" in
+              Windows)
+                exe="$(find "$dir" -type f -name Nivra.exe -print -quit)"
+                cp "$exe" "Nivra-${tag}-Windows-${arch}.exe"
+                ;;
+              macOS)
+                app="$(find "$dir" -type d -name Nivra.app -print -quit)"
+                (cd "$(dirname "$app")" && zip -r -y "$OLDPWD/Nivra-${tag}-macOS-${arch}.zip" Nivra.app)
+                ;;
+              Linux)
+                tar -czf "Nivra-${tag}-Linux-${arch}.tar.gz" -C "$dir" .
+                ;;
+            esac
+          done
+          sha256sum Nivra-"${tag}"-* > SHA256SUMS.txt
+          notes="$(mktemp)"
+          printf '%s\n' \
+            "Nivra ${version}" \
+            "" \
+            "A chamada continua quando alguém entra ou sai, num resume curto e com o PC travado. Os atalhos globais ficam desligados até serem ligados em Configurações, Atalhos. Dá para exportar a conversa como texto ou Markdown. O Windows continua um único executável, sem script de instalação das notificações. Estes pacotes não têm assinatura." \
+            > "$notes"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "Nivra ${version}" --notes-file "$notes" --verify-tag Nivra-"${tag}"-* SHA256SUMS.txt

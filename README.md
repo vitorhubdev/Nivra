@@ -31,6 +31,10 @@ and is available under MIT OR Apache-2.0.
 Nivra is not affiliated with, endorsed by, or an official client
 of Discord Inc.
 
+### Nivra 1.0.6
+
+A call stays up when someone joins or leaves, through a short resume, and while the PC is stalled. Global shortcuts are off until they are turned on under Settings, Keybinds. Chat can be exported as text or Markdown. The Windows build remains one executable, without a notification install script, and these builds are unsigned.
+
 ### Nivra 1.0.5
 
 SereinExt is now Nivra.
@@ -134,7 +138,7 @@ Stable builds are published on the [Releases page](https://github.com/vitorhubde
 
 - Repository: [`vitorhubdev/Nivra`](https://github.com/vitorhubdev/Nivra)
 - Development branch: `main`
-- Workspace version: `1.0.5`
+- Workspace version: `1.0.6`
 - Version history: [Tags](https://github.com/vitorhubdev/Nivra/tags)
 
 ### Build from source

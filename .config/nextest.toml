@@ -12,3 +12,7 @@ success-output = "immediate"
 [[profile.ci.overrides]]
 filter = 'test(a_long_preview_opens_one_window_at_a_time)'
 success-output = "immediate"
+
+[[profile.ci.overrides]]
+filter = 'test(preview_matrix_names_each_format) | test(native_playback_keeps_file_pixels_and_names_the_decoder)'
+success-output = "immediate"

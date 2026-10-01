@@ -318,4 +318,60 @@ mod tests {
 		assert!(!preview.has_more());
 		println!("decode 20000 ascii chars: {decode:?}");
 	}
+
+	#[test]
+	fn preview_matrix_names_each_format() {
+		use std::time::Instant;
+		// Same split as `attachments::show_subset`: images in the gallery,
+		// video and audio in their players, text and code behind Preview,
+		// everything else (including PDF) on the download card.
+		fn inline_path(kind: crate::attachments::FileKind) -> &'static str {
+			match kind {
+				crate::attachments::FileKind::Image => "inline image",
+				crate::attachments::FileKind::Video => "inline native video player",
+				crate::attachments::FileKind::Audio => "inline audio player",
+				crate::attachments::FileKind::Text | crate::attachments::FileKind::Code => {
+					"preview button, then text layout"
+				}
+				crate::attachments::FileKind::Pdf => "file card; no page renderer",
+				crate::attachments::FileKind::Archive | crate::attachments::FileKind::Other => {
+					"file card"
+				}
+			}
+		}
+		let started = Instant::now();
+		let rows = [
+			("notes.md", Some("text/markdown")),
+			("notes.txt", Some("text/plain")),
+			("main.rs", None),
+			("photo.png", Some("image/png")),
+			("report.pdf", Some("application/pdf")),
+			("voice.mp3", Some("audio/mpeg")),
+			("clip.mp4", Some("video/mp4")),
+			("clip.webm", Some("video/webm")),
+		];
+		for (name, mime) in rows {
+			let kind = crate::attachments::file_kind(name, mime);
+			let text = preview_format(name, mime);
+			let path = inline_path(kind);
+			println!("{name} kind={kind:?} text_preview={text:?} path={path}");
+		}
+		println!("classified 8 formats in {:?}", started.elapsed());
+		assert_eq!(
+			inline_path(crate::attachments::file_kind(
+				"voice.mp3",
+				Some("audio/mpeg")
+			)),
+			"inline audio player"
+		);
+		assert_eq!(
+			inline_path(crate::attachments::file_kind(
+				"report.pdf",
+				Some("application/pdf")
+			)),
+			"file card; no page renderer"
+		);
+		assert!(preview_format("notes.md", None).is_some());
+		assert!(preview_format("voice.mp3", Some("audio/mpeg")).is_none());
+	}
 }

@@ -168,3 +168,33 @@ mod tests {
 		);
 	}
 }
+
+#[cfg(test)]
+mod capability {
+	use super::*;
+
+	#[test]
+	fn native_playback_keeps_file_pixels_and_names_the_decoder() {
+		assert!(check_dimensions(1920, 1080).is_ok());
+		assert_eq!(check_dimensions(3840, 2160), Err(TOO_LARGE));
+		let backend = if cfg!(windows) {
+			"Media Foundation"
+		} else if cfg!(target_os = "macos") {
+			"VideoToolbox and AAC"
+		} else if cfg!(target_os = "linux") {
+			"GStreamer decodebin"
+		} else {
+			"none"
+		};
+		println!("video backend: {backend}");
+		println!(
+			"pixels: the file's own dimensions up to 1920x1080; larger frames are refused, not scaled"
+		);
+		println!(
+			"macOS demuxer: MP4/MOV avc1, hvc1, AAC. WebM, Matroska, VP8, VP9 and AV1 have no in-tree demuxer"
+		);
+		println!("linux: decodebin uses codecs installed on the machine");
+		println!("windows: Media Foundation uses codecs installed on the machine");
+		println!("bundled ffmpeg: not added. VLC: absent");
+	}
+}

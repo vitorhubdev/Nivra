@@ -1618,6 +1618,67 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Proposed composer text" => "Texto proposto para o compositor",
 		"Proposed app action" => "Ação proposta do app",
 		"Apply to Draft" => "Aplicar ao rascunho",
+		"(edited)" => "(editado)",
+		". See all " => ". Ver tudo ",
+		"Application interaction pending…" => "Interação com o aplicativo pendente…",
+		"Archived" => "Arquivado",
+		"Archived posts need a connected session with history access." => {
+			"Publicações arquivadas exigem uma sessão conectada com acesso ao histórico."
+		}
+		"Choose a conversation to see its people." => {
+			"Escolha uma conversa para ver quem participa."
+		}
+		"Clear this draft" => "Limpar este rascunho",
+		"Copy edit text" => "Copiar o texto editado",
+		"Dismiss message" => "Dispensar a mensagem",
+		"Display limited · Copy message for the full text" => {
+			"Exibição limitada · Copie a mensagem para ler o texto todo"
+		}
+		"Draft budget full. Clear an existing draft to continue." => {
+			"Limite de rascunhos cheio. Apague um rascunho existente para continuar."
+		}
+		"Enter a message..." => "Escreva uma mensagem...",
+		"Hide spoilers" => "Ocultar spoilers",
+		"Latest message unavailable" => "Última mensagem indisponível",
+		"Load archived posts" => "Carregar publicações arquivadas",
+		"Load more posts" => "Carregar mais publicações",
+		"Loading archived posts…" => "Carregando publicações arquivadas…",
+		"Loading posts…" => "Carregando publicações…",
+		"Message deleted" => "Mensagem apagada",
+		"No conversation selected" => "Nenhuma conversa selecionada",
+		"No older archived posts reported." => "Nenhuma publicação arquivada antiga informada.",
+		"No people returned for this view." => "Ninguém apareceu nesta visão.",
+		"OFFLINE PREVIEW" => "PRÉVIA OFFLINE",
+		"Older archived posts" => "Publicações arquivadas antigas",
+		"Only you can see this  •" => "Só você vê isto  •",
+		"Open this channel’s threads" => "Abrir os tópicos deste canal",
+		"Pick a channel or direct message from the list." => {
+			"Escolha um canal ou mensagem direta na lista."
+		}
+		"Posting…" => "Publicando…",
+		"Profile and status" => "Perfil e status",
+		"Remove Message" => "Remover a mensagem",
+		"Replying to " => "Respondendo a ",
+		"Retry shortcuts" => "Tentar os atalhos de novo",
+		"Reveal spoiler media" => "Mostrar a mídia com spoiler",
+		"Search loaded conversations (Ctrl/Cmd+K)" => "Buscar conversas carregadas (Ctrl/Cmd+K)",
+		"Search or create a post..." => "Buscar ou criar uma publicação...",
+		"Search this conversation" => "Buscar nesta conversa",
+		"Synthetic data · no network or local storage" => {
+			"Dados sintéticos · sem rede ou armazenamento local"
+		}
+		"This is the beginning of the conversation." => "Este é o início da conversa.",
+		"Thread started from this message" => "Tópico criado a partir desta mensagem",
+		"Title" => "Título",
+		"Toggle Deleted Highlight" => "Alternar o destaque das apagadas",
+		"View original" => "Ver o original",
+		"View original message" => "Ver a mensagem original",
+		"[Deleted message had no text]" => "[A mensagem apagada não tinha texto]",
+		"used" => "usado",
+		"· Save requested, check the connection before retrying" => {
+			"· Salvamento pedido, confira a conexão antes de tentar de novo"
+		}
+		"↪ Forwarded" => "↪ Encaminhada",
 		_ => return None,
 	})
 }
@@ -3154,6 +3215,69 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Proposed composer text" => "Texto propuesto del compositor",
 		"Proposed app action" => "Acción propuesta de la app",
 		"Apply to Draft" => "Aplicar al borrador",
+		"(edited)" => "(editado)",
+		". See all " => ". Ver todo ",
+		"Application interaction pending…" => "Interacción con la aplicación pendiente…",
+		"Archived" => "Archivado",
+		"Archived posts need a connected session with history access." => {
+			"Las publicaciones archivadas necesitan una sesión conectada con acceso al historial."
+		}
+		"Choose a conversation to see its people." => {
+			"Elige una conversación para ver quién participa."
+		}
+		"Clear this draft" => "Borrar este borrador",
+		"Copy edit text" => "Copiar el texto editado",
+		"Dismiss message" => "Descartar el mensaje",
+		"Display limited · Copy message for the full text" => {
+			"Vista limitada · Copia el mensaje para leer el texto completo"
+		}
+		"Draft budget full. Clear an existing draft to continue." => {
+			"Límite de borradores lleno. Borra un borrador existente para continuar."
+		}
+		"Enter a message..." => "Escribe un mensaje...",
+		"Hide spoilers" => "Ocultar spoilers",
+		"Latest message unavailable" => "Último mensaje no disponible",
+		"Load archived posts" => "Cargar publicaciones archivadas",
+		"Load more posts" => "Cargar más publicaciones",
+		"Loading archived posts…" => "Cargando publicaciones archivadas…",
+		"Loading posts…" => "Cargando publicaciones…",
+		"Message deleted" => "Mensaje eliminado",
+		"No conversation selected" => "Ninguna conversación seleccionada",
+		"No older archived posts reported." => {
+			"No se encontraron publicaciones archivadas más antiguas."
+		}
+		"No people returned for this view." => "No se encontró nadie para esta vista.",
+		"OFFLINE PREVIEW" => "VISTA SIN CONEXIÓN",
+		"Older archived posts" => "Publicaciones archivadas antiguas",
+		"Only you can see this  •" => "Solo tú ves esto  •",
+		"Open this channel’s threads" => "Abrir los hilos de este canal",
+		"Pick a channel or direct message from the list." => {
+			"Elige un canal o mensaje directo de la lista."
+		}
+		"Posting…" => "Publicando…",
+		"Profile and status" => "Perfil y estado",
+		"Remove Message" => "Quitar el mensaje",
+		"Replying to " => "Respondiendo a ",
+		"Retry shortcuts" => "Reintentar los atajos",
+		"Reveal spoiler media" => "Mostrar el archivo con spoiler",
+		"Search loaded conversations (Ctrl/Cmd+K)" => "Buscar conversaciones cargadas (Ctrl/Cmd+K)",
+		"Search or create a post..." => "Buscar o crear una publicación...",
+		"Search this conversation" => "Buscar en esta conversación",
+		"Synthetic data · no network or local storage" => {
+			"Datos sintéticos · sin red ni almacenamiento local"
+		}
+		"This is the beginning of the conversation." => "Este es el comienzo de la conversación.",
+		"Thread started from this message" => "Hilo creado a partir de este mensaje",
+		"Title" => "Título",
+		"Toggle Deleted Highlight" => "Alternar el resaltado de los eliminados",
+		"View original" => "Ver el original",
+		"View original message" => "Ver el mensaje original",
+		"[Deleted message had no text]" => "[El mensaje eliminado no tenía texto]",
+		"used" => "usado",
+		"· Save requested, check the connection before retrying" => {
+			"· Guardado solicitado, revisa la conexión antes de reintentar"
+		}
+		"↪ Forwarded" => "↪ Reenviado",
 		_ => return None,
 	})
 }
@@ -4116,6 +4240,54 @@ mod tests {
 			"Connecting…",
 			"Call failed",
 			"A selected message could not be deleted and is back in the conversation",
+			"(edited)",
+			". See all ",
+			"Application interaction pending…",
+			"Archived",
+			"Archived posts need a connected session with history access.",
+			"Choose a conversation to see its people.",
+			"Clear this draft",
+			"Copy edit text",
+			"Dismiss message",
+			"Display limited · Copy message for the full text",
+			"Draft budget full. Clear an existing draft to continue.",
+			"Enter a message...",
+			"Hide spoilers",
+			"Latest message unavailable",
+			"Load archived posts",
+			"Load more posts",
+			"Loading archived posts…",
+			"Loading posts…",
+			"Message deleted",
+			"No conversation selected",
+			"No older archived posts reported.",
+			"No people returned for this view.",
+			"OFFLINE PREVIEW",
+			"Older archived posts",
+			"Only you can see this  •",
+			"Open this channel’s threads",
+			"Pick a channel or direct message from the list.",
+			"Posting…",
+			"Profile and status",
+			"Remove Message",
+			"Replying to ",
+			"Retry",
+			"Retry shortcuts",
+			"Reveal spoiler media",
+			"Search loaded conversations (Ctrl/Cmd+K)",
+			"Search or create a post...",
+			"Search this conversation",
+			"Synthetic data · no network or local storage",
+			"This is the beginning of the conversation.",
+			"Thread started from this message",
+			"Title",
+			"Toggle Deleted Highlight",
+			"View original",
+			"View original message",
+			"[Deleted message had no text]",
+			"used",
+			"· Save requested, check the connection before retrying",
+			"↪ Forwarded",
 		];
 		for key in KEYS {
 			assert!(portuguese_brazil(key).is_some(), "missing pt-BR: {key}");

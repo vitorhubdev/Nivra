@@ -1396,12 +1396,19 @@ impl MessagingUi {
 								.inner_margin(egui::Margin::symmetric(8, 3))
 								.show(ui, |ui| {
 									ui.label(
-										design::semibold(ui, "OFFLINE PREVIEW", 10.0)
-											.color(colors.muted),
+										design::semibold(
+											ui,
+											crate::tr_ui!(ui, "OFFLINE PREVIEW"),
+											10.0,
+										)
+										.color(colors.muted),
 									);
 								})
 								.response
-								.on_hover_text("Synthetic data · no network or local storage");
+								.on_hover_text(crate::tr_ui!(
+									ui,
+									"Synthetic data · no network or local storage"
+								));
 						}
 						if !state.demo
 							&& state.auth != client_core::auth::AuthState::Authenticated
@@ -1424,7 +1431,13 @@ impl MessagingUi {
 			.filter(|list| Some(list.channel) == state.selected)
 		else {
 			ui.add_space(8.0);
-			ui.label(RichText::new("Choose a conversation to see its people.").color(colors.muted));
+			ui.label(
+				RichText::new(crate::tr_ui!(
+					ui,
+					"Choose a conversation to see its people."
+				))
+				.color(colors.muted),
+			);
 			return;
 		};
 		let has_entry = list.slots.iter().any(|slot| slot.is_some()) || cached;
@@ -1439,7 +1452,7 @@ impl MessagingUi {
 				ui.label(RichText::new(text).small().color(colors.muted));
 			} else {
 				ui.label(
-					RichText::new("No people returned for this view.")
+					RichText::new(crate::tr_ui!(ui, "No people returned for this view."))
 						.small()
 						.color(colors.muted),
 				);
@@ -1880,7 +1893,10 @@ impl MessagingUi {
 								},
 							)
 							.inner
-							.on_hover_text("Search loaded conversations (Ctrl/Cmd+K)");
+							.on_hover_text(crate::tr_ui!(
+								ui,
+								"Search loaded conversations (Ctrl/Cmd+K)"
+							));
 						find.widget_info(|| {
 							egui::WidgetInfo::labeled(
 								egui::Role::Button,
@@ -1950,7 +1966,7 @@ impl MessagingUi {
 				}
 				if !self.channel_preferences_status.is_empty() {
 					ui.colored_label(design::palette(ui).warning, self.channel_preferences_status);
-					if ui.button("Retry shortcuts").clicked() {
+					if ui.button(crate::tr_ui!(ui, "Retry shortcuts")).clicked() {
 						if self.channel_preferences_loaded {
 							self.channel_preferences_changed = true;
 						} else {
@@ -2059,7 +2075,9 @@ impl MessagingUi {
 									profiles::presence_color(self.own_presence.status.wire()),
 									colors.raised,
 								);
-								anchor = Some(avatar.on_hover_text("Profile and status"));
+								anchor = Some(
+									avatar.on_hover_text(crate::tr_ui!(ui, "Profile and status")),
+								);
 							}
 							ui.with_layout(
 								egui::Layout::right_to_left(egui::Align::Center),
@@ -2140,7 +2158,10 @@ impl MessagingUi {
 													ui.scope_id().with("account-identity"),
 													egui::Sense::click(),
 												)
-												.on_hover_text("Profile and status");
+												.on_hover_text(crate::tr_ui!(
+													ui,
+													"Profile and status"
+												));
 											identity.widget_info(|| {
 												egui::WidgetInfo::labeled(
 													egui::Role::Button,
@@ -2341,7 +2362,12 @@ impl MessagingUi {
 									pill_text,
 								);
 								if enabled
-									&& response.on_hover_text("Search this conversation").clicked()
+									&& response
+										.on_hover_text(crate::tr_ui!(
+											ui,
+											"Search this conversation"
+										))
+										.clicked()
 								{
 									if state.archives.is_some() {
 										commands.push(state.clear_archives());
@@ -2742,9 +2768,12 @@ impl MessagingUi {
 				);
 				if self.edit_sent {
 					ui.label(
-						RichText::new("· Save requested, check the connection before retrying")
-							.size(12.0)
-							.color(colors.muted),
+						RichText::new(crate::tr_ui!(
+							ui,
+							"· Save requested, check the connection before retrying"
+						))
+						.size(12.0)
+						.color(colors.muted),
 					);
 				}
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2754,7 +2783,7 @@ impl MessagingUi {
 						&& ui
 							.add(
 								egui::Button::new(
-									RichText::new("Copy edit text")
+									RichText::new(crate::tr_ui!(ui, "Copy edit text"))
 										.size(12.0)
 										.color(colors.muted),
 								)
@@ -2775,7 +2804,11 @@ impl MessagingUi {
 				.to_owned();
 			let cap = composer_cap(ui, &colors, |ui| {
 				ui.spacing_mut().item_spacing.x = 0.0;
-				ui.label(RichText::new("Replying to ").size(13.0).color(colors.muted));
+				ui.label(
+					RichText::new(crate::tr_ui!(ui, "Replying to "))
+						.size(13.0)
+						.color(colors.muted),
+				);
 				ui.label(design::semibold(ui, author.as_str(), 13.0).color(colors.text_strong));
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					ui.spacing_mut().item_spacing.x = 6.0;
@@ -2789,7 +2822,7 @@ impl MessagingUi {
 						.add_enabled(
 							state.can_open_reply_target(reply.target()),
 							egui::Button::new(
-								RichText::new("View original")
+								RichText::new(crate::tr_ui!(ui, "View original"))
 									.size(12.0)
 									.color(colors.muted),
 							)
@@ -2811,8 +2844,13 @@ impl MessagingUi {
 		let full = state.draft_bytes() >= MAX_DRAFT_BYTES
 			|| (!state.drafts.contains_key(&channel) && state.drafts.len() >= 64);
 		if full && !editing_here {
-			ui.label("Draft budget full. Clear an existing draft to continue.");
-			if state.drafts.contains_key(&channel) && ui.button("Clear this draft").clicked() {
+			ui.label(crate::tr_ui!(
+				ui,
+				"Draft budget full. Clear an existing draft to continue."
+			));
+			if state.drafts.contains_key(&channel)
+				&& ui.button(crate::tr_ui!(ui, "Clear this draft")).clicked()
+			{
 				self.clear_draft(state, channel);
 			}
 			return;
@@ -4486,13 +4524,20 @@ impl MessagingUi {
 					ui.add_space((ui.available_height() * 0.32).max(24.0));
 					ui.vertical_centered(|ui| {
 						ui.label(
-							design::semibold(ui, "No conversation selected", 20.0)
-								.color(colors.text_strong),
+							design::semibold(
+								ui,
+								crate::tr_ui!(ui, "No conversation selected"),
+								20.0,
+							)
+							.color(colors.text_strong),
 						);
 						ui.add_space(8.0);
 						ui.label(
-							RichText::new("Pick a channel or direct message from the list.")
-								.color(colors.muted),
+							RichText::new(crate::tr_ui!(
+								ui,
+								"Pick a channel or direct message from the list."
+							))
+							.color(colors.muted),
 						);
 					});
 					return;

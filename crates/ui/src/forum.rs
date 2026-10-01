@@ -276,7 +276,7 @@ impl ForumUi {
 								egui::TextEdit::singleline(&mut self.query)
 									.char_limit(MAX_TITLE)
 									.frame(egui::Frame::NONE)
-									.hint_text("Search or create a post...")
+									.hint_text(crate::tr_ui!(ui, "Search or create a post..."))
 									.font(egui::TextStyle::Body)
 									.desired_width(ui.available_width().max(60.0)),
 							);
@@ -391,7 +391,8 @@ impl ForumUi {
 										))
 										.text_color(colors.text_strong)
 										.hint_text(
-											design::semibold(ui, "Title", 20.0).color(colors.muted),
+											design::semibold(ui, crate::tr_ui!(ui, "Title"), 20.0)
+												.color(colors.muted),
 										)
 										.desired_width(f32::INFINITY),
 								);
@@ -405,7 +406,7 @@ impl ForumUi {
 										.char_limit(MAX_CONTENT)
 										.frame(egui::Frame::NONE)
 										.hint_text(
-											RichText::new("Enter a message...")
+											RichText::new(crate::tr_ui!(ui, "Enter a message..."))
 												.size(15.0)
 												.color(colors.muted),
 										)
@@ -519,7 +520,10 @@ impl ForumUi {
 									);
 									submit = post.clicked();
 									if posting {
-										ui.label(RichText::new("Posting…").color(colors.muted));
+										ui.label(
+											RichText::new(crate::tr_ui!(ui, "Posting…"))
+												.color(colors.muted),
+										);
 									} else if let Some(error) = error {
 										ui.label(RichText::new(error).color(colors.danger));
 									}
@@ -657,7 +661,7 @@ fn card(
 							});
 						} else {
 							ui.label(
-								RichText::new("Latest message unavailable")
+								RichText::new(crate::tr_ui!(ui, "Latest message unavailable"))
 									.size(14.0)
 									.color(colors.muted),
 							);
@@ -687,7 +691,11 @@ fn card(
 							);
 							if archived {
 								ui.label(RichText::new("·").color(colors.muted));
-								ui.label(RichText::new("Archived").size(13.0).color(colors.muted));
+								ui.label(
+									RichText::new(crate::tr_ui!(ui, "Archived"))
+										.size(13.0)
+										.color(colors.muted),
+								);
 							}
 						});
 					});
@@ -721,7 +729,7 @@ fn posts_footer(ui: &mut egui::Ui, state: &State, forum: Id) -> bool {
 	ui.horizontal_wrapped(|ui| {
 		if state.posts.loading {
 			ui.label(
-				RichText::new("Loading posts…")
+				RichText::new(crate::tr_ui!(ui, "Loading posts…"))
 					.size(13.0)
 					.color(colors.muted),
 			);
@@ -730,14 +738,14 @@ fn posts_footer(ui: &mut egui::Ui, state: &State, forum: Id) -> bool {
 			request = ui
 				.add_enabled(
 					state.can_load_posts(forum),
-					egui::Button::new(RichText::new("Retry").size(13.0)),
+					egui::Button::new(RichText::new(crate::tr_ui!(ui, "Retry")).size(13.0)),
 				)
 				.clicked();
 		} else if state.posts.more {
 			request = ui
 				.add(
 					egui::Button::new(
-						RichText::new("Load more posts")
+						RichText::new(crate::tr_ui!(ui, "Load more posts"))
 							.size(13.0)
 							.color(colors.link),
 					)
@@ -764,7 +772,7 @@ fn archive_footer(
 			let button = ui.add_enabled(
 				allowed,
 				egui::Button::new(
-					RichText::new("Load archived posts")
+					RichText::new(crate::tr_ui!(ui, "Load archived posts"))
 						.size(13.0)
 						.color(colors.link),
 				)
@@ -775,15 +783,18 @@ fn archive_footer(
 			}
 			if !allowed {
 				ui.label(
-					RichText::new("Archived posts need a connected session with history access.")
-						.size(12.0)
-						.color(colors.muted),
+					RichText::new(crate::tr_ui!(
+						ui,
+						"Archived posts need a connected session with history access."
+					))
+					.size(12.0)
+					.color(colors.muted),
 				);
 			}
 		}
 		Some(view) if view.loading => {
 			ui.label(
-				RichText::new("Loading archived posts…")
+				RichText::new(crate::tr_ui!(ui, "Loading archived posts…"))
 					.size(13.0)
 					.color(colors.muted),
 			);
@@ -794,7 +805,7 @@ fn archive_footer(
 				if ui
 					.add_enabled(
 						allowed,
-						egui::Button::new(RichText::new("Retry").size(13.0)),
+						egui::Button::new(RichText::new(crate::tr_ui!(ui, "Retry")).size(13.0)),
 					)
 					.clicked()
 				{
@@ -806,7 +817,7 @@ fn archive_footer(
 						.add_enabled(
 							allowed,
 							egui::Button::new(
-								RichText::new("Older archived posts")
+								RichText::new(crate::tr_ui!(ui, "Older archived posts"))
 									.size(13.0)
 									.color(colors.link),
 							)
@@ -818,7 +829,7 @@ fn archive_footer(
 					}
 				} else {
 					ui.label(
-						RichText::new("No older archived posts reported.")
+						RichText::new(crate::tr_ui!(ui, "No older archived posts reported."))
 							.size(12.0)
 							.color(colors.muted),
 					);

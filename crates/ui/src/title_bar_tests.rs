@@ -57,14 +57,37 @@ fn title_bar_layout_rects(output: &egui::FullOutput) -> Vec<egui::Rect> {
 	rects
 }
 
-fn gateway_dot_center(output: &egui::FullOutput) -> Option<egui::Pos2> {
-	output.shapes.iter().find_map(|clipped| {
-		if let egui::Shape::Circle(circle) = &clipped.shape {
-			((circle.radius - 3.0).abs() < 0.01).then_some(circle.center)
-		} else {
-			None
-		}
-	})
+fn gateway_signal_point(output: &egui::FullOutput) -> Option<egui::Pos2> {
+	let bars: Vec<_> = output
+		.shapes
+		.iter()
+		.filter_map(|clipped| {
+			let egui::Shape::Rect(shape) = &clipped.shape else {
+				return None;
+			};
+			let rect = shape.rect;
+			(rect.width() > 1.5
+				&& rect.width() < 2.5
+				&& rect.height() >= 3.5
+				&& rect.height() <= 14.0
+				&& rect.top() < 36.0)
+				.then_some(rect)
+		})
+		.collect();
+	if bars.len() < 4 {
+		return None;
+	}
+	let left = bars.iter().map(|rect| rect.left()).fold(f32::MAX, f32::min);
+	let right = bars
+		.iter()
+		.map(|rect| rect.right())
+		.fold(f32::MIN, f32::max);
+	let top = bars.iter().map(|rect| rect.top()).fold(f32::MAX, f32::min);
+	let bottom = bars
+		.iter()
+		.map(|rect| rect.bottom())
+		.fold(f32::MIN, f32::max);
+	Some(egui::pos2((left + right) / 2.0, (top + bottom) / 2.0))
 }
 
 fn connected_gateway_state() -> State {
@@ -171,28 +194,78 @@ fn gateway_status_dot_color_respects_latency_bands() {
 		since: Instant::now(),
 	});
 	assert_eq!(
-		MessagingUi::gateway_status_dot_color(&colors, &reconnecting),
+		MessagingUi::gateway_status_color(&colors, &reconnecting),
 		colors.warning
 	);
 	let disconnected = State::default();
 	assert_eq!(
-		MessagingUi::gateway_status_dot_color(&colors, &disconnected),
+		MessagingUi::gateway_status_color(&colors, &disconnected),
 		colors.danger
 	);
 	let mut good = State::default();
 	good.gateway_connected = true;
-	good.gateway_ping_ms = Some(80);
+	good.gateway_ping_ms = Some(250);
 	assert_eq!(
-		MessagingUi::gateway_status_dot_color(&colors, &good),
+		MessagingUi::gateway_status_color(&colors, &good),
 		colors.positive
 	);
-	let mut slow = State::default();
-	slow.gateway_connected = true;
-	slow.gateway_ping_ms = Some(250);
+	let mut fair = State::default();
+	fair.gateway_connected = true;
+	fair.gateway_ping_ms = Some(500);
 	assert_eq!(
-		MessagingUi::gateway_status_dot_color(&colors, &slow),
+		MessagingUi::gateway_status_color(&colors, &fair),
 		colors.warning
 	);
+	let mut poor = State::default();
+	poor.gateway_connected = true;
+	poor.gateway_ping_ms = Some(501);
+	assert_eq!(
+		MessagingUi::gateway_status_color(&colors, &poor),
+		colors.danger
+	);
+	assert_eq!(MessagingUi::gateway_signal_bars(&good), 4);
+	assert_eq!(MessagingUi::gateway_signal_bars(&fair), 2);
+	assert_eq!(MessagingUi::gateway_signal_bars(&poor), 1);
+	assert_eq!(
+		MessagingUi::gateway_status_label(model::Language::PortugueseBrazil, &good),
+		"Conectado · ping 250 ms"
+	);
+	assert_eq!(
+		MessagingUi::gateway_status_label(model::Language::Spanish, &reconnecting),
+		"Reconectando…"
+	);
+	assert_eq!(
+		MessagingUi::gateway_status_label(model::Language::English, &disconnected),
+		"No connection"
+	);
+}
+
+#[test]
+fn stable_title_bar_draws_no_version_circle() {
+	let orange = egui::Color32::from_rgb(0xe8, 0xa3, 0x3d);
+	for width in [320.0, 480.0, 960.0] {
+		let ctx = egui::Context::default();
+		let mut view = MessagingUi::default();
+		assert_eq!(view.build.channel, design::Channel::Stable);
+		view.build.version = "1.0.7";
+		let output = frame_output(&ctx, &mut view, &connected_gateway_state(), width, vec![]);
+		assert!(
+			gateway_signal_point(&output).is_some(),
+			"signal icon stays visible at {width}"
+		);
+		let version_dot = output.shapes.iter().any(|clipped| {
+			matches!(
+				&clipped.shape,
+				egui::Shape::Circle(circle)
+					if (circle.radius - 4.0).abs() < 0.2 && circle.fill == orange
+			)
+		});
+		assert!(
+			!version_dot,
+			"stable title bar has no version circle at {width}"
+		);
+		output.drop_without_applying_deltas();
+	}
 }
 
 #[test]
@@ -202,7 +275,7 @@ fn title_bar_layout_is_identical_with_and_without_gateway_hover() {
 	let width = 960.0;
 	let mut view = MessagingUi::default();
 	let baseline = frame_output(&ctx, &mut view, &state, width, vec![]);
-	let dot = gateway_dot_center(&baseline).expect("title bar renders the gateway status dot");
+	let dot = gateway_signal_point(&baseline).expect("title bar renders the signal icon");
 	let hovered = frame_output(
 		&ctx,
 		&mut view,

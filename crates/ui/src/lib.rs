@@ -1201,12 +1201,12 @@ impl MessagingUi {
 		}
 	}
 
-	const GATEWAY_PING_GOOD_MS: u32 = 150;
+	/// Green through this ping. 150 ms was always yellow from Brazil.
+	pub(crate) const GATEWAY_PING_GOOD_MS: u32 = 250;
+	/// Yellow through this ping. Above it, or with no connection, the mark is red.
+	pub(crate) const GATEWAY_PING_FAIR_MS: u32 = 500;
 
-	pub(crate) fn gateway_status_dot_color(
-		colors: &design::Palette,
-		state: &State,
-	) -> egui::Color32 {
+	pub(crate) fn gateway_status_color(colors: &design::Palette, state: &State) -> egui::Color32 {
 		if state.gateway_reconnect.is_some() {
 			return colors.warning;
 		}
@@ -1214,65 +1214,67 @@ impl MessagingUi {
 			return colors.danger;
 		}
 		match state.gateway_ping_ms {
-			Some(ms) if ms < Self::GATEWAY_PING_GOOD_MS => colors.positive,
-			Some(_) => colors.warning,
+			Some(ms) if ms <= Self::GATEWAY_PING_GOOD_MS => colors.positive,
+			Some(ms) if ms <= Self::GATEWAY_PING_FAIR_MS => colors.warning,
+			Some(_) => colors.danger,
 			None => colors.positive,
 		}
 	}
 
-	pub(crate) fn format_gateway_connected_duration(since: std::time::Instant) -> String {
-		let seconds = since.elapsed().as_secs();
-		if seconds < 60 {
-			format!("{seconds}s")
-		} else if seconds < 3600 {
-			format!("{}m {}s", seconds / 60, seconds % 60)
-		} else {
-			format!("{}h {}m", seconds / 3600, (seconds / 60) % 60)
+	/// How many signal bars to fill: 4 green, 2 yellow, 1 red.
+	pub(crate) fn gateway_signal_bars(state: &State) -> u8 {
+		if state.gateway_reconnect.is_some() {
+			return 2;
+		}
+		if !state.gateway_connected {
+			return 1;
+		}
+		match state.gateway_ping_ms {
+			Some(ms) if ms <= Self::GATEWAY_PING_GOOD_MS => 4,
+			Some(ms) if ms <= Self::GATEWAY_PING_FAIR_MS => 2,
+			Some(_) => 1,
+			None => 4,
+		}
+	}
+
+	pub(crate) fn gateway_status_label(language: model::Language, state: &State) -> String {
+		if state.gateway_reconnect.is_some() {
+			return crate::i18n::text(language, "Reconnecting…").to_owned();
+		}
+		if !state.gateway_connected {
+			return crate::i18n::text(language, "No connection").to_owned();
+		}
+		match state.gateway_ping_ms {
+			Some(ms) => format!(
+				"{} · ping {ms} ms",
+				crate::i18n::text(language, "Connected")
+			),
+			None => crate::i18n::text(language, "Connected").to_owned(),
 		}
 	}
 
 	fn title_bar_gateway_status(&mut self, ui: &mut egui::Ui, state: &State) {
 		let colors = design::palette(ui);
-		let dot_color = Self::gateway_status_dot_color(&colors, state);
-		let (dot_rect, dot_response) =
-			ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
-		ui.painter()
-			.circle_filled(dot_rect.center(), 3.0, dot_color);
+		let color = Self::gateway_status_color(&colors, state);
+		let bars = Self::gateway_signal_bars(state);
+		let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
+		let dim = color.gamma_multiply(0.28);
+		for index in 0..4 {
+			let height = 4.0 + index as f32 * 3.0;
+			let left = rect.left() + index as f32 * 4.0;
+			let bar = egui::Rect::from_min_max(
+				egui::pos2(left, rect.bottom() - height),
+				egui::pos2(left + 2.0, rect.bottom()),
+			);
+			let fill = if index < u32::from(bars) { color } else { dim };
+			ui.painter().rect_filled(bar, 1.0, fill);
+		}
 		let language = self.language;
-		let ping = state.gateway_ping_ms;
-		let host = state.gateway_host.clone();
-		let since = state.gateway_connected_since;
-		let connected = state.gateway_connected;
-		let reconnecting = !connected || state.gateway_reconnect.is_some();
+		let label = Self::gateway_status_label(language, state);
+		let reconnecting = state.gateway_reconnect.is_some() || !state.gateway_connected;
 		let mut reconnect = false;
-		dot_response.on_hover_ui(|ui| {
-			ui.spacing_mut().item_spacing.y = 4.0;
-			let ping_label = if let Some(ms) = ping {
-				format!("{} {ms} ms", crate::i18n::text(language, "Ping"))
-			} else if connected {
-				format!("{} …", crate::i18n::text(language, "Ping"))
-			} else {
-				format!("{} —", crate::i18n::text(language, "Ping"))
-			};
-			ui.label(design::semibold(ui, ping_label, 13.0));
-			if !host.is_empty() {
-				ui.label(
-					RichText::new(host)
-						.size(12.0)
-						.color(design::palette(ui).muted),
-				);
-			}
-			if let Some(since) = since {
-				let duration = Self::format_gateway_connected_duration(since);
-				ui.label(
-					RichText::new(format!(
-						"{} {duration}",
-						crate::i18n::text(language, "Connected for")
-					))
-					.size(12.0)
-					.color(design::palette(ui).muted),
-				);
-			}
+		response.on_hover_ui(|ui| {
+			ui.label(label);
 			if reconnecting
 				&& ui
 					.button(crate::i18n::text(language, "Reconnect now"))

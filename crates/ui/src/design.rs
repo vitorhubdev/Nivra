@@ -1854,7 +1854,8 @@ mod tests {
 	}
 }
 
-/// Release channel shown in the title bar. Stable builds keep a small version dot.
+/// Release channel shown in the title bar. Stable builds do not draw a badge;
+/// the version lives in Settings, About.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Channel {
 	#[default]
@@ -1867,24 +1868,12 @@ pub struct Build {
 	pub channel: Channel,
 	pub version: &'static str,
 }
-/// Small orange dot beside the window controls. Hover reveals the version.
-fn version_dot(ui: &mut egui::Ui, version: &str) -> egui::Response {
-	let (rect, response) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-	ui.painter()
-		.circle_filled(rect.center(), 4.0, rgb(0xe8a33d));
-	let label = if version.is_empty() {
-		"Nivra".to_owned()
-	} else {
-		format!("Nivra {version}")
-	};
-	response.on_hover_text(label)
-}
-
 /// Gradient release pill with a glow, a channel glyph and the version.
-/// Stable builds show the orange version dot beside the window controls.
+/// Stable builds draw nothing here. A narrow slot also draws nothing: a clipped
+/// pill used to fall back to an orange dot that looked like a status light.
 pub fn build_badge(ui: &mut egui::Ui, build: Build) -> Option<egui::Response> {
 	let (label, hint, stops) = match build.channel {
-		Channel::Stable => return Some(version_dot(ui, build.version)),
+		Channel::Stable => return None,
 		Channel::Nightly => (
 			"NIGHTLY",
 			"Nightly build from the latest main. Unofficial client; live compatibility is unverified.",
@@ -1915,10 +1904,8 @@ pub fn build_badge(ui: &mut egui::Ui, build: Build) -> Option<egui::Response> {
 		+ 5.0 + title.size().x
 		+ version.as_ref().map_or(0.0, |v| 13.0 + v.size().x)
 		+ PAD;
-	// The title-bar slot is often only wide enough for the orange cap. A clipped
-	// pill looks like a dot and hides the version, so use the hover dot instead.
 	if ui.available_width() < width {
-		return Some(version_dot(ui, build.version));
+		return None;
 	}
 	let (rect, response) = ui.allocate_exact_size(egui::vec2(width, HEIGHT), egui::Sense::hover());
 	let painter = ui.painter();

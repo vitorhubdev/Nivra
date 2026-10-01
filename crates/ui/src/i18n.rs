@@ -1973,7 +1973,6 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"Platform login webview unavailable" => "La ventana de inicio de sesión no abrió",
 		"Interface language" => "Idioma de la interfaz",
 		"Loading discord.com…" => "Abriendo discord.com…",
-		"Cancel" => "Cancelar",
 		"Welcome back" => "Bienvenido de nuevo",
 		"Welcome to Nivra" => "Bienvenido a Nivra",
 		"Continue with a saved account, or sign in with another one." => {

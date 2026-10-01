@@ -1807,7 +1807,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 			"Mensagens fixadas indisponíveis sem conexão ou sem acesso ao canal."
 		}
 		"Recipients will land in" => "Os destinatários vão chegar em",
-		"Refine your search to see more results" => "Aperte a busca para ver mais resultados",
+		"Refine your search to see more results" => "Refine sua busca para ver mais resultados",
 		"Remove Role / Member" => "Remover cargo / membro",
 		"Remove dates" => "Remover as datas",
 		"Remove emoji" => "Remover o emoji",
@@ -1834,7 +1834,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"Seek voice message" => "Mover a mensagem de voz",
 		"Show remaining roles" => "Mostrar os cargos restantes",
 		"Showing the first 1,000 custom emoji. Refine your search for more." => {
-			"Mostrando os primeiros 1.000 emojis próprios. Aperte a busca para ver mais."
+			"Mostrando os primeiros 1.000 emojis próprios. Refine a busca para ver mais."
 		}
 		"Showing the first 500 stickers. Search to narrow the results." => {
 			"Mostrando os primeiros 500 adesivos. Busque para refinar o resultado."

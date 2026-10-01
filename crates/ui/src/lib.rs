@@ -1137,6 +1137,11 @@ impl MessagingUi {
 		if clear_batch {
 			self.deleting_batch = None;
 		}
+		if self.timeline.inline_edit.as_ref().is_some_and(|edit| {
+			edit.channel == channel && ids.contains(&edit.message) && edit.text == edit.original
+		}) {
+			self.timeline.cancel_inline_edit();
+		}
 		let Some((edit_channel, message, _)) = &self.editing else {
 			return;
 		};

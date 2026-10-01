@@ -1201,6 +1201,10 @@ async fn run_inner(
 	let mut voice_open = true;
 	let mut gateway_outage = false;
 	let mut reconnect_announced = false;
+	// Held across reconnects. A send failure used to drop Leave/SetMute that had
+	// already been taken out of the channel.
+	let mut voice_held: std::collections::VecDeque<client_core::voice::Command> =
+		std::collections::VecDeque::new();
 	// Initial login is bounded, but an established session must survive long outages.
 	while was_ready || attempt < 6 {
 		if attempt > 0 {
@@ -1322,8 +1326,6 @@ async fn run_inner(
 		let mut queries = member_search::Search::default();
 		outgoing_activity.reconnect();
 		let mut defer_attempt: Option<u32> = None;
-		let mut voice_held: std::collections::VecDeque<client_core::voice::Command> =
-			std::collections::VecDeque::new();
 		loop {
 			if activity_enabled && last_observation != Some(outgoing_activity.observation) {
 				observe(outgoing_activity.observation)?;

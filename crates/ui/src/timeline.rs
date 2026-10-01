@@ -782,6 +782,9 @@ pub(super) struct InlineEdit {
 	pub channel: Id,
 	pub message: Id,
 	pub text: String,
+	/// Content when the editor opened. A delete of this message keeps `text` only
+	/// when the user has changed it.
+	pub original: String,
 	pub focus_requested: bool,
 }
 
@@ -810,6 +813,7 @@ impl TimelineView {
 		self.inline_edit = Some(InlineEdit {
 			channel,
 			message,
+			original: text.clone(),
 			text,
 			focus_requested: true,
 		});
@@ -954,6 +958,7 @@ impl TimelineView {
 	/// leave the layout together so each server echo cannot shift the list.
 	pub(super) fn begin_group_removal(&mut self, ids: &[Id], now: f64) {
 		self.batch_hold.clear();
+		self.batch_fail_at = None;
 		for id in ids {
 			self.batch_hold.insert(*id);
 			self.removing.insert(*id, now);
@@ -1251,6 +1256,7 @@ fn message_actions(
 			*inline_edit = Some(InlineEdit {
 				channel: message.channel,
 				message: message.id,
+				original: message.content.clone(),
 				text: message.content.clone(),
 				focus_requested: true,
 			});
@@ -5515,6 +5521,7 @@ mod tests {
 					Some(InlineEdit {
 						channel: message.channel,
 						message: message.id,
+						original: message.content.clone(),
 						text: message.content.clone(),
 						focus_requested: true,
 					})
@@ -5539,6 +5546,7 @@ mod tests {
 			Some(InlineEdit {
 				channel: Id(7),
 				message: Id(2),
+				original: "hi".into(),
 				text: "hi".into(),
 				focus_requested: true,
 			})

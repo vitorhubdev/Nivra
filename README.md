@@ -31,6 +31,10 @@ and is available under MIT OR Apache-2.0.
 Nivra is not affiliated with, endorsed by, or an official client
 of Discord Inc.
 
+### Nivra 1.0.7
+
+The local database keeps a 2 MiB page cache, which already holds the file. A write past the 256 MiB cap returns an error. Saving a channel at that cap drops the oldest cached channel to make room, then retries. Text, Markdown and code previews detect UTF-8 and UTF-16, read a legacy Windows text file, and show a long file in steps. Video stays on the operating system's decoder. There is no VLC and no bundled FFmpeg. A PDF attachment is still a file card.
+
 ### Nivra 1.0.6
 
 A call stays up when someone joins or leaves, through a short resume, and while the PC is stalled. Global shortcuts are off until they are turned on under Settings, Keybinds. Chat can be exported as text or Markdown. The Windows build remains one executable, without a notification install script, and these builds are unsigned.
@@ -138,7 +142,7 @@ Stable builds are published on the [Releases page](https://github.com/vitorhubde
 
 - Repository: [`vitorhubdev/Nivra`](https://github.com/vitorhubdev/Nivra)
 - Development branch: `main`
-- Workspace version: `1.0.6`
+- Workspace version: `1.0.7`
 - Version history: [Tags](https://github.com/vitorhubdev/Nivra/tags)
 
 ### Build from source

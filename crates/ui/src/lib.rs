@@ -3609,10 +3609,8 @@ impl MessagingUi {
 		if opening.is_some() {
 			self.timeline.opening = opening;
 		}
-		if more {
-			if let Some(preview) = self.preview.as_mut() {
-				preview.show_more();
-			}
+		if more && let Some(preview) = self.preview.as_mut() {
+			preview.show_more();
 		}
 		if close {
 			self.preview = None;

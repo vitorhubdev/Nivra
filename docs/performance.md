@@ -1897,3 +1897,22 @@ ARM 10.0717 ms and 134.8 µs. The synthetic file was 110,592 bytes. This
 is an in-memory check, not native RSS or frame time. Text preview of
 20,000 ASCII characters in CI run 36819481221: macOS 557.708 µs, Ubuntu
 889.729 µs, Windows x64 924.6 µs, Windows ARM 1.0856 ms.
+
+# Timeline cursors and watch frame reuse (port) - October 2026
+
+Ported from upstream `eab1961a`. Measured on the agent PC (Windows x64) in
+debug builds, same machine back-to-back; medians of the workloads' own 5-6
+internal runs. Debug inflates absolutes; the relative deltas are the signal.
+Release numbers on stable hardware remain pending.
+
+| Metric / method | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| 100k live-edge/forward/unread triples, 500 rows, clean tail, ms | 13,585.8 | 111.2 | ~-99.2% (~122x) |
+| Same, retained deleted tail, ms | 20,824.3 | 704.6 | ~-96.6% (~30x) |
+| Watch 1080p x120 frames, ms | 434.9 | 335.7 | ~-22.8% |
+
+Old cursor code walked the whole filtered timeline per query (`Iterator::last`
++ full `all` scan); the port reads the back directly (`next_back`). Workloads:
+`timeline_cursor_workload` (client-core, ignored) and
+`watch_frame_memory_workload` (watch, ignored; `NIVRA_WATCH_FRAME_LEGACY=1`
+reproduces the allocation-per-frame path). No RSS claim; excludes rendering.

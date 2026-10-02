@@ -812,6 +812,10 @@ it does not send typing notifications. Incoming typing for the selected conversa
 handled as described below; other conversations' typing is discarded.
 The request still covers only positions 0–99, with the existing 128-KiB retained member
 budget, request/list identity filtering and timeout. No full-directory fetch was added.
+Opcode 37 subscriptions explicitly send `member_updates: false`, matching the complete bulk
+subscription shape used by discord.py-self, instead of relying on an omitted field when opening
+large guilds that were not implicitly subscribed at login. Live large-guild acceptance remains
+unverified.
 
 A read-only observation of the owner's already-open app confirmed an unavailable pane
 with a nonzero server total. That is reproduction evidence, not successful validation of

@@ -2,15 +2,28 @@
 use super::*;
 use serde_json::{Value, json};
 use std::sync::{
-	Arc,
+	Arc, OnceLock,
 	atomic::{AtomicBool, Ordering},
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio_tungstenite::{
-	WebSocketStream, accept_async,
-	tungstenite::protocol::{CloseFrame, frame::coding::CloseCode},
+	WebSocketStream, accept_async, accept_async_with_config,
+	tungstenite::Utf8Bytes,
+	tungstenite::protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCode},
 };
+
+/// Built once per test process: a frame just over the 64 MiB wire limit. `Bytes`
+/// clones by reference count, so sharing the payload costs no 64 MiB copy per
+/// iteration; it is warmed up before the measured section below.
+static OVERSIZED_FRAME: OnceLock<bytes::Bytes> = OnceLock::new();
+fn oversized_frame() -> Utf8Bytes {
+	OVERSIZED_FRAME
+		.get_or_init(|| bytes::Bytes::from(" ".repeat(MAX_GATEWAY_WIRE + 1)))
+		.clone()
+		.try_into()
+		.expect("spaces are valid UTF-8")
+}
 
 async fn send(socket: &mut WebSocketStream<TcpStream>, value: Value) {
 	socket
@@ -257,7 +270,11 @@ async fn supplemental_accepts_4097_members_without_voice() {
 #[tokio::test]
 async fn ready_between_4_and_64_mib_logs_in() {
 	// A normal account in many servers receives a READY far above the per-event bound.
-	let padding = "x".repeat(64 * 1024);
+	// 96 guilds x 48 KiB stays above MAX_WIRE (4 MiB) with margin, proving the same
+	// boundary with ~25% less build/serialize/parse work, so a busy runner cannot
+	// mistake slowness for a hang (nextest caps each test at 60 s). The assert below
+	// keeps the boundary proof deterministic: too small fails fast, never flakes.
+	let padding = "x".repeat(48 * 1024);
 	let guilds = (1..=96)
 		.map(|id| {
 			json!({"id":id.to_string(),"owner_id":"1","name":"Synthetic","roles":[],"channels":[],
@@ -270,13 +287,28 @@ async fn ready_between_4_and_64_mib_logs_in() {
 
 #[tokio::test]
 async fn oversized_frames_stop_login_during_and_after_hello() {
+	// Warm up outside the measured section: the 64 MiB build must never run on a
+	// timed path, and `Bytes` sharing keeps iterations copy-free.
+	oversized_frame();
 	for after_hello in [false, true] {
 		measured("synthetic login", async {
 			let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 			let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
 			let server = async {
 				let (stream, _) = listener.accept().await.unwrap();
-				let mut socket = accept_async(stream).await.unwrap();
+				// No server-side wire cap: the limit under test belongs to the
+				// client. Relying on tungstenite's send defaults would couple
+				// delivery of the oversized frame to library defaults.
+				let mut socket = accept_async_with_config(
+					stream,
+					Some(
+						WebSocketConfig::default()
+							.max_message_size(None)
+							.max_frame_size(None),
+					),
+				)
+				.await
+				.unwrap();
 				if after_hello {
 					send(
 						&mut socket,
@@ -285,10 +317,19 @@ async fn oversized_frames_stop_login_during_and_after_hello() {
 					.await;
 					assert_eq!(packet(&mut socket).await["op"], 2);
 				}
-				// The client may close as soon as it reads the oversized frame header.
-				let _ = socket
-					.send(Frame::Text(" ".repeat(MAX_GATEWAY_WIRE + 1).into()))
-					.await;
+				// The client may close as soon as it reads the oversized frame header,
+				// so a reset/broken pipe mid-send is the designed race, not a failure:
+				// the client already saw enough to report the capacity error, and only
+				// the assertion below decides. Logged for diagnosis, never failed on.
+				let send_result = socket.send(Frame::Text(oversized_frame())).await;
+				eprintln!(
+					"synthetic oversized send {}",
+					if send_result.is_ok() {
+						"delivered"
+					} else {
+						"raced the client close"
+					}
+				);
 				// Keep the peer open until the client reports the capacity error.
 				socket
 			};

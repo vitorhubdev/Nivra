@@ -324,15 +324,18 @@ fn waveform(
 			egui::Sense::hover()
 		},
 	);
-	let before = *position;
+	let mut commit = false;
 	if enabled {
 		if (response.clicked() || response.dragged())
 			&& let Some(pointer) = response.interact_pointer_pos()
 		{
 			*position =
 				f64::from(((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0)) * duration;
+			// Commit clicks at once; drags commit on release so decoding restarts a single time.
+			commit = response.clicked() || response.drag_stopped();
 		}
 		if response.has_focus() {
+			let keyed = *position;
 			ui.input_mut(|input| {
 				for (key, value) in [
 					(egui::Key::ArrowLeft, *position - 1.0),
@@ -345,6 +348,7 @@ fn waveform(
 					}
 				}
 			});
+			commit = commit || *position != keyed;
 		}
 	}
 	let bars = ((rect.width() / 4.0).floor() as usize).clamp(1, 80);
@@ -383,7 +387,7 @@ fn waveform(
 		egui::WidgetInfo::slider(enabled && ui.is_enabled(), *position, "Seek voice message")
 	});
 	response.on_hover_text(crate::tr_ui!(ui, "Seek voice message"));
-	*position != before
+	commit
 }
 
 fn timestamp(seconds: f64) -> String {

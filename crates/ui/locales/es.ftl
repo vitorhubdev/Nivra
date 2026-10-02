@@ -1241,3 +1241,7 @@ Try a channel, server or person name. = "Prueba el nombre de un canal, servidor 
 Watch this screen share in full screen = "Ver esta pantalla compartida a pantalla completa"
 Copy failure details = "Copiar detalles del error"
 Copied = "Copiado"
+new message = "nuevo mensaje"
+new messages = "nuevos mensajes"
+Jump to present = "Saltar al presente"
+New messages below = "Nuevos mensajes debajo"

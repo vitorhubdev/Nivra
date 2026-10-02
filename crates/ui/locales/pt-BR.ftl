@@ -1241,3 +1241,7 @@ Syncing server folders with Discord = "Sincronizando as pastas de servidor com o
 The message may already have reached Discord. Check the conversation before sending again. = "A mensagem pode já ter chegado ao Discord. Confira a conversa antes de enviar de novo."
 Copy failure details = "Copiar detalhes da falha"
 Copied = "Copiado"
+new message = "nova mensagem"
+new messages = "novas mensagens"
+Jump to present = "Pular para o presente"
+New messages below = "Novas mensagens abaixo"

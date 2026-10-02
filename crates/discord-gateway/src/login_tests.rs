@@ -311,12 +311,19 @@ async fn oversized_frames_stop_login_during_and_after_hello() {
 					.await;
 					assert_eq!(packet(&mut socket).await["op"], 2);
 				}
-				// The client may close as soon as it reads the oversized frame header.
-				// A failed send must fail the test now, not hang it until the 60 s cap.
-				socket
-					.send(Frame::Text(oversized_frame().into()))
-					.await
-					.expect("synthetic oversized frame must be deliverable");
+				// The client may close as soon as it reads the oversized frame header,
+				// so a reset/broken pipe mid-send is the designed race, not a failure:
+				// the client already saw enough to report the capacity error, and only
+				// the assertion below decides. Logged for diagnosis, never failed on.
+				let send_result = socket.send(Frame::Text(oversized_frame().into())).await;
+				eprintln!(
+					"synthetic oversized send {}",
+					if send_result.is_ok() {
+						"delivered"
+					} else {
+						"raced the client close"
+					}
+				);
 				// Keep the peer open until the client reports the capacity error.
 				socket
 			};

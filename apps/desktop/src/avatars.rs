@@ -656,12 +656,22 @@ fn proxy_base(source: &str) -> Option<url::Url> {
 	} else if path.starts_with("/external/") {
 		let mut parts = path.trim_start_matches('/').split('/');
 		parts.next();
-		parts.next().is_some_and(|hash| {
+		let hash = parts.next().is_some_and(|hash| {
 			(16..=256).contains(&hash.len())
 				&& hash
 					.bytes()
 					.all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-		}) && matches!(parts.next(), Some("https" | "http"))
+		});
+		// The CDN may insert the source URL's encoded query between the signature
+		// and the scheme (embed author avatars arrive with `%3Fv%3D…` there).
+		let mut scheme = parts.next();
+		if scheme.is_some_and(|part| {
+			part.get(..3)
+				.is_some_and(|part| part.eq_ignore_ascii_case("%3f"))
+		}) {
+			scheme = parts.next();
+		}
+		hash && matches!(scheme, Some("https" | "http"))
 			&& parts.next().is_some_and(|domain| !domain.is_empty())
 	} else {
 		let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
@@ -1838,6 +1848,16 @@ mod tests {
 			.unwrap();
 		encoded.into_inner()
 	}
+	#[test]
+	fn external_proxy_urls_accept_encoded_source_queries() {
+		discord_api::ensure_tls_provider();
+		assert!(embed_url(
+			"https://images-ext-1.discordapp.net/external/abcdefghijklmnopqrstuvwxyzABCDEFG/%3Fv%3D4/https/avatars.githubusercontent.com/u/67194087",
+			ui::EMBED_EDGE,
+		)
+		.is_some());
+	}
+
 	#[test]
 	fn bounded_images_cache_reopen_eviction_and_cancelled_cleanup() {
 		discord_api::ensure_tls_provider();

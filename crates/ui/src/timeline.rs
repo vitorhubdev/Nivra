@@ -2016,13 +2016,19 @@ impl TimelineView {
 				self.unread_boundary.is_some_and(|kept| kept <= read) && *first > read
 			})
 		});
+		let kept = self
+			.unread_boundary
+			.filter(|id| state.timeline.get(*id).is_some());
 		let boundary = match unseen_after_read {
 			Some(first) => Some(first),
-			None => first_unread
-				.filter(|_| self.unread_boundary.is_none())
-				.or(self
-					.unread_boundary
-					.filter(|id| state.timeline.get(*id).is_some())),
+			None => match (first_unread, kept) {
+				// Older unread history loading above may move the divider up, but new
+				// arrivals below must not push it forward once it is placed.
+				(Some(first), Some(previous)) if first < previous => Some(first),
+				(Some(_), Some(previous)) => Some(previous),
+				(Some(first), None) => Some(first),
+				(None, previous) => previous,
+			},
 		};
 		if self.unread_boundary != boundary {
 			self.unread_boundary = boundary;
@@ -5400,6 +5406,84 @@ mod tests {
 			labels.iter().any(|(text, _)| text == "2 new messages"),
 			"the way-down pill did not name the unseen arrivals: {labels:?}"
 		);
+		assert_eq!(view.unread_boundary, Some(Id(26)));
+	}
+
+	#[test]
+	fn older_unread_page_moves_the_divider_upward() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		state.timeline.clear();
+		state.selected = Some(Id(20));
+		state.auth = client_core::auth::AuthState::Authenticated;
+		state.gateway_connected = true;
+		state.freshness = model::Freshness::Fresh;
+		state.history_pending = false;
+		state.history_targeted = false;
+		state.history_before = None;
+		state.history_after = None;
+		state.older_exhausted = true;
+		state.channels = vec![model::Channel {
+			id: Id(20),
+			guild: None,
+			parent_id: None,
+			position: 0,
+			name: "Synthetic unread conversation".into(),
+			kind: 1,
+			recipients: vec![],
+			member_list_id: None,
+			message_count: None,
+			icon: None,
+			last_message: Some(Id(65)),
+		}];
+		state
+			.apply_read_state(client_core::read_state::Event::Snapshot {
+				entries: Some(vec![(Id(20), Some(Id(25)), 0)]),
+				version: Some(1),
+				partial: false,
+			})
+			.unwrap();
+		// The initial live-edge page starts after the true read marker. Enough rows
+		// stay loaded so the reader can scroll up and leave the live edge.
+		for id in 30..=65 {
+			state.timeline.insert(text_message(id), false, false).unwrap();
+		}
+		let mut view = TimelineView::default();
+		for _ in 0..6 {
+			banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		}
+		assert_eq!(view.unread_boundary, Some(Id(30)));
+		// The reader scrolls up, leaving the watched live edge, and the older page
+		// arrives with the true first unread message: the divider must move up
+		// instead of staying stuck on the first loaded page.
+		for _ in 0..10 {
+			banner_frame(
+				&ctx,
+				&mut view,
+				&mut state,
+				vec![
+					egui::Event::PointerMoved(egui::pos2(450.0, 300.0)),
+					egui::Event::MouseWheel {
+							unit: egui::MouseWheelUnit::Point,
+							delta: egui::vec2(0.0, 600.0),
+							modifiers: egui::Modifiers::NONE,
+							phase: egui::TouchPhase::Move,
+						},
+				],
+				false,
+			);
+			if !view.following {
+				break;
+			}
+		}
+		assert!(!view.following, "wheel-up never left the live edge");
+		for id in 26..=29 {
+			state.timeline.insert(text_message(id), false, false).unwrap();
+		}
+		state.revision += 1;
+		for _ in 0..6 {
+			banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		}
 		assert_eq!(view.unread_boundary, Some(Id(26)));
 	}
 

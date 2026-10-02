@@ -21,3 +21,6 @@ getrandom.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+bytes.workspace = true

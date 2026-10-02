@@ -9,17 +9,20 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio_tungstenite::{
 	WebSocketStream, accept_async, accept_async_with_config,
+	tungstenite::Utf8Bytes,
 	tungstenite::protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCode},
 };
 
-/// Built once per test process: a frame just over the 64 MiB wire limit. Rebuilding
-/// 64 MiB inside the measured section on every iteration punishes busy runners;
-/// sharing one payload keeps the test about the limit, not machine speed.
-static OVERSIZED_FRAME: OnceLock<String> = OnceLock::new();
-fn oversized_frame() -> String {
+/// Built once per test process: a frame just over the 64 MiB wire limit. `Bytes`
+/// clones by reference count, so sharing the payload costs no 64 MiB copy per
+/// iteration; it is warmed up before the measured section below.
+static OVERSIZED_FRAME: OnceLock<bytes::Bytes> = OnceLock::new();
+fn oversized_frame() -> Utf8Bytes {
 	OVERSIZED_FRAME
-		.get_or_init(|| " ".repeat(MAX_GATEWAY_WIRE + 1))
+		.get_or_init(|| bytes::Bytes::from(" ".repeat(MAX_GATEWAY_WIRE + 1)))
 		.clone()
+		.try_into()
+		.expect("spaces are valid UTF-8")
 }
 
 async fn send(socket: &mut WebSocketStream<TcpStream>, value: Value) {
@@ -284,6 +287,9 @@ async fn ready_between_4_and_64_mib_logs_in() {
 
 #[tokio::test]
 async fn oversized_frames_stop_login_during_and_after_hello() {
+	// Warm up outside the measured section: the 64 MiB build must never run on a
+	// timed path, and `Bytes` sharing keeps iterations copy-free.
+	oversized_frame();
 	for after_hello in [false, true] {
 		measured("synthetic login", async {
 			let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -315,7 +321,7 @@ async fn oversized_frames_stop_login_during_and_after_hello() {
 				// so a reset/broken pipe mid-send is the designed race, not a failure:
 				// the client already saw enough to report the capacity error, and only
 				// the assertion below decides. Logged for diagnosis, never failed on.
-				let send_result = socket.send(Frame::Text(oversized_frame().into())).await;
+				let send_result = socket.send(Frame::Text(oversized_frame())).await;
 				eprintln!(
 					"synthetic oversized send {}",
 					if send_result.is_ok() {

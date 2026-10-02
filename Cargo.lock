@@ -1581,6 +1581,7 @@ dependencies = [
 name = "discord-gateway"
 version = "1.0.9"
 dependencies = [
+ "bytes",
  "client-core",
  "discord-protocol",
  "flate2",

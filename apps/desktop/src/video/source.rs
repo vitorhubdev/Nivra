@@ -16,6 +16,7 @@ const CACHE_CHUNKS: usize = 8;
 const INVALID: &str = "Video download failed or changed; reload the conversation";
 const UNSUPPORTED: &str = "Video server does not support buffering; download to play externally";
 const EXPIRED: &str = "Video link expired; reload the conversation";
+const STALLED: &str = "Video buffering stalled; retry or download to play externally";
 #[cfg(test)]
 pub(super) static OFFLINE_PROBE: AtomicBool = AtomicBool::new(false);
 
@@ -71,13 +72,17 @@ fn probe(
 			}
 		};
 		let transfer = async {
-			let response = client
-				.get(url.clone())
-				.header(reqwest::header::ACCEPT_ENCODING, "identity")
-				.header(reqwest::header::RANGE, "bytes=0-0")
-				.send()
-				.await
-				.map_err(|_| INVALID)?;
+			let response = tokio::time::timeout(
+				Duration::from_secs(15),
+				client
+					.get(url.clone())
+					.header(reqwest::header::ACCEPT_ENCODING, "identity")
+					.header(reqwest::header::RANGE, "bytes=0-0")
+					.send(),
+			)
+			.await
+			.map_err(|_| STALLED)?
+			.map_err(|_| INVALID)?;
 			let status = response.status();
 			if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::GONE {
 				return Err(EXPIRED);
@@ -137,12 +142,16 @@ fn download_whole(
 			}
 		};
 		let transfer = async {
-			let mut response = client
-				.get(url.clone())
-				.header(reqwest::header::ACCEPT_ENCODING, "identity")
-				.send()
-				.await
-				.map_err(|_| INVALID)?;
+			let mut response = tokio::time::timeout(
+				Duration::from_secs(15),
+				client
+					.get(url.clone())
+					.header(reqwest::header::ACCEPT_ENCODING, "identity")
+					.send(),
+			)
+			.await
+			.map_err(|_| STALLED)?
+			.map_err(|_| INVALID)?;
 			if !response.status().is_success() {
 				return Err(INVALID);
 			}
@@ -154,7 +163,11 @@ fn download_whole(
 				return Err(INVALID);
 			}
 			let mut bytes = Vec::new();
-			while let Some(chunk) = response.chunk().await.map_err(|_| INVALID)? {
+			while let Some(chunk) = tokio::time::timeout(Duration::from_secs(15), response.chunk())
+				.await
+				.map_err(|_| STALLED)?
+				.map_err(|_| INVALID)?
+			{
 				// Never grow past the length the server stated, whatever it sends.
 				if bytes.len() + chunk.len() > expected {
 					return Err(INVALID);
@@ -238,6 +251,8 @@ pub(super) fn source(
 		len,
 		position: 0,
 		cache: VecDeque::new(),
+		start_time: std::time::Instant::now(),
+		first_byte_logged: false,
 	}))
 }
 
@@ -258,9 +273,14 @@ struct Source {
 	len: usize,
 	position: usize,
 	cache: VecDeque<(usize, Vec<u8>)>,
+	start_time: std::time::Instant,
+	first_byte_logged: bool,
 }
 fn invalid() -> io::Error {
 	io::Error::new(io::ErrorKind::InvalidData, INVALID)
+}
+fn stalled() -> io::Error {
+	io::Error::new(io::ErrorKind::TimedOut, STALLED)
 }
 impl Source {
 	fn check_cancelled(&self) -> io::Result<()> {
@@ -300,13 +320,17 @@ impl Source {
 				}
 			};
 			let transfer = async {
-				let mut response = client
-					.get(url.clone())
-					.header(reqwest::header::ACCEPT_ENCODING, "identity")
-					.header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
-					.send()
-					.await
-					.map_err(|_| invalid())?;
+				let mut response = tokio::time::timeout(
+					Duration::from_secs(15),
+					client
+						.get(url.clone())
+						.header(reqwest::header::ACCEPT_ENCODING, "identity")
+						.header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
+						.send(),
+				)
+				.await
+				.map_err(|_| stalled())?
+				.map_err(|_| invalid())?;
 				if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
 					let range = format!("bytes {start}-{end}/{}", self.len);
 					if response
@@ -333,7 +357,12 @@ impl Source {
 					return Err(invalid());
 				}
 				let mut bytes = Vec::with_capacity(count);
-				while let Some(chunk) = response.chunk().await.map_err(|_| invalid())? {
+				while let Some(chunk) =
+					tokio::time::timeout(Duration::from_secs(15), response.chunk())
+						.await
+						.map_err(|_| stalled())?
+						.map_err(|_| invalid())?
+				{
 					if chunk.len() > count - bytes.len() {
 						return Err(invalid());
 					}
@@ -360,6 +389,13 @@ impl Read for Source {
 		let mut count = output.len().min(CHUNK).min(self.len - self.position);
 		if count == 0 {
 			return Ok(0);
+		}
+		if !self.first_byte_logged {
+			self.first_byte_logged = true;
+			eprintln!(
+				"[Nivra video] first_byte: read in {:.3} ms",
+				self.start_time.elapsed().as_secs_f64() * 1000.0
+			);
 		}
 		#[cfg(feature = "demo")]
 		if let Input::Demo(bytes) = self.input {

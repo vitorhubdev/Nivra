@@ -16,7 +16,10 @@ struct Update {
 	duration: f64,
 	frame: Option<(u32, u32, Vec<u8>)>,
 }
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
 struct Session {
+	id: u64,
 	cancelled: Arc<AtomicBool>,
 	paused: Arc<AtomicBool>,
 	volume: Arc<AtomicU32>,
@@ -24,8 +27,9 @@ struct Session {
 	update: Mutex<Update>,
 }
 impl Session {
-	fn new(volume: f32) -> Self {
+	fn new(volume: f32, id: u64) -> Self {
 		Self {
+			id,
 			cancelled: Arc::new(AtomicBool::new(false)),
 			paused: Arc::new(AtomicBool::new(false)),
 			volume: Arc::new(AtomicU32::new(volume.to_bits())),
@@ -47,16 +51,14 @@ struct Request {
 #[derive(Default)]
 pub struct Video {
 	session: Option<Arc<Session>>,
-	requests: Option<tokio::sync::watch::Sender<Option<Request>>>,
+	worker: Option<std::thread::JoinHandle<()>>,
 }
 impl Video {
 	pub fn stop(&mut self) {
 		if let Some(session) = self.session.take() {
 			session.cancelled.store(true, Ordering::Release);
 		}
-		if let Some(requests) = &self.requests {
-			requests.send_replace(None);
-		}
+		self.worker = None;
 	}
 	pub fn poll(&self, player: &mut VideoUi, ctx: &eframe::egui::Context) {
 		let Some(session) = &self.session else {
@@ -152,41 +154,54 @@ impl Video {
 				attachment.size as usize,
 			)
 		};
-		if self.requests.is_none() {
-			let (sender, mut receiver) = tokio::sync::watch::channel::<Option<Request>>(None);
-			let runtime = runtime.clone();
-			let ctx = ctx.clone();
-			std::thread::Builder::new()
-				.name("nivra-attachment-video".into())
-				.spawn(move || {
-					while runtime.block_on(receiver.changed()).is_ok() {
-						let Some(request) = receiver.borrow_and_update().clone() else {
-							continue;
-						};
-						if let Err(error) = play(&request, &runtime, &ctx)
-							&& !request.session.cancelled.load(Ordering::Acquire)
-						{
-							if let Ok(mut update) = request.session.update.lock() {
+		let session_id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
+		let session = Arc::new(Session::new(volume, session_id));
+		let request = Request {
+			session: session.clone(),
+			url,
+			fallback,
+			size,
+		};
+		let worker_session = session.clone();
+		let runtime = runtime.clone();
+		let ctx = ctx.clone();
+		let worker = std::thread::Builder::new()
+			.name(format!("nivra-attachment-video-{session_id}"))
+			.spawn(move || {
+				let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+					play(&request, &runtime, &ctx)
+				}));
+				match result {
+					Ok(Err(error)) => {
+						if !worker_session.cancelled.load(Ordering::Acquire) {
+							if let Ok(mut update) = worker_session
+								.update
+								.try_lock()
+								.or_else(|_| worker_session.update.lock())
+							{
 								update.state = VideoState::Failed(error);
 							}
 							ctx.request_repaint();
 						}
 					}
-				})
-				.map_err(|_| "Could not start video worker")?;
-			self.requests = Some(sender);
-		}
-		let requests = self.requests.as_ref().expect("worker created");
-		if requests.is_closed() {
-			return Err("Video worker stopped; restart Nivra");
-		}
-		let session = Arc::new(Session::new(volume));
-		requests.send_replace(Some(Request {
-			session: session.clone(),
-			url,
-			fallback,
-			size,
-		}));
+					Err(_) => {
+						if !worker_session.cancelled.load(Ordering::Acquire) {
+							if let Ok(mut update) = worker_session
+								.update
+								.try_lock()
+								.or_else(|_| worker_session.update.lock())
+							{
+								update.state =
+									VideoState::Failed("The video could not be decoded safely.");
+							}
+							ctx.request_repaint();
+						}
+					}
+					Ok(Ok(())) => {}
+				}
+			})
+			.map_err(|_| "Could not start video worker")?;
+		self.worker = Some(worker);
 		self.session = Some(session);
 		Ok(())
 	}
@@ -210,6 +225,7 @@ fn play(
 	ctx: &eframe::egui::Context,
 ) -> Result<(), &'static str> {
 	use platform::video::Decoder;
+	use std::time::{Duration, Instant};
 	let session = &request.session;
 	if session.cancelled.load(Ordering::Acquire) {
 		return Ok(());
@@ -218,6 +234,8 @@ fn play(
 	if source::OFFLINE_PROBE.load(Ordering::Acquire) {
 		return Ok(());
 	}
+	let start_time = Instant::now();
+	eprintln!("[Nivra video] open_source: starting session {}", session.id);
 	let url = if let Some(primary) = request.url.clone() {
 		match source::resolve_media_url(
 			primary,
@@ -238,10 +256,26 @@ fn play(
 		session.cancelled.clone(),
 		runtime.clone(),
 	)?;
+	eprintln!(
+		"[Nivra video] open_source: ready in {:.3} ms",
+		start_time.elapsed().as_secs_f64() * 1000.0
+	);
+	let open_started = Instant::now();
+	eprintln!("[Nivra video] open_decoder: starting");
+	let open_timed_out = Arc::new(AtomicBool::new(false));
+	let open_timed_out_clone = open_timed_out.clone();
+	let cancelled_clone = session.cancelled.clone();
+	let watchdog = runtime.spawn(async move {
+		tokio::time::sleep(Duration::from_secs(20)).await;
+		open_timed_out_clone.store(true, Ordering::Release);
+		cancelled_clone.store(true, Ordering::Release);
+	});
 	let decoder = Decoder::open(source);
 	#[cfg(target_os = "macos")]
 	let decoder = match decoder {
-		Err(platform::video::UNSUPPORTED | platform::video::INVALID) => {
+		Err(platform::video::UNSUPPORTED | platform::video::INVALID)
+			if !open_timed_out.load(Ordering::Acquire) =>
+		{
 			let source = source::source(
 				url.clone(),
 				request.size,
@@ -252,9 +286,18 @@ fn play(
 		}
 		result => result,
 	};
+	watchdog.abort();
+	if open_timed_out.load(Ordering::Acquire) {
+		eprintln!("[Nivra video] open_decoder: timed out after 20s");
+		return Err("Video buffering stalled; retry or download to play externally");
+	}
 	let _ = url;
 	let decoder = decoder?;
-	let result = play_decoded(decoder, session, ctx);
+	eprintln!(
+		"[Nivra video] open_decoder: ready in {:.3} ms",
+		open_started.elapsed().as_secs_f64() * 1000.0
+	);
+	let result = play_decoded(decoder, session, ctx, start_time);
 	// Cancellation aborts in-flight source reads; that is a clean stop, not a decode failure.
 	if session.cancelled.load(Ordering::Acquire) {
 		return Ok(());
@@ -266,6 +309,7 @@ fn play_decoded(
 	mut decoder: platform::video::Decoder,
 	session: &Session,
 	ctx: &eframe::egui::Context,
+	start_time: std::time::Instant,
 ) -> Result<(), &'static str> {
 	use platform::video::Sample;
 	use std::{
@@ -276,6 +320,8 @@ fn play_decoded(
 	let info = decoder.info();
 	let mut target = 0.;
 	let mut seeking = false;
+	let mut stall_restarts: u32 = 0;
+	let mut first_frame_logged = false;
 	'seek: loop {
 		if session.cancelled.load(Ordering::Acquire) {
 			return Ok(());
@@ -323,7 +369,8 @@ fn play_decoded(
 				drop(output);
 				target = (seek as f64 / 1000.).min((info.duration - 0.001).max(0.));
 				seeking = true;
-				if let Ok(mut update) = session.update.lock() {
+				if let Ok(mut update) = session.update.try_lock().or_else(|_| session.update.lock())
+				{
 					update.frame = None;
 					update.state = VideoState::Loading;
 					update.position = target;
@@ -365,9 +412,19 @@ fn play_decoded(
 				frame = Some((width, height, rgba));
 				preview_needed = false;
 			}
+			if frame.is_some() {
+				if !first_frame_logged {
+					first_frame_logged = true;
+					eprintln!(
+						"[Nivra video] first_frame: ready in {:.3} ms",
+						start_time.elapsed().as_secs_f64() * 1000.0
+					);
+				}
+				last_progress = now;
+			}
 			let finished = video_ended && audio_drained && frames.is_empty();
 			let mut changed = false;
-			if let Ok(mut update) = session.update.lock() {
+			if let Ok(mut update) = session.update.try_lock().or_else(|_| session.update.lock()) {
 				let state = if finished {
 					VideoState::Ended
 				} else if paused {
@@ -400,8 +457,37 @@ fn play_decoded(
 				std::thread::sleep(Duration::from_millis(20));
 				continue;
 			}
-			if now.duration_since(last_progress) > Duration::from_secs(15) {
-				return Err("Video buffering stalled; retry or download to play externally");
+			if !paused
+				&& !preview_needed
+				&& now.duration_since(last_progress) > Duration::from_secs(10)
+			{
+				if stall_restarts == 0 {
+					stall_restarts += 1;
+					eprintln!(
+						"[Nivra video] watchdog: stalled for 10s at position {:.3}s, restarting decoder",
+						current
+					);
+					drop(output);
+					target = current;
+					seeking = true;
+					last_progress = Instant::now();
+					last_tick = Instant::now();
+					if let Ok(mut update) =
+						session.update.try_lock().or_else(|_| session.update.lock())
+					{
+						update.frame = None;
+						update.state = VideoState::Loading;
+						update.position = target;
+					}
+					ctx.request_repaint();
+					continue 'seek;
+				} else {
+					eprintln!(
+						"[Nivra video] watchdog: stalled again at position {:.3}s, failing",
+						current
+					);
+					return Err("Video buffering stalled; retry or download to play externally");
+				}
 			}
 			if let Some((samples, offset)) = &mut pending_audio {
 				let output = output.as_mut().ok_or("Unexpected video audio track")?;
@@ -501,12 +587,17 @@ mod tests {
 		let path = std::env::var("NIVRA_VIDEO_SAMPLE").expect("NIVRA_VIDEO_SAMPLE path");
 		assert!(std::fs::metadata(&path).unwrap().len() <= 100 * 1024 * 1024);
 		let bytes = std::fs::read(path).unwrap();
-		let session = Arc::new(Session::new(0.));
+		let session = Arc::new(Session::new(0., 1));
 		let worker_session = session.clone();
 		let started = Instant::now();
 		let thread = std::thread::spawn(move || {
 			let decoder = platform::video::Decoder::open(Box::new(std::io::Cursor::new(bytes)))?;
-			play_decoded(decoder, &worker_session, &eframe::egui::Context::default())
+			play_decoded(
+				decoder,
+				&worker_session,
+				&eframe::egui::Context::default(),
+				started,
+			)
 		});
 		while !thread.is_finished() {
 			let update = session.update.lock().unwrap();
@@ -534,7 +625,7 @@ mod tests {
 	#[ignore = "opens the local audio output device at zero volume; explicit offline playback check"]
 	fn inline_video_plays_pauses_seeks_and_cancels() {
 		let runtime = tokio::runtime::Runtime::new().unwrap();
-		let session = Arc::new(Session::new(0.));
+		let session = Arc::new(Session::new(0., 2));
 		let request = Request {
 			session: session.clone(),
 			url: None,
@@ -583,12 +674,17 @@ mod tests {
 			include_bytes!("../tests/fixtures/video-silent.mov").as_slice(),
 			include_bytes!("../tests/fixtures/video-short-audio.mov").as_slice(),
 		] {
-			let session = Arc::new(Session::new(0.));
+			let session = Arc::new(Session::new(0., 3));
 			let worker_session = session.clone();
 			let thread = std::thread::spawn(move || {
 				let decoder =
 					platform::video::Decoder::open(Box::new(std::io::Cursor::new(bytes))).unwrap();
-				play_decoded(decoder, &worker_session, &eframe::egui::Context::default())
+				play_decoded(
+					decoder,
+					&worker_session,
+					&eframe::egui::Context::default(),
+					Instant::now(),
+				)
 			});
 			let start = Instant::now();
 			while !thread.is_finished() {
@@ -756,5 +852,131 @@ mod attachment_url_tests {
 		);
 		drop(video);
 		drop(runtime);
+	}
+
+	#[test]
+	fn opening_subsequent_video_cancels_previous_without_blocking() {
+		source::OFFLINE_PROBE.store(true, Ordering::Release);
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(2)
+			.enable_all()
+			.build()
+			.unwrap();
+		let mut player = VideoUi::default();
+		let mut video = Video::default();
+		let make_attachment = |id: u64| model::Attachment {
+			id: model::Id(id),
+			filename: format!("video_{id}.mp4"),
+			description: None,
+			content_type: Some("video/mp4".into()),
+			size: 1024,
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+			media: model::EmbedMedia {
+				url: Some(format!(
+					"https://cdn.discordapp.com/attachments/1/{id}/video_{id}.mp4?ex=68dc&is=68db&hm=abc&backend=b2"
+				)),
+				..Default::default()
+			},
+		};
+		// Start first video
+		video.command(
+			VideoCommand::Play(make_attachment(1)),
+			&mut player,
+			runtime.handle(),
+			&eframe::egui::Context::default(),
+			false,
+		);
+		let session1 = video.session.as_ref().unwrap().clone();
+		assert!(!session1.cancelled.load(Ordering::Acquire));
+
+		// Start second video immediately
+		video.command(
+			VideoCommand::Play(make_attachment(2)),
+			&mut player,
+			runtime.handle(),
+			&eframe::egui::Context::default(),
+			false,
+		);
+		let session2 = video.session.as_ref().unwrap().clone();
+		assert!(session1.cancelled.load(Ordering::Acquire));
+		assert!(!session2.cancelled.load(Ordering::Acquire));
+		assert_ne!(session1.id, session2.id);
+
+		video.stop();
+		assert!(session2.cancelled.load(Ordering::Acquire));
+		source::OFFLINE_PROBE.store(false, Ordering::Release);
+	}
+
+	#[test]
+	fn opening_and_closing_50_videos_releases_resources() {
+		source::OFFLINE_PROBE.store(true, Ordering::Release);
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(2)
+			.enable_all()
+			.build()
+			.unwrap();
+		let mut player = VideoUi::default();
+		let mut video = Video::default();
+		let mut sessions = Vec::new();
+		for i in 1..=50 {
+			let attachment = model::Attachment {
+				id: model::Id(i),
+				filename: format!("video_{i}.mp4"),
+				description: None,
+				content_type: Some("video/mp4".into()),
+				size: 1024,
+				spoiler: false,
+				duration_ms: None,
+				waveform: Vec::new(),
+				media: model::EmbedMedia {
+					url: Some(format!(
+						"https://cdn.discordapp.com/attachments/1/{i}/video_{i}.mp4?ex=68dc&is=68db&hm=abc&backend=b2"
+					)),
+					..Default::default()
+				},
+			};
+			video.command(
+				VideoCommand::Play(attachment),
+				&mut player,
+				runtime.handle(),
+				&eframe::egui::Context::default(),
+				false,
+			);
+			let s = video.session.clone().expect("session created");
+			sessions.push(s);
+		}
+		assert_eq!(sessions.len(), 50);
+		video.stop();
+		for s in &sessions {
+			assert!(s.cancelled.load(Ordering::Acquire));
+		}
+		source::OFFLINE_PROBE.store(false, Ordering::Release);
+	}
+
+	#[test]
+	fn worker_panic_is_caught_safely_and_next_video_plays() {
+		let session_id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
+		let session = Arc::new(Session::new(1.0, session_id));
+		let worker_session = session.clone();
+		let ctx = eframe::egui::Context::default();
+		let worker = std::thread::spawn(move || {
+			let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				panic!("simulated decoder panic");
+			}));
+			if result.is_err() && !worker_session.cancelled.load(Ordering::Acquire) {
+				if let Ok(mut update) = worker_session.update.lock() {
+					update.state = VideoState::Failed("The video could not be decoded safely.");
+				}
+				ctx.request_repaint();
+			}
+		});
+		worker.join().unwrap();
+		let update = session.update.lock().unwrap();
+		assert_eq!(
+			update.state,
+			VideoState::Failed("The video could not be decoded safely.")
+		);
 	}
 }

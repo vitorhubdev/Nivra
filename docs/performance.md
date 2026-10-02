@@ -1897,3 +1897,14 @@ ARM 10.0717 ms and 134.8 µs. The synthetic file was 110,592 bytes. This
 is an in-memory check, not native RSS or frame time. Text preview of
 20,000 ASCII characters in CI run 36819481221: macOS 557.708 µs, Ubuntu
 889.729 µs, Windows x64 924.6 µs, Windows ARM 1.0856 ms.
+
+# DX12 allocation reserves (port) - October 2026
+
+Ported from upstream `4c7cfd06` without its hardware table: on the DX12 backend
+the device descriptor uses `MemoryHints::MemoryUsage` (smaller allocation
+blocks, not a cap on texture sizes or total memory); other backends keep
+eframe's requirements untouched, pinned by
+`gpu::tests::memory_policy_preserves_device_requirements_and_other_backends`.
+No RSS before/after was measured for this port: it needs a Windows DX12 run on
+identical hardware (not this PC per repo rules). No performance change is
+claimed until such a run happens.

@@ -1239,3 +1239,5 @@ Syncing server folders with Discord = "Sincronizando las carpetas del servidor c
 The message may already have reached Discord. Check the conversation before sending again. = "El mensaje puede haber llegado ya a Discord. Revisa la conversación antes de enviar otra vez."
 Try a channel, server or person name. = "Prueba el nombre de un canal, servidor o persona."
 Watch this screen share in full screen = "Ver esta pantalla compartida a pantalla completa"
+Copy failure details = "Copiar detalles del error"
+Copied = "Copiado"

@@ -1239,3 +1239,5 @@ Silence this person on this device only. Nobody else is affected. = "Silence thi
 Spoiler media - open the message to reveal it. = "Spoiler media - open the message to reveal it."
 Syncing server folders with Discord = "Syncing server folders with Discord"
 The message may already have reached Discord. Check the conversation before sending again. = "The message may already have reached Discord. Check the conversation before sending again."
+Copy failure details = "Copy failure details"
+Copied = "Copied"

@@ -843,6 +843,8 @@ struct Desktop {
 	token_open: bool,
 	/// Height the sign-in card took last frame, so a tall card stays fully reachable.
 	sign_in_height: f32,
+	/// Until when the sign-in failure copy button reads "Copied".
+	sign_in_copied: Option<f64>,
 	#[cfg(feature = "demo")]
 	synthetic_id: u64,
 	token_input: Zeroizing<String>,
@@ -1894,6 +1896,8 @@ impl Desktop {
 			if rest == "failed" {
 				state.auth = AuthState::Failed;
 				state.status = "Synthetic fixture failure · Discord was not contacted";
+				state.failure_detail =
+					Some("guilds[3].channels[12].permission_overwrites[0].allow: invalid type: null, expected a string".into());
 			}
 		}
 		#[cfg(feature = "demo")]
@@ -2031,6 +2035,7 @@ impl Desktop {
 			about_open: sign_in_panels,
 			token_open: sign_in_panels,
 			sign_in_height: 0.0,
+			sign_in_copied: None,
 			#[cfg(feature = "demo")]
 			synthetic_id,
 			token_input: Zeroizing::new(String::new()),
@@ -2096,6 +2101,7 @@ impl Desktop {
 		self.messaging.draft_restore_pending = false;
 		self.state.auth = AuthState::Authenticating;
 		self.state.status = "Connecting to Discord…";
+		self.state.failure_detail = None;
 		let secret = Arc::new(secret);
 		self.pending_save = save.then(|| secret.clone());
 		self.pending_account_save = Some(secret.clone());
@@ -4639,6 +4645,9 @@ impl Desktop {
 								.wrap(),
 							);
 						}
+						if attention {
+							self.sign_in_failure_details(ui, p.muted);
+						}
 						if !self.fixture_only && !self.credential_status.is_empty() {
 							ui.add(
 								egui::Label::new(
@@ -4663,6 +4672,39 @@ impl Desktop {
 					});
 				});
 			});
+	}
+	/// Redacted decode cause plus a copyable report users can attach to a bug report.
+	fn sign_in_failure_details(&mut self, ui: &mut egui::Ui, muted: egui::Color32) {
+		if let Some(detail) = &self.state.failure_detail {
+			ui.add(
+				egui::Label::new(egui::RichText::new(&**detail).size(12.0).color(muted))
+					.wrap()
+					.selectable(true),
+			);
+		}
+		ui.add_space(4.0);
+		let now = ui.input(|i| i.time);
+		let copied = self.sign_in_copied.is_some_and(|until| now < until);
+		let label = if copied {
+			ui::i18n::text(self.messaging.language, "Copied")
+		} else {
+			ui::i18n::text(self.messaging.language, "Copy failure details")
+		};
+		if ui::design::button(ui, label, ui::design::ButtonKind::Outline).clicked() {
+			let report = format!(
+				"### Sign-in failure\n- **Reason:** {}\n- **Cause:** {}\n{}",
+				self.state.status,
+				self.state
+					.failure_detail
+					.as_deref()
+					.unwrap_or("No decode detail recorded"),
+				self.messaging.diagnostic_info(ui.ctx())
+			);
+			ui.ctx().copy_text(report);
+			self.sign_in_copied = Some(now + 2.5);
+			ui.ctx()
+				.request_repaint_after(std::time::Duration::from_secs(3));
+		}
 	}
 	/// Fixture-only entry into the offline preview, kept visually secondary to signing in.
 	#[cfg(feature = "demo")]

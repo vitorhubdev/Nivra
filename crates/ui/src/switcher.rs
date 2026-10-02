@@ -525,7 +525,7 @@ impl Switcher {
 								})
 								.frame(egui::Frame::NONE)
 								.font(egui::FontId::proportional(16.0))
-								.hint_text("Where would you like to go?")
+								.hint_text(crate::tr_ui!(ui, "Where would you like to go?"))
 								.char_limit(QUERY_CHARS)
 								.desired_width(ui.available_width().max(60.0)),
 						);
@@ -550,9 +550,12 @@ impl Switcher {
 			}
 			if blocked {
 				ui.label(
-					egui::RichText::new("Finish composing text before opening or closing.")
-						.size(12.0)
-						.color(colors.warning),
+					egui::RichText::new(crate::tr_ui!(
+						ui,
+						"Finish composing text before opening or closing."
+					))
+					.size(12.0)
+					.color(colors.warning),
 				);
 			}
 			let now = ui.input(|input| input.time);
@@ -596,13 +599,20 @@ impl Switcher {
 							icons::inline(ui, icons::Icon::Search, 28.0, colors.muted);
 							ui.add_space(6.0);
 							ui.label(
-								design::semibold(ui, "No conversations or friends match", 14.0)
-									.color(colors.text),
+								design::semibold(
+									ui,
+									crate::tr_ui!(ui, "No conversations or friends match"),
+									14.0,
+								)
+								.color(colors.text),
 							);
 							ui.label(
-								egui::RichText::new("Try a channel, server or person name.")
-									.size(12.0)
-									.color(colors.muted),
+								egui::RichText::new(crate::tr_ui!(
+									ui,
+									"Try a channel, server or person name."
+								))
+								.size(12.0)
+								.color(colors.muted),
 							);
 						});
 					});
@@ -647,7 +657,7 @@ impl Switcher {
 				}
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					ui.add_enabled_ui(!blocked, |ui| {
-						if design::secondary_button(ui, "Close").clicked() {
+						if design::secondary_button(ui, crate::tr_ui!(ui, "Close")).clicked() {
 							cancel = true;
 						}
 					});

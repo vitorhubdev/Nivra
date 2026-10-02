@@ -444,7 +444,7 @@ impl InvitesUi {
 			}
 		} else if !state.server_admin.pending
 			&& state.server_admin.error.is_none()
-			&& ui.button("Load Invites").clicked()
+			&& ui.button(crate::tr_ui!(ui, "Load Invites")).clicked()
 		{
 			action = Some(Action::Load);
 		}

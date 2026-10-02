@@ -675,9 +675,10 @@ impl Menu {
 									|ui| {
 										ui.add_space(12.0);
 										ui.label(
-											egui::RichText::new(
-												"↑↓ choose · Tab/Enter insert · Esc",
-											)
+											egui::RichText::new(crate::tr_ui!(
+												ui,
+												"↑↓ choose · Tab/Enter insert · Esc"
+											))
 											.size(11.0)
 											.color(colors.muted),
 										);

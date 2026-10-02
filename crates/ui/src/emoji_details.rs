@@ -91,7 +91,7 @@ pub(crate) fn show(
 						.wrap(),
 					);
 					if custom.is_some() {
-						ui.label("A custom emoji.");
+						ui.label(crate::tr_ui!(ui, "A custom emoji."));
 						if let Some((guild, _)) = source {
 							ui.add(egui::Label::new(format!("From {}", guild.name)).wrap());
 						} else {
@@ -112,7 +112,7 @@ pub(crate) fn show(
 			});
 		});
 	response.context_menu(|ui| {
-		if ui.button("Copy emoji").clicked() {
+		if ui.button(crate::tr_ui!(ui, "Copy emoji")).clicked() {
 			ui.ctx().copy_text(text.to_owned());
 			ui.close();
 		}

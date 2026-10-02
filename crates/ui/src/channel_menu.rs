@@ -493,7 +493,7 @@ impl ChannelMenu {
 					if pending_now {
 						ui.horizontal(|ui| {
 							ui.spinner();
-							ui.label("Loading channel settings…");
+							ui.label(crate::tr_ui!(ui, "Loading channel settings…"));
 						});
 					} else {
 						dialog::notice(
@@ -765,7 +765,10 @@ impl Dialog {
 			let topic = dialog::input(
 				ui,
 				egui::TextEdit::multiline(&mut self.draft.topic)
-					.hint_text("Let everyone know how to use this channel")
+					.hint_text(crate::tr_ui!(
+						ui,
+						"Let everyone know how to use this channel"
+					))
 					.char_limit(1024)
 					.desired_rows(3),
 			)

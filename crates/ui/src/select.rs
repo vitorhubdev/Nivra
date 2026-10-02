@@ -315,11 +315,11 @@ impl egui::Plugin for Pointer {
 		.open_memory(Some(egui::SetOpenCommand::Bool(true)))
 		.kind(egui::PopupKind::Menu)
 		.show(|ui| {
-			if ui.button("Copy").clicked() {
+			if ui.button(crate::tr_ui!(ui, "Copy")).clicked() {
 				request_copy(ui.ctx());
 				ui.close();
 			}
-			if ui.button("Save .txt").clicked() {
+			if ui.button(crate::tr_ui!(ui, "Save .txt")).clicked() {
 				let text = selected_text(ui.ctx());
 				if !text.is_empty() {
 					self.save_txt = Some(text.into_bytes());

@@ -434,9 +434,10 @@ impl RolesUi {
 				);
 			}
 		});
-		ui.label(
-			"Members use the color of the highest role they have on this list. Drag roles to reorder them.",
-		);
+		ui.label(crate::tr_ui!(
+			ui,
+			"Members use the color of the highest role they have on this list. Drag roles to reorder them."
+		));
 		ui.add_space(28.0);
 		let Some(catalog) = &state.server_admin.roles else {
 			return;
@@ -522,12 +523,12 @@ impl RolesUi {
 						}
 						let menu = boxed_icon(ui, icons::Icon::More, "Role actions");
 						egui::Popup::menu(&menu).show(|ui| {
-							if ui.button("Edit Role").clicked() {
+							if ui.button(crate::tr_ui!(ui, "Edit Role")).clicked() {
 								self.switch(Some(role.id), guild);
 								ui.close();
 							}
 							if state.can_move_guild_role(guild, role.id, role.position + 1)
-								&& ui.button("Move Up").clicked()
+								&& ui.button(crate::tr_ui!(ui, "Move Up")).clicked()
 							{
 								action = Some(Action::Move {
 									id: role.id,
@@ -536,7 +537,7 @@ impl RolesUi {
 								ui.close();
 							}
 							if state.can_move_guild_role(guild, role.id, role.position - 1)
-								&& ui.button("Move Down").clicked()
+								&& ui.button(crate::tr_ui!(ui, "Move Down")).clicked()
 							{
 								action = Some(Action::Move {
 									id: role.id,
@@ -604,7 +605,7 @@ impl RolesUi {
 		if ui.ctx().content_rect().width() < 752.0 {
 			let mut selected = self.selected;
 			ui.horizontal_wrapped(|ui| {
-				if ui.button("← Back to Roles").clicked() {
+				if ui.button(crate::tr_ui!(ui, "← Back to Roles")).clicked() {
 					selected = None;
 				}
 				egui::ComboBox::from_id_salt("compact-role-navigation")
@@ -973,7 +974,7 @@ impl RolesUi {
 				if (draft.icon.is_some()
 					|| draft.unicode_emoji.is_some()
 					|| !matches!(self.icon, Patch::Absent))
-					&& ui.button("Remove Icon").clicked()
+					&& ui.button(crate::tr_ui!(ui, "Remove Icon")).clicked()
 				{
 					draft.icon = None;
 					draft.unicode_emoji = None;

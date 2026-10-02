@@ -300,7 +300,7 @@ pub fn show_users(
 				if details.users.is_empty() && details.loading {
 					ui.horizontal(|ui| {
 						ui.spinner();
-						ui.label("Loading reactions…");
+						ui.label(crate::tr_ui!(ui, "Loading reactions…"));
 					});
 				} else if details.users.is_empty() {
 					crate::dialog::hint(

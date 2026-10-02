@@ -178,8 +178,11 @@ impl Browser {
 							let (_, header, _) = header.body(|ui| {
 								if matching.is_empty() {
 									ui.label(
-										egui::RichText::new("This server has no stickers yet.")
-											.color(colors.muted),
+										egui::RichText::new(crate::tr_ui!(
+											ui,
+											"This server has no stickers yet."
+										))
+										.color(colors.muted),
 									);
 								}
 								for row in matching.chunks(columns) {
@@ -244,17 +247,18 @@ impl Browser {
 								self.target = None;
 							}
 							if !query.is_empty() && results >= 500 {
-								ui.small(
-									"Showing the first 500 stickers. Search to narrow the results.",
-								);
+								ui.small(crate::tr_ui!(
+									ui,
+									"Showing the first 500 stickers. Search to narrow the results."
+								));
 								break;
 							}
 						}
 						if results == 0 && !query.is_empty() {
-							ui.label("No stickers found.");
+							ui.label(crate::tr_ui!(ui, "No stickers found."));
 						}
 						if state.stickers.loading {
-							ui.label("Loading sticker packs…");
+							ui.label(crate::tr_ui!(ui, "Loading sticker packs…"));
 						}
 					});
 			});
@@ -322,7 +326,7 @@ pub(crate) fn message(
 			if let Some(section) = section {
 				ui.label(format!("This is a {} sticker.", section.name));
 			} else if state.stickers.detail_loading == Some(sticker.id) {
-				ui.label("Loading sticker details…");
+				ui.label(crate::tr_ui!(ui, "Loading sticker details…"));
 			} else {
 				ui.label(
 					state
@@ -330,7 +334,10 @@ pub(crate) fn message(
 						.detail_error
 						.unwrap_or("Sticker details unavailable."),
 				);
-				if ui.button("Retry sticker details").clicked() {
+				if ui
+					.button(crate::tr_ui!(ui, "Retry sticker details"))
+					.clicked()
+				{
 					*request = Some(sticker.id);
 				}
 			}

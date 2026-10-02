@@ -175,8 +175,15 @@ impl MessagingUi {
 			ui.add_space(24.0);
 			ui.separator();
 			ui.add_space(16.0);
-			ui.label(design::semibold(ui, "Other Places to Make Friends", 20.0));
-			ui.label("Don't have a username? Discover public communities in Discord.");
+			ui.label(design::semibold(
+				ui,
+				crate::tr_ui!(ui, "Other Places to Make Friends"),
+				20.0,
+			));
+			ui.label(crate::tr_ui!(
+				ui,
+				"Don't have a username? Discover public communities in Discord."
+			));
 			ui.hyperlink_to(
 				"Explore Discoverable Servers ↗",
 				"https://discord.com/servers",
@@ -216,7 +223,7 @@ impl MessagingUi {
 			ui.add_sized(
 				[ui.available_width(), 40.0],
 				egui::TextEdit::singleline(&mut self.friends.query)
-					.hint_text("Search requests")
+					.hint_text(crate::tr_ui!(ui, "Search requests"))
 					.char_limit(128)
 					.align(egui::Align2::LEFT_CENTER),
 			);

@@ -1267,8 +1267,11 @@ async fn run_inner(
 			Err(Failure::Network)
 		})
 		.await;
+		// Wire limits always stop here too: reconnecting would re-read the same
+		// oversized hello, and CapacityAt no longer ends the session by itself.
+		// Same rule as the main read loop below.
 		if let Ok(Err(failure)) = hello
-			&& failure.ends_session()
+			&& (matches!(failure, Failure::CapacityAt(_)) || failure.ends_session())
 		{
 			return Err(failure);
 		}

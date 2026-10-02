@@ -624,7 +624,13 @@ impl DiscordApi {
 							})
 							.transpose()
 							.map_err(|_| Failure::Protocol)?;
-						json!({"muted": *mute != Mute::Unmute, "mute_config":{"end_time":end,"selected_time_window":seconds.map_or(-1,i64::from)}})
+						// Unmuting clears the config; a leftover "forever" window keeps the mute on the service.
+						let mute_config = if *mute != Mute::Unmute {
+							json!({"end_time":end,"selected_time_window":seconds.map_or(-1,i64::from)})
+						} else {
+							serde_json::Value::Null
+						};
+						json!({"muted": *mute != Mute::Unmute, "mute_config":mute_config})
 					}
 					_ => unreachable!(),
 				};
@@ -639,6 +645,7 @@ impl DiscordApi {
 		let requested_until = body
 			.as_ref()
 			.and_then(|body| body.get("mute_config"))
+			.filter(|config| !config.is_null())
 			.map(|config| {
 				serde_json::from_value::<discord_protocol::notifications::MuteConfig>(
 					config.clone(),
@@ -712,7 +719,13 @@ impl DiscordApi {
 					})
 					.transpose()
 					.map_err(|_| Failure::Protocol)?;
-				json!({"muted": *mute != Mute::Unmute, "mute_config":{"end_time":end,"selected_time_window":seconds.map_or(-1,i64::from)}})
+				// Unmuting clears the config; a leftover "forever" window keeps the mute on the service.
+				let mute_config = if *mute != Mute::Unmute {
+					json!({"end_time":end,"selected_time_window":seconds.map_or(-1,i64::from)})
+				} else {
+					serde_json::Value::Null
+				};
+				json!({"muted": *mute != Mute::Unmute, "mute_config":mute_config})
 			}
 			_ => return Err(Failure::Protocol),
 		};

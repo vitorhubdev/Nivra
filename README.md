@@ -155,6 +155,8 @@ cd Nivra
 cargo build --locked --release -p nivra
 ```
 
+Interface text lives in one file per language under `crates/ui/locales/`; adding a language is adding a file, with no screen changes: see [Languages](docs/i18n.md). 
+
 Platform-specific runtime/build requirements remain documented under [Platform Support](docs/platform-support.md) and the `packaging/` directory. Upstream documentation can still be useful as technical reference, but its downloads belong to the original project, not this fork.
 
 ### Requirements

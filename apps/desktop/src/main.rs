@@ -5638,9 +5638,11 @@ impl Desktop {
 				}
 			}
 			// Only an authentication refusal forgets the saved login and requires
-			// an explicit sign-in. Any other drop auto-reconnects from the OS
+			// an explicit sign-in. Transient drops auto-reconnect from the OS
 			// credential store when the token is still valid; the call hint
 			// remembered by `sync_reconnect_call` offers the voice rejoin.
+			// Wire-limit capacity stops (oversized frames) never auto-reconnect:
+			// retrying would re-read the same violation.
 			if matches!(
 				failure,
 				Failure::Expired | Failure::Challenged | Failure::InvalidCredential
@@ -5654,7 +5656,9 @@ impl Desktop {
 						credentials::Operation::Forget,
 					));
 				}
-			} else if let Some(user) = self.state.user.clone() {
+			} else if !matches!(failure, Failure::Capacity | Failure::CapacityAt(_))
+				&& let Some(user) = self.state.user.clone()
+			{
 				self.credential_status = "Reconnecting…";
 				if let Some(saved) = self
 					.messaging

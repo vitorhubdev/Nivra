@@ -169,10 +169,27 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8.0.1
-        with:
-          pattern: nivra-*
-          path: release-assets
+      # actions/download-artifact@v8 fails the tag run with `digest-mismatch`, so the
+      # packaged builds are pulled through the API, which this job already uses.
+      - name: Collect the packaged builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" > artifacts.json
+          while read -r id name; do
+            case "$name" in
+              nivra-*) ;;
+              *) continue ;;
+            esac
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > "${name}.zip"
+            unzip -q -o "${name}.zip" -d "release-assets/${name}"
+            rm -f "${name}.zip"
+            echo "collected ${name}"
+          done < <(python3 -c "import json,sys; [print(a['id'], a['name']) for a in json.load(open('artifacts.json'))['artifacts']]")
+          rm -f artifacts.json
+          ls -1 release-assets
       - name: Publish the tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -209,7 +226,7 @@ jobs:
             $0 == want { printing = 1; next }
             printing && /^## / { exit }
             printing { print }
-          ' CHANGELOG.md > "$notes"
+          ' "${GITHUB_WORKSPACE}/CHANGELOG.md" > "$notes"
           if [ ! -s "$notes" ]; then
             printf 'Nivra %s\n\nSem notas no CHANGELOG para esta versão.\n' "${version}" > "$notes"
           fi

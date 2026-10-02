@@ -1,6 +1,6 @@
 # Changelog
 
-## Nivra 1.0.8
+## Nivra 1.0.9
 
 Vídeo toca dentro do app. O anexo `.mp4` do Discord parou de mostrar "vídeo indisponível", e o vídeo de embed (X, GIF, link direto) abre no player do próprio Nivra, sem navegador: o WebView ficou só para o login do Discord. YouTube e Vimeo continuam abrindo no navegador do sistema, com um botão só.
 

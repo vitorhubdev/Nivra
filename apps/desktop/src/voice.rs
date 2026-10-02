@@ -452,6 +452,35 @@ impl Voice {
 			}
 			return None;
 		}
+		if let voice::Event::SessionConfirmationFailed {
+			channel,
+			request,
+			revision,
+			message,
+		} = event
+		{
+			let pending = self.pending.as_ref().or_else(|| {
+				self.live
+					.as_ref()
+					.and_then(|live| live.negotiation.as_ref())
+			});
+			let current = pending.is_some_and(|pending| {
+				pending.generation == state.generation
+					&& pending.accepts_confirmation(*channel, *request, *revision)
+					&& state.can_call(*channel)
+					&& state.voice.active.as_ref().is_some_and(|call| {
+						(call.channel, call.request) == (*channel, *request)
+							&& matches!(
+								call.phase,
+								Phase::Connecting
+									| Phase::ConnectingTransport
+									| Phase::Discovering | Phase::Securing
+							)
+					})
+			});
+			// The caller uses fail/end_control; unconfirmed negotiation selects local Abandon.
+			return current.then_some(*message);
+		}
 		if let voice::Event::SessionConfirmed {
 			channel,
 			request,
@@ -2232,6 +2261,116 @@ mod tests {
 		assert!(state.start_call(Id(22), false).is_some());
 		assert!(manager.begin(&state, false).is_ok());
 	}
+	#[test]
+	fn confirmation_failure_abandons_only_the_current_unconfirmed_candidate() {
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		state.gateway_connected = true;
+		state.start_call(Id(22), false).unwrap();
+		let request = state.voice.active.as_ref().unwrap().request;
+		let mut manager = Voice::default();
+		manager.begin(&state, false).unwrap();
+		let pending = manager.pending.as_mut().unwrap();
+		pending.session = Some(Secret::new("synthetic-session".into()).unwrap());
+		pending.server = Some((
+			Secret::new("synthetic-token".into()).unwrap(),
+			"synthetic.discord.media".into(),
+		));
+		pending.negotiation_revision = Some(2);
+		let started = pending.started;
+		let failure = |channel, attempt, revision| {
+			Event::Voice(voice::Event::SessionConfirmationFailed {
+				channel,
+				request: attempt,
+				revision,
+				message: "Call confirmation was not sent; the voice queue is full",
+			})
+		};
+		state.voice.active.as_mut().unwrap().phase = Phase::Securing;
+		for (channel, attempt, revision) in [
+			(Id(22), request, 1),
+			(Id(23), request, 2),
+			(Id(22), request + 1, 2),
+		] {
+			assert!(
+				manager
+					.observe(&state, &mut failure(channel, attempt, revision))
+					.is_none()
+			);
+			assert_eq!(manager.pending.as_ref().unwrap().started, started);
+		}
+		for phase in [
+			Phase::Connected,
+			Phase::Waiting,
+			Phase::Ringing,
+			Phase::OpeningAudio,
+			Phase::Failed,
+		] {
+			state.voice.active.as_mut().unwrap().phase = phase;
+			assert!(
+				manager
+					.observe(&state, &mut failure(Id(22), request, 2))
+					.is_none()
+			);
+		}
+		for phase in [
+			Phase::Connecting,
+			Phase::ConnectingTransport,
+			Phase::Discovering,
+			Phase::Securing,
+		] {
+			state.voice.active.as_mut().unwrap().phase = phase;
+			assert!(
+				manager
+					.observe(&state, &mut failure(Id(22), request, 2))
+					.is_some()
+			);
+		}
+		manager.pending.as_mut().unwrap().generation += 1;
+		assert!(
+			manager
+				.observe(&state, &mut failure(Id(22), request, 2))
+				.is_none()
+		);
+		manager.pending.as_mut().unwrap().generation = state.generation;
+		manager.pending.as_mut().unwrap().failed_candidate = true;
+		assert!(
+			manager
+				.observe(&state, &mut failure(Id(22), request, 2))
+				.is_none()
+		);
+		manager.pending.as_mut().unwrap().failed_candidate = false;
+		manager.pending.as_mut().unwrap().started = Instant::now() - Duration::from_secs(31);
+		assert!(
+			manager
+				.observe(&state, &mut failure(Id(22), request, 2))
+				.is_none()
+		);
+		manager.pending.as_mut().unwrap().started = started;
+		let auth = state.auth;
+		// Core cannot fail a candidate merely from its channel/request: revision lives in Desktop.
+		state.apply(client_core::Envelope {
+			generation: state.generation,
+			event: failure(Id(22), request, 1),
+		});
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Securing);
+		let error = manager
+			.observe(&state, &mut failure(Id(22), request, 2))
+			.unwrap();
+		assert!(
+			matches!(manager.fail(&mut state, error), Some(Command::Voice(voice::Command::AbandonSession { channel: Id(22), request: attempt })) if attempt == request)
+		);
+		assert_eq!(state.auth, auth);
+		assert!(state.gateway_connected);
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Failed);
+		assert!(manager.pending.is_none() && manager.live.is_none());
+		assert!(
+			manager
+				.observe(&state, &mut failure(Id(22), request, 2))
+				.is_none()
+		);
+	}
+
 	#[test]
 	fn takeover_join_reconciles_both_credential_orders_and_rejects_stale_transport_readiness() {
 		for server_first in [false, true] {

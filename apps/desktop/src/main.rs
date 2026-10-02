@@ -5637,14 +5637,40 @@ impl Desktop {
 					pending.delivery = Delivery::Ambiguous;
 				}
 			}
-			if failure == Failure::Expired
-				&& let Some(store) = &self.store
+			// Only an authentication refusal forgets the saved login and requires
+			// an explicit sign-in. Transient drops auto-reconnect from the OS
+			// credential store when the token is still valid; the call hint
+			// remembered by `sync_reconnect_call` offers the voice rejoin.
+			// Wire-limit capacity stops (oversized frames) never auto-reconnect:
+			// retrying would re-read the same violation.
+			if matches!(
+				failure,
+				Failure::Expired | Failure::Challenged | Failure::InvalidCredential
+			) {
+				if failure == Failure::Expired
+					&& let Some(store) = &self.store
+				{
+					let _ = store.send.try_send((
+						self.state.generation,
+						credentials::Request::NONE,
+						credentials::Operation::Forget,
+					));
+				}
+			} else if !matches!(failure, Failure::Capacity | Failure::CapacityAt(_))
+				&& let Some(user) = self.state.user.clone()
 			{
-				let _ = store.send.try_send((
-					self.state.generation,
-					credentials::Request::NONE,
-					credentials::Operation::Forget,
-				));
+				self.credential_status = "Reconnecting…";
+				if let Some(saved) = self
+					.messaging
+					.accounts
+					.iter()
+					.find(|saved| saved.id == user.id && saved.has_token)
+					.map(|saved| saved.id)
+				{
+					self.begin_switch(saved);
+				} else {
+					self.probe_saved_logins();
+				}
 			}
 		}
 		if let Some(login) = &self.login {

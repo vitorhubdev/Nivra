@@ -171,6 +171,7 @@ pub struct LongTextDialog {
 	pub channel: Id,
 	pub text: String,
 	pub filename: String,
+	pub split_count: usize,
 }
 
 /// Over-limit composer text staged as a `.txt` attachment. The desktop upload
@@ -183,15 +184,20 @@ pub struct LongTextAttachment {
 
 /// Default staged filename for over-limit text.
 pub const LONG_TEXT_DEFAULT_FILENAME: &str = "message.txt";
+/// Default staged filename for over-limit text: `message.md` when it looks like
+/// Markdown, otherwise `message.txt`.
+pub fn long_text_default_filename(text: &str) -> &'static str {
+	client_core::State::long_text_filename(text)
+}
 
-/// Appends `.txt` when missing so the staged file always has the text extension.
-/// Returns `None` for blank names.
+/// Appends `.txt`/`.md` when missing so the staged file always has a text extension.
+/// Returns `None` for blank names. Preserves `.md` for Markdown, defaults to `.txt`.
 pub fn normalize_txt_filename(name: &str) -> Option<String> {
 	let trimmed = name.trim();
 	if trimmed.is_empty() {
 		return None;
 	}
-	Some(if trimmed.ends_with(".txt") {
+	Some(if trimmed.ends_with(".txt") || trimmed.ends_with(".md") {
 		trimmed.to_owned()
 	} else {
 		format!("{trimmed}.txt")
@@ -199,13 +205,17 @@ pub fn normalize_txt_filename(name: &str) -> Option<String> {
 }
 
 /// Filename rules mirrored from the send path: bounded, no directories, no
-/// control characters, and always a `.txt` file with a non-empty stem.
+/// control characters, and always a `.txt` or `.md` file with a non-empty stem.
 pub(crate) fn valid_txt_filename(name: &str) -> bool {
 	!name.trim().is_empty()
 		&& name.len() <= 256
 		&& !matches!(name, "." | "..")
-		&& name.ends_with(".txt")
-		&& !name.trim_end_matches(".txt").trim().is_empty()
+		&& (name.ends_with(".txt") || name.ends_with(".md"))
+		&& !name
+			.trim_end_matches(".txt")
+			.trim_end_matches(".md")
+			.trim()
+			.is_empty()
 		&& name
 			.chars()
 			.all(|c| !c.is_control() && !matches!(c, '/' | '\\' | ':'))
@@ -3493,10 +3503,20 @@ impl MessagingUi {
                         {
                             // The fresh buffer only exists out here; the send site above
                             // merely recorded the request.
+                            let over_limit_text = std::mem::take(&mut new_draft);
+                            let over_limit_filename =
+                                long_text_default_filename(&over_limit_text).to_owned();
+                            let over_limit_split = client_core::State::split_text(
+                                &over_limit_text,
+                                state.message_char_limit(),
+                            )
+                            .len()
+                            .max(1);
                             self.long_text_dialog = Some(LongTextDialog {
                                 channel,
-                                text: std::mem::take(&mut new_draft),
-                                filename: LONG_TEXT_DEFAULT_FILENAME.into(),
+                                text: over_limit_text,
+                                filename: over_limit_filename,
+                                split_count: over_limit_split,
                             });
                         }
                         if !editing_here && (!new_draft.is_empty() || restore_empty_draft) {
@@ -3686,8 +3706,10 @@ impl MessagingUi {
 		let ready = normalize_txt_filename(&dialog.filename)
 			.as_deref()
 			.is_some_and(valid_txt_filename);
+		let split_count = dialog.split_count.max(1);
 		let mut send = false;
 		let mut cancel = false;
+		let mut split = false;
 		crate::dialog::Dialog::new(
 			"long-text-rename",
 			crate::i18n::text(language, "Send as text file?"),
@@ -3732,6 +3754,15 @@ impl MessagingUi {
 						send = true;
 					}
 				});
+				if split_count >= 2 {
+					let split_label =
+						format!("{} ({split_count})", crate::i18n::text(language, "Split"));
+					if crate::dialog::action(ui, &split_label, crate::dialog::Action::Neutral)
+						.clicked()
+					{
+						split = true;
+					}
+				}
 				if crate::dialog::action(
 					ui,
 					crate::i18n::text(language, "Cancel"),
@@ -3753,6 +3784,8 @@ impl MessagingUi {
 			}
 		} else if send {
 			self.send_long_text(ctx, state, channel, commands);
+		} else if split {
+			self.send_split_long_text(state, channel, commands);
 		}
 	}
 
@@ -3802,6 +3835,53 @@ impl MessagingUi {
 					state.drafts.insert(channel, restored);
 				}
 			}
+		}
+	}
+
+	/// Split the dialog text into consecutive messages within the account limit.
+	/// The dialog owns the text; anything that cannot be queued is returned to
+	/// the draft. The file attachment staging is untouched.
+	fn send_split_long_text(
+		&mut self,
+		state: &mut State,
+		channel: Id,
+		commands: &mut Vec<Command>,
+	) {
+		let Some(dialog) = self.long_text_dialog.take() else {
+			return;
+		};
+		if dialog.channel != channel {
+			self.long_text_dialog = Some(dialog);
+			return;
+		}
+		let limit = state.message_char_limit();
+		let chunks = State::split_text(&dialog.text, limit);
+		if chunks.len() < 2 {
+			self.long_text_dialog = Some(dialog);
+			return;
+		}
+		let pending_before = state.pending.len();
+		let commands_before = commands.len();
+		let mut queued = 0;
+		for chunk in &chunks {
+			if let Some(command) = state.prepare_text_send(chunk) {
+				commands.push(command);
+				queued += 1;
+			} else {
+				break;
+			}
+		}
+		if queued == chunks.len() {
+			self.timeline.follow_latest(state);
+			state.status = "Long message split into several messages";
+		} else {
+			// Queue pressure: return the whole text so nothing is lost.
+			commands.truncate(commands_before);
+			state.pending.truncate(pending_before);
+			if let std::collections::btree_map::Entry::Vacant(entry) = state.drafts.entry(channel) {
+				entry.insert(dialog.text);
+			}
+			state.status = "Work queue full; message was not sent";
 		}
 	}
 
@@ -5476,6 +5556,7 @@ mod composer_tests {
 			channel: Id(1),
 			text: text.clone(),
 			filename: "notes".into(),
+			split_count: 2,
 		});
 		let mut commands = vec![];
 		view.send_long_text(&ctx, &mut state, Id(1), &mut commands);
@@ -5497,6 +5578,7 @@ mod composer_tests {
 			channel: Id(1),
 			text: text.clone(),
 			filename: "notes".into(),
+			split_count: 2,
 		});
 		let mut commands = vec![];
 		let labels = render_dialog(&ctx, &mut view, &mut state, &mut commands);
@@ -5575,6 +5657,7 @@ mod composer_tests {
 			channel: Id(1),
 			text: "Hello".into(),
 			filename: "message.txt".into(),
+			split_count: 1,
 		});
 		let mut commands = vec![];
 		let labels = render_dialog(&ctx, &mut view, &mut state, &mut commands);
@@ -5604,6 +5687,7 @@ mod composer_tests {
 				channel: Id(1),
 				text: "x".repeat(2500),
 				filename: "a/b.txt".into(),
+				split_count: 2,
 			}),
 			..Default::default()
 		};
@@ -5618,6 +5702,44 @@ mod composer_tests {
 		assert!(commands.is_empty());
 		assert!(view.long_text_dialog.is_some());
 		assert!(view.long_text_attachment.is_none());
+	}
+
+	#[test]
+	fn markdown_defaults_to_message_md_and_accepts_md_names() {
+		assert_eq!(long_text_default_filename("# Title\n- item"), "message.md");
+		assert_eq!(long_text_default_filename("plain long text"), "message.txt");
+		assert_eq!(normalize_txt_filename("notes.md"), Some("notes.md".into()));
+		assert_eq!(normalize_txt_filename("notes"), Some("notes.txt".into()));
+		assert!(valid_txt_filename("message.md"));
+		assert!(valid_txt_filename("message.txt"));
+		assert!(!valid_txt_filename("notes"));
+	}
+
+	#[test]
+	fn split_sends_consecutive_messages_within_the_limit() {
+		let ctx = egui::Context::default();
+		let mut state = dm_state();
+		let mut view = MessagingUi::default();
+		let text = "# Report\n".to_string() + &"word ".repeat(1000);
+		let limit = state.message_char_limit();
+		assert!(text.chars().count() > limit);
+		view.long_text_dialog = Some(LongTextDialog {
+			channel: Id(1),
+			text: text.clone(),
+			filename: "message.md".into(),
+			split_count: 3,
+		});
+		let mut commands = vec![];
+		view.send_split_long_text(&mut state, Id(1), &mut commands);
+		assert!(view.long_text_dialog.is_none());
+		assert!(commands.len() >= 2);
+		for command in &commands {
+			let client_core::Command::Send { content, .. } = command else {
+				panic!("split must queue text sends");
+			};
+			assert!(content.chars().count() <= limit);
+		}
+		let _ = ctx;
 	}
 
 	#[test]

@@ -202,10 +202,16 @@ jobs:
             esac
           done
           sha256sum Nivra-"${tag}"-* > SHA256SUMS.txt
+          # Notes come from the CHANGELOG section of this version, so a release
+          # never repeats an older round's text.
           notes="$(mktemp)"
-          printf '%s\n' \
-            "Nivra ${version}" \
-            "" \
-            "O banco local mantém um cache de páginas de 2 MiB, que já cabe o arquivo. Uma gravação além do teto de 256 MiB devolve erro. Salvar um canal nesse teto apaga o canal em cache mais antigo para abrir espaço e tenta de novo. A prévia de texto, Markdown e código detecta UTF-8 e UTF-16, lê um texto legado do Windows e mostra um arquivo longo em partes. O vídeo fica no decodificador do sistema. Não há VLC nem FFmpeg embutido. Um anexo PDF continua um cartão de arquivo. Estes pacotes não têm assinatura." \
-            > "$notes"
+          awk -v want="## Nivra ${version}" '
+            $0 == want { printing = 1; next }
+            printing && /^## / { exit }
+            printing { print }
+          ' CHANGELOG.md > "$notes"
+          if [ ! -s "$notes" ]; then
+            printf 'Nivra %s\n\nSem notas no CHANGELOG para esta versão.\n' "${version}" > "$notes"
+          fi
+          printf '\nEstes pacotes não têm assinatura. O Windows pode mostrar "Proteção do Windows" ao abrir o .exe; escolha "Mais informações" e "Executar assim mesmo".\n' >> "$notes"
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "Nivra ${version}" --notes-file "$notes" --verify-tag Nivra-"${tag}"-* SHA256SUMS.txt

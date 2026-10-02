@@ -611,6 +611,14 @@ impl MessagingUi {
 									c.guild.is_none()
 										&& c.kind == 1 && c.recipients.iter().any(|u| u.id == user.id)
 								});
+								// A missing DM still opens: the tap requests the channel
+								// instead of staying disabled without one.
+								let can_message = dm.is_some()
+									|| (!state.user_action_pending()
+										&& (state.demo
+											|| (state.gateway_connected
+												&& state.auth
+													== client_core::auth::AuthState::Authenticated)));
 								let mut actions = ui.new_child(
 									egui::UiBuilder::new()
 										.max_rect(egui::Rect::from_min_size(
@@ -622,17 +630,12 @@ impl MessagingUi {
 								actions.spacing_mut().item_spacing.x = 8.0;
 								if restricted.is_none() {
 									let message = actions
-										.add_enabled_ui(dm.is_some(), |ui| {
+										.add_enabled_ui(can_message, |ui| {
 											icons::button(ui, Icon::Threads, 36.0, "Message")
 										})
 										.inner;
-									if message
-										.on_disabled_hover_text(
-											"No open direct message with this friend",
-										)
-										.clicked()
-									{
-										selected = dm.map(|c| c.id);
+									if message.clicked() {
+										selected = Some(user.id);
 									}
 								}
 								let more = icons::button(&mut actions, Icon::More, 36.0, "More");
@@ -650,8 +653,8 @@ impl MessagingUi {
 						}
 					});
 			});
-		if let Some(channel) = selected
-			&& let Some(command) = state.select(channel)
+		if let Some(user) = selected
+			&& let Some(command) = state.open_friend_dm(user)
 		{
 			commands.push(command);
 		}
@@ -1044,5 +1047,102 @@ mod tests {
 					.any(|s| s == "Send Friend Request")
 			);
 		}
+	}
+
+	#[test]
+	fn message_button_opens_a_missing_dm() {
+		use client_core::user_actions::Action;
+		let ctx = egui::Context::default();
+		ctx.enable_accesskit();
+		let mut state = test_support::friends_demo_state();
+		let friend = Id(1002);
+		assert!(
+			state.channels.iter().all(|channel| {
+				!(channel.guild.is_none()
+					&& channel.kind == 1
+					&& channel.recipients.iter().any(|user| user.id == friend))
+			}),
+			"the fixture gained a DM channel for the friend under test"
+		);
+		let mut view = MessagingUi::default();
+		view.friends.tab = Tab::All;
+		view.friends.query = state.friend_username(friend).unwrap().to_owned();
+		fn frame(
+			ctx: &egui::Context,
+			view: &mut MessagingUi,
+			state: &mut State,
+			events: Vec<egui::Event>,
+			commands: &mut Vec<Command>,
+		) -> Vec<(egui::Pos2, bool)> {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					focused: true,
+					events,
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(1120.0, 800.0),
+					)),
+					..Default::default()
+				},
+				|ui| view.friends_page(ui, state, commands),
+			);
+			let buttons = output
+				.platform_output
+				.accesskit_update
+				.as_ref()
+				.expect("friends render without an accessibility tree")
+				.nodes
+				.iter()
+				.filter_map(|(_, node)| {
+					(node.label() == Some("Message")).then(|| {
+						let bounds = node.bounds().expect("message button without bounds");
+						(
+							egui::pos2(
+								((bounds.x0 + bounds.x1) / 2.0) as f32,
+								((bounds.y0 + bounds.y1) / 2.0) as f32,
+							),
+							node.is_disabled(),
+						)
+					})
+				})
+				.collect();
+			output.drop_without_applying_deltas();
+			buttons
+		}
+		let mut commands = Vec::new();
+		let buttons = frame(&ctx, &mut view, &mut state, vec![], &mut commands);
+		assert_eq!(buttons.len(), 1, "expected one message button: {buttons:?}");
+		assert!(
+			!buttons[0].1,
+			"message stays disabled without an existing DM: {buttons:?}"
+		);
+		for pressed in [true, false] {
+			frame(
+				&ctx,
+				&mut view,
+				&mut state,
+				vec![
+					egui::Event::PointerMoved(buttons[0].0),
+					egui::Event::PointerButton {
+						pos: buttons[0].0,
+						button: egui::PointerButton::Primary,
+						pressed,
+						modifiers: egui::Modifiers::NONE,
+					},
+				],
+				&mut commands,
+			);
+		}
+		assert!(
+			commands.iter().any(|command| matches!(
+				command,
+				Command::UserAction {
+					action: Action::OpenDm(user),
+					..
+				} if *user == friend
+			)),
+			"clicking message requested no DM for the friend ({} commands)",
+			commands.len()
+		);
 	}
 }

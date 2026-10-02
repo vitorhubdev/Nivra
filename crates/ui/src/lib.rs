@@ -171,6 +171,7 @@ pub struct LongTextDialog {
 	pub channel: Id,
 	pub text: String,
 	pub filename: String,
+	pub split_count: usize,
 }
 
 /// Over-limit composer text staged as a `.txt` attachment. The desktop upload
@@ -3505,10 +3506,17 @@ impl MessagingUi {
                             let over_limit_text = std::mem::take(&mut new_draft);
                             let over_limit_filename =
                                 long_text_default_filename(&over_limit_text).to_owned();
+                            let over_limit_split = client_core::State::split_text(
+                                &over_limit_text,
+                                state.message_char_limit(),
+                            )
+                            .len()
+                            .max(1);
                             self.long_text_dialog = Some(LongTextDialog {
                                 channel,
                                 text: over_limit_text,
                                 filename: over_limit_filename,
+                                split_count: over_limit_split,
                             });
                         }
                         if !editing_here && (!new_draft.is_empty() || restore_empty_draft) {
@@ -3698,9 +3706,7 @@ impl MessagingUi {
 		let ready = normalize_txt_filename(&dialog.filename)
 			.as_deref()
 			.is_some_and(valid_txt_filename);
-		let split_count = client_core::State::split_text(&dialog.text, state.message_char_limit())
-			.len()
-			.max(1);
+		let split_count = dialog.split_count.max(1);
 		let mut send = false;
 		let mut cancel = false;
 		let mut split = false;
@@ -3854,6 +3860,8 @@ impl MessagingUi {
 			self.long_text_dialog = Some(dialog);
 			return;
 		}
+		let pending_before = state.pending.len();
+		let commands_before = commands.len();
 		let mut queued = 0;
 		for chunk in &chunks {
 			if let Some(command) = state.prepare_text_send(chunk) {
@@ -3868,7 +3876,8 @@ impl MessagingUi {
 			state.status = "Long message split into several messages";
 		} else {
 			// Queue pressure: return the whole text so nothing is lost.
-			commands.truncate(commands.len().saturating_sub(queued));
+			commands.truncate(commands_before);
+			state.pending.truncate(pending_before);
 			if let std::collections::btree_map::Entry::Vacant(entry) = state.drafts.entry(channel) {
 				entry.insert(dialog.text);
 			}
@@ -5547,6 +5556,7 @@ mod composer_tests {
 			channel: Id(1),
 			text: text.clone(),
 			filename: "notes".into(),
+			split_count: 2,
 		});
 		let mut commands = vec![];
 		view.send_long_text(&ctx, &mut state, Id(1), &mut commands);
@@ -5568,6 +5578,7 @@ mod composer_tests {
 			channel: Id(1),
 			text: text.clone(),
 			filename: "notes".into(),
+			split_count: 2,
 		});
 		let mut commands = vec![];
 		let labels = render_dialog(&ctx, &mut view, &mut state, &mut commands);
@@ -5646,6 +5657,7 @@ mod composer_tests {
 			channel: Id(1),
 			text: "Hello".into(),
 			filename: "message.txt".into(),
+			split_count: 1,
 		});
 		let mut commands = vec![];
 		let labels = render_dialog(&ctx, &mut view, &mut state, &mut commands);
@@ -5675,6 +5687,7 @@ mod composer_tests {
 				channel: Id(1),
 				text: "x".repeat(2500),
 				filename: "a/b.txt".into(),
+				split_count: 2,
 			}),
 			..Default::default()
 		};
@@ -5714,6 +5727,7 @@ mod composer_tests {
 			channel: Id(1),
 			text: text.clone(),
 			filename: "message.md".into(),
+			split_count: 3,
 		});
 		let mut commands = vec![];
 		view.send_split_long_text(&mut state, Id(1), &mut commands);

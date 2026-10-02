@@ -1655,101 +1655,59 @@ impl State {
 		}
 	}
 	/// Split over-limit text into chunks within `limit` characters, preferring
-	/// newline and space boundaries so words are not cut mid-word. Never returns
-	/// an empty vec for nonempty input; a single long word is cut hard at the
-	/// limit. All chunks are nonempty and within the limit.
+	/// newline and space boundaries so words are not cut mid-word. Every
+	/// character is preserved exactly (no whitespace normalization): joining
+	/// the chunks yields the original text. Never returns an empty vec for
+	/// nonempty input; a single long word is cut hard at the limit. All chunks
+	/// are nonempty and within the limit.
 	pub fn split_text(text: &str, limit: usize) -> Vec<String> {
 		let limit = limit.max(1);
+		if text.is_empty() {
+			return Vec::new();
+		}
+		let chars: Vec<char> = text.chars().collect();
+		if chars.len() <= limit {
+			return vec![text.to_owned()];
+		}
 		let mut chunks = Vec::new();
-		let mut current = String::new();
-		let mut current_count = 0;
-		let push_word = |chunks: &mut Vec<String>,
-		                 current: &mut String,
-		                 current_count: &mut usize,
-		                 word: &str| {
-			let word_count = word.chars().count();
-			if word_count >= limit {
-				if !current.is_empty() {
-					chunks.push(std::mem::take(current));
-					*current_count = 0;
+		let mut start = 0;
+		while start < chars.len() {
+			let remaining = chars.len() - start;
+			if remaining <= limit {
+				let chunk: String = chars[start..].iter().collect();
+				if !chunk.is_empty() {
+					chunks.push(chunk);
 				}
-				let mut piece = String::new();
-				let mut piece_count = 0;
-				for ch in word.chars() {
-					piece.push(ch);
-					piece_count += 1;
-					if piece_count >= limit {
-						chunks.push(std::mem::take(&mut piece));
-						piece_count = 0;
-					}
+				break;
+			}
+			// Prefer to break after the last space/newline within the window so
+			// words stay whole; the delimiter stays with the next chunk so
+			// nothing is lost or normalized.
+			let window_end = start + limit;
+			let mut split = window_end;
+			for index in (start + 1..=window_end).rev() {
+				if chars[index - 1] == '\n' || chars[index - 1] == ' ' {
+					split = index;
+					break;
 				}
-				if !piece.is_empty() {
-					*current = piece;
-					*current_count = piece_count;
-				} else {
-					*current_count = 0;
-				}
-			} else if *current_count + word_count + usize::from(!current.is_empty()) > limit {
-				chunks.push(std::mem::take(current));
-				*current = word.to_owned();
-				*current_count = word_count;
+			}
+			if split == start {
+				split = window_end;
+			}
+			let chunk: String = chars[start..split].iter().collect();
+			if chunk.is_empty() {
+				// Defensive: never emit empty chunks, always make progress.
+				split = window_end;
+				let chunk: String = chars[start..split].iter().collect();
+				chunks.push(chunk);
 			} else {
-				if !current.is_empty() {
-					current.push(' ');
-					*current_count += 1;
-				}
-				current.push_str(word);
-				*current_count += word_count;
+				chunks.push(chunk);
 			}
-		};
-		for paragraph in text.split('\n') {
-			if paragraph.is_empty() {
-				if current_count + 1 > limit {
-					if !current.is_empty() {
-						chunks.push(std::mem::take(&mut current));
-						current_count = 0;
-					}
-					chunks.push(String::new());
-				} else {
-					if chunks.is_empty() && current.is_empty() {
-						// Leading blank lines are preserved as empty first chunk boundary.
-					} else {
-						current.push('\n');
-						current_count += 1;
-					}
-					if current_count >= limit && !current.is_empty() {
-						chunks.push(std::mem::take(&mut current));
-						current_count = 0;
-					}
-				}
-				continue;
-			}
-			for word in paragraph.split(' ') {
-				if word.is_empty() {
-					continue;
-				}
-				push_word(&mut chunks, &mut current, &mut current_count, word);
-			}
-			// Newline boundary: prefer to break here when near the limit.
-			if current_count + 1 > limit {
-				if !current.is_empty() {
-					chunks.push(std::mem::take(&mut current));
-					current_count = 0;
-				}
-			} else if !current.is_empty() {
-				current.push('\n');
-				current_count += 1;
-			}
+			start = split;
 		}
-		if !current.is_empty() {
-			// Trim the trailing newline added above; empty text yields no chunks.
-			let trimmed = current.strip_suffix('\n').unwrap_or(&current).to_owned();
-			if !trimmed.is_empty() {
-				chunks.push(trimmed);
-			}
-		}
-		if chunks.is_empty() && !text.is_empty() {
-			chunks.push(text.chars().take(limit).collect());
+		chunks.retain(|chunk| !chunk.is_empty());
+		if chunks.is_empty() {
+			chunks.push(chars.into_iter().take(limit).collect());
 		}
 		chunks
 	}
@@ -4557,6 +4515,7 @@ mod tests {
 			("x".repeat(4500), MAX_CONTENT),
 			("y".repeat(4500), MAX_CONTENT_NITRO),
 			("hello world ".repeat(500), 2000),
+			("a  b   c\n    indented\n\n  spaced  ".repeat(200), 2000),
 		] {
 			let chunks = State::split_text(&text, limit);
 			assert!(chunks.len() >= 2, "{} chars should split", text.len());
@@ -4564,15 +4523,12 @@ mod tests {
 				assert!(!chunk.is_empty());
 				assert!(chunk.chars().count() <= limit, "chunk too long");
 			}
-			// Splitting is word-aware, so rejoining with spaces/newlines is lossy;
-			// instead check no chunk exceeds the limit and the char count is preserved
-			// up to whitespace normalization.
-			let joined_len: usize = chunks.iter().map(|c| c.chars().count()).sum();
-			assert!(joined_len <= text.chars().count() + chunks.len());
-			assert!(!chunks.is_empty());
+			// Whitespace is preserved exactly: joining yields the original.
+			assert_eq!(chunks.concat(), text);
 		}
 		assert_eq!(State::split_text("", 2000), Vec::<String>::new());
 		assert_eq!(State::split_text("hi", 2000), vec!["hi".to_string()]);
+		assert_eq!(State::split_text("a  b", 10), vec!["a  b".to_string()]);
 	}
 
 	#[test]

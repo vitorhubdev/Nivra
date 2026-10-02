@@ -299,9 +299,8 @@ impl Connection {
                             }
 							if let Command::Voice(control @ client_core::voice::Command::Sync { channel }) = &command {
 								if *voice_availability.borrow() && dm_channels.lock().map_err(|_|Failure::Protocol)?.contains(channel) {
-									if voice_send.try_send(*control).is_err() {
 									// Sync is periodic and idempotent; drop it under pressure, never fail the session.
-								}
+									let _ = voice_send.try_send(*control);
 								}
 								continue;
 							}
@@ -453,7 +452,7 @@ impl Connection {
                 }
                 Ok::<(),Failure>(())
             }.await;
-            if let Err(f)=result { if f.ends_session() { let _=finished.send(Some(f)); } wake.request_repaint(); }
+            if let Err(f)=result { if !matches!(f, Failure::Capacity | Failure::CapacityAt(_)) { let _=finished.send(Some(f)); } wake.request_repaint(); }
         });
 		Self {
 			commands,

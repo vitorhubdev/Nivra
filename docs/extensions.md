@@ -246,7 +246,7 @@ Four opt-in additions extend the same ABI without changing existing SDK structs:
 - `messaging_settings` adds the loaded account privacy snapshot and approved updates
   for DM, message-request, friend-source and game-DM preferences.
 - `guild_folders` adds the loaded server-folder layout and an approved whole-layout
-  update through the existing versioned, 200-folder/200-server native path. Updates
+  update through the existing versioned, 1,000-folder/1,000-server native path. Updates
   carry the snapshot's `base_version` and reject stale full-layout replacements.
 - `action_feedback` adds `tracked_app_action`. Supply a unique `request_id`; after
   **Apply**, the app-event handler receives `action_result` with `accepted` or

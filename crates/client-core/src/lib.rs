@@ -416,6 +416,8 @@ pub enum Event {
 	},
 	Startup(Box<PreparedStartup>),
 	StartupWarnings(model::account::Warnings),
+	/// Redacted decode cause preceding a session failure; schema paths only, never remote values.
+	FailureDetail(Box<str>),
 	MessagingPermissions {
 		request: u64,
 		result: Result<model::messaging_permissions::Snapshot, auth::Failure>,
@@ -716,6 +718,8 @@ pub struct State {
 	pub resident: resident::Windows,
 	pub freshness: Freshness,
 	pub status: &'static str,
+	/// User-copyable cause of the last session failure, cleared by the next READY.
+	pub failure_detail: Option<Box<str>>,
 	pub drafts: BTreeMap<Id, String>,
 	pub pending: Vec<Pending>,
 	pub reply: Option<Reply>,
@@ -961,6 +965,7 @@ impl Default for State {
 			resident: resident::Windows::default(),
 			freshness: Freshness::Stale,
 			status: "Disconnected",
+			failure_detail: None,
 			drafts: BTreeMap::new(),
 			pending: vec![],
 			reply: None,
@@ -2333,6 +2338,7 @@ impl State {
 		}
 		if matches!(envelope.event, Event::Ready { .. } | Event::Resync) {
 			self.startup_warnings = Default::default();
+			self.failure_detail = None;
 		}
 		if matches!(envelope.event, Event::Resync) {
 			self.read_state.reset();
@@ -3527,6 +3533,10 @@ impl State {
 				if host.len() <= 256 && host.chars().all(|c| !c.is_control()) {
 					self.gateway_host = host;
 				}
+				Ok(())
+			}
+			Event::FailureDetail(detail) => {
+				self.failure_detail = Some(detail);
 				Ok(())
 			}
 			Event::Disconnected => {

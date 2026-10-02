@@ -1239,3 +1239,5 @@ Silence this person on this device only. Nobody else is affected. = "Silencie es
 Spoiler media - open the message to reveal it. = "Mídia com spoiler - abra a mensagem para ver."
 Syncing server folders with Discord = "Sincronizando as pastas de servidor com o Discord"
 The message may already have reached Discord. Check the conversation before sending again. = "A mensagem pode já ter chegado ao Discord. Confira a conversa antes de enviar de novo."
+Copy failure details = "Copiar detalhes da falha"
+Copied = "Copiado"

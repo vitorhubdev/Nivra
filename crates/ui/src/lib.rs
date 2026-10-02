@@ -3869,8 +3869,8 @@ impl MessagingUi {
 		} else {
 			// Queue pressure: return the whole text so nothing is lost.
 			commands.truncate(commands.len().saturating_sub(queued));
-			if !state.drafts.contains_key(&channel) {
-				state.drafts.insert(channel, dialog.text);
+			if let std::collections::btree_map::Entry::Vacant(entry) = state.drafts.entry(channel) {
+				entry.insert(dialog.text);
 			}
 			state.status = "Work queue full; message was not sent";
 		}

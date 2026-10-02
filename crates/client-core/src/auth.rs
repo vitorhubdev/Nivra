@@ -62,11 +62,7 @@ impl Failure {
 	pub fn ends_session(self) -> bool {
 		matches!(
 			self,
-			Self::Expired
-				| Self::Challenged
-				| Self::Capacity
-				| Self::CapacityAt(_)
-				| Self::InvalidCredential
+			Self::Expired | Self::Challenged | Self::InvalidCredential
 		)
 	}
 }
@@ -112,7 +108,11 @@ mod tests {
 		assert_eq!(contextual.label(), "Synthetic stage");
 		let capacity = Failure::CapacityAt("Synthetic capacity limit");
 		assert_eq!(capacity.label(), "Synthetic capacity limit");
-		assert!(capacity.ends_session());
+		assert!(!capacity.ends_session());
+		assert!(!Failure::Capacity.ends_session());
+		assert!(Failure::Expired.ends_session());
+		assert!(Failure::Challenged.ends_session());
+		assert!(Failure::InvalidCredential.ends_session());
 		for failure in [
 			Failure::Expired,
 			Failure::Challenged,

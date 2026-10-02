@@ -1064,7 +1064,9 @@ impl DiscordApi {
 				message,
 				content,
 			} => {
-				if content.trim().is_empty() || content.chars().count() > client_core::MAX_CONTENT {
+				if content.trim().is_empty()
+					|| content.chars().count() > client_core::MAX_CONTENT_NITRO
+				{
 					return Event::Edited {
 						request,
 						channel,
@@ -1317,7 +1319,7 @@ impl DiscordApi {
 		sticker: Option<model::Id>,
 	) -> Result<model::Message, Failure> {
 		if (content.trim().is_empty() && attachment.is_none() && sticker.is_none())
-			|| content.chars().count() > client_core::MAX_CONTENT
+			|| content.chars().count() > client_core::MAX_CONTENT_NITRO
 		{
 			return Err(Failure::Capacity);
 		}
@@ -1365,7 +1367,7 @@ impl DiscordApi {
 		if title.is_empty()
 			|| title.chars().count() > client_core::forum::MAX_TITLE
 			|| (content.trim().is_empty() && attachments.is_none())
-			|| content.chars().count() > client_core::MAX_CONTENT
+			|| content.chars().count() > client_core::MAX_CONTENT_NITRO
 		{
 			return Err(Failure::Capacity);
 		}
@@ -1447,6 +1449,22 @@ fn safe_delay(seconds: Option<f64>) -> Result<Duration, Failure> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[tokio::test]
+	async fn over_limit_message_fails_locally_without_ending_the_session() {
+		// 4.500 characters never touch the network; the operation fails alone.
+		crate::ensure_tls_provider();
+		let api = DiscordApi::new(Arc::new(
+			SessionSecret::from_owner_input("SYNTHETIC_LONG_TEXT_TOKEN".into()).unwrap(),
+		))
+		.unwrap();
+		let long = "x".repeat(4500);
+		let result = api
+			.send_message(model::Id(1), &long, "nonce", None, None, None)
+			.await;
+		assert!(matches!(result, Err(Failure::Capacity)));
+		assert!(!Failure::Capacity.ends_session());
+	}
+
 	#[tokio::test]
 	async fn guild_creation_posts_once_and_waits_for_gateway_state() {
 		crate::ensure_tls_provider();

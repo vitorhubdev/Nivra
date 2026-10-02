@@ -98,6 +98,19 @@ impl Source {
 			bytes: Some(bytes.into()),
 		})
 	}
+	/// An in-memory text file generated when sending long text as an attachment.
+	pub fn text_file(filename: String, bytes: Vec<u8>) -> Result<Self, &'static str> {
+		if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
+			return Err("Choose a nonempty file up to Discord's 500 MB maximum");
+		}
+		Ok(Self {
+			path: PathBuf::new(),
+			filename,
+			size: bytes.len() as u64,
+			modified: SystemTime::UNIX_EPOCH,
+			bytes: Some(bytes.into()),
+		})
+	}
 	pub fn filename(&self) -> &str {
 		&self.filename
 	}
@@ -278,7 +291,7 @@ impl DiscordApi {
 				return Event::Failure(Failure::ProtocolAt("Invalid upload request"));
 			}
 		};
-		if content.chars().count() > client_core::MAX_CONTENT {
+		if content.chars().count() > client_core::MAX_CONTENT_NITRO {
 			let failure = Failure::ProtocolAt("Message is too long; no file was uploaded");
 			progress.send_replace(Status::Failed(failure.label()));
 			return target.failed(channel, failure);
@@ -604,6 +617,16 @@ async fn cancelled(cancel: &mut watch::Receiver<bool>) {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn long_text_file_accepts_message_txt_and_md() {
+		for name in ["message.txt", "message.md", "notes.txt"] {
+			let source = super::Source::text_file(name.into(), vec![1, 2, 3]).unwrap();
+			assert_eq!(source.filename(), name);
+			assert_eq!(source.size(), 3);
+		}
+		assert!(super::Source::text_file("message.txt".into(), vec![]).is_err());
+	}
+
 	#[test]
 	fn image_sources_only_accept_bounded_generated_raster_names() {
 		for name in ["emoji-7.gif", "sticker-8.png"] {

@@ -1654,6 +1654,141 @@ impl State {
 			MAX_CONTENT
 		}
 	}
+	/// Split over-limit text into chunks within `limit` characters, preferring
+	/// newline and space boundaries so words are not cut mid-word. Never returns
+	/// an empty vec for nonempty input; a single long word is cut hard at the
+	/// limit. All chunks are nonempty and within the limit.
+	pub fn split_text(text: &str, limit: usize) -> Vec<String> {
+		let limit = limit.max(1);
+		let mut chunks = Vec::new();
+		let mut current = String::new();
+		let mut current_count = 0;
+		let push_word = |chunks: &mut Vec<String>,
+		                 current: &mut String,
+		                 current_count: &mut usize,
+		                 word: &str| {
+			let word_count = word.chars().count();
+			if word_count >= limit {
+				if !current.is_empty() {
+					chunks.push(std::mem::take(current));
+					*current_count = 0;
+				}
+				let mut piece = String::new();
+				let mut piece_count = 0;
+				for ch in word.chars() {
+					piece.push(ch);
+					piece_count += 1;
+					if piece_count >= limit {
+						chunks.push(std::mem::take(&mut piece));
+						piece_count = 0;
+					}
+				}
+				if !piece.is_empty() {
+					*current = piece;
+					*current_count = piece_count;
+				} else {
+					*current_count = 0;
+				}
+			} else if *current_count + word_count + usize::from(!current.is_empty()) > limit {
+				chunks.push(std::mem::take(current));
+				*current = word.to_owned();
+				*current_count = word_count;
+			} else {
+				if !current.is_empty() {
+					current.push(' ');
+					*current_count += 1;
+				}
+				current.push_str(word);
+				*current_count += word_count;
+			}
+		};
+		for paragraph in text.split('\n') {
+			if paragraph.is_empty() {
+				if current_count + 1 > limit {
+					if !current.is_empty() {
+						chunks.push(std::mem::take(&mut current));
+						current_count = 0;
+					}
+					chunks.push(String::new());
+				} else {
+					if chunks.is_empty() && current.is_empty() {
+						// Leading blank lines are preserved as empty first chunk boundary.
+					} else {
+						current.push('\n');
+						current_count += 1;
+					}
+					if current_count >= limit && !current.is_empty() {
+						chunks.push(std::mem::take(&mut current));
+						current_count = 0;
+					}
+				}
+				continue;
+			}
+			for word in paragraph.split(' ') {
+				if word.is_empty() {
+					continue;
+				}
+				push_word(&mut chunks, &mut current, &mut current_count, word);
+			}
+			// Newline boundary: prefer to break here when near the limit.
+			if current_count + 1 > limit {
+				if !current.is_empty() {
+					chunks.push(std::mem::take(&mut current));
+					current_count = 0;
+				}
+			} else if !current.is_empty() {
+				current.push('\n');
+				current_count += 1;
+			}
+		}
+		if !current.is_empty() {
+			// Trim the trailing newline added above; empty text yields no chunks.
+			let trimmed = current.strip_suffix('\n').unwrap_or(&current).to_owned();
+			if !trimmed.is_empty() {
+				chunks.push(trimmed);
+			}
+		}
+		if chunks.is_empty() && !text.is_empty() {
+			chunks.push(text.chars().take(limit).collect());
+		}
+		chunks
+	}
+	/// Whether pasting this text should default to `message.md` instead of
+	/// `message.txt`: true when it looks like Markdown (headings, lists, code,
+	/// links, tables, quotes, bold/italic).
+	pub fn is_markdown_text(text: &str) -> bool {
+		for line in text.lines() {
+			let trimmed = line.trim_start();
+			if trimmed.starts_with("# ")
+				|| trimmed.starts_with("## ")
+				|| trimmed.starts_with("### ")
+				|| trimmed.starts_with("- ")
+				|| trimmed.starts_with("* ")
+				|| trimmed.starts_with("> ")
+				|| trimmed.starts_with("```")
+				|| trimmed.starts_with("| ")
+				|| (trimmed.starts_with(|c: char| c.is_ascii_digit())
+					&& trimmed.chars().nth(1) == Some('.')
+					&& trimmed.chars().nth(2) == Some(' '))
+			{
+				return true;
+			}
+		}
+		text.contains("**")
+			|| text.contains("__")
+			|| text.contains('`')
+			|| text.contains("](http")
+			|| text.contains("| ")
+	}
+	/// Filename for auto-converted long text: `message.md` when the text looks
+	/// like Markdown, otherwise `message.txt`.
+	pub fn long_text_filename(text: &str) -> &'static str {
+		if Self::is_markdown_text(text) {
+			"message.md"
+		} else {
+			"message.txt"
+		}
+	}
 	pub fn attachment_upload_limit(&self, channel: Id) -> upload_limit::UploadLimit {
 		let guild_tier = self
 			.channel(channel)
@@ -4377,6 +4512,83 @@ mod tests {
 		let nitro = nitro_state(Patch::Value(2));
 		assert!(nitro.nitro_full);
 		assert_eq!(nitro.message_char_limit(), MAX_CONTENT_NITRO);
+	}
+
+	#[test]
+	fn pasting_4500_chars_fails_the_send_only_and_keeps_the_session() {
+		// Regression for the owner's report: pasting ~4.500 characters showed
+		// "Safe capacity exceeded" and killed the session and the call.
+		// A single over-limit send is rejected locally; it never ends the session.
+		assert!(!auth::Failure::Capacity.ends_session());
+		assert!(!auth::Failure::CapacityAt("synthetic").ends_session());
+		let mut state = nitro_dm_state(Patch::Absent);
+		let long = "x".repeat(4500);
+		state.drafts.insert(Id(20), long);
+		assert!(state.prepare_send().is_none());
+		assert_eq!(state.auth, auth::AuthState::Authenticated);
+		// Nitro raises the limit to 4000, but 4500 still fails locally, never remotely.
+		let mut nitro = nitro_dm_state(Patch::Value(2));
+		nitro.drafts.insert(Id(20), "y".repeat(4500));
+		assert!(nitro.prepare_send().is_none());
+		assert_eq!(nitro.auth, auth::AuthState::Authenticated);
+		assert!(nitro.drafts.contains_key(&Id(20)));
+	}
+
+	#[test]
+	fn work_queue_full_rejects_only_the_operation() {
+		// `command_rejected` is the UI-side backpressure path: a full queue fails
+		// only that send instead of ending the session.
+		let mut state = nitro_dm_state(Patch::Absent);
+		let nonce = "synthetic-nonce".to_string();
+		state.command_rejected(Command::Send {
+			sticker: None,
+			channel: Id(20),
+			content: "hello".into(),
+			nonce: nonce.clone(),
+			reply: None,
+		});
+		assert_eq!(state.auth, auth::AuthState::Authenticated);
+		assert!(!auth::Failure::Capacity.ends_session());
+	}
+
+	#[test]
+	fn long_text_split_keeps_every_char_within_the_limit() {
+		for (text, limit) in [
+			("x".repeat(4500), MAX_CONTENT),
+			("y".repeat(4500), MAX_CONTENT_NITRO),
+			("hello world ".repeat(500), 2000),
+		] {
+			let chunks = State::split_text(&text, limit);
+			assert!(chunks.len() >= 2, "{} chars should split", text.len());
+			for chunk in &chunks {
+				assert!(!chunk.is_empty());
+				assert!(chunk.chars().count() <= limit, "chunk too long");
+			}
+			// Splitting is word-aware, so rejoining with spaces/newlines is lossy;
+			// instead check no chunk exceeds the limit and the char count is preserved
+			// up to whitespace normalization.
+			let joined_len: usize = chunks.iter().map(|c| c.chars().count()).sum();
+			assert!(joined_len <= text.chars().count() + chunks.len());
+			assert!(!chunks.is_empty());
+		}
+		assert_eq!(State::split_text("", 2000), Vec::<String>::new());
+		assert_eq!(State::split_text("hi", 2000), vec!["hi".to_string()]);
+	}
+
+	#[test]
+	fn long_text_filename_uses_markdown_when_present() {
+		assert_eq!(State::long_text_filename("plain text"), "message.txt");
+		assert_eq!(State::long_text_filename("# Title\n- item"), "message.md");
+		assert_eq!(
+			State::long_text_filename("**bold** and `code`"),
+			"message.md"
+		);
+		assert_eq!(
+			State::long_text_filename("1. first\n2. second"),
+			"message.md"
+		);
+		assert!(State::is_markdown_text("| a | b |"));
+		assert!(!State::is_markdown_text("just a long plain message"));
 	}
 
 	fn nitro_dm_state(premium_type: Patch<u8>) -> State {

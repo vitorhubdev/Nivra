@@ -299,7 +299,9 @@ impl Connection {
                             }
 							if let Command::Voice(control @ client_core::voice::Command::Sync { channel }) = &command {
 								if *voice_availability.borrow() && dm_channels.lock().map_err(|_|Failure::Protocol)?.contains(channel) {
-									voice_send.try_send(*control).map_err(|_|Failure::Capacity)?;
+									if voice_send.try_send(*control).is_err() {
+									// Sync is periodic and idempotent; drop it under pressure, never fail the session.
+								}
 								}
 								continue;
 							}
@@ -354,7 +356,10 @@ impl Connection {
                                     Ok(action)=>action,
                                     Err(())=>{emit(Event::Voice(E::Failed{channel,request,message:"Call action expired; no ringing request was sent"}))?;continue;}
                                 };
-                                voice_send.try_send(control).map_err(|_|Failure::Capacity)?;
+                                if voice_send.try_send(control).is_err() {
+                                    let _ = emit(Event::Voice(E::Failed{channel,request,message:"Call action was not sent; the work queue is full"}));
+                                    continue;
+                                }
                                 if let Some((recipient,stop))=ring {
                                     drop(ringing.take());
                                     let api=api.clone();let emit=emit.clone();let voice_send=voice_send.clone();let finished=finished.clone();let ring_wake=wake.clone();
@@ -419,14 +424,36 @@ impl Connection {
                                     history_wake.request_repaint();
                                 })));
                             } else {
-                                write_send.try_send(command).map_err(|_|Failure::Capacity)?;
+                                if let Err(error) = write_send.try_send(command) {
+                                    let command = error.into_inner();
+                                    match command {
+                                        Command::Send { nonce, .. } | Command::Forward { nonce, .. } => {
+                                            let _ = emit(Event::SendResult{nonce,result:Err(Failure::ProtocolAt("Work queue full; message was not sent"))});
+                                        }
+                                        Command::Voice(control) => {
+                                            use client_core::voice::Event as VE;
+                                            match control {
+                                                client_core::voice::Command::Join{channel,request,..} | client_core::voice::Command::Ring{channel,request} | client_core::voice::Command::Leave{channel,request} | client_core::voice::Command::SetMute{channel,request,..} | client_core::voice::Command::SetCamera{channel,request,..} => {
+                                                    let _ = emit(Event::Voice(VE::Failed{channel,request,message:"Call action was not sent; the work queue is full"}));
+                                                }
+                                                _ => {
+                                                    let _ = emit(Event::Failure(Failure::ProtocolAt("Work queue full; action was not sent")));
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            let _ = emit(Event::Failure(Failure::ProtocolAt("Work queue full; action was not sent")));
+                                        }
+                                    }
+                                    continue;
+                                }
                             }
                         }
                     }
                 }
                 Ok::<(),Failure>(())
             }.await;
-            if let Err(f)=result {let _=finished.send(Some(f));wake.request_repaint();}
+            if let Err(f)=result { if f.ends_session() { let _=finished.send(Some(f)); } wake.request_repaint(); }
         });
 		Self {
 			commands,

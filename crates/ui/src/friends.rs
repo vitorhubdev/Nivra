@@ -1093,17 +1093,16 @@ mod tests {
 				.expect("friends render without an accessibility tree")
 				.nodes
 				.iter()
-				.filter_map(|(_, node)| {
-					(node.label() == Some("Message")).then(|| {
-						let bounds = node.bounds().expect("message button without bounds");
-						(
-							egui::pos2(
-								((bounds.x0 + bounds.x1) / 2.0) as f32,
-								((bounds.y0 + bounds.y1) / 2.0) as f32,
-							),
-							node.is_disabled(),
-						)
-					})
+				.filter(|(_, node)| node.label() == Some("Message"))
+				.map(|(_, node)| {
+					let bounds = node.bounds().expect("message button without bounds");
+					(
+						egui::pos2(
+							((bounds.x0 + bounds.x1) / 2.0) as f32,
+							((bounds.y0 + bounds.y1) / 2.0) as f32,
+						),
+						node.is_disabled(),
+					)
 				})
 				.collect();
 			output.drop_without_applying_deltas();

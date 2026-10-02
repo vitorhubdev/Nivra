@@ -168,7 +168,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # The artifact API needs actions: read; unspecified permissions are none.
+      actions: read
     steps:
+      # The release notes come from CHANGELOG.md, so the repository has to be here.
+      - uses: actions/checkout@v7.0.1
+        with:
+          sparse-checkout: CHANGELOG.md
       # actions/download-artifact@v8 fails the tag run with `digest-mismatch`, so the
       # packaged builds are pulled through the API, which this job already uses.
       - name: Collect the packaged builds

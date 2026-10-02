@@ -1877,6 +1877,7 @@ fn portuguese_brazil(key: &str) -> Option<&'static str> {
 		"for now." => "por enquanto.",
 		"← Back to Roles" => "← Voltar para os cargos",
 		"↑↓ choose · Tab/Enter insert · Esc" => "↑↓ escolher · Tab/Enter inserir · Esc",
+		"Skip this question" => "Pular esta pergunta",
 		_ => return None,
 	})
 }
@@ -3680,6 +3681,7 @@ fn spanish(key: &str) -> Option<&'static str> {
 		"for now." => "por ahora.",
 		"← Back to Roles" => "← Volver a los roles",
 		"↑↓ choose · Tab/Enter insert · Esc" => "↑↓ elegir · Tab/Enter insertar · Esc",
+		"Skip this question" => "Saltar esta pregunta",
 		_ => return None,
 	})
 }
@@ -4855,6 +4857,7 @@ mod tests {
 			"for now.",
 			"← Back to Roles",
 			"↑↓ choose · Tab/Enter insert · Esc",
+			"Skip this question",
 		];
 		for key in KEYS {
 			assert!(portuguese_brazil(key).is_some(), "missing pt-BR: {key}");

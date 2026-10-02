@@ -330,7 +330,7 @@ impl JoinDialog {
 			ui.add_space(8.0);
 			ui.horizontal_wrapped(|ui| {
 				ui.label(crate::tr_ui!(ui, "Not sure?"));
-				if ui.link("Skip this question").clicked() {
+				if ui.link(crate::tr_ui!(ui, "Skip this question")).clicked() {
 					self.begin_customize(state);
 				}
 				ui.label(crate::tr_ui!(ui, "for now."));

@@ -6844,6 +6844,7 @@ impl eframe::App for Desktop {
 			{
 				match downloads::original_url(&attachment) {
 					Some(url) => {
+						let proxy = downloads::proxy_attachment_url(&attachment);
 						let runtime = self.runtime.handle().clone();
 						let (send, receive) = std::sync::mpsc::sync_channel(1);
 						self.preview_done = Some(receive);
@@ -6858,7 +6859,7 @@ impl eframe::App for Desktop {
 							.name("nivra-preview".into())
 							.spawn(move || {
 								let result = runtime.block_on(async {
-									let bytes = downloads::fetch_preview(url, size).await?;
+									let bytes = downloads::fetch_preview(url, proxy, size).await?;
 									let (text, truncated) =
 										ui::text_preview::decode_preview(&bytes)
 											.ok_or("This file has no readable text")?;

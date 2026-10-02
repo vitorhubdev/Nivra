@@ -75,6 +75,13 @@ fn main() -> eframe::Result {
 		println!("Nivra {}", env!("CARGO_PKG_VERSION"));
 		return Ok(());
 	}
+	#[cfg(all(debug_assertions, feature = "demo"))]
+	if std::env::args().any(|arg| arg == "--demo")
+		&& std::env::args().any(|arg| arg == "--demo-check-voice-preferences")
+	{
+		cache::debug_voice_preferences_check();
+		return Ok(());
+	}
 	// One-time Nivra migration (data dir, keyring, autostart/shortcut).
 	// Data-dir failure is fatal: never open empty over old data.
 	if let Err(error) = platform::migration::migrate_all() {
@@ -302,14 +309,15 @@ fn main() -> eframe::Result {
 		return Ok(());
 	}
 	// Native GPU/window capabilities are selected before the first window exists.
-	let (gpu_preference, transparency_available) = if demo {
-		(model::GpuPreference::default(), false)
+	let preferences = if demo {
+		Ok(local_store::AppPreferences::default())
 	} else {
-		local_store::LocalStore::open_default()
-			.and_then(|store| store.app_preferences())
-			.map(|preferences| (preferences.gpu_preference, preferences.transparency_blur))
-			.unwrap_or_default()
+		local_store::LocalStore::open_default().and_then(|store| store.app_preferences())
 	};
+	let (gpu_preference, transparency_available) = preferences
+		.as_ref()
+		.map(|value| (value.gpu_preference, value.transparency_blur))
+		.unwrap_or_default();
 	#[cfg(feature = "demo")]
 	let transparency_available =
 		transparency_available || demo && std::env::args().any(|arg| arg == "--demo-transparency");
@@ -378,7 +386,8 @@ fn main() -> eframe::Result {
 		"Nivra",
 		options,
 		Box::new(move |cc| {
-			let desktop = Desktop::new(cc, demo, frame_sample, transparency_available)?;
+			let desktop =
+				Desktop::new(cc, demo, frame_sample, transparency_available, preferences)?;
 			if start_minimized {
 				cc.egui_ctx
 					.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -1215,6 +1224,7 @@ impl Desktop {
 		demo: bool,
 		frame_sample: Option<(Duration, Duration)>,
 		transparency_available: bool,
+		preferences: Result<local_store::AppPreferences, local_store::StoreError>,
 	) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
 		ui::fonts::install(&cc.egui_ctx);
 		ui::emoji::install(&cc.egui_ctx)?;
@@ -1410,21 +1420,8 @@ impl Desktop {
 				cache::Operation::LoadAccountPresences,
 			)
 		});
-		cache_pending += usize::from(presence_load_pending);
-		let mut app_settings = app_settings::Settings::default();
-		let mut app_preferences_unread = false;
-		if cache.as_ref().is_some_and(|cache| {
-			cache.queue(
-				state.generation,
-				model::Id(0),
-				cache::Operation::LoadAppPreferences,
-			)
-		}) {
-			cache_pending += 1;
-		} else if !demo {
-			app_settings.state.failed = true;
-			app_preferences_unread = true;
-		}
+		let app_preferences_unread = preferences.is_err();
+		let mut app_settings = app_settings::Settings::from_preferences(preferences);
 		let mut reading = reading_settings::ReadingSettings::default();
 		let mut game_activity = toggle_setting::Settings::default();
 		let mut tray_setting = toggle_setting::Settings::with_default(true);
@@ -1468,12 +1465,8 @@ impl Desktop {
 			.last()
 			.map_or(10_000, |m| m.id.0.max(10_000));
 		let mut messaging = ui::MessagingUi::default();
-		messaging.minimize_to_tray = true;
-		let preference_defaults = local_store::AppPreferences::default();
-		messaging.notifications_enabled = preference_defaults.notifications_enabled;
-		messaging.transparency = preference_defaults.transparency;
-		messaging.blur = preference_defaults.blur;
-		messaging.voice_bot_safe_volume = preference_defaults.voice_bot_safe_volume;
+		messaging.minimize_to_tray = tray_setting.enabled;
+		app_settings.apply(&mut messaging);
 		#[cfg(feature = "demo")]
 		if demo {
 			messaging.transparency_blur = transparency_available;
@@ -5032,20 +5025,6 @@ impl Desktop {
 			self.cache_pending = self.cache_pending.saturating_sub(1);
 			// Settings are global; account removal/write failures still matter after logout.
 			match &outcome {
-				cache::Outcome::AppPreferences(result) => {
-					self.app_settings.loaded = result.is_ok();
-					self.app_preferences_unread = result.is_err();
-					if !self.app_settings.state.touched {
-						match result {
-							Ok(value) => self.app_settings.current = value.as_ref().clone(),
-							Err(_) => self.app_settings.state.failed = true,
-						}
-						if !self.state.demo && !self.fixture_only {
-							self.app_settings.apply(&mut self.messaging);
-						}
-					}
-					continue;
-				}
 				cache::Outcome::AppPreferencesSaved(result) => {
 					self.app_settings.state.saving = false;
 					self.app_settings.state.failed = result.is_err();
@@ -5243,7 +5222,6 @@ impl Desktop {
 					}
 				}
 				cache::Outcome::Appearance(..)
-				| cache::Outcome::AppPreferences(_)
 				| cache::Outcome::AppPreferencesSaved(_)
 				| cache::Outcome::MinimizeToTray(_)
 				| cache::Outcome::MinimizeToTraySaved(_)

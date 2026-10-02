@@ -52,7 +52,6 @@ fn message_bytes(messages: &Vec<Message>) -> usize {
 }
 #[allow(clippy::large_enum_variant)]
 pub enum Operation {
-	LoadAppPreferences,
 	SaveAppPreferences(Box<local_store::AppPreferences>),
 	LoadAppearance,
 	SaveAppearance(Appearance),
@@ -102,7 +101,6 @@ pub enum Operation {
 }
 #[allow(clippy::large_enum_variant)]
 pub enum Outcome {
-	AppPreferences(Result<Box<local_store::AppPreferences>, StoreError>),
 	AppPreferencesSaved(Result<(), StoreError>),
 	/// Saved appearance plus the saved theme preset key, if any.
 	Appearance(Appearance, Option<String>),
@@ -425,12 +423,6 @@ fn execute(
 				pruned: Vec::new(),
 			};
 		}
-		Operation::LoadAppPreferences => {
-			return Outcome::AppPreferences(match store {
-				Ok(store) => store.app_preferences().map(Box::new),
-				Err(error) => Err(*error),
-			});
-		}
 		Operation::SaveAppPreferences(value) => {
 			return Outcome::AppPreferencesSaved(match store {
 				Ok(store) => store.save_app_preferences(value),
@@ -516,8 +508,7 @@ fn execute(
 			"Could not save GIF favorites; the change exists only in this session"
 		}
 		Operation::LoadChannel { .. } => "Could not read cached history",
-		Operation::LoadAppPreferences
-		| Operation::LoadAccounts
+		Operation::LoadAccounts
 		| Operation::SaveAccount(_)
 		| Operation::SetAccountToken { .. }
 		| Operation::LoadChannelPreferences
@@ -534,8 +525,7 @@ fn execute(
 	};
 	let result = match store {
 		Ok(store) => match operation {
-			Operation::LoadAppPreferences
-			| Operation::LoadAccounts
+			Operation::LoadAccounts
 			| Operation::SaveAccount(_)
 			| Operation::SetAccountToken { .. }
 			| Operation::LoadChannelPreferences
@@ -609,6 +599,89 @@ fn execute(
 	})
 }
 
+/// Offline restart check; uses only synthetic device preferences and opens no audio devices.
+#[cfg(all(debug_assertions, feature = "demo"))]
+pub fn debug_voice_preferences_check() {
+	let root = std::env::temp_dir().join(format!(
+		"serein-voice-preferences-{}-{}",
+		std::process::id(),
+		std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap()
+			.as_nanos()
+	));
+	std::fs::create_dir(&root).unwrap();
+	let path = root.join("client.sqlite3");
+	let (send, commands) = mpsc::sync_channel(16);
+	let (_, receive) = mpsc::sync_channel(16);
+	let cache = Cache {
+		send,
+		receive,
+		budget: Arc::new(Budget::default()),
+		history: Arc::new(HistorySafety::default()),
+	};
+	let mut settings =
+		crate::app_settings::Settings::from_preferences(Ok(local_store::AppPreferences::default()));
+	let mut view = ui::MessagingUi::default();
+	settings.apply(&mut view);
+	view.set_voice_user_volume_overrides(&[(7, 35), (9, 150)]);
+	view.set_voice_user_mutes(&[9]);
+	settings.observe(&view);
+	{
+		let mut store = Ok(local_store::LocalStore::open(&path).unwrap());
+		assert!(settings.save(Some(&cache), 0));
+		let (_, account, epoch, operation, _reservation) = commands.try_recv().unwrap();
+		assert!(matches!(
+			execute(&mut store, &cache.history, account, epoch, operation),
+			Outcome::AppPreferencesSaved(Ok(()))
+		));
+	}
+	let mut restored = crate::app_settings::Settings::from_preferences(
+		local_store::LocalStore::open(&path)
+			.unwrap()
+			.app_preferences(),
+	);
+	let mut restarted = ui::MessagingUi::default();
+	restored.apply(&mut restarted);
+	assert!(restored.loaded);
+	assert!(restarted.voice_user_volumes().contains(&(7, 35)));
+	assert!(restarted.voice_user_volumes().contains(&(9, 0)));
+	assert_eq!(
+		restarted.voice_user_volume_overrides(),
+		vec![(7, 35), (9, 150)]
+	);
+	restored.observe(&restarted);
+	assert!(!restored.state.touched && !restored.state.dirty);
+	restarted.notifications_enabled = !restarted.notifications_enabled;
+	restored.observe(&restarted);
+	assert_eq!(restored.current.user_volumes, vec![(7, 35), (9, 150)]);
+	assert_eq!(restored.current.muted_users, vec![9]);
+	let mut failed =
+		crate::app_settings::Settings::from_preferences(Err(local_store::StoreError::Unavailable));
+	failed.apply(&mut restarted);
+	restarted.notifications_enabled = !restarted.notifications_enabled;
+	failed.observe(&restarted);
+	assert!(!failed.save(Some(&cache), 0));
+	assert!(matches!(
+		commands.try_recv(),
+		Err(mpsc::TryRecvError::Empty)
+	));
+	assert!(failed.state.failed && !failed.state.saving);
+	assert_eq!(
+		local_store::LocalStore::open(&path)
+			.unwrap()
+			.app_preferences()
+			.unwrap()
+			.user_volumes,
+		vec![(7, 35), (9, 150)]
+	);
+	std::fs::remove_file(path).unwrap();
+	std::fs::remove_dir(root).unwrap();
+	println!(
+		"Voice preferences debug check passed: SQLite reopen, startup restore, independent local mute and subsequent preference edits. No Discord or audio devices accessed."
+	);
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -626,7 +699,7 @@ mod tests {
 		let mut view = ui::MessagingUi::default();
 		view.channel_preferences_reload = true;
 		for _ in 0..16 {
-			assert!(cache.queue(7, Id(0), Operation::LoadAppPreferences));
+			assert!(cache.queue(7, Id(0), Operation::LoadAppearance));
 		}
 		assert!(!crate::queue_channel_preferences(
 			Some(&cache),
@@ -657,7 +730,7 @@ mod tests {
 		for _ in 0..15 {
 			assert!(matches!(
 				commands.try_recv().unwrap().3,
-				Operation::LoadAppPreferences
+				Operation::LoadAppearance
 			));
 		}
 		let (generation, account, epoch, operation, reservation) = commands.try_recv().unwrap();
@@ -725,6 +798,7 @@ mod tests {
 			let mut store = Ok(LocalStore::open(&path).unwrap());
 			let mut settings = crate::app_settings::Settings {
 				current: store.as_ref().unwrap().app_preferences().unwrap(),
+				loaded: true,
 				..Default::default()
 			};
 			let mut view = ui::MessagingUi::default();
@@ -732,7 +806,7 @@ mod tests {
 			view.notifications_enabled = enabled;
 			settings.observe(&view);
 			for _ in 0..16 {
-				assert!(cache.queue(1, Id(0), Operation::LoadAppPreferences));
+				assert!(cache.queue(1, Id(0), Operation::LoadAppearance));
 			}
 			assert!(!settings.save(Some(&cache), 1));
 			assert!(settings.state.needs_attention());

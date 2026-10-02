@@ -2424,7 +2424,7 @@ mod tests {
 		let transport = task.abort_handle();
 		let (controls, _control_events) = watch::channel(Controls::default());
 		let (_notices, events) = mpsc::sync_channel(8);
-		let (_speaking, speakers) = watch::channel([0; 64]);
+		let (_speaking, speakers) = watch::channel(discord_voice::SpeakingState::default());
 		let (camera_frames, _camera_frames) = mpsc::sync_channel(1);
 		let (stream_audio, _stream_audio) = mpsc::sync_channel(8);
 		manager.live = Some(Live {

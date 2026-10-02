@@ -91,7 +91,7 @@ impl InviteDialog {
 				};
 				ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 0.0), layout, |ui| {
 					ui.label(
-						egui::RichText::new("Recipients will land in")
+						egui::RichText::new(crate::tr_ui!(ui, "Recipients will land in"))
 							.size(18.0)
 							.color(colors.muted),
 					);
@@ -138,7 +138,7 @@ impl InviteDialog {
 					icons::paint(ui.painter(), icons::Icon::Search, rect, colors.muted);
 					ui.add(
 						egui::TextEdit::singleline(&mut self.search)
-							.hint_text("Search for friends")
+							.hint_text(crate::tr_ui!(ui, "Search for friends"))
 							.char_limit(100)
 							.font(egui::FontId::proportional(18.0))
 							.align(egui::Align2::LEFT_CENTER)
@@ -322,7 +322,7 @@ impl InviteDialog {
 				.add_enabled(
 					!state.server_action_pending() && !state.server_invite_pending(),
 					egui::Button::new(
-						egui::RichText::new("Edit link.")
+						egui::RichText::new(crate::tr_ui!(ui, "Edit link."))
 							.size(12.0)
 							.color(colors.link),
 					)

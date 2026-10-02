@@ -77,7 +77,7 @@ impl ForwardDialog {
 					let input = design::input(
 						ui,
 						egui::TextEdit::singleline(&mut self.query)
-							.hint_text("Search")
+							.hint_text(crate::tr_ui!(ui, "Search"))
 							.char_limit(256)
 							.desired_width(f32::INFINITY),
 					);
@@ -180,7 +180,7 @@ impl ForwardDialog {
 								}
 							}
 							if !found {
-								ui.label("No matching destinations");
+								ui.label(crate::tr_ui!(ui, "No matching destinations"));
 							}
 						});
 				});
@@ -204,14 +204,14 @@ impl ForwardDialog {
 							&preview
 						});
 					} else {
-						ui.label("Source message is no longer available");
+						ui.label(crate::tr_ui!(ui, "Source message is no longer available"));
 					}
 					ui.add_space(8.0);
 					ui.add_enabled_ui(!submitted, |ui| {
 						design::input(
 							ui,
 							egui::TextEdit::singleline(&mut self.note)
-								.hint_text("Add an optional message…")
+								.hint_text(crate::tr_ui!(ui, "Add an optional message…"))
 								.char_limit(client_core::MAX_CONTENT)
 								.desired_width(f32::INFINITY),
 						)

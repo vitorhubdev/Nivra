@@ -74,7 +74,7 @@ impl ContactEditor {
 					if busy {
 						ui.horizontal(|ui| {
 							ui.spinner();
-							ui.label("Loading note…");
+							ui.label(crate::tr_ui!(ui, "Loading note…"));
 						});
 					} else {
 						crate::dialog::notice(
@@ -82,7 +82,7 @@ impl ContactEditor {
 							crate::dialog::Level::Error,
 							"Could not load the note. Your existing note has not been changed.",
 						);
-						if ui.button("Retry").clicked()
+						if ui.button(crate::tr_ui!(ui, "Retry")).clicked()
 							&& let Some(command) = state.load_user_note(user.id)
 						{
 							commands.push(command);

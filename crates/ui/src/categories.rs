@@ -702,7 +702,10 @@ impl MessagingUi {
 		let colors = design::palette(ui);
 		let mut selected = None;
 		if self.guild.is_some() && self.channel_cache.rows.is_empty() {
-			ui.label(RichText::new("No conversations available here.").color(colors.muted));
+			ui.label(
+				RichText::new(crate::tr_ui!(ui, "No conversations available here."))
+					.color(colors.muted),
+			);
 		}
 		let dm_list = self.guild.is_none();
 		let row_height = if dm_list { 44.0 } else { 34.0 };
@@ -722,7 +725,8 @@ impl MessagingUi {
 				for index in range {
 					let Some(row) = self.channel_cache.rows.get(index).copied() else {
 						ui.label(
-							RichText::new("No conversations available here.").color(colors.muted),
+							RichText::new(crate::tr_ui!(ui, "No conversations available here."))
+								.color(colors.muted),
 						);
 						continue;
 					};

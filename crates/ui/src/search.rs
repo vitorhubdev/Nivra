@@ -173,7 +173,7 @@ impl SearchUi {
 					let output = egui::TextEdit::singleline(&mut self.query)
 						.char_limit(256)
 						.frame(egui::Frame::NONE)
-						.hint_text("Search")
+						.hint_text(crate::tr_ui!(ui, "Search"))
 						.desired_width((ui.available_width() - 28.0).max(30.0))
 						.show(ui);
 					let input = output
@@ -328,7 +328,10 @@ impl SearchUi {
 											}
 										}
 										if matching.is_empty() {
-											ui.label("No matching users in this conversation.");
+											ui.label(crate::tr_ui!(
+												ui,
+												"No matching users in this conversation."
+											));
 										}
 									});
 								if let Some(id) = chosen {
@@ -360,7 +363,8 @@ impl SearchUi {
 								ui.horizontal(|ui| {
 									ui.add_space(10.0);
 									ui.label(
-										design::semibold(ui, "Filters", 13.0).color(colors.muted),
+										design::semibold(ui, crate::tr_ui!(ui, "Filters"), 13.0)
+											.color(colors.muted),
 									);
 								});
 								for (title, detail, key) in [
@@ -476,8 +480,12 @@ impl SearchUi {
 									ui.spacing_mut().item_spacing.x = 8.0;
 									icons::inline(ui, icons::Icon::Pin, 20.0, colors.muted);
 									ui.label(
-										design::semibold(ui, "Pinned Messages", 16.0)
-											.color(colors.text_strong),
+										design::semibold(
+											ui,
+											crate::tr_ui!(ui, "Pinned Messages"),
+											16.0,
+										)
+										.color(colors.text_strong),
 									);
 									ui.with_layout(
 										egui::Layout::right_to_left(egui::Align::Center),
@@ -600,9 +608,10 @@ impl SearchUi {
 		ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 		if !allowed {
 			ui.label(
-				RichText::new(
-					"Pinned messages are unavailable while disconnected or without channel access.",
-				)
+				RichText::new(crate::tr_ui!(
+					ui,
+					"Pinned messages are unavailable while disconnected or without channel access."
+				))
 				.small()
 				.color(colors.muted),
 			);
@@ -669,9 +678,10 @@ impl SearchUi {
 					});
 				if page.pin_cursor.is_none() && !view.loading && page.partial {
 					ui.label(
-						RichText::new(
-							"More pins may exist, but this page has no usable continuation.",
-						)
+						RichText::new(crate::tr_ui!(
+							ui,
+							"More pins may exist, but this page has no usable continuation."
+						))
 						.small()
 						.color(colors.muted),
 					);
@@ -707,7 +717,10 @@ impl SearchUi {
 		ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 		if self.pins {
 			ui.horizontal(|ui| {
-				ui.label(design::semibold(ui, "Pinned Messages", 16.0).color(colors.text_strong));
+				ui.label(
+					design::semibold(ui, crate::tr_ui!(ui, "Pinned Messages"), 16.0)
+						.color(colors.text_strong),
+				);
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					if icons::button(ui, icons::Icon::Close, 28.0, "Close").clicked() {
 						self.open = false;
@@ -760,7 +773,10 @@ impl SearchUi {
 					});
 					let sort = chip(ui, Chip::new(icons::Icon::SortArrows, "Sort"));
 					egui::Popup::menu(&sort).show(|ui| {
-						ui.label(RichText::new("Order on this page").color(colors.muted));
+						ui.label(
+							RichText::new(crate::tr_ui!(ui, "Order on this page"))
+								.color(colors.muted),
+						);
 						ui.radio_value(&mut self.oldest_first, false, "Newest first");
 						ui.radio_value(&mut self.oldest_first, true, "Oldest first");
 					});
@@ -820,9 +836,12 @@ impl SearchUi {
 						ui.spacing_mut().item_spacing.y = 16.0;
 						if page.partial {
 							ui.label(
-								RichText::new("Indexing is incomplete; results may be missing.")
-									.small()
-									.color(colors.muted),
+								RichText::new(crate::tr_ui!(
+									ui,
+									"Indexing is incomplete; results may be missing."
+								))
+								.small()
+								.color(colors.muted),
 							);
 						}
 						if page.hits.is_empty() {
@@ -1129,10 +1148,13 @@ impl SearchUi {
 							let preview = &self.previews[&hit.id];
 							if crate::embeds::has_media_spoilers(preview) {
 								ui.label(
-									RichText::new("Spoiler media - open the message to reveal it.")
-										.small()
-										.italics()
-										.color(colors.muted),
+									RichText::new(crate::tr_ui!(
+										ui,
+										"Spoiler media - open the message to reveal it."
+									))
+									.small()
+									.italics()
+									.color(colors.muted),
 								);
 							} else {
 								if !preview.embeds.is_empty() {

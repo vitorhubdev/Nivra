@@ -352,7 +352,7 @@ impl Picker {
 				egui::Button::new(selected.as_deref().unwrap_or("☺")).frame(false),
 			)
 		}
-		.on_hover_text("Choose emoji");
+		.on_hover_text(crate::tr_ui!(ui, "Choose emoji"));
 		button.widget_info(|| {
 			egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Choose emoji")
 		});
@@ -368,7 +368,7 @@ impl Picker {
 				if ui
 					.add(
 						egui::TextEdit::singleline(&mut self.query)
-							.hint_text("Search emoji")
+							.hint_text(crate::tr_ui!(ui, "Search emoji"))
 							.char_limit(64)
 							.desired_width(f32::INFINITY),
 					)
@@ -376,7 +376,7 @@ impl Picker {
 				{
 					self.filter();
 				}
-				if removable && ui.button("Remove emoji").clicked() {
+				if removable && ui.button(crate::tr_ui!(ui, "Remove emoji")).clicked() {
 					*selected = None;
 					ui.close();
 				}
@@ -983,8 +983,10 @@ impl Picker {
 								|ui| {
 									if let Some(error) = state.stickers.error {
 										ui.label(error);
-										if ui.button("Retry sticker packs").clicked()
-											&& let Some(command) = state.request_sticker_packs()
+										if ui
+											.button(crate::tr_ui!(ui, "Retry sticker packs"))
+											.clicked() && let Some(command) =
+											state.request_sticker_packs()
 										{
 											commands.push(command);
 										}
@@ -1121,8 +1123,12 @@ impl Picker {
 									ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
 									if self.reaction.is_some() && self.query.is_empty() {
 										ui.label(
-											crate::design::semibold(ui, "FREQUENTLY USED", 12.0)
-												.color(colors.muted),
+											crate::design::semibold(
+												ui,
+												crate::tr_ui!(ui, "FREQUENTLY USED"),
+												12.0,
+											)
+											.color(colors.muted),
 										);
 										ui.horizontal_wrapped(|ui| {
 											for index in self.favorites() {
@@ -1197,9 +1203,10 @@ impl Picker {
 									}
 									if searching && custom.len() == CUSTOM_LIMIT {
 										ui.label(
-											egui::RichText::new(
-												"Showing the first 1,000 custom emoji. Refine your search for more.",
-											)
+											egui::RichText::new(crate::tr_ui!(
+												ui,
+												"Showing the first 1,000 custom emoji. Refine your search for more."
+											))
 											.small()
 											.color(colors.muted),
 										);
@@ -1377,7 +1384,10 @@ impl Picker {
 											);
 										});
 									} else {
-										ui.label("Hover a sticker to preview it");
+										ui.label(crate::tr_ui!(
+											ui,
+											"Hover a sticker to preview it"
+										));
 									}
 									return;
 								}
@@ -1401,9 +1411,10 @@ impl Picker {
 										}
 										None => {
 											ui.label(
-												egui::RichText::new(
-													"Click a GIF to send it right away",
-												)
+												egui::RichText::new(crate::tr_ui!(
+													ui,
+													"Click a GIF to send it right away"
+												))
 												.color(colors.muted),
 											);
 										}
@@ -1446,8 +1457,11 @@ impl Picker {
 											colors.muted,
 										);
 										ui.label(
-											egui::RichText::new("Hover an emoji to preview it")
-												.color(colors.muted),
+											egui::RichText::new(crate::tr_ui!(
+												ui,
+												"Hover an emoji to preview it"
+											))
+											.color(colors.muted),
 										);
 									}
 								}
@@ -1832,7 +1846,8 @@ fn gif_home(
 						ui.spacing_mut().item_spacing.x = 8.0;
 						ui.add(egui::Spinner::new().size(16.0).color(colors.muted));
 						ui.label(
-							egui::RichText::new("Loading trending categories…").color(colors.muted),
+							egui::RichText::new(crate::tr_ui!(ui, "Loading trending categories…"))
+								.color(colors.muted),
 						);
 					},
 				);

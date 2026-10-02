@@ -1870,7 +1870,8 @@ impl ExtensionUi {
 								});
 								if !consent.entry.manifest.source.is_empty() {
 									ui.hyperlink_to(
-										egui::RichText::new("View source").size(12.0),
+										egui::RichText::new(crate::tr_ui!(ui, "View source"))
+											.size(12.0),
 										&consent.entry.manifest.source,
 									);
 								}

@@ -183,7 +183,10 @@ pub fn color_edit(ui: &mut egui::Ui, color: &mut [u8; 3]) -> egui::Response {
 				.custom_parser(|text| parse_hex_color(text).map(f64::from))
 				.update_while_editing(false),
 		)
-		.on_hover_text("Hex color: #RRGGBB. Click to type or paste.");
+		.on_hover_text(crate::tr_ui!(
+			ui,
+			"Hex color: #RRGGBB. Click to type or paste."
+		));
 	if hex.changed() {
 		let [_, r, g, b] = value.to_be_bytes();
 		*color = [r, g, b];
@@ -1482,7 +1485,7 @@ pub fn account_row_with_remove(
 		remove.widget_info(|| {
 			egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("Forget {name}"))
 		});
-		remove.on_hover_text("Forget this account on this device")
+		remove.on_hover_text(crate::tr_ui!(ui, "Forget this account on this device"))
 	});
 	(response, remove)
 }
@@ -1680,7 +1683,7 @@ mod tests {
 						},
 						|ui| {
 							let response = match kind {
-								"button" => ui.button("Action"),
+								"button" => ui.button(crate::tr_ui!(ui, "Action")),
 								"checkbox" => ui.checkbox(&mut false, "Toggle"),
 								"disabled" => ui.add_enabled(false, egui::Button::new("Disabled")),
 								"text" => ui.text_edit_singleline(&mut text),

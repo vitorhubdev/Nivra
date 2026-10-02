@@ -449,7 +449,7 @@ impl Admin {
 											"Emoji actions",
 										);
 										egui::Popup::menu(&button).show(|ui| {
-											if ui.button("Rename").clicked() {
+											if ui.button(crate::tr_ui!(ui, "Rename")).clicked() {
 												self.dialog = Some(Dialog::Rename {
 													id: row.emoji.id,
 													name: row.emoji.name.clone(),
@@ -923,7 +923,7 @@ impl Admin {
 	) {
 		ui.set_width(190.0);
 		let colors = design::palette(ui);
-		if ui.button("Profile").clicked() {
+		if ui.button(crate::tr_ui!(ui, "Profile")).clicked() {
 			profile.command_open(member.user.clone());
 			ui.close();
 		}
@@ -933,14 +933,14 @@ impl Admin {
 					.recipients
 					.iter()
 					.any(|user| user.id == member.user.id)
-		}) && ui.button("Message").clicked()
+		}) && ui.button(crate::tr_ui!(ui, "Message")).clicked()
 		{
 			self.message = Some(dm.id);
 			ui.close();
 		}
 		ui.separator();
 		if state.can_edit_guild_nickname(guild, member.user.id)
-			&& ui.button("Change Nickname").clicked()
+			&& ui.button(crate::tr_ui!(ui, "Change Nickname")).clicked()
 		{
 			self.dialog = Some(Dialog::Nickname {
 				user: member.user.id,
@@ -1011,7 +1011,7 @@ impl Admin {
 			ui.close();
 		}
 		ui.separator();
-		if ui.button("Copy User ID").clicked() {
+		if ui.button(crate::tr_ui!(ui, "Copy User ID")).clicked() {
 			ui.ctx().copy_text(member.user.id.to_string());
 			ui.close();
 		}

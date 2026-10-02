@@ -504,7 +504,7 @@ mod tests {
 					};
 					let edit = egui::TextEdit::multiline(&mut text)
 						.id(id)
-						.hint_text("Message")
+						.hint_text(crate::tr_ui!(ui, "Message"))
 						.layouter(&mut layouter)
 						.show(ui);
 					layout.paint(ui, &edit);

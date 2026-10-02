@@ -107,7 +107,10 @@ fn link(
 	if let Some(target) = target {
 		response
 			.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, ui.is_enabled(), label));
-		if response.on_hover_text("Open link…").clicked() {
+		if response
+			.on_hover_text(crate::tr_ui!(ui, "Open link…"))
+			.clicked()
+		{
 			*opening = Some(target);
 		}
 	}
@@ -137,7 +140,7 @@ fn text(
 		(images, demo, guilds),
 	);
 	if formatted.limited {
-		ui.small("Text display limited");
+		ui.small(crate::tr_ui!(ui, "Text display limited"));
 	}
 }
 pub fn standalone_media_links(message: &Message) -> bool {
@@ -264,7 +267,9 @@ fn gallery(
 					);
 				}
 				if let Some(target) = target
-					&& response.on_hover_text("Open image…").clicked()
+					&& response
+						.on_hover_text(crate::tr_ui!(ui, "Open image…"))
+						.clicked()
 				{
 					*opening = Some(target);
 				}
@@ -372,7 +377,7 @@ pub fn show(
 			if count > 1 && inline_image(embed).is_some() {
 				gallery(ui, group, images, opening, download, demo);
 				if group.iter().any(|e| e.limited) {
-					ui.small("Embed display limited");
+					ui.small(crate::tr_ui!(ui, "Embed display limited"));
 				}
 				ui.add_space(6.0);
 				return;
@@ -451,7 +456,9 @@ pub fn show(
 				if !star
 					.as_ref()
 					.is_some_and(|star| star.hovered() || star.clicked())
-					&& response.on_hover_text("Open image…").clicked()
+					&& response
+						.on_hover_text(crate::tr_ui!(ui, "Open image…"))
+						.clicked()
 				{
 					*opening = embed
 						.url
@@ -731,13 +738,16 @@ pub fn show(
 								ui.small(timestamp);
 							}
 							if group.iter().any(|e| e.limited) {
-								ui.small("Embed display limited");
+								ui.small(crate::tr_ui!(ui, "Embed display limited"));
 							}
 							if !matches!(
 								embed.kind.as_str(),
 								"rich" | "article" | "link" | "image" | "video" | "gifv"
 							) {
-								ui.small("Additional embed content is not supported");
+								ui.small(crate::tr_ui!(
+									ui,
+									"Additional embed content is not supported"
+								));
 							}
 						});
 				});

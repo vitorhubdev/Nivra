@@ -169,7 +169,7 @@ impl Editor {
 			ui.horizontal(|ui| {
 				ui.add(egui::Spinner::new().size(14.0));
 				ui.label(
-					egui::RichText::new("Loading your profile…")
+					egui::RichText::new(crate::tr_ui!(ui, "Loading your profile…"))
 						.size(13.0)
 						.color(colors.muted),
 				);
@@ -286,7 +286,7 @@ impl Editor {
 					if state.own_profile.saving {
 						ui.add(egui::Spinner::new().size(14.0));
 						ui.label(
-							egui::RichText::new("Saving profile…")
+							egui::RichText::new(crate::tr_ui!(ui, "Saving profile…"))
 								.size(13.0)
 								.color(colors.muted),
 						);
@@ -302,7 +302,7 @@ impl Editor {
 						);
 					} else if changed {
 						ui.label(
-							egui::RichText::new("You have unsaved changes.")
+							egui::RichText::new(crate::tr_ui!(ui, "You have unsaved changes."))
 								.size(13.0)
 								.color(colors.text),
 						);
@@ -410,7 +410,7 @@ fn form(
 		false,
 	);
 	ui.label(
-		egui::RichText::new("Leave blank to use your username.")
+		egui::RichText::new(crate::tr_ui!(ui, "Leave blank to use your username."))
 			.size(12.0)
 			.color(colors.muted),
 	);
@@ -442,7 +442,7 @@ fn form(
 			if let Some(color) = &mut draft.color {
 				let mut rgb = [(*color >> 16) as u8, (*color >> 8) as u8, *color as u8];
 				if design::color_edit(ui, &mut rgb)
-					.on_hover_text("Choose profile color")
+					.on_hover_text(crate::tr_ui!(ui, "Choose profile color"))
 					.changed()
 				{
 					*color =
@@ -567,7 +567,7 @@ fn preview(
 					ui.scope_id().with("change-avatar"),
 					egui::Sense::click(),
 				);
-				let hit = hit.on_hover_text("Change profile picture");
+				let hit = hit.on_hover_text(crate::tr_ui!(ui, "Change profile picture"));
 				if hit.hovered() || hit.has_focus() {
 					ui.painter().circle_filled(
 						avatar.center(),

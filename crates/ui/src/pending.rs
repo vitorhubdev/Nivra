@@ -205,9 +205,12 @@ pub fn show(
 						} else {
 							if pending.delivery == Delivery::Ambiguous {
 								ui.label(
-									RichText::new("Check the conversation before sending again.")
-										.small()
-										.color(colors.muted),
+									RichText::new(crate::tr_ui!(
+										ui,
+										"Check the conversation before sending again."
+									))
+									.small()
+									.color(colors.muted),
 								);
 							}
 							if ui
@@ -367,7 +370,10 @@ fn send_alert(ui: &mut egui::Ui, delivery: Delivery, restore: &mut Option<String
 						egui::Label::new(RichText::new(detail).size(13.0).color(colors.text))
 							.wrap(),
 					);
-					if ui.button("Restore to composer").clicked() {
+					if ui
+						.button(crate::tr_ui!(ui, "Restore to composer"))
+						.clicked()
+					{
 						*restore = Some(nonce.to_owned());
 					}
 				});
@@ -419,9 +425,10 @@ fn upload_strip(ui: &mut egui::Ui, pending: &Pending, upload: Option<&Upload>, c
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					if upload.is_some()
 						&& icons::button(ui, icons::Icon::Close, 24.0, "Cancel upload")
-							.on_hover_text(
-								"The message may already have reached Discord. Check the conversation before sending again.",
-							)
+							.on_hover_text(crate::tr_ui!(
+								ui,
+								"The message may already have reached Discord. Check the conversation before sending again."
+							))
 							.clicked()
 					{
 						*cancel = true;
@@ -447,10 +454,8 @@ fn upload_strip(ui: &mut egui::Ui, pending: &Pending, upload: Option<&Upload>, c
 					});
 				});
 			});
-			let (bar, _) = ui.allocate_exact_size(
-				egui::vec2(ui.available_width(), 6.0),
-				egui::Sense::hover(),
-			);
+			let (bar, _) =
+				ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::hover());
 			ui.painter().rect_filled(bar, 3, colors.hover);
 			if fraction > 0.0 {
 				let fill = egui::Rect::from_min_size(

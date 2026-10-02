@@ -1361,21 +1361,50 @@ fn overlay_bar(
 	bar.spacing_mut().item_spacing.x = 8.0;
 	add(&mut bar);
 }
-/// Round "back to the live edge" control floating over the bottom-right of the conversation.
-fn present_control(ui: &mut egui::Ui, rect: egui::Rect, unread: bool) -> bool {
+/// "Back to the live edge" control floating over the bottom-right of the conversation: a round
+/// arrow, or an accent pill naming the messages that arrived below while the reader was away.
+fn present_control(
+	ui: &mut egui::Ui,
+	area: egui::Rect,
+	unread: bool,
+	new_below: Option<&str>,
+	language: model::Language,
+) -> (egui::Rect, bool) {
 	let colors = crate::design::palette(ui);
+	let size = 38.0;
+	let galley = new_below.map(|label| {
+		egui::WidgetText::from(crate::design::medium(ui, label, 14.0).color(colors.accent_text))
+			.into_galley(
+				ui,
+				Some(egui::TextWrapMode::Truncate),
+				(area.width() - 32.0 - size).max(size),
+				egui::TextStyle::Body,
+			)
+	});
+	let width = galley
+		.as_ref()
+		.map_or(size, |galley| 16.0 + galley.size().x + 6.0 + 18.0 + 12.0);
+	let rect = egui::Rect::from_min_size(
+		egui::pos2(
+			area.right() - 16.0 - width,
+			area.bottom() - crate::typing::OVERLAY_HEIGHT - 10.0 - size,
+		),
+		egui::vec2(width, size),
+	);
 	let response = ui.interact(
 		rect,
 		ui.make_persistent_id("timeline-present"),
 		egui::Sense::click(),
 	);
 	let painter = ui.painter();
-	painter.circle_filled(
-		rect.center() + egui::vec2(0.0, 1.5),
-		rect.width() / 2.0,
+	let radius = egui::CornerRadius::same((size / 2.0) as u8);
+	painter.rect_filled(
+		rect.translate(egui::vec2(0.0, 1.5)),
+		radius,
 		egui::Color32::from_black_alpha(52),
 	);
-	let fill = if unread {
+	let accent = unread || galley.is_some();
+	let fill = if accent {
 		colors.accent
 	} else {
 		colors.raised.to_opaque()
@@ -1385,40 +1414,53 @@ fn present_control(ui: &mut egui::Ui, rect: egui::Rect, unread: bool) -> bool {
 	} else {
 		fill
 	};
-	painter.circle_filled(rect.center(), rect.width() / 2.0, fill);
-	if !unread {
-		painter.circle_stroke(
-			rect.center(),
-			rect.width() / 2.0 - 0.5,
+	painter.rect_filled(rect, radius, fill);
+	if !accent {
+		painter.rect_stroke(
+			rect,
+			radius,
 			egui::Stroke::new(1.0, colors.border),
+			egui::StrokeKind::Inside,
 		);
 	}
-	let color = if unread {
+	let color = if accent {
 		colors.accent_text
 	} else {
 		colors.text_strong
 	};
+	let arrow_center = if let Some(galley) = &galley {
+		let text_pos = egui::pos2(rect.left() + 16.0, rect.center().y - galley.size().y / 2.0);
+		painter.galley(text_pos, galley.clone(), color);
+		egui::pos2(rect.right() - 12.0 - 9.0, rect.center().y)
+	} else {
+		rect.center()
+	};
 	crate::icons::paint(
 		painter,
 		crate::icons::Icon::ArrowDown,
-		egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(18.0)),
+		egui::Rect::from_center_size(arrow_center, egui::Vec2::splat(18.0)),
 		color,
 	);
 	if response.has_focus() {
-		painter.circle_stroke(
-			rect.center(),
-			rect.width() / 2.0 + 2.0,
+		painter.rect_stroke(
+			rect.expand(2.0),
+			egui::CornerRadius::same((size / 2.0 + 2.0) as u8),
 			egui::Stroke::new(1.0, colors.accent),
+			egui::StrokeKind::Outside,
 		);
 	}
-	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Jump to present"));
-	response
-		.on_hover_text(if unread {
-			"New messages below · jump to present"
+	let jump = crate::i18n::text(language, "Jump to present");
+	let name = new_below.map_or(jump.to_string(), |label| format!("{label} · {jump}"));
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+	let below = crate::i18n::text(language, "New messages below");
+	let clicked = response
+		.on_hover_text(if unread || new_below.is_some() {
+			format!("{below} · {jump}")
 		} else {
-			"Jump to present"
+			jump.to_string()
 		})
-		.clicked()
+		.clicked();
+	(rect, clicked)
 }
 /// Frameless text action with a trailing arrow glyph, for use inside [`overlay_bar`].
 fn bar_button(
@@ -1674,6 +1716,14 @@ impl TimelineView {
 	}
 	pub(super) fn viewing_latest(&self, channel: Id) -> bool {
 		self.channel == Some(channel) && self.following && self.at_current_latest
+	}
+	/// Newest message the reader has already read during this visit, when it lies inside the
+	/// divider's section: the banner counts only what arrived after it.
+	fn read_through(&self) -> Option<Id> {
+		self.unread_dismissed.flatten().filter(|read| {
+			self.unread_boundary
+				.is_some_and(|boundary| boundary <= *read)
+		})
 	}
 	/// Leaving the latest page is deliberate reading; nothing is acknowledged automatically.
 	pub(super) fn browse_away(&mut self) {
@@ -1948,7 +1998,7 @@ impl TimelineView {
 			&& self.at_current_latest
 			&& state.live_edge_latest().is_some()
 			&& ui.input(|input| input.focused);
-		let boundary = state
+		let first_unread = state
 			.selected
 			.and_then(|channel| state.read_marker(channel))
 			.and_then(|read| {
@@ -1958,10 +2008,28 @@ impl TimelineView {
 					.find(|m| read.is_none_or(|id| m.id > id))
 					.map(|m| m.id)
 			})
-			.filter(|_| !watching_latest || self.unread_boundary.is_some())
-			.or(self
-				.unread_boundary
-				.filter(|id| state.timeline.get(*id).is_some()));
+			.filter(|_| !watching_latest);
+		// Once the reader has read past the divider, messages that then arrive unseen
+		// start a new section; only older unread history loading above may move it up.
+		let unseen_after_read = first_unread.filter(|first| {
+			self.read_through().is_some_and(|read| {
+				self.unread_boundary.is_some_and(|kept| kept <= read) && *first > read
+			})
+		});
+		let kept = self
+			.unread_boundary
+			.filter(|id| state.timeline.get(*id).is_some());
+		let boundary = match unseen_after_read {
+			Some(first) => Some(first),
+			None => match (first_unread, kept) {
+				// Older unread history loading above may move the divider up, but new
+				// arrivals below must not push it forward once it is placed.
+				(Some(first), Some(previous)) if first < previous => Some(first),
+				(Some(_), Some(previous)) => Some(previous),
+				(Some(first), None) => Some(first),
+				(None, previous) => previous,
+			},
+		};
 		if self.unread_boundary != boundary {
 			self.unread_boundary = boundary;
 			self.revision = u64::MAX;
@@ -2154,7 +2222,11 @@ impl TimelineView {
 					self.unread_jump = true;
 					self.browse_away();
 				}
+				if jump_unread || mark_read {
+					self.unread_dismissed = Some(latest);
+				}
 				if mark_read {
+					self.hold_read_ack = false;
 					self.unread_dismissed = Some(latest);
 					self.mark_channel_read = state.selected;
 				}
@@ -3943,6 +4015,12 @@ impl TimelineView {
 			&& let Some(latest) = state.live_edge_latest()
 		{
 			self.seen_latest = Some(latest);
+			// A focused reader at the live edge reads each arrival as it lands: nothing they
+			// watched may raise the banner or add to its count. An unacknowledged join keeps
+			// its banner until the reader scrolls toward the bottom or marks it read.
+			if !self.hold_read_ack && ui.is_enabled() {
+				self.unread_dismissed = Some(channel_latest);
+			}
 		}
 		if self.following
 			&& !self.hold_read_ack
@@ -4426,6 +4504,7 @@ impl TimelineView {
 			let (jump_unread, mark_read) =
 				unread_banner(ui, banner_rect(area), can_jump_unread, self.language);
 			if jump_unread {
+				self.unread_dismissed = Some(channel_latest);
 				if state.can_jump_unread() {
 					self.unread_jump = true;
 					self.browse_away();
@@ -4435,6 +4514,7 @@ impl TimelineView {
 			}
 			if mark_read {
 				self.unread_dismissed = Some(channel_latest);
+				self.hold_read_ack = false;
 				self.mark_channel_read = state.selected;
 			}
 		}
@@ -4445,23 +4525,35 @@ impl TimelineView {
 		let unread = state
 			.selected
 			.is_some_and(|channel| state.missed(channel) == Some(true));
+		// Messages that landed at the live edge after the reader last had it on screen.
+		let new_below = if self.following || browsing_history || !self.at_current_latest {
+			0
+		} else {
+			self.seen_latest
+				.or(self.unread_dismissed.flatten())
+				.map_or(0, |seen| {
+					state.timeline.iter().filter(|m| m.id > seen).count()
+				})
+		};
 		self.present_control = None;
 		if (!self.following && distance_from_bottom > PRESENT_CONTROL_SCREENS * area.height())
 			|| (self.target_browsing && !(at_bottom && unread))
 			|| detached_page
+			|| new_below > 0
 		{
-			// A round control on the right edge, not a bar across the conversation: it says the
+			// A control on the right edge, not a bar across the conversation: it says the
 			// same thing with far less furniture and never covers a message being read.
-			let size = 38.0;
-			let rect = egui::Rect::from_min_size(
-				egui::pos2(
-					area.right() - 16.0 - size,
-					area.bottom() - crate::typing::OVERLAY_HEIGHT - 10.0 - size,
-				),
-				egui::vec2(size, size),
-			);
+			let label = (new_below > 0).then(|| {
+				let news = if new_below == 1 {
+					crate::i18n::text(self.language, "new message")
+				} else {
+					crate::i18n::text(self.language, "new messages")
+				};
+				format!("{new_below} {news}")
+			});
+			let (rect, present) =
+				present_control(ui, area, unread, label.as_deref(), self.language);
 			self.present_control = Some(rect);
-			let present = present_control(ui, rect, unread);
 			if present {
 				if browsing_history {
 					self.latest = true;
@@ -5112,7 +5204,7 @@ mod tests {
 	}
 
 	#[test]
-	fn unread_visit_keeps_the_divider_acks_on_leave_and_raises_again() {
+	fn unread_visit_keeps_the_divider_acks_on_leave_and_stays_read_at_the_live_edge() {
 		let ctx = egui::Context::default();
 		let mut state = test_support::demo_state();
 		state.timeline.clear();
@@ -5215,15 +5307,190 @@ mod tests {
 		newer.content = "Synthetic message after the dismissed edge".into();
 		state.timeline.insert(newer, false, false).unwrap();
 		state.revision += 1;
+		// A focused reader at the live edge reads the arrival as it lands: the dismissed
+		// banner stays down instead of reviving on the next message.
 		let labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
 		assert!(
-			labels.iter().any(|(text, _)| text == "Unread messages"),
-			"a newer message did not raise the banner again: {labels:?}"
+			!labels.iter().any(|(text, _)| text == "Unread messages"),
+			"a watched arrival revived the dismissed banner: {labels:?}"
 		);
 		assert!(
 			labels.iter().any(|(text, _)| text == "New messages"),
 			"the unread divider left when a newer message arrived: {labels:?}"
 		);
+		assert_eq!(view.unread_dismissed, Some(Some(Id(30))));
+	}
+
+	#[test]
+	fn arrivals_while_scrolled_up_show_a_counted_way_down_pill() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		state.timeline.clear();
+		state.selected = Some(Id(20));
+		state.auth = client_core::auth::AuthState::Authenticated;
+		state.gateway_connected = true;
+		state.freshness = model::Freshness::Fresh;
+		state.history_pending = false;
+		state.history_targeted = false;
+		state.history_before = None;
+		state.history_after = None;
+		state.older_exhausted = true;
+		state.channels = vec![model::Channel {
+			id: Id(20),
+			guild: None,
+			parent_id: None,
+			position: 0,
+			name: "Synthetic unread conversation".into(),
+			kind: 1,
+			recipients: vec![],
+			member_list_id: None,
+			message_count: None,
+			icon: None,
+			last_message: Some(Id(40)),
+		}];
+		state
+			.apply_read_state(client_core::read_state::Event::Snapshot {
+				entries: Some(vec![(Id(20), Some(Id(25)), 0)]),
+				version: Some(1),
+				partial: false,
+			})
+			.unwrap();
+		for id in 11..=40 {
+			state
+				.timeline
+				.insert(text_message(id), false, false)
+				.unwrap();
+		}
+		let mut view = TimelineView::default();
+		for _ in 0..6 {
+			banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		}
+		assert!(view.following);
+		assert_eq!(view.seen_latest, Some(Id(40)));
+		assert_eq!(view.unread_boundary, Some(Id(26)));
+		for _ in 0..10 {
+			banner_frame(
+				&ctx,
+				&mut view,
+				&mut state,
+				vec![
+					egui::Event::PointerMoved(egui::pos2(450.0, 300.0)),
+					egui::Event::MouseWheel {
+						unit: egui::MouseWheelUnit::Point,
+						delta: egui::vec2(0.0, 600.0),
+						modifiers: egui::Modifiers::NONE,
+						phase: egui::TouchPhase::Move,
+					},
+				],
+				false,
+			);
+			if !view.following {
+				break;
+			}
+		}
+		assert!(!view.following, "wheel-up never left the live edge");
+		for id in [41, 42] {
+			state
+				.timeline
+				.insert(text_message(id), false, false)
+				.unwrap();
+			state.channels[0].last_message = Some(Id(id));
+		}
+		state.revision += 1;
+		let labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		assert!(
+			labels.iter().any(|(text, _)| text == "Unread messages"),
+			"no banner while away from the live edge: {labels:?}"
+		);
+		assert!(
+			labels.iter().any(|(text, _)| text == "2 new messages"),
+			"the way-down pill did not name the unseen arrivals: {labels:?}"
+		);
+		assert_eq!(view.unread_boundary, Some(Id(26)));
+	}
+
+	#[test]
+	fn older_unread_page_moves_the_divider_upward() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		state.timeline.clear();
+		state.selected = Some(Id(20));
+		state.auth = client_core::auth::AuthState::Authenticated;
+		state.gateway_connected = true;
+		state.freshness = model::Freshness::Fresh;
+		state.history_pending = false;
+		state.history_targeted = false;
+		state.history_before = None;
+		state.history_after = None;
+		state.older_exhausted = true;
+		state.channels = vec![model::Channel {
+			id: Id(20),
+			guild: None,
+			parent_id: None,
+			position: 0,
+			name: "Synthetic unread conversation".into(),
+			kind: 1,
+			recipients: vec![],
+			member_list_id: None,
+			message_count: None,
+			icon: None,
+			last_message: Some(Id(65)),
+		}];
+		state
+			.apply_read_state(client_core::read_state::Event::Snapshot {
+				entries: Some(vec![(Id(20), Some(Id(25)), 0)]),
+				version: Some(1),
+				partial: false,
+			})
+			.unwrap();
+		// The initial live-edge page starts after the true read marker. Enough rows
+		// stay loaded so the reader can scroll up and leave the live edge.
+		for id in 30..=65 {
+			state
+				.timeline
+				.insert(text_message(id), false, false)
+				.unwrap();
+		}
+		let mut view = TimelineView::default();
+		for _ in 0..6 {
+			banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		}
+		assert_eq!(view.unread_boundary, Some(Id(30)));
+		// The reader scrolls up, leaving the watched live edge, and the older page
+		// arrives with the true first unread message: the divider must move up
+		// instead of staying stuck on the first loaded page.
+		for _ in 0..10 {
+			banner_frame(
+				&ctx,
+				&mut view,
+				&mut state,
+				vec![
+					egui::Event::PointerMoved(egui::pos2(450.0, 300.0)),
+					egui::Event::MouseWheel {
+						unit: egui::MouseWheelUnit::Point,
+						delta: egui::vec2(0.0, 600.0),
+						modifiers: egui::Modifiers::NONE,
+						phase: egui::TouchPhase::Move,
+					},
+				],
+				false,
+			);
+			if !view.following {
+				break;
+			}
+		}
+		assert!(!view.following, "wheel-up never left the live edge");
+		for id in 26..=29 {
+			state
+				.timeline
+				.insert(text_message(id), false, false)
+				.unwrap();
+		}
+		state.revision += 1;
+		for _ in 0..6 {
+			banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		}
+		assert_eq!(view.unread_boundary, Some(Id(26)));
 	}
 
 	#[test]

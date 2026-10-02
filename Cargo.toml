@@ -41,6 +41,7 @@ local-store = { path = "crates/local-store" }
 rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache"] }
 dirs = "=7.0.0"
 getrandom = "0.4"
+bytes = "1"
 time = { version = "0.3", features = ["parsing"] }
 wry = { version = "=0.57.0", default-features = false, features = ["os-webview"] }
 keyring = "=4.2.0"

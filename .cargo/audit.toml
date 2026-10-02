@@ -20,4 +20,13 @@ ignore = [
     # independently while the pinned DeepFilterNet rev dictates tract 0.19.
     # Re-check together with the tract line.
     "RUSTSEC-2026-0186",
+    # anymap2 0.13.0 is unmaintained (informational, not a vulnerability).
+    # It arrives transitively through liquid-core 0.26.11 -> liquid 0.26.11,
+    # a build-dependency of tract-linalg 0.19, which is dictated by the pinned
+    # DeepFilterNet rev 978576aa (see above): no independent update path without
+    # moving that rev and requalifying voice noise suppression. anymap3 in the
+    # lockfile belongs to an unrelated subtree (generic_singleton <- easyfft
+    # <- nnnoiseless) and does not replace this edge. Recorded 2026-10-02;
+    # re-check when the DeepFilterNet rev moves.
+    "RUSTSEC-2026-0319",
 ]

@@ -12,7 +12,12 @@ all-features = true
 # so the vulnerable reader never runs in this build. Updating tract past 0.19.16
 # is blocked by pinned version conflicts (libm and half).
 [advisories]
-ignore = ["RUSTSEC-2026-0217"]
+# RUSTSEC-2026-0217: see the Accepted-risk note at the top of this file.
+# RUSTSEC-2026-0319: anymap2 0.13.0 unmaintained (informational, not a
+# vulnerability), via liquid-core -> liquid -> tract-linalg (build-dep) ->
+# pinned DeepFilterNet rev; no independent update path. Recorded 2026-10-02.
+# Kept in sync with .cargo/audit.toml, which is what the security job enforces.
+ignore = ["RUSTSEC-2026-0217", "RUSTSEC-2026-0319"]
 
 [licenses]
 confidence-threshold = 0.95

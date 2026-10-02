@@ -84,6 +84,16 @@ fn main() -> eframe::Result {
 	}
 	#[cfg(all(debug_assertions, feature = "demo"))]
 	if std::env::args().any(|arg| arg == "--demo")
+		&& std::env::args().any(|arg| arg == "--demo-check-audio")
+	{
+		audio::debug_voice_message_check();
+		println!(
+			"Offline audio check passed: 24 MiB admission and complete range decoding, bounded buffering."
+		);
+		return Ok(());
+	}
+	#[cfg(all(debug_assertions, feature = "demo"))]
+	if std::env::args().any(|arg| arg == "--demo")
 		&& std::env::args().any(|arg| arg == "--demo-check-spotify")
 	{
 		spotify::debug_check();

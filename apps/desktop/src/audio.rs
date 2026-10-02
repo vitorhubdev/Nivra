@@ -211,10 +211,13 @@ impl Audio {
 		}
 	}
 	pub fn seek(&mut self, position: Duration) {
-		self.gate.seek_millis.store(
-			position.min(Duration::from_secs(MAX_SECONDS)).as_millis() as u64,
-			Ordering::Release,
-		);
+		let millis = position.min(Duration::from_secs(MAX_SECONDS)).as_millis() as u64;
+		// Show the target while decoding restarts; output callbacks are muted until it resumes.
+		let rate = u64::from(self.gate.sample_rate.load(Ordering::Acquire));
+		self.gate
+			.position_frames
+			.store(millis * rate / 1000, Ordering::Release);
+		self.gate.seek_millis.store(millis, Ordering::Release);
 		if let Some(worker) = &self.worker {
 			worker.wake.notify_one();
 		}
@@ -242,6 +245,26 @@ impl Drop for Audio {
 	fn drop(&mut self) {
 		self.stop();
 	}
+}
+
+/// PulseAudio (including pipewire-pulse) otherwise applies its ~2 s server-default buffer: the
+/// first callback queues that much silence, and the callback clock behind progress, seeking and
+/// A/V sync runs that far ahead of what is audible.
+pub(crate) fn playback_config(
+	host: cpal::HostId,
+	config: cpal::StreamConfig,
+) -> cpal::StreamConfig {
+	#[cfg(target_os = "linux")]
+	if host == cpal::HostId::PulseAudio {
+		// 40 ms periods; cpal double-buffers, so about 80 ms reach the server.
+		return cpal::StreamConfig {
+			buffer_size: cpal::BufferSize::Fixed(config.sample_rate / 25),
+			..config
+		};
+	}
+	#[cfg(not(target_os = "linux"))]
+	let _ = host;
+	config
 }
 
 fn worker(
@@ -1006,6 +1029,23 @@ mod tests {
 	#[test]
 	fn start_admits_large_attachments_and_rejects_invalid_sizes() {
 		check_large_attachment_admission();
+	}
+	#[cfg(target_os = "linux")]
+	#[test]
+	fn pulseaudio_playback_avoids_the_server_default_buffer() {
+		let config = cpal::StreamConfig {
+			channels: 2,
+			sample_rate: 48000,
+			buffer_size: cpal::BufferSize::Default,
+		};
+		assert_eq!(
+			playback_config(cpal::HostId::PulseAudio, config).buffer_size,
+			cpal::BufferSize::Fixed(1920)
+		);
+		assert_eq!(
+			playback_config(cpal::HostId::Alsa, config).buffer_size,
+			cpal::BufferSize::Default
+		);
 	}
 	#[test]
 	fn decode_bounded_audio_and_reject_malformed_headers() {

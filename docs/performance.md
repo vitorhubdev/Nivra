@@ -1897,3 +1897,21 @@ ARM 10.0717 ms and 134.8 µs. The synthetic file was 110,592 bytes. This
 is an in-memory check, not native RSS or frame time. Text preview of
 20,000 ASCII characters in CI run 36819481221: macOS 557.708 µs, Ubuntu
 889.729 µs, Windows x64 924.6 µs, Windows ARM 1.0856 ms.
+
+# History copies and decoded-image backpressure (port) - October 2026
+
+Ported from upstream `35b8042c` without its hardware table: incremental history
+saves borrow loaded/changed rows instead of cloning the window, `finish_page`
+inherits author membership per incoming row instead of cloning a prior map, and
+decoded image results share a 128-item / 128 MiB allocation budget (final results
+wait cancellably, previews drop under pressure). No wall-clock/RSS before/after
+was measured for this port: release workloads are not run on the agent PC per
+repo rules, and CI runners are not stable hardware. The ignored synthetic
+workloads print comparable medians for on-hardware runs:
+`page_membership_benchmark` (session-cache), `benchmark_changed_row_save`
+(local-store, in-memory SQLite), `decoded_result_queue_workload` (avatars,
+`NIVRA_IMAGE_QUEUE_LEGACY=1` reproduces the old item-only queue),
+`timeline_cursor_workload` (client-core) and `watch_frame_memory_workload`
+(watch, `NIVRA_WATCH_FRAME_LEGACY=1` / `NIVRA_WATCH_FRAME_UPLOAD_EVERY=3`).
+Behavioral tests pin the bounds; no performance change is claimed until those
+workloads run on identical hardware.

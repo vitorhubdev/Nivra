@@ -5446,7 +5446,10 @@ mod tests {
 		// The initial live-edge page starts after the true read marker. Enough rows
 		// stay loaded so the reader can scroll up and leave the live edge.
 		for id in 30..=65 {
-			state.timeline.insert(text_message(id), false, false).unwrap();
+			state
+				.timeline
+				.insert(text_message(id), false, false)
+				.unwrap();
 		}
 		let mut view = TimelineView::default();
 		for _ in 0..6 {
@@ -5464,11 +5467,11 @@ mod tests {
 				vec![
 					egui::Event::PointerMoved(egui::pos2(450.0, 300.0)),
 					egui::Event::MouseWheel {
-							unit: egui::MouseWheelUnit::Point,
-							delta: egui::vec2(0.0, 600.0),
-							modifiers: egui::Modifiers::NONE,
-							phase: egui::TouchPhase::Move,
-						},
+						unit: egui::MouseWheelUnit::Point,
+						delta: egui::vec2(0.0, 600.0),
+						modifiers: egui::Modifiers::NONE,
+						phase: egui::TouchPhase::Move,
+					},
 				],
 				false,
 			);
@@ -5478,7 +5481,10 @@ mod tests {
 		}
 		assert!(!view.following, "wheel-up never left the live edge");
 		for id in 26..=29 {
-			state.timeline.insert(text_message(id), false, false).unwrap();
+			state
+				.timeline
+				.insert(text_message(id), false, false)
+				.unwrap();
 		}
 		state.revision += 1;
 		for _ in 0..6 {

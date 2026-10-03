@@ -576,7 +576,7 @@ impl crate::MessagingUi {
 	}
 }
 
-pub fn presence_label(status: &str) -> &'static str {
+pub fn presence_key(status: &str) -> &'static str {
 	match status {
 		"online" => "Online",
 		"idle" => "Idle",
@@ -585,6 +585,11 @@ pub fn presence_label(status: &str) -> &'static str {
 		_ => "Presence unavailable",
 	}
 }
+
+pub fn presence_label(status: &str, language: model::Language) -> &'static str {
+	crate::i18n::text(language, presence_key(status))
+}
+
 pub(crate) fn presence_color(status: &str) -> Color32 {
 	match status {
 		"online" => Color32::from_rgb(35, 165, 89),
@@ -593,12 +598,23 @@ pub(crate) fn presence_color(status: &str) -> Color32 {
 		_ => Color32::from_rgb(128, 132, 142),
 	}
 }
-fn presence_description(status: &str, clients: model::ClientPlatforms) -> String {
+
+fn presence_description(
+	status: &str,
+	clients: model::ClientPlatforms,
+	language: model::Language,
+) -> String {
+	let label = presence_label(status, language);
+	let mobile_prefix = crate::i18n::text(language, "Mobile");
 	clients.mobile.map_or_else(
-		|| presence_label(status).into(),
-		|mobile| format!("{} · Mobile {}", presence_label(status), mobile.label()),
+		|| label.into(),
+		|mobile| {
+			let mobile_status = presence_label(mobile.wire(), language);
+			format!("{label} · {mobile_prefix} {mobile_status}")
+		},
 	)
 }
+
 pub(crate) fn presence_badge(
 	ui: &mut egui::Ui,
 	rect: Rect,
@@ -606,6 +622,7 @@ pub(crate) fn presence_badge(
 	clients: model::ClientPlatforms,
 	ring: Color32,
 ) {
+	let language = crate::i18n::interface_language(ui.ctx());
 	let radius = (rect.width() * 0.2).clamp(6.0, 10.0);
 	let center = rect.right_bottom() - Vec2::splat(radius + 0.5);
 	if clients.mobile.is_some() {
@@ -622,7 +639,7 @@ pub(crate) fn presence_badge(
 		Rect::from_center_size(center, Vec2::splat((radius + 2.0) * 2.0)),
 		egui::Sense::hover(),
 	)
-	.on_hover_text(presence_description(status, clients));
+	.on_hover_text(presence_description(status, clients, language));
 }
 /// Keep known guild presence through range loads and reconnects; access loss clears the snapshot.
 pub(crate) fn presence(
@@ -1919,14 +1936,25 @@ mod tests {
 			desktop: Some(model::ClientPresence::Online),
 			..Default::default()
 		};
-		assert_eq!(presence_description("online", desktop), "Online");
+		assert_eq!(
+			presence_description("online", desktop, model::Language::English),
+			"Online"
+		);
 		let mobile = model::ClientPlatforms {
 			mobile: Some(model::ClientPresence::Idle),
 			..desktop
 		};
 		assert_eq!(
-			presence_description("online", mobile),
+			presence_description("online", mobile, model::Language::English),
 			"Online · Mobile Idle"
+		);
+		assert_eq!(
+			presence_description("online", mobile, model::Language::PortugueseBrazil),
+			"Online · Celular Ausente"
+		);
+		assert_eq!(
+			presence_description("online", mobile, model::Language::Spanish),
+			"En línea · Móvil Ausente"
 		);
 	}
 

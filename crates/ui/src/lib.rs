@@ -1674,7 +1674,13 @@ impl MessagingUi {
 									true,
 									format!(
 										"{name}, {}, {}",
-										status.map_or("presence unknown", profiles::presence_label),
+										status.map_or_else(
+											|| crate::i18n::text(
+												self.language,
+												"Presence unavailable"
+											),
+											|s| profiles::presence_label(s, self.language),
+										),
 										subtitle.as_deref().unwrap_or_default()
 									),
 								)
@@ -2055,7 +2061,9 @@ impl MessagingUi {
 					.inner_margin(egui::Margin::symmetric(8, 6))
 					.show(ui, |ui| {
 						ui.set_width(ui.available_width());
-						ui.horizontal(|ui| {
+						ui.set_min_height(44.0);
+						ui.horizontal_centered(|ui| {
+							ui.set_min_height(44.0);
 							ui.spacing_mut().item_spacing.x = 8.0;
 							if let Some(user) = &state.user {
 								let avatar = self.avatars.show(ui, user, 32.0, state.demo);
@@ -2094,6 +2102,7 @@ impl MessagingUi {
 							ui.with_layout(
 								egui::Layout::right_to_left(egui::Align::Center),
 								|ui| {
+									ui.set_min_height(44.0);
 									ui.spacing_mut().item_spacing.x = 2.0;
 									let settings =
 										icons::button(ui, icons::Icon::Gear, 32.0, "User settings");
@@ -2107,6 +2116,7 @@ impl MessagingUi {
 									ui.with_layout(
 										egui::Layout::left_to_right(egui::Align::Center),
 										|ui| {
+											ui.set_min_height(44.0);
 											let identity = ui
 												.vertical(|ui| {
 													ui.spacing_mut().item_spacing.y = 0.0;
@@ -2114,12 +2124,13 @@ impl MessagingUi {
 														egui::Label::new(
 															design::semibold(
 																ui,
-																state
-																	.user
-																	.as_ref()
-																	.map_or("Your account", |u| {
-																		u.name.as_str()
-																	}),
+																state.user.as_ref().map_or(
+																	crate::i18n::text(
+																		self.language,
+																		"Your account",
+																	),
+																	|u| u.name.as_str(),
+																),
 																14.0,
 															)
 															.color(colors.text_strong),
@@ -2146,14 +2157,25 @@ impl MessagingUi {
 																	}) {
 																	game.to_owned()
 																} else if state.demo {
-																	"Offline preview".to_owned()
+																	crate::i18n::text(
+																		self.language,
+																		"Offline preview",
+																	)
+																	.to_owned()
 																} else if state.gateway_connected {
-																	self.own_presence
-																		.status
-																		.label()
-																		.to_owned()
+																	crate::i18n::text(
+																		self.language,
+																		self.own_presence
+																			.status
+																			.label(),
+																	)
+																	.to_owned()
 																} else {
-																	"Reconnecting…".to_owned()
+																	crate::i18n::text(
+																		self.language,
+																		"Reconnecting…",
+																	)
+																	.to_owned()
 																},
 															)
 															.size(12.0)

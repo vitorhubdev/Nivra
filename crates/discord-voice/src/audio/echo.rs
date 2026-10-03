@@ -405,8 +405,11 @@ impl Echo {
 		let mode_changed = settings.suppression != self.settings.suppression
 			|| settings.suppression_level != self.settings.suppression_level
 			|| settings.deep_filter_intensity != self.settings.deep_filter_intensity;
-		if mode_changed {
+		let is_studio = settings == Processing::studio();
+		if mode_changed && !is_studio {
 			self.mode_transition_remaining = 480;
+		} else if is_studio {
+			self.mode_transition_remaining = 0;
 		}
 		if settings.suppression != NoiseSuppression::DeepFilter {
 			self.deep = None;
@@ -521,6 +524,7 @@ impl Echo {
 						self.deep = None;
 						self.deep_fallback = true;
 						self.sync_rnnoise();
+						deep_processed = false;
 					}
 					Step::Covered | Step::Loading => {}
 				}
@@ -533,7 +537,7 @@ impl Echo {
 					noise_time += elapsed;
 				}
 			}
-			if self.mode_transition_remaining > 0 {
+			if self.mode_transition_remaining > 0 && self.settings != Processing::studio() {
 				let step = output[0] - self.last_capture_sample;
 				let count = self.mode_transition_remaining.min(output.len());
 				for (i, sample) in output.iter_mut().enumerate().take(count) {

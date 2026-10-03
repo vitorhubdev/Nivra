@@ -495,7 +495,7 @@ pub(super) fn confirm_external_link(
 		})
 	});
 
-	if discord || (is_safe && (!confirm_links || is_allowed)) {
+	if (!disguised && discord) || (is_safe && (!confirm_links || is_allowed)) {
 		ctx.data_mut(|d| d.remove_temp::<bool>(disguised_id));
 		ctx.open_url(egui::OpenUrl::new_tab(target));
 		*opening = None;
@@ -2959,29 +2959,34 @@ mod tests {
 			output.drop_without_applying_deltas();
 		}
 
-		// 3. Disguised link ALWAYS prompts even with global switch OFF/ON and domain allowed!
-		for confirm_links in [true, false] {
-			let ctx = egui::Context::default();
-			set_disguised_link_for_test(&ctx, true);
-			let mut opening = Some("https://evil.com/login".to_string());
-			let mut allowed = std::collections::HashSet::from(["evil.com".to_string()]);
-			let mut add = None;
-			let output = ctx.run_ui(Default::default(), |_| {
-				confirm_external_link(
-					&ctx,
-					&mut opening,
-					confirm_links,
-					&mut allowed,
-					&mut add,
-					model::Language::English,
+		// 3. Disguised link ALWAYS prompts even with global switch OFF/ON, domain allowed, or targeting Discord!
+		for (target, allowed_domain) in [
+			("https://evil.com/login", "evil.com"),
+			("https://discord.com/invite/fake", "discord.com"),
+		] {
+			for confirm_links in [true, false] {
+				let ctx = egui::Context::default();
+				set_disguised_link_for_test(&ctx, true);
+				let mut opening = Some(target.to_string());
+				let mut allowed = std::collections::HashSet::from([allowed_domain.to_string()]);
+				let mut add = None;
+				let output = ctx.run_ui(Default::default(), |_| {
+					confirm_external_link(
+						&ctx,
+						&mut opening,
+						confirm_links,
+						&mut allowed,
+						&mut add,
+						model::Language::English,
+					);
+				});
+				assert!(
+					output.platform_output.commands.is_empty(),
+					"disguised link to {target} MUST NOT open directly"
 				);
-			});
-			assert!(
-				output.platform_output.commands.is_empty(),
-				"disguised link MUST NOT open directly"
-			);
-			assert!(opening.is_some(), "disguised link must keep dialog open");
-			output.drop_without_applying_deltas();
+				assert!(opening.is_some(), "disguised link must keep dialog open");
+				output.drop_without_applying_deltas();
+			}
 		}
 
 		// 4. URL shortener ALWAYS prompts even with global switch OFF/ON and domain allowed!

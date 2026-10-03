@@ -2491,22 +2491,24 @@ impl Desktop {
 		if let Some(delay) = self.reading.remaining(now) {
 			ctx.request_repaint_after(delay);
 		}
-		if let Some(domain) = self.messaging.add_allowed_domain_requested.take()
+		if let Some(domain) = self.messaging.add_allowed_domain_requested.as_ref()
 			&& let Some(cache) = &self.cache
 			&& cache.queue(
 				self.state.generation,
 				model::Id(0),
-				cache::Operation::AddAllowedDomain(domain),
+				cache::Operation::AddAllowedDomain(domain.clone()),
 			) {
+			self.messaging.add_allowed_domain_requested = None;
 			self.cache_pending += 1;
 		}
-		if std::mem::take(&mut self.messaging.clear_allowed_domains_requested)
+		if self.messaging.clear_allowed_domains_requested
 			&& let Some(cache) = &self.cache
 			&& cache.queue(
 				self.state.generation,
 				model::Id(0),
 				cache::Operation::ClearAllowedDomains,
 			) {
+			self.messaging.clear_allowed_domains_requested = false;
 			self.cache_pending += 1;
 		}
 		self.messaging.reading_status = self.reading.status();

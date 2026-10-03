@@ -127,12 +127,16 @@ impl Editor {
 		}
 	}
 
+	#[allow(clippy::too_many_arguments)]
 	pub fn show(
 		&mut self,
 		ui: &mut egui::Ui,
 		state: &mut State,
 		avatars: &mut Avatars,
 		commands: &mut Vec<Command>,
+		confirm_links: bool,
+		allowed_domains: &mut std::collections::HashSet<String>,
+		add_allowed_domain: &mut Option<String>,
 	) {
 		if self.generation != Some(state.generation) {
 			*self = Self {
@@ -358,9 +362,9 @@ impl Editor {
 		crate::markdown::confirm_external_link(
 			ui.ctx(),
 			&mut self.preview_link,
-			true,
-			&mut Default::default(),
-			&mut None,
+			confirm_links,
+			allowed_domains,
+			add_allowed_domain,
 			language,
 		);
 		if !state.demo && !state.gateway_connected {
@@ -711,7 +715,17 @@ mod tests {
 					events,
 					..Default::default()
 				},
-				|ui| editor.show(ui, state, avatars, &mut commands),
+				|ui| {
+					editor.show(
+						ui,
+						state,
+						avatars,
+						&mut commands,
+						true,
+						&mut Default::default(),
+						&mut None,
+					)
+				},
 			);
 			output.textures_delta.clear();
 			fn text(shape: &egui::Shape, labels: &mut Vec<(String, egui::Rect)>) {

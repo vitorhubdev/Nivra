@@ -425,6 +425,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			} else {
 				test_support::demo_state()
 			};
+			if args.iter().any(|arg| arg == "--timeline-text") {
+				// Text-only fixture for timeline density shots: six short rows with
+				// alternating authors in the selected channel (synthetic, disclosed).
+				let channel = state.selected.unwrap();
+				state.timeline.clear();
+				state.older_exhausted = true;
+				for i in 0..6u64 {
+					let mut m = test_support::message(100 + i, channel);
+					m.id = model::Id(
+						((1_788_998_100_000u64 + i * 60_000 - 1_420_070_400_000) << 22) | 1,
+					);
+					m.content = format!("Synthetic timeline row {i} for density comparison.");
+					state.timeline.insert(m, false, false).unwrap();
+				}
+			}
 			if page == "profile" {
 				prime_profile(&mut state);
 			}
@@ -457,6 +472,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				let _ = state.select(model::Id(22));
 			}
 			let mut messaging = ui::MessagingUi::default();
+			if args.iter().any(|arg| arg == "--compact") {
+				messaging.compact_timeline = true;
+			}
 			messaging.tray_available = platform::tray::supported();
 			messaging.startup_available = platform::startup::available();
 			messaging.startup_enabled = args.iter().any(|arg| arg == "--startup-enabled");
@@ -523,7 +541,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 						event,
 					});
 				}
-			} else {
+			} else if !args.iter().any(|arg| arg == "--no-settings") {
 				messaging.preview_settings(
 					if page == "extensions" && args.iter().any(|arg| arg == "--themes") {
 						"themes"

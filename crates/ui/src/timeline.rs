@@ -45,6 +45,7 @@ pub struct TimelineView {
 	pub(super) cancel_upload: bool,
 	pending_heights: BTreeMap<String, f32>,
 	pub(super) hide_media_links: bool,
+	pub(super) compact_timeline: bool,
 	pub(super) instant_scrolling: bool,
 	applied_hide_media_links: bool,
 	pub(super) gif_favorite: Option<model::Gif>,
@@ -531,20 +532,26 @@ fn starter_row(
 	state: &State,
 	avatars: &mut crate::avatars::Avatars,
 	width: f32,
+	compact_timeline: bool,
 ) {
 	let colors = crate::design::palette(ui);
 	egui::Frame::NONE
 		.inner_margin(egui::Margin {
 			left: 16,
 			right: 16,
-			top: 14,
+			top: if compact_timeline { 1 } else { 14 },
 			bottom: 6,
 		})
 		.show(ui, |ui| {
 			ui.set_min_width((width - 32.0).max(1.0));
 			ui.spacing_mut().item_spacing = egui::vec2(16.0, 4.0);
 			ui.horizontal_top(|ui| {
-				avatars.show_plain(ui, &message.author, 40.0, state.demo);
+				if compact_timeline {
+					// Time gutter instead of the 40-point avatar, like ordinary rows.
+					ui.allocate_exact_size(egui::vec2(40.0, 20.0), egui::Sense::hover());
+				} else {
+					avatars.show_plain(ui, &message.author, 40.0, state.demo);
+				}
 				ui.vertical(|ui| {
 					ui.set_width(ui.available_width());
 					ui.allocate_ui_with_layout(
@@ -1916,6 +1923,7 @@ impl TimelineView {
 			*self = Self {
 				extension_actions: self.extension_actions.clone(),
 				hide_media_links: self.hide_media_links,
+				compact_timeline: self.compact_timeline,
 				instant_scrolling: self.instant_scrolling,
 				suppressed_deleted_highlight: std::mem::take(
 					&mut self.suppressed_deleted_highlight,
@@ -2570,7 +2578,7 @@ impl TimelineView {
 				{
 					let response = ui
 						.scope_builder(egui::UiBuilder::new().scope_id(row_id), |ui| {
-							starter_row(ui, starter, state, avatars, width);
+							starter_row(ui, starter, state, avatars, width, self.compact_timeline);
 						})
 						.response;
 					measurements.push((
@@ -2635,6 +2643,10 @@ impl TimelineView {
 				}
 
 				let compact = grouped(previous, message, self.unread_boundary);
+				// IRC-style density: every row gets the tight grouped treatment
+				// (time gutter, no avatar) while keeping its own author header,
+				// dividers, embeds and selection untouched.
+				let irc = self.compact_timeline;
 				let new_day = previous
 					.is_none_or(|previous| timestamp(previous.id).date() != timestamp(id).date());
 				let response = ui.scope_builder(egui::UiBuilder::new().scope_id(row_id), |ui| {
@@ -2658,7 +2670,7 @@ impl TimelineView {
 						.inner_margin(egui::Margin {
 							left: 16,
 							right: 16,
-							top: if compact { 1 } else { 14 },
+							top: if compact || irc { 1 } else { 14 },
 							bottom: 1,
 						})
 						.show(ui, |ui| {
@@ -2867,7 +2879,7 @@ impl TimelineView {
 										),
 										tint,
 									);
-								} else if compact {
+								} else if compact || irc {
 									time_rect = Some(
 										ui.allocate_exact_size(
 											egui::vec2(40.0, MESSAGE_LINE),
@@ -3901,6 +3913,7 @@ impl TimelineView {
 			ui.add_space((total - used).max(0.0));
 			for (index, (pending, height)) in pending_rows.iter().enumerate() {
 				let compact = index > 0
+					|| self.compact_timeline
 					|| state.timeline.iter().next_back().is_some_and(|previous| {
 						let now = crate::local_time::now();
 						state
@@ -5410,6 +5423,141 @@ mod tests {
 			state.timeline.insert(message, false, false).unwrap();
 		}
 		state
+	}
+
+	#[test]
+	fn compact_timeline_applies_to_thread_starter_rows() {
+		let ctx = egui::Context::default();
+		let state = test_support::demo_state();
+		let message = test_support::message(1, Id(20));
+		let mut heights = Vec::new();
+		for compact in [false, true] {
+			let mut avatars = crate::avatars::Avatars::default();
+			let mut height = 0.0;
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 400.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					super::starter_row(ui, &message, &state, &mut avatars, 900.0, compact);
+					height = ui.min_rect().height();
+				},
+			);
+			heights.push(height);
+			output.drop_without_applying_deltas();
+		}
+		assert!(
+			heights[1] < heights[0],
+			"starter sheds its avatar in compact: {:?}",
+			heights
+		);
+	}
+
+	#[test]
+	fn compact_timeline_keeps_content_and_markers_while_saving_height() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		// Authors alternate at this boundary (1, 2, 2): the middle row always
+		// renders its own header, so grouping cannot hide the layout change.
+		let ids: Vec<Id> = [2, 3, 4]
+			.iter()
+			.map(|n| state.timeline.iter().nth(*n).unwrap().id)
+			.collect();
+		// An optimistic outgoing row renders in both modes too (same compact input).
+		state.pending.push(client_core::Pending {
+			sticker: None,
+			channel: state.selected.unwrap(),
+			nonce: "compact-pending".into(),
+			content: "Compact pending message".into(),
+			attachments: vec![],
+			delivery: model::Delivery::Sending,
+			confirmed: None,
+		});
+		let mut rendered = Vec::new();
+		for compact in [false, true] {
+			let mut view = TimelineView {
+				compact_timeline: compact,
+				unread_boundary: Some(ids[1]),
+				..Default::default()
+			};
+			let output = ctx.run_ui(
+				egui::RawInput {
+					focused: true,
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 1200.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					view.show(
+						ui,
+						&mut state,
+						&mut None,
+						&mut None,
+						(
+							&mut crate::avatars::Avatars::default(),
+							&mut crate::profiles::ProfileSession::default(),
+						),
+						None,
+					);
+				},
+			);
+			let mut labels: Vec<(String, egui::Rect)> = Vec::new();
+			fn walk(shape: &egui::Shape, labels: &mut Vec<(String, egui::Rect)>) {
+				match shape {
+					egui::Shape::Text(text) => labels.push((
+						text.galley.job.text.clone(),
+						text.galley.rect.translate(text.pos.to_vec2()),
+					)),
+					egui::Shape::Vec(shapes) => {
+						for shape in shapes {
+							walk(shape, labels);
+						}
+					}
+					_ => {}
+				}
+			}
+			for shape in &output.shapes {
+				walk(&shape.shape, &mut labels);
+			}
+			output.drop_without_applying_deltas();
+			rendered.push(labels);
+		}
+		let (cozy, irc) = (&rendered[0], &rendered[1]);
+		// Compact never hides content: every cozy string still renders, the
+		// unread marker survives, and tighter rows fit strictly more labels.
+		let mut cozy_texts: Vec<&str> = cozy.iter().map(|(text, _)| text.as_str()).collect();
+		let mut irc_texts: Vec<&str> = irc.iter().map(|(text, _)| text.as_str()).collect();
+		cozy_texts.sort_unstable();
+		irc_texts.sort_unstable();
+		for text in &cozy_texts {
+			// Pending delivery headers collapse in compact exactly like grouped rows;
+			// everything else must survive.
+			if *text == "Sending…" {
+				continue;
+			}
+			assert!(irc_texts.contains(text), "compact hides {text:?}");
+		}
+		assert!(
+			irc.iter()
+				.any(|(text, _)| text.contains("Compact pending message")),
+			"pending rows render in compact"
+		);
+		assert!(
+			irc.iter().any(|(text, _)| text.contains("New messages")),
+			"unread marker survives"
+		);
+		assert!(
+			irc_texts.len() > cozy_texts.len(),
+			"compact fits more: {} vs {}",
+			irc_texts.len(),
+			cozy_texts.len()
+		);
 	}
 
 	#[test]

@@ -73,6 +73,7 @@ impl Settings {
 			show_hidden_channels: ui.show_hidden_channels,
 			hide_offline_members: ui.hide_offline_members,
 			hide_bot_dms: ui.hide_bot_dms,
+			compact_timeline: ui.compact_timeline,
 			hide_title_bar: ui.hide_title_bar,
 			language: ui.language,
 			language_chosen: self.current.language_chosen
@@ -124,6 +125,7 @@ impl Settings {
 		ui.show_hidden_channels = value.show_hidden_channels;
 		ui.hide_offline_members = value.hide_offline_members;
 		ui.hide_bot_dms = value.hide_bot_dms;
+		ui.compact_timeline = value.compact_timeline;
 		ui.hide_title_bar = value.hide_title_bar;
 		ui.language = value.language;
 		ui.gpu_preference = value.gpu_preference;

@@ -5,6 +5,7 @@ use crate::{
 	screen,
 };
 use model::{Id, Member};
+use std::collections::{BTreeSet, VecDeque};
 use std::time::Instant;
 pub const MAX_PARTICIPANTS: usize = 64;
 pub const MAX_DM_CALLS: usize = 64;
@@ -116,6 +117,15 @@ pub struct Call {
 #[derive(Default)]
 pub struct State {
 	pub active: Option<Call>,
+	/// Membership transitions observed while syncing the active call roster, in
+	/// order: every join and every leave becomes a sound, even when both happen
+	/// between two UI polls. Drained by the desktop; oldest dropped past the cap.
+	pub membership_events: VecDeque<MembershipEvent>,
+	/// (channel, request) the baselined roster belongs to, with its user ids.
+	/// Survives gateway reconnects on purpose: a refill with the same people is
+	/// silent, while someone who left or joined during the gap still announces.
+	membership_basis: Option<(Id, u64)>,
+	membership_seen: BTreeSet<u64>,
 	/// Last service-confirmed departure, scoped to its local request.
 	pub departed: Option<(Id, u64)>,
 	pub incoming: Option<Id>,
@@ -131,6 +141,15 @@ pub struct State {
 	/// The UI joins that channel once the previous media session has closed.
 	pub follow: Option<VoiceFollow>,
 }
+/// One observed roster transition for the active call. The desktop maps these to
+/// call sounds; both sides of a quick leave+rejoin are always present, in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MembershipEvent {
+	Joined { channel: Id, user: Id },
+	Left { channel: Id, user: Id },
+}
+/// Drained membership transitions never exceed one screen of rapid rejoins.
+const MAX_MEMBERSHIP_EVENTS: usize = 32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VoiceFollow {
 	pub channel: Id,
@@ -549,10 +568,12 @@ impl ClientState {
 					self.voice.outgoing = None;
 					self.voice.departed = Some((channel, request));
 					self.status = "This device's call session was replaced";
+					self.clear_call_membership(channel);
 				}
 			}
 			Event::Departed { channel, request } => {
 				self.voice.departed = Some((channel, request));
+				self.clear_call_membership(channel);
 			}
 			Event::Snapshot {
 				partial,
@@ -653,7 +674,7 @@ impl ClientState {
 				}
 				if let Some(mut participants) = participants {
 					participants.shrink_to_fit();
-					if let Some(call) = &mut self.voice.active
+					let synced = if let Some(call) = &mut self.voice.active
 						&& call.channel == channel
 					{
 						if self.user.as_ref().is_some_and(|own| {
@@ -669,6 +690,16 @@ impl ClientState {
 						}) {
 							call.watching = None;
 						}
+						Some(call.request)
+					} else {
+						None
+					};
+					if let Some(request) = synced {
+						self.sync_call_membership(
+							channel,
+							request,
+							participants.iter().map(|p| p.user),
+						);
 					}
 					self.remember_dm_participants(channel, participants);
 				}
@@ -927,8 +958,75 @@ impl ClientState {
 			}
 			if call.participants.len() > MAX_PARTICIPANTS {
 				self.disconnect_voice("Voice channel exceeds the 64 participant limit");
+				return;
 			}
+			let users: Vec<Id> = call.participants.iter().map(|p| p.user).collect();
+			let (channel, request) = (call.channel, call.request);
+			self.sync_call_membership(channel, request, users.into_iter());
 		}
+	}
+	/// Record one active-call roster sync as join/leave events, in order.
+	/// The first sync after a (re)baseline seeds silently, except our own join
+	/// which keeps its single cue; everyone already present is baseline.
+	/// Reconnect refills diff against the kept roster, so unchanged people stay
+	/// silent while someone who left or joined during the gap still announces.
+	fn sync_call_membership(&mut self, channel: Id, request: u64, users: impl Iterator<Item = Id>) {
+		let fresh: BTreeSet<u64> = users.map(|user| user.0).collect();
+		let basis = Some((channel, request));
+		if self.voice.membership_basis != basis {
+			self.voice.membership_basis = basis;
+			if self
+				.user
+				.as_ref()
+				.is_some_and(|own| fresh.contains(&own.id.0))
+			{
+				self.push_membership_event(MembershipEvent::Joined {
+					channel,
+					user: self.user.as_ref().expect("owner checked").id,
+				});
+			}
+			self.voice.membership_seen = fresh;
+			return;
+		}
+		let seen = std::mem::replace(&mut self.voice.membership_seen, fresh.clone());
+		// Leaves sort before joins: a quick leave+rejoin always plays both, in order.
+		for gone in seen.difference(&fresh) {
+			self.push_membership_event(MembershipEvent::Left {
+				channel,
+				user: Id(*gone),
+			});
+		}
+		for new in fresh.difference(&seen) {
+			self.push_membership_event(MembershipEvent::Joined {
+				channel,
+				user: Id(*new),
+			});
+		}
+	}
+	fn push_membership_event(&mut self, event: MembershipEvent) {
+		// Only the exact same event twice in a row collapses; leave+rejoin replays fully.
+		if self.voice.membership_events.back() == Some(&event) {
+			return;
+		}
+		if self.voice.membership_events.len() >= MAX_MEMBERSHIP_EVENTS {
+			self.voice.membership_events.pop_front();
+		}
+		self.voice.membership_events.push_back(event);
+	}
+	/// Drop queued transitions and the baselined roster of an ended call.
+	fn clear_call_membership(&mut self, channel: Id) {
+		if self
+			.voice
+			.membership_basis
+			.is_some_and(|(known, _)| known == channel)
+		{
+			self.voice.membership_basis = None;
+			self.voice.membership_seen.clear();
+		}
+		self.voice.membership_events.retain(|event| match event {
+			MembershipEvent::Joined { channel: known, .. }
+			| MembershipEvent::Left { channel: known, .. } => *known != channel,
+		});
 	}
 	fn remember_dm_participants(&mut self, channel: Id, participants: Vec<Participant>) {
 		if participants.len() > MAX_PARTICIPANTS || !self.voice.has_dm_call(channel) {
@@ -950,6 +1048,7 @@ impl ClientState {
 		self.voice.dm_calls.retain(|id| *id != channel);
 		self.voice.dm_participants.retain(|(id, _)| *id != channel);
 		self.voice.roster.retain(|r| r.channel != channel);
+		self.clear_call_membership(channel);
 		if self.voice.incoming == Some(channel) {
 			self.voice.incoming = None;
 		}
@@ -1679,6 +1778,116 @@ mod tests {
 			participants: None,
 			unavailable: false,
 		});
+	}
+
+	#[test]
+	fn membership_transitions_announce_every_join_and_leave_in_order() {
+		let mut state = dm_state();
+		let (channel, request) = (Id(2), 7);
+		let sync = |state: &mut ClientState, users: &[u64]| {
+			state.sync_call_membership(channel, request, users.iter().map(|id| Id(*id)));
+		};
+		// Baseline seeds silently: people already here are not announced.
+		sync(&mut state, &[2, 3]);
+		assert!(state.voice.membership_events.is_empty());
+		// Our own arrival still gets its single cue.
+		sync(&mut state, &[1, 2, 3]);
+		assert_eq!(
+			state.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![MembershipEvent::Joined {
+				channel,
+				user: Id(1)
+			}]
+		);
+		// One join and one leave in the same sync keep their order.
+		sync(&mut state, &[1, 3, 4]);
+		assert_eq!(
+			state.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![
+				MembershipEvent::Left {
+					channel,
+					user: Id(2)
+				},
+				MembershipEvent::Joined {
+					channel,
+					user: Id(4)
+				},
+			]
+		);
+		// A quick leave+rejoin between UI polls still plays both, in order.
+		sync(&mut state, &[1, 3]);
+		sync(&mut state, &[1, 3, 4]);
+		assert_eq!(
+			state.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![
+				MembershipEvent::Left {
+					channel,
+					user: Id(4)
+				},
+				MembershipEvent::Joined {
+					channel,
+					user: Id(4)
+				},
+			]
+		);
+		// Three people joining together announce three times.
+		sync(&mut state, &[1, 3, 4, 5, 6, 7]);
+		assert_eq!(
+			state.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![
+				MembershipEvent::Joined {
+					channel,
+					user: Id(5)
+				},
+				MembershipEvent::Joined {
+					channel,
+					user: Id(6)
+				},
+				MembershipEvent::Joined {
+					channel,
+					user: Id(7)
+				},
+			]
+		);
+		// A reconnect refill with the same people stays silent.
+		sync(&mut state, &[1, 3, 4, 5, 6, 7]);
+		assert!(state.voice.membership_events.is_empty());
+		// Someone who left during the gap still announces on refill.
+		sync(&mut state, &[1, 3, 4, 5, 6]);
+		assert_eq!(
+			state.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![MembershipEvent::Left {
+				channel,
+				user: Id(7)
+			}]
+		);
+		// Our own join gets its single cue even on the baseline sync.
+		let mut fresh = dm_state();
+		fresh.sync_call_membership(channel, request, [Id(2), Id(3)].into_iter());
+		assert!(fresh.voice.membership_events.is_empty());
+		fresh.sync_call_membership(channel, request, [Id(1), Id(2), Id(3)].into_iter());
+		assert_eq!(
+			fresh.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![MembershipEvent::Joined {
+				channel,
+				user: Id(1)
+			}]
+		);
+		// A new request rebaselines: the same roster seeds silently again.
+		fresh.sync_call_membership(channel, request + 1, [Id(1), Id(2), Id(3)].into_iter());
+		assert_eq!(
+			fresh.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![MembershipEvent::Joined {
+				channel,
+				user: Id(1)
+			}]
+		);
+		// The queue stays bounded under a storm of rejoins.
+		for id in 100..200 {
+			fresh.sync_call_membership(channel, request + 1, [Id(1), Id(id)].into_iter());
+			fresh.sync_call_membership(channel, request + 1, [Id(1)].into_iter());
+		}
+		assert!(fresh.voice.membership_events.len() <= MAX_MEMBERSHIP_EVENTS);
 	}
 
 	#[test]

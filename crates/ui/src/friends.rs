@@ -579,10 +579,11 @@ impl MessagingUi {
 									})
 									.or_else(|| profiles::subtitle(custom, activities))
 									.unwrap_or_else(|| {
+										let lang = crate::i18n::interface_language(ui.ctx());
 										status
-											.map_or(
-												"Presence unavailable",
-												profiles::presence_label,
+											.map_or_else(
+												|| crate::i18n::text(lang, "Presence unavailable"),
+												|s| profiles::presence_label(s, lang),
 											)
 											.into()
 									});

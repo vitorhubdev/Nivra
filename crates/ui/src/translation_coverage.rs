@@ -138,6 +138,12 @@ fn the_guard_reports_only_keys_the_manifest_knows() {
 		"Export chat",
 		"Toggle Deleted Highlight",
 		"Retry",
+		"Idle",
+		"Do Not Disturb",
+		"Offline",
+		"Presence unavailable",
+		"Mobile",
+		"Offline preview",
 	] {
 		for language in LANGUAGES {
 			assert_ne!(
@@ -156,4 +162,28 @@ fn the_guard_reports_only_keys_the_manifest_knows() {
 	}
 	let _ = crate::i18n::drain_untranslated_keys();
 	assert!(crate::i18n::drain_untranslated_keys().is_empty());
+}
+
+#[test]
+fn presence_surfaces_render_translated_in_all_languages() {
+	for language in LANGUAGES {
+		let ctx = context(language);
+		let mut view = crate::MessagingUi {
+			language,
+			..Default::default()
+		};
+		let mut state: State = test_support::demo_state();
+		state.demo = false;
+		state.gateway_connected = true;
+		view.own_presence.status = model::PresenceStatus::Idle;
+		let _ = crate::i18n::drain_untranslated_keys();
+		frame(&ctx, 1280.0, 820.0, |ui| {
+			view.show(ui, &mut state);
+		});
+		let missing = crate::i18n::drain_untranslated_keys();
+		assert!(
+			missing.is_empty(),
+			"{language:?} presence missing translations: {missing:?}"
+		);
+	}
 }

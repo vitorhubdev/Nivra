@@ -1,13 +1,76 @@
 //! One explicit inline player; native decoding and network reads stay on one lazy worker.
+/// Stderr diagnostics budget macro (defined before the child modules so they
+/// share it textually); see `vlog` below.
+macro_rules! vlog {
+	($budget:expr, $($arg:tt)*) => {
+		$crate::video::vlog($budget, format_args!($($arg)*))
+	};
+}
 #[cfg(target_os = "macos")]
 mod fallback;
 mod output;
 mod source;
 use std::sync::{
 	Arc, Mutex,
-	atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+	atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
+use std::time::Duration;
 use ui::{VideoCommand, VideoState, VideoUi};
+/// Stderr diagnostics budget: one playback emits at most this many lines, so
+/// repeated playback cannot grow an unbounded diagnostic stream (Codex PR #34).
+/// One budgeted diagnostic line; silently dropped once the session budget runs out.
+fn vlog(budget: &AtomicUsize, args: std::fmt::Arguments<'_>) {
+	if budget
+		.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |lines| {
+			lines.checked_sub(1)
+		})
+		.is_ok()
+	{
+		eprintln!("[Nivra video] {args}");
+	}
+}
+/// Native decoder opens cannot be interrupted: a stuck open keeps its thread
+/// until the OS call returns. Cap concurrent workers so retries cannot grow
+/// threads without bound; the slot frees when the worker exits (Codex PR #34).
+const MAX_VIDEO_WORKERS: usize = 4;
+/// Stderr lines per playback (open, first frame/byte, stalls, errors).
+const LOG_BUDGET: usize = 24;
+static LIVE_VIDEO_WORKERS: AtomicUsize = AtomicUsize::new(0);
+fn try_acquire_video_worker(live: &AtomicUsize) -> bool {
+	if live.fetch_add(1, Ordering::AcqRel) >= MAX_VIDEO_WORKERS {
+		live.fetch_sub(1, Ordering::AcqRel);
+		false
+	} else {
+		true
+	}
+}
+/// Startup transients free slots in milliseconds while stuck native opens do
+/// not: poll briefly so rapid zapping never fails, then refuse with a clean
+/// error instead of growing threads without bound.
+fn acquire_video_worker() -> bool {
+	if try_acquire_video_worker(&LIVE_VIDEO_WORKERS) {
+		return true;
+	}
+	for _ in 0..50 {
+		std::thread::sleep(Duration::from_millis(5));
+		if try_acquire_video_worker(&LIVE_VIDEO_WORKERS) {
+			return true;
+		}
+	}
+	false
+}
+struct WorkerSlot<'a>(&'a AtomicUsize);
+impl Drop for WorkerSlot<'_> {
+	fn drop(&mut self) {
+		self.0.fetch_sub(1, Ordering::AcqRel);
+	}
+}
+/// Stall watchdog predicate: an unpaused player that made no progress for 10 s
+/// restarts the decoder once, then fails. It also covers a missing first frame
+/// (`preview_needed` never clears while the clock never advances).
+fn stall_timed_out(paused: bool, idle: Duration) -> bool {
+	!paused && idle > Duration::from_secs(10)
+}
 
 #[derive(Default)]
 struct Update {
@@ -23,6 +86,8 @@ struct Session {
 	/// Wanted voice output selection, refreshed by the UI (`None` = default).
 	output: std::sync::Mutex<Option<String>>,
 	cancelled: Arc<AtomicBool>,
+	/// Remaining stderr diagnostic lines for this playback (see `vlog`).
+	log_budget: Arc<AtomicUsize>,
 	/// Set by the 20 s open watchdog together with `cancelled`: a stall surfaces
 	/// as `Failed` (with retry) instead of freezing the player in `Loading`.
 	open_timed_out: Arc<AtomicBool>,
@@ -37,6 +102,7 @@ impl Session {
 			id,
 			output: std::sync::Mutex::new(None),
 			cancelled: Arc::new(AtomicBool::new(false)),
+			log_budget: Arc::new(AtomicUsize::new(LOG_BUDGET)),
 			open_timed_out: Arc::new(AtomicBool::new(false)),
 			paused: Arc::new(AtomicBool::new(false)),
 			volume: Arc::new(AtomicU32::new(volume.to_bits())),
@@ -169,6 +235,9 @@ impl Video {
 		};
 		let session_id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
 		let session = Arc::new(Session::new(volume, session_id));
+		if !acquire_video_worker() {
+			return Err("Video is busy finishing another open; retry in a moment");
+		}
 		let request = Request {
 			session: session.clone(),
 			url,
@@ -181,6 +250,7 @@ impl Video {
 		let worker = std::thread::Builder::new()
 			.name(format!("nivra-attachment-video-{session_id}"))
 			.spawn(move || {
+				let _slot = WorkerSlot(&LIVE_VIDEO_WORKERS);
 				let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 					play(&request, &runtime, &ctx)
 				}));
@@ -213,7 +283,10 @@ impl Video {
 					Ok(Ok(())) => {}
 				}
 			})
-			.map_err(|_| "Could not start video worker")?;
+			.map_err(|_| {
+				LIVE_VIDEO_WORKERS.fetch_sub(1, Ordering::AcqRel);
+				"Could not start video worker"
+			})?;
 		self.worker = Some(worker);
 		self.session = Some(session);
 		Ok(())
@@ -254,7 +327,11 @@ fn play(
 		return Ok(());
 	}
 	let start_time = Instant::now();
-	eprintln!("[Nivra video] open_source: starting session {}", session.id);
+	vlog!(
+		&session.log_budget,
+		"open_source: starting session {}",
+		session.id
+	);
 	let url = if let Some(primary) = request.url.clone() {
 		match source::resolve_media_url(
 			primary,
@@ -273,14 +350,16 @@ fn play(
 		url.clone(),
 		request.size,
 		session.cancelled.clone(),
+		session.log_budget.clone(),
 		runtime.clone(),
 	)?;
-	eprintln!(
-		"[Nivra video] open_source: ready in {:.3} ms",
+	vlog!(
+		&session.log_budget,
+		"open_source: ready in {:.3} ms",
 		start_time.elapsed().as_secs_f64() * 1000.0
 	);
 	let open_started = Instant::now();
-	eprintln!("[Nivra video] open_decoder: starting");
+	vlog!(&session.log_budget, "open_decoder: starting");
 	session.open_timed_out.store(false, Ordering::Release);
 	let open_timed_out_clone = session.open_timed_out.clone();
 	let cancelled_clone = session.cancelled.clone();
@@ -299,6 +378,7 @@ fn play(
 				url.clone(),
 				request.size,
 				session.cancelled.clone(),
+				session.log_budget.clone(),
 				runtime.clone(),
 			)?;
 			fallback::open(source, &session.cancelled)
@@ -307,13 +387,14 @@ fn play(
 	};
 	watchdog.abort();
 	if session.open_timed_out.load(Ordering::Acquire) {
-		eprintln!("[Nivra video] open_decoder: timed out after 20s");
+		vlog!(&session.log_budget, "open_decoder: timed out after 20s");
 		return Err("Video buffering stalled; retry or download to play externally");
 	}
 	let _ = url;
 	let decoder = decoder?;
-	eprintln!(
-		"[Nivra video] open_decoder: ready in {:.3} ms",
+	vlog!(
+		&session.log_budget,
+		"open_decoder: ready in {:.3} ms",
 		open_started.elapsed().as_secs_f64() * 1000.0
 	);
 	let result = play_decoded(decoder, session, ctx, start_time);
@@ -464,8 +545,9 @@ fn play_decoded(
 			if frame.is_some() {
 				if !first_frame_logged {
 					first_frame_logged = true;
-					eprintln!(
-						"[Nivra video] first_frame: ready in {:.3} ms",
+					vlog!(
+						&session.log_budget,
+						"first_frame: ready in {:.3} ms",
 						start_time.elapsed().as_secs_f64() * 1000.0
 					);
 				}
@@ -506,14 +588,16 @@ fn play_decoded(
 				std::thread::sleep(Duration::from_millis(20));
 				continue;
 			}
-			if !paused
-				&& !preview_needed
-				&& now.duration_since(last_progress) > Duration::from_secs(10)
-			{
+			// The stall bound also covers a missing first frame: while the decoder
+			// opens but never yields a sample, `preview_needed` stays true and the
+			// clock never advances, so without this the player sits in Loading
+			// forever (Codex PR #34 P2).
+			if stall_timed_out(paused, now.duration_since(last_progress)) {
 				if stall_restarts == 0 {
 					stall_restarts += 1;
-					eprintln!(
-						"[Nivra video] watchdog: stalled for 10s at position {:.3}s, restarting decoder",
+					vlog!(
+						&session.log_budget,
+						"watchdog: stalled for 10s at position {:.3}s, restarting decoder",
 						current
 					);
 					drop(output);
@@ -531,8 +615,9 @@ fn play_decoded(
 					ctx.request_repaint();
 					continue 'seek;
 				} else {
-					eprintln!(
-						"[Nivra video] watchdog: stalled again at position {:.3}s, failing",
+					vlog!(
+						&session.log_budget,
+						"watchdog: stalled again at position {:.3}s, failing",
 						current
 					);
 					return Err("Video buffering stalled; retry or download to play externally");
@@ -753,6 +838,43 @@ mod tests {
 #[cfg(test)]
 mod attachment_url_tests {
 	use super::*;
+	#[test]
+	fn video_worker_slots_are_bounded_and_released() {
+		let live = AtomicUsize::new(0);
+		for _ in 0..MAX_VIDEO_WORKERS {
+			assert!(try_acquire_video_worker(&live));
+		}
+		assert!(
+			!try_acquire_video_worker(&live),
+			"a fifth concurrent open is refused"
+		);
+		assert_eq!(live.load(Ordering::Acquire), MAX_VIDEO_WORKERS);
+		live.fetch_sub(1, Ordering::AcqRel);
+		assert!(try_acquire_video_worker(&live), "a freed slot is reusable");
+		live.fetch_sub(1, Ordering::AcqRel);
+	}
+	#[test]
+	fn diagnostic_budget_caps_lines_per_playback() {
+		let budget = AtomicUsize::new(2);
+		vlog(&budget, format_args!("one"));
+		vlog(&budget, format_args!("two"));
+		assert_eq!(budget.load(Ordering::Acquire), 0);
+		vlog(&budget, format_args!("three is dropped"));
+		assert_eq!(
+			budget.load(Ordering::Acquire),
+			0,
+			"over-budget lines are suppressed"
+		);
+	}
+	#[test]
+	fn stall_watchdog_covers_a_missing_first_frame() {
+		assert!(stall_timed_out(false, Duration::from_secs(11)));
+		assert!(!stall_timed_out(false, Duration::from_secs(5)));
+		assert!(
+			!stall_timed_out(true, Duration::from_secs(60)),
+			"paused players never trip the watchdog"
+		);
+	}
 	#[test]
 	fn decoder_timeout_surfaces_failed_instead_of_sticking_in_loading() {
 		let session = Session::new(0., 1);

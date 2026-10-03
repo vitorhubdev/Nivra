@@ -63,6 +63,11 @@ impl Envelope<'_> {
 		let skipped = guilds.skipped
 			|| self.users.skipped
 			|| self.private_channels.skipped
+			|| self
+				.private_channels
+				.items
+				.iter()
+				.any(|c| c.recipients.skipped)
 			|| self.relationships.as_ref().is_some_and(|r| r.1);
 		let read_state = optional(self.read_state, &mut warnings.read_state);
 		let user_guild_settings = optional(self.user_guild_settings, &mut warnings.notifications)
@@ -323,7 +328,8 @@ impl<'de> Deserialize<'de> for Guilds {
 						|| guild.threads.skipped
 						|| guild.roles.skipped
 						|| guild.voice_states.skipped
-						|| guild.members.skipped;
+						|| guild.members.skipped
+						|| guild.channels.items.iter().any(|c| c.recipients.skipped);
 					entries += 1 + guild.channels.items.len() + guild.threads.items.len();
 					if entries > model::account::MAX_ENTRIES {
 						return Err(serde::de::Error::custom(
@@ -444,6 +450,27 @@ mod tests {
 			envelope.navigation().is_err(),
 			"150k invalid guilds must hit the capacity bound"
 		);
+	}
+
+	#[test]
+	fn channel_with_unreadable_recipients_keeps_channel_and_warns() {
+		let mut payload = fixture();
+		payload["guilds"][0]["channels"][0]["recipients"] = json!([{"id": false}]);
+		payload["private_channels"] =
+			json!([{"id": "30", "type": 1, "recipients": [{"id": false}]}]);
+		let bytes = serde_json::to_vec(&payload).unwrap();
+		let (mut ready, _) = decode(&bytes).unwrap().navigation().unwrap();
+		let (guilds, channels) = ready.navigation().unwrap();
+		assert!(guilds.len() == 1 && channels.len() == 2);
+		assert!(
+			channels.iter().all(|c| c.recipients.is_empty()),
+			"unreadable peers are dropped"
+		);
+		assert!(
+			channels.iter().any(|c| c.id == model::Id(30)),
+			"the DM row survives"
+		);
+		assert!(ready.skipped, "dropped peers must raise the entries banner");
 	}
 
 	#[test]
@@ -636,7 +663,7 @@ mod tests {
 					last_message_id: None,
 					parent_id: None,
 					position: 0,
-					recipients: Vec::new(),
+					recipients: crate::lossy::Lossy::default(),
 					permission_overwrites: None,
 					message_count: None,
 					is_message_request: false,

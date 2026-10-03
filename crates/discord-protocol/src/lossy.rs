@@ -32,10 +32,6 @@ pub(crate) fn text_or_number<'de, D: Deserializer<'de>>(d: D) -> Result<String, 
 	d.deserialize_any(Text)
 }
 
-pub(crate) fn recipients<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<crate::UserDto>, D::Error> {
-	Lossy::<crate::UserDto, 64, true>::deserialize(d).map(|rows| rows.items)
-}
-
 /// Positions are kept: a malformed element becomes `None`, so index-aligned lists
 /// (`merged_members`) still line up. More than `N` elements is an error unless `TRUNCATE`.
 /// Elements are split as borrowed raw values, so only use it on borrowed JSON input.
@@ -92,9 +88,10 @@ impl<'de, T: Deserialize<'de>, const N: usize, const TRUNCATE: bool> Deserialize
 }
 
 /// Malformed elements are dropped; `skipped` reports that anything was lost.
-pub(crate) struct Lossy<T, const N: usize, const TRUNCATE: bool = false> {
-	pub(crate) items: Vec<T>,
-	pub(crate) skipped: bool,
+/// `recipients` keeps it so a dropped DM peer still raises the startup warning.
+pub struct Lossy<T, const N: usize, const TRUNCATE: bool = false> {
+	pub items: Vec<T>,
+	pub skipped: bool,
 }
 impl<T, const N: usize, const TRUNCATE: bool> Default for Lossy<T, N, TRUNCATE> {
 	fn default() -> Self {

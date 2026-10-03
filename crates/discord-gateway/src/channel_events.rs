@@ -98,7 +98,7 @@ pub(super) fn ready_calls(ready: &Ready, calls: &mut Calls) -> Result<BTreeSet<I
 	for channel in &ready.private_channels {
 		if !channel.is_obfuscated()
 			&& channel.guild_id.is_none()
-			&& private_call(channel.kind, channel.recipients.len())
+			&& private_call(channel.kind, channel.recipients.items.len())
 		{
 			calls.allowed.insert(channel.id, None);
 		}

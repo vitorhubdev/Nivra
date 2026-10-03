@@ -175,8 +175,8 @@ pub struct ChannelDto {
 	#[serde(rename = "type")]
 	pub kind: u8,
 	/// An unreadable recipient is dropped without losing the conversation.
-	#[serde(default, deserialize_with = "lossy::recipients")]
-	pub recipients: Vec<UserDto>,
+	#[serde(default)]
+	pub recipients: lossy::Lossy<UserDto, 64, true>,
 	#[serde(default)]
 	pub permission_overwrites: Option<Vec<Overwrite>>,
 	#[serde(default)]
@@ -207,6 +207,7 @@ impl ChannelDto {
 	pub fn into_model(self) -> Channel {
 		let recipients: Vec<_> = self
 			.recipients
+			.items
 			.into_iter()
 			.take(64)
 			.map(UserDto::into_model)
@@ -554,7 +555,11 @@ impl Ready {
 					keep
 				});
 			}
+			// A dropped DM peer keeps its warning even though the channel survives.
+			skipped |= g.channels.iter().any(|c| c.recipients.skipped);
+			skipped |= g.threads.iter().any(|c| c.recipients.skipped);
 		}
+		skipped |= self.private_channels.iter().any(|c| c.recipients.skipped);
 		drop(ids);
 		let mut channels: Vec<_> = std::mem::take(&mut self.private_channels)
 			.into_iter()

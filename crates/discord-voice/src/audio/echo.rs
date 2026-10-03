@@ -182,7 +182,7 @@ impl Deep {
 					let mut covered = *chunk;
 					(self.cover)(&mut covered);
 					for i in 0..480 {
-						chunk[i] = chunk[i] * (1.0 - factor) + covered[i] * factor;
+						chunk[i] += factor * (covered[i] - chunk[i]);
 					}
 					self.was_cover = true;
 					self.last_play_sample = chunk[479];
@@ -234,7 +234,7 @@ impl Deep {
 		if seq < PLAY_BEHIND {
 			// No two frames of history yet: play the current cover.
 			for i in 0..480 {
-				chunk[i] = chunk[i] * (1.0 - factor) + covered[i] * factor;
+				chunk[i] += factor * (covered[i] - chunk[i]);
 			}
 			self.was_cover = true;
 			self.last_play_sample = chunk[479];
@@ -260,20 +260,18 @@ impl Deep {
 				Some((output, inferred)) => {
 					let mut tuned = [0.0f32; 480];
 					for i in 0..480 {
-						let with_floor =
-							output[i] * (1.0 - NOISE_FLOOR) + original[i] * NOISE_FLOOR;
-						tuned[i] = original[i] * (1.0 - factor) + with_floor * factor;
+						let with_floor = output[i] + NOISE_FLOOR * (original[i] - output[i]);
+						tuned[i] = original[i] + factor * (with_floor - original[i]);
 					}
 
 					if self.was_cover {
 						let mut tuned_cover = [0.0f32; 480];
 						for i in 0..480 {
-							tuned_cover[i] =
-								original[i] * (1.0 - factor) + cover_output[i] * factor;
+							tuned_cover[i] = original[i] + factor * (cover_output[i] - original[i]);
 						}
 						for i in 0..480 {
 							let alpha = (i as f32) / 480.0;
-							chunk[i] = tuned_cover[i] * (1.0 - alpha) + tuned[i] * alpha;
+							chunk[i] = tuned_cover[i] + alpha * (tuned[i] - tuned_cover[i]);
 						}
 						self.was_cover = false;
 					} else {
@@ -306,7 +304,7 @@ impl Deep {
 	) -> Step {
 		let mut tuned = [0.0f32; 480];
 		for i in 0..480 {
-			tuned[i] = original[i] * (1.0 - factor) + cover_output[i] * factor;
+			tuned[i] = original[i] + factor * (cover_output[i] - original[i]);
 		}
 		self.was_cover = true;
 		*chunk = tuned;

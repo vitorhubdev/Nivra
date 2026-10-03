@@ -1915,3 +1915,23 @@ workloads print comparable medians for on-hardware runs:
 (watch, `NIVRA_WATCH_FRAME_LEGACY=1` / `NIVRA_WATCH_FRAME_UPLOAD_EVERY=3`).
 Behavioral tests pin the bounds; no performance change is claimed until those
 workloads run on identical hardware.
+
+## History copies and decoded-image backpressure — measured October 2026
+
+Same-machine debug medians on the agent PC (Windows x64); debug inflates
+absolutes, the relative deltas are the signal. Release numbers on stable
+hardware remain pending.
+
+| Metric / method | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| Page completion, 500 membership-heavy rows + 50-row page, recent, µs | 2,011.6 | 1,030.0 | -48.8% |
+| Same, older, µs | 744.3 | 185.9 | -75.0% |
+| Same, append, µs | 778.4 | 236.1 | -69.7% |
+| 200 incremental SQLite saves, 500 rows, s | 2.18 | 1.93 | -11.4% |
+| Paused image consumer, queued pixel bytes | 536,870,912 | 130,023,424 | -75.8% |
+
+The queue workload's legacy comparator reproduces the old 128-item channel
+(`NIVRA_IMAGE_QUEUE_LEGACY=1`); the port admits 31 results (130,027,919
+charged bytes) then waits. Workloads: `page_membership_benchmark`,
+`benchmark_changed_row_save`, `decoded_result_queue_workload`. No RSS claim;
+excludes rendering and filesystem latency.

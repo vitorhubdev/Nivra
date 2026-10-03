@@ -4200,6 +4200,22 @@ impl Event {
 #[cfg(test)]
 mod tests {
 	#[test]
+	fn startup_warnings_merge_keeps_dropped_entry_notice() {
+		let mut state = super::State::default();
+		let generation = state.generation;
+		state.apply(super::Envelope {
+			generation,
+			event: super::Event::StartupWarnings(model::account::Warnings {
+				entries: true,
+				..Default::default()
+			}),
+		});
+		assert!(
+			state.startup_warnings.entries,
+			"dropped guilds/channels must keep their banner (audit #9)"
+		);
+	}
+	#[test]
 	fn guild_lookup_caches_misses_and_tracks_navigation_changes() {
 		let guild = |id| Guild {
 			stickers: None,

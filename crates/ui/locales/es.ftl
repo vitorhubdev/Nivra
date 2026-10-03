@@ -1283,4 +1283,5 @@ Later = "Más tarde"
 What's new = "Novedades"
 Update waiting for call or upload to end = "Actualización esperando que termine la llamada o subida"
 What's new in this version = "Novedades en esta versión"
+Twemoji graphics are copyright Twitter, Inc. and contributors, licensed under CC-BY 4.0. = "Los gráficos de Twemoji son propiedad de Twitter, Inc. y colaboradores, bajo licencia CC-BY 4.0."
 

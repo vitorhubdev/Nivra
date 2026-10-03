@@ -14,7 +14,7 @@ use tokio::sync::{Notify, watch};
 
 const MAX_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_EMBED_BYTES: u64 = 16 * 1024 * 1024;
-const DOWNLOAD_EDGE: u32 = 2048;
+pub(crate) const DOWNLOAD_EDGE: u32 = 2048;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Status {
 	#[default]

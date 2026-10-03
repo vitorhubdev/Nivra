@@ -129,10 +129,22 @@ async fn run_indices(
 			shared.items.get(index).cloned()
 		};
 		context.request_repaint();
-		let result = match attachment.and_then(|attachment| {
-			super::downloads::original_url(&attachment)
-				.map(|url| (url, attachment.filename, attachment.size))
-		}) {
+		let resolved = attachment.and_then(|attachment| {
+			if let Some(url) = super::downloads::original_url(&attachment) {
+				Some((url, attachment.filename, attachment.size))
+			} else {
+				let media = &attachment.media;
+				let url = [media.proxy_url.as_deref(), media.url.as_deref()]
+					.into_iter()
+					.flatten()
+					.find_map(|source| {
+						crate::avatars::embed_url(source, super::downloads::DOWNLOAD_EDGE)
+							.and_then(|u| url::Url::parse(&u).ok())
+					})?;
+				Some((url, attachment.filename, attachment.size))
+			}
+		});
+		let result = match resolved {
 			None => Err("Attachment download unavailable"),
 			Some((url, filename, size)) => {
 				let (destination, named) = unique_dest(folder, &filename, &mut reserved);

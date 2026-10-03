@@ -960,6 +960,28 @@ impl MessagingUi {
 					}
 				},
 			);
+			design::row(
+				ui,
+				"Twemoji",
+				Some(crate::i18n::text(
+					self.language,
+					"Twemoji graphics are copyright Twitter, Inc. and contributors, licensed under CC-BY 4.0.",
+				)),
+				|ui| {
+					if design::button(
+						ui,
+						crate::i18n::text(self.language, "Open"),
+						design::ButtonKind::Outline,
+					)
+					.clicked()
+					{
+						self.open_licenses();
+						self.settings
+							.licenses
+							.select("licenses/Twemoji-CC-BY-4.0.txt");
+					}
+				},
+			);
 		});
 	}
 

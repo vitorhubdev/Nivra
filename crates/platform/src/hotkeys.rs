@@ -132,6 +132,7 @@ impl NativeInput {
 	}
 
 	/// Held state set by the Windows mouse poller (same slot as a global hotkey).
+	/// Every call is a press/release edge, so the host always wakes like `handle`.
 	#[cfg(target_os = "windows")]
 	fn apply(&self, index: usize, pressed: bool) {
 		let mut state = self.state.lock().expect("native hotkey state poisoned");
@@ -154,6 +155,8 @@ impl NativeInput {
 			(TOGGLE_DEAFEN, false) => state.deafen_down = false,
 			_ => {}
 		}
+		drop(state);
+		(self.wake)();
 	}
 }
 
@@ -748,6 +751,28 @@ mod tests {
 			0,
 			"a second mute inside 400 ms is ignored"
 		);
+	}
+
+	#[cfg(target_os = "windows")]
+	#[test]
+	fn poller_edges_wake_the_host_and_hold_push_to_mute() {
+		use std::sync::atomic::{AtomicBool, Ordering};
+		let woken = Arc::new(AtomicBool::new(false));
+		let flag = woken.clone();
+		let native = NativeInput {
+			state: Mutex::new(NativeState::default()),
+			wake: Arc::new(move || flag.store(true, Ordering::Release)),
+		};
+		native.apply(PUSH_TO_MUTE, true);
+		assert!(native.ptm_down());
+		assert!(
+			woken.load(Ordering::Acquire),
+			"a background edge must wake the UI"
+		);
+		woken.store(false, Ordering::Release);
+		native.apply(PUSH_TO_MUTE, false);
+		assert!(!native.ptm_down());
+		assert!(woken.load(Ordering::Acquire));
 	}
 
 	#[test]

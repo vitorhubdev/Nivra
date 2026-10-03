@@ -119,6 +119,7 @@ impl Calls {
 	/// replacement call is active, so the old ack cannot be retagged.
 	fn complete_departure(&mut self) -> Option<(Id, u64)> {
 		let (channel, request) = self.departing.take()?;
+		self.departing_session = None;
 		self.ignore_own_null = true;
 		self.ignore_own_null_guild = self.departing_guild.take();
 		self.departure_deadline = None;
@@ -2225,6 +2226,7 @@ mod tests {
 			}))
 		));
 		assert!(calls.departing.is_none());
+		assert!(calls.departing_session.is_none());
 		calls
 			.packet(Command::Join {
 				channel: Id(2),

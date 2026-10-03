@@ -374,6 +374,7 @@ fn play_decoded(
 		let mut audio_ended = output.is_none();
 		let mut preview_needed = true;
 		let mut wall = target;
+		let mut ticks = 0u64;
 		let mut last_tick = Instant::now();
 		let mut last_progress = Instant::now();
 		let mut previous_position = target;
@@ -401,11 +402,19 @@ fn play_decoded(
 			}
 			// A changed voice output re-seeks in place: the seek cycle drops the
 			// device and reopens it on the new selection without losing position.
+			ticks += 1;
+			let wanted = wanted_output();
+			// Explicit switches migrate every frame; a moved system default is re-resolved about once a second.
+			let default_moved = wanted.is_none()
+				&& ticks % 60 == 0
+				&& opened.as_ref().map(|(_, id)| id)
+					!= discord_voice::output::default_id(&cpal::default_host()).as_ref();
 			if output.is_some()
 				&& opened
 					.as_ref()
 					.and_then(|(selection, _)| selection.as_ref())
-					!= wanted_output().as_ref()
+					!= wanted.as_ref()
+				|| default_moved
 			{
 				session
 					.seek

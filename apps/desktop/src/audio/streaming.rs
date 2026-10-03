@@ -209,6 +209,24 @@ pub(super) fn play(
 						if skip == packet_frames as usize {
 							return Ok(());
 						}
+						// A changed voice output migrates on the next packet without waiting
+						// for a seek: drop the stream so it reopens below at the same position.
+						if producer.is_some() {
+							let wanted = gate.output.lock().ok().and_then(|guard| guard.clone());
+							if opened
+								.as_ref()
+								.and_then(|(selection, _)| selection.as_ref())
+								!= wanted.as_ref()
+							{
+								if rate > 0 {
+									target = gate.position_frames.load(Ordering::Acquire) * 1000
+										/ u64::from(rate);
+								}
+								stream = None;
+								producer = None;
+								opened = None;
+							}
+						}
 						if producer.is_none() {
 							let (sender, frames) = RingBuffer::new(rate as usize);
 							gate.position_frames.store(target_frame, Ordering::Release);

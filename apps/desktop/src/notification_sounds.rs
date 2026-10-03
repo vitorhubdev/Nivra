@@ -18,6 +18,8 @@ pub const OUTGOING_RING_INTERVAL: Duration = Duration::from_secs(3);
 #[derive(Default)]
 pub struct Sounds {
 	send: Option<SyncSender<Cue>>,
+	/// Stop epoch: only `stop` advances it. Accepted cues are never preempted
+	/// by newer cues, so an ordered queue plays in full, in order.
 	generation: Arc<AtomicU64>,
 	status: Arc<AtomicU8>,
 }
@@ -25,7 +27,7 @@ pub struct Sounds {
 /// resolved per cue so a changed default (or a changed voice setting) applies
 /// to the next sound without migrating live streams.
 struct Cue {
-	request: u64,
+	epoch: u64,
 	sound: Sound,
 	volume: u8,
 	output: Option<String>,
@@ -60,7 +62,8 @@ impl Sounds {
 				.name("nivra-notification-audio".into())
 				.spawn(move || {
 					while let Ok(cue) = receive.recv() {
-						if generation.load(Ordering::Acquire) != cue.request {
+						// Only an explicit stop cuts a cue: newer cues never preempt queued ones.
+						if generation.load(Ordering::Acquire) != cue.epoch {
 							continue;
 						}
 						let finished = Arc::new(AtomicBool::new(false));
@@ -69,7 +72,7 @@ impl Sounds {
 							cue.volume,
 							cue.output.as_deref(),
 							generation.clone(),
-							cue.request,
+							cue.epoch,
 							status.clone(),
 							finished.clone(),
 						) {
@@ -77,13 +80,13 @@ impl Sounds {
 								let deadline = Instant::now() + duration + Duration::from_secs(2);
 								while !finished.load(Ordering::Acquire) && Instant::now() < deadline
 								{
-									if generation.load(Ordering::Acquire) != cue.request {
+									if generation.load(Ordering::Acquire) != cue.epoch {
 										break;
 									}
 									std::thread::sleep(Duration::from_millis(20));
 								}
 								drop(stream);
-								if generation.load(Ordering::Acquire) == cue.request {
+								if generation.load(Ordering::Acquire) == cue.epoch {
 									let _ = status.compare_exchange(
 										1,
 										if finished.load(Ordering::Acquire) {
@@ -97,7 +100,7 @@ impl Sounds {
 								}
 							}
 							Err(()) => {
-								if generation.load(Ordering::Acquire) == cue.request {
+								if generation.load(Ordering::Acquire) == cue.epoch {
 									status.store(2, Ordering::Release);
 								}
 							}
@@ -112,23 +115,20 @@ impl Sounds {
 			}
 			self.send = Some(send);
 		}
-		let previous = self.generation.load(Ordering::Acquire);
-		let request = previous.wrapping_add(1);
-		self.generation.store(request, Ordering::Release);
+		let epoch = self.generation.load(Ordering::Acquire);
 		self.status.store(1, Ordering::Release);
 		if self
 			.send
 			.as_ref()
 			.expect("worker started")
 			.try_send(Cue {
-				request,
+				epoch,
 				sound,
 				volume,
 				output: output_id.map(str::to_owned),
 			})
 			.is_err()
 		{
-			self.generation.store(previous, Ordering::Release);
 			self.status.store(0, Ordering::Release);
 			return false;
 		}

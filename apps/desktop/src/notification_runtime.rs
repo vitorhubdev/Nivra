@@ -58,9 +58,8 @@ fn membership_due(due: Option<Instant>, now: Instant) -> bool {
 }
 
 fn push_membership_cue(queue: &mut VecDeque<(Sound, u8)>, cue: Sound, volume: u8) {
-	if queue.back().is_some_and(|(last, _)| *last == cue) {
-		return;
-	}
+	// No collapsing here: consecutive joins belong to different people (the core
+	// already drops exact event repeats), so every transition keeps its sound.
 	if queue.len() >= MAX_MEMBERSHIP_CUES {
 		queue.pop_front();
 	}
@@ -297,11 +296,11 @@ mod tests {
 	fn cue_queues_keep_order_and_collapse_repeats() {
 		let mut membership = VecDeque::new();
 		push_membership_cue(&mut membership, Sound::UserLeave, 100);
-		push_membership_cue(&mut membership, Sound::UserLeave, 100);
+		push_membership_cue(&mut membership, Sound::UserJoin, 100);
 		push_membership_cue(&mut membership, Sound::UserJoin, 100);
 		assert_eq!(
 			membership.iter().map(|(cue, _)| *cue).collect::<Vec<_>>(),
-			vec![Sound::UserLeave, Sound::UserJoin]
+			vec![Sound::UserLeave, Sound::UserJoin, Sound::UserJoin]
 		);
 		let mut local = VecDeque::new();
 		push_local_cue(&mut local, Sound::Mute, 75);

@@ -2562,7 +2562,7 @@ impl MessagingUi {
 				.is_some_and(|call| call.phase != Phase::Failed)
 	}
 
-	fn queue_voice_toggle_cue(&mut self, deafen: bool, active: bool) {
+	pub(crate) fn queue_voice_toggle_cue(&mut self, deafen: bool, active: bool) {
 		let cue = match (deafen, active) {
 			(true, true) => model::notification_preferences::Sound::Deafen,
 			(true, false) => model::notification_preferences::Sound::Undeafen,

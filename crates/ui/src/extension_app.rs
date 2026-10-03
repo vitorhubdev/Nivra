@@ -910,6 +910,11 @@ impl MessagingUi {
 					.set_call_mute(muted, deafened)
 					.ok_or("Call controls are unavailable")?;
 				if let Some(call) = &state.voice.active {
+					if call.deafened != self.voice_deafened {
+						self.queue_voice_toggle_cue(true, call.deafened);
+					} else if call.muted != self.voice_muted {
+						self.queue_voice_toggle_cue(false, call.muted);
+					}
 					self.voice_muted = call.muted;
 					self.voice_deafened = call.deafened;
 				}
@@ -1376,6 +1381,49 @@ mod tests {
 			Some(Command::Voice(client_core::voice::Command::Leave { .. }))
 		));
 		assert!(state.voice.active.is_none());
+	}
+
+	#[test]
+	fn extension_mute_changes_queue_the_same_toggle_cue() {
+		use model::notification_preferences::Sound;
+		let ctx = egui::Context::default();
+		let mut state = test_support::call_demo_state();
+		let mut view = view(Capability::VoiceControl);
+		let mut commands = Vec::new();
+		let effect = proposal(
+			&state,
+			HostEffect::SetVoice {
+				muted: true,
+				deafened: false,
+			},
+		);
+		view.apply_extension_effect(&ctx, &mut state, effect, &mut commands)
+			.unwrap();
+		assert_eq!(view.notification_cues.as_slice(), &[Sound::Mute]);
+		// Repeating the same state queues nothing new.
+		let effect = proposal(
+			&state,
+			HostEffect::SetVoice {
+				muted: true,
+				deafened: false,
+			},
+		);
+		view.apply_extension_effect(&ctx, &mut state, effect, &mut commands)
+			.unwrap();
+		assert_eq!(view.notification_cues.as_slice(), &[Sound::Mute]);
+		let effect = proposal(
+			&state,
+			HostEffect::SetVoice {
+				muted: false,
+				deafened: false,
+			},
+		);
+		view.apply_extension_effect(&ctx, &mut state, effect, &mut commands)
+			.unwrap();
+		assert_eq!(
+			view.notification_cues.as_slice(),
+			&[Sound::Mute, Sound::Unmute]
+		);
 	}
 
 	#[test]

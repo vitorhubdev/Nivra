@@ -176,6 +176,10 @@ fn arm_negotiation_deadline(
 ) {
 	if !waiting && (!secure || pending) {
 		deadline.get_or_insert(now + Duration::from_secs(30));
+	} else if secure && !pending {
+		// A completed rekey (or a secure tick after the announce path): a stale
+		// armed deadline must not kill a healthy secured stream (Codex PR #72 P1).
+		*deadline = None;
 	}
 }
 /// Receive errors that describe one lost or rejected datagram rather than a dead socket.
@@ -1693,6 +1697,10 @@ mod tests {
 		arm_negotiation_deadline(&mut deadline, now, false, true, false);
 		assert_eq!(deadline, None);
 		arm_negotiation_deadline(&mut deadline, now, true, true, true);
+		assert_eq!(deadline, None);
+		// A completed rekey disarms the deadline it armed while pending.
+		let mut deadline = Some(now + Duration::from_secs(30));
+		arm_negotiation_deadline(&mut deadline, now, true, false, false);
 		assert_eq!(deadline, None);
 	}
 

@@ -79,9 +79,13 @@ fn is_process_running(pid: u32) -> bool {
 
 #[cfg(unix)]
 fn is_process_running(pid: u32) -> bool {
-	#[allow(clippy::cast_possible_wrap)]
-	let res = unsafe { libc::kill(pid as libc::pid_t, 0) };
-	res == 0
+	unsafe extern "C" {
+		fn kill(pid: i32, sig: i32) -> i32;
+	}
+	let Ok(pid_i32) = i32::try_from(pid) else {
+		return false;
+	};
+	unsafe { kill(pid_i32, 0) == 0 }
 }
 
 #[cfg(not(any(target_os = "windows", unix)))]

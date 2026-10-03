@@ -80,6 +80,22 @@ pub fn open_folder(folder: &Path) {
 	let _ = folder;
 }
 
+fn resolve_item_url(attachment: &Attachment) -> Option<(url::Url, String, u64)> {
+	if let Some(url) = super::downloads::original_url(attachment) {
+		Some((url, attachment.filename.clone(), attachment.size))
+	} else {
+		let media = &attachment.media;
+		let url = [media.proxy_url.as_deref(), media.url.as_deref()]
+			.into_iter()
+			.flatten()
+			.find_map(|source| {
+				crate::avatars::embed_url(source, super::downloads::DOWNLOAD_EDGE)
+					.and_then(|u| url::Url::parse(&u).ok())
+			})?;
+		Some((url, attachment.filename.clone(), attachment.size))
+	}
+}
+
 /// Download stored items at `indices` into `folder`, one at a time, updating the
 /// shared snapshot. Reuses the `downloads` transfer, client limits and size caps.
 async fn run_indices(
@@ -129,22 +145,7 @@ async fn run_indices(
 			shared.items.get(index).cloned()
 		};
 		context.request_repaint();
-		let resolved = attachment.and_then(|attachment| {
-			if let Some(url) = super::downloads::original_url(&attachment) {
-				Some((url, attachment.filename, attachment.size))
-			} else {
-				let media = &attachment.media;
-				let url = [media.proxy_url.as_deref(), media.url.as_deref()]
-					.into_iter()
-					.flatten()
-					.find_map(|source| {
-						crate::avatars::embed_url(source, super::downloads::DOWNLOAD_EDGE)
-							.and_then(|u| url::Url::parse(&u).ok())
-					})?;
-				Some((url, attachment.filename, attachment.size))
-			}
-		});
-		let result = match resolved {
+		let result = match attachment.as_ref().and_then(resolve_item_url) {
 			None => Err("Attachment download unavailable"),
 			Some((url, filename, size)) => {
 				let (destination, named) = unique_dest(folder, &filename, &mut reserved);
@@ -333,11 +334,11 @@ impl BatchDownloads {
 							shared.files[index].status = FileStatus::Active;
 						}
 						worker_context.request_repaint();
-						let result = match super::downloads::original_url(attachment) {
+						let result = match resolve_item_url(attachment) {
 							None => Err("Attachment download unavailable"),
-							Some(url) => {
+							Some((url, filename, size)) => {
 								let (destination, named) =
-									unique_dest(&folder, &attachment.filename, &mut reserved);
+									unique_dest(&folder, &filename, &mut reserved);
 								{
 									let mut shared = shared.lock().expect("batch download state");
 									shared.files[index].name = named;
@@ -346,7 +347,7 @@ impl BatchDownloads {
 									&client,
 									url,
 									&destination,
-									attachment.size,
+									size,
 									false,
 									&cancelled,
 									&wake_cancel,

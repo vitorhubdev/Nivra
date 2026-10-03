@@ -420,14 +420,13 @@ pub fn is_disguised_link(label: &str, target_url: &str) -> bool {
 		None
 	};
 
-	if let Some(l_url) = label_url {
-		if let Some(l_host) = l_url.host_str() {
-			if l_host.contains('.') {
-				let l_host = l_host.trim_start_matches("www.").to_ascii_lowercase();
-				if l_host != target_host {
-					return true;
-				}
-			}
+	if let Some(l_url) = label_url
+		&& let Some(l_host) = l_url.host_str()
+		&& l_host.contains('.')
+	{
+		let l_host = l_host.trim_start_matches("www.").to_ascii_lowercase();
+		if l_host != target_host {
+			return true;
 		}
 	}
 	false
@@ -482,7 +481,7 @@ pub(super) fn confirm_external_link(
 
 	let disguised_id = egui::Id::unique("markdown_disguised_link");
 	let disguised = ctx.data(|d| d.get_temp(disguised_id)).unwrap_or(false);
-	let is_shortener = target_host.as_deref().map_or(false, is_url_shortener);
+	let is_shortener = target_host.as_deref().is_some_and(is_url_shortener);
 	let is_http_or_https = matches!(target_scheme, "http" | "https");
 	let is_safe = is_http_or_https && !disguised && !is_shortener;
 
@@ -571,19 +570,21 @@ pub(super) fn confirm_external_link(
 
 	ctx.data_mut(|d| d.insert_temp(remember_id, remember_site));
 	cancel |= response.close;
-	if confirm && !cancel {
-		if let Some(url) = external_url(&target) {
-			if remember_site && is_safe {
-				if let Some(host) = target_host {
-					let host = host.trim_start_matches("www.").to_ascii_lowercase();
-					if !host.is_empty() {
-						allowed_domains.insert(host.clone());
-						*add_allowed_domain = Some(host);
-					}
-				}
+	if confirm
+		&& !cancel
+		&& let Some(url) = external_url(&target)
+	{
+		if remember_site
+			&& is_safe
+			&& let Some(host) = target_host
+		{
+			let host = host.trim_start_matches("www.").to_ascii_lowercase();
+			if !host.is_empty() {
+				allowed_domains.insert(host.clone());
+				*add_allowed_domain = Some(host);
 			}
-			ctx.open_url(egui::OpenUrl::new_tab(url));
 		}
+		ctx.open_url(egui::OpenUrl::new_tab(url));
 	}
 	if confirm || cancel {
 		ctx.data_mut(|d| {

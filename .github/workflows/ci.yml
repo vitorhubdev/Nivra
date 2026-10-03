@@ -50,6 +50,13 @@ jobs:
         run: |
           cargo nextest run --workspace --locked --profile ci
           cargo test --workspace --locked --doc
+      - name: Upload noise suppression benchmark audio
+        uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: noise-suppression-audio-${{ runner.os }}-${{ runner.arch }}
+          path: crates/discord-voice/test-assets/*.wav
+          if-no-files-found: ignore
       - name: Check the release feature set and policy
         run: |
           cargo check -p nivra --no-default-features --locked

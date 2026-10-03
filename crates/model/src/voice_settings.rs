@@ -31,12 +31,19 @@ impl NoiseSuppression {
 	}
 }
 
+fn default_intensity() -> u8 {
+	100
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Processing {
 	pub suppression: NoiseSuppression,
 	/// WebRTC suppression strength, from low (0) through very high (3).
 	pub suppression_level: u8,
+	/// DeepFilterNet Maximum suppression intensity, from 0% through 100%.
+	#[serde(default = "default_intensity")]
+	pub deep_filter_intensity: u8,
 	pub echo_cancellation: bool,
 	pub automatic_gain: bool,
 	/// None is an open microphone; otherwise a dBFS threshold with a short release hold.
@@ -47,6 +54,7 @@ impl Default for Processing {
 		Self {
 			suppression: NoiseSuppression::RnNoise,
 			suppression_level: 2,
+			deep_filter_intensity: 100,
 			echo_cancellation: true,
 			automatic_gain: true,
 			sensitivity_db: Some(-55),
@@ -55,12 +63,15 @@ impl Default for Processing {
 }
 impl Processing {
 	pub fn is_valid(self) -> bool {
-		self.suppression_level <= 3 && self.sensitivity_db.is_none_or(|db| (-80..=0).contains(&db))
+		self.suppression_level <= 3
+			&& self.deep_filter_intensity <= 100
+			&& self.sensitivity_db.is_none_or(|db| (-80..=0).contains(&db))
 	}
 	pub fn studio() -> Self {
 		Self {
 			suppression: NoiseSuppression::Off,
 			suppression_level: 0,
+			deep_filter_intensity: 100,
 			echo_cancellation: false,
 			automatic_gain: false,
 			sensitivity_db: None,

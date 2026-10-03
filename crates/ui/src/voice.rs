@@ -2534,6 +2534,29 @@ impl MessagingUi {
 						self.voice_processing.edit().suppression_level = strength;
 					}
 				}
+				if self.voice_processing.effective().suppression == NoiseSuppression::DeepFilter {
+					design::card_divider(ui);
+					let mut intensity = i32::from(
+						self.voice_processing
+							.effective()
+							.deep_filter_intensity
+							.min(100),
+					);
+					let before = intensity;
+					design::row(
+						ui,
+						t("Maximum suppression intensity"),
+						Some(t(
+							"Blend between natural speech clarity and aggressive background noise cancellation.",
+						)),
+						|ui| {
+							design::slider(ui, &mut intensity, 0..=100, "%");
+						},
+					);
+					if intensity != before {
+						self.voice_processing.edit().deep_filter_intensity = intensity as u8;
+					}
+				}
 				design::card_divider(ui);
 				ui.horizontal_wrapped(|ui| {
 					if design::text_action(ui, t("Recommended defaults")).clicked() {

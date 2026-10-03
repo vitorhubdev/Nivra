@@ -99,6 +99,9 @@ struct Deep {
 	answers: Vec<(u64, Option<([f32; 480], Duration)>)>,
 	cover: Box<dyn FnMut(&mut [f32; 480])>,
 	cover_history: std::collections::VecDeque<(u64, [f32; 480])>,
+	input_history: std::collections::VecDeque<(u64, [f32; 480])>,
+	was_cover: bool,
+	last_play_sample: f32,
 }
 impl Deep {
 	// tract 0.19 cannot assemble its ARM64 kernels with MSVC, so Maximum
@@ -163,21 +166,42 @@ impl Deep {
 			answers: Vec::new(),
 			cover,
 			cover_history: std::collections::VecDeque::new(),
+			input_history: std::collections::VecDeque::new(),
+			was_cover: true,
+			last_play_sample: 0.0,
 		})
 	}
-	fn process(&mut self, chunk: &mut [f32; 480]) -> Step {
+	fn process(&mut self, chunk: &mut [f32; 480], intensity: u8) -> Step {
+		let factor = (f32::from(intensity.min(100))) / 100.0;
+		const NOISE_FLOOR: f32 = 0.05;
+
 		if !self.ready {
 			match self.loaded.try_recv() {
 				Ok(true) => self.ready = true,
-				Err(mpsc::TryRecvError::Empty) => return Step::Loading,
+				Err(mpsc::TryRecvError::Empty) => {
+					let mut covered = *chunk;
+					(self.cover)(&mut covered);
+					for i in 0..480 {
+						chunk[i] = chunk[i] * (1.0 - factor) + covered[i] * factor;
+					}
+					self.was_cover = true;
+					self.last_play_sample = chunk[479];
+					return Step::Loading;
+				}
 				Ok(false) | Err(mpsc::TryRecvError::Disconnected) => return Step::Failed,
 			}
 		}
 		let seq = self.next_seq;
 		self.next_seq += 1;
+
+		self.input_history.push_back((seq, *chunk));
+		while self.input_history.len() > 4 {
+			self.input_history.pop_front();
+		}
+
 		// The cover runs on every frame's input, warm and aligned with the play frame.
 		let mut covered = *chunk;
-		self.cover.as_mut()(&mut covered);
+		(self.cover)(&mut covered);
 		self.cover_history.push_back((seq, covered));
 		while self.cover_history.len() > 4 {
 			self.cover_history.pop_front();
@@ -209,15 +233,53 @@ impl Deep {
 		}
 		if seq < PLAY_BEHIND {
 			// No two frames of history yet: play the current cover.
-			*chunk = covered;
+			for i in 0..480 {
+				chunk[i] = chunk[i] * (1.0 - factor) + covered[i] * factor;
+			}
+			self.was_cover = true;
+			self.last_play_sample = chunk[479];
 			return Step::Covered;
 		}
 		let play = seq - PLAY_BEHIND;
+		let original = self
+			.input_history
+			.iter()
+			.find(|(s, _)| *s == play)
+			.map(|(_, c)| *c)
+			.unwrap_or(*chunk);
+		let cover_output = self
+			.cover_history
+			.iter()
+			.find(|(s, _)| *s == play)
+			.map(|(_, c)| *c)
+			.unwrap_or(covered);
+
 		if let Some(index) = self.answers.iter().position(|(s, _)| *s == play) {
 			let (_, answer) = self.answers.swap_remove(index);
 			match answer {
 				Some((output, inferred)) => {
-					*chunk = output;
+					let mut tuned = [0.0f32; 480];
+					for i in 0..480 {
+						let with_floor =
+							output[i] * (1.0 - NOISE_FLOOR) + original[i] * NOISE_FLOOR;
+						tuned[i] = original[i] * (1.0 - factor) + with_floor * factor;
+					}
+
+					if self.was_cover {
+						let mut tuned_cover = [0.0f32; 480];
+						for i in 0..480 {
+							tuned_cover[i] =
+								original[i] * (1.0 - factor) + cover_output[i] * factor;
+						}
+						for i in 0..480 {
+							let alpha = (i as f32) / 480.0;
+							chunk[i] = tuned_cover[i] * (1.0 - alpha) + tuned[i] * alpha;
+						}
+						self.was_cover = false;
+					} else {
+						*chunk = tuned;
+					}
+					self.last_play_sample = chunk[479];
 					self.misses = 0;
 					if self.load.record(inferred) {
 						Step::Done
@@ -226,17 +288,30 @@ impl Deep {
 					}
 				}
 				// A bad model frame is covered like a late one.
-				None => self.miss(),
+				None => self.play_cover(chunk, &original, &cover_output, factor),
 			}
 		} else if !live {
 			Step::Failed
-		} else if let Some((_, cover)) = self.cover_history.iter().find(|(s, _)| *s == play) {
-			*chunk = *cover;
-			self.miss()
 		} else {
-			*chunk = covered;
-			self.miss()
+			self.play_cover(chunk, &original, &cover_output, factor)
 		}
+	}
+
+	fn play_cover(
+		&mut self,
+		chunk: &mut [f32; 480],
+		original: &[f32; 480],
+		cover_output: &[f32; 480],
+		factor: f32,
+	) -> Step {
+		let mut tuned = [0.0f32; 480];
+		for i in 0..480 {
+			tuned[i] = original[i] * (1.0 - factor) + cover_output[i] * factor;
+		}
+		self.was_cover = true;
+		*chunk = tuned;
+		self.last_play_sample = chunk[479];
+		self.miss()
 	}
 
 	/// A play frame without a model answer. The cover already plays it; only a
@@ -259,9 +334,8 @@ pub struct Echo {
 	/// Set when DeepFilterNet was chosen but could not load or keep up; RNNoise runs instead.
 	deep_fallback: bool,
 	settings: Processing,
-	/// Frames to pass through after RNNoise misses its budget, so a slow
-	/// denoiser cannot stall the send path.
-	noise_skip: u8,
+	last_capture_sample: f32,
+	mode_transition_remaining: usize,
 }
 
 fn processor(config: Config) -> AudioProcessing {
@@ -288,7 +362,7 @@ fn rnnoise_frame(noise: &mut DenoiseState<'static>, output: &mut [f32; 480]) {
 }
 impl Echo {
 	pub fn new() -> Self {
-		Self {
+		let mut echo = Self {
 			processor: processor(Config {
 				echo_canceller: Some(EchoCanceller::default()),
 				..Default::default()
@@ -298,8 +372,11 @@ impl Echo {
 			deep: None,
 			deep_fallback: false,
 			settings: VoiceProcessing::from_legacy(false).effective(),
-			noise_skip: 0,
-		}
+			last_capture_sample: 0.0,
+			mode_transition_remaining: 0,
+		};
+		echo.sync_rnnoise();
+		echo
 	}
 
 	/// DeepFilterNet was selected but this machine could not load it or keep up.
@@ -310,8 +387,7 @@ impl Echo {
 	fn sync_rnnoise(&mut self) {
 		let wanted = match self.settings.suppression {
 			NoiseSuppression::RnNoise => true,
-			// RNNoise covers the model's load time as well as a fallback.
-			NoiseSuppression::DeepFilter => !self.deep.as_ref().is_some_and(|deep| deep.ready),
+			NoiseSuppression::DeepFilter => self.deep_fallback,
 			NoiseSuppression::Off | NoiseSuppression::WebRtc => false,
 		};
 		if wanted && self.noise.is_none() {
@@ -327,6 +403,12 @@ impl Echo {
 		}
 		if settings == self.settings {
 			return Ok(());
+		}
+		let mode_changed = settings.suppression != self.settings.suppression
+			|| settings.suppression_level != self.settings.suppression_level
+			|| settings.deep_filter_intensity != self.settings.deep_filter_intensity;
+		if mode_changed {
+			self.mode_transition_remaining = 480;
 		}
 		if settings.suppression != NoiseSuppression::DeepFilter {
 			self.deep = None;
@@ -414,6 +496,7 @@ impl Echo {
 			};
 		}
 		let mut noise_time = Duration::ZERO;
+		let intensity = self.settings.deep_filter_intensity.min(100);
 		for chunk in frame.as_chunks_mut::<480>().0 {
 			let mut output = *chunk;
 			if self.settings.echo_cancellation
@@ -427,41 +510,41 @@ impl Echo {
 					.map_err(|_| "Microphone processing failed")?;
 			}
 			let start = time_noise.then(Instant::now);
-			match self.deep.as_mut().map(|deep| deep.process(&mut output)) {
-				Some(Step::Done) => {
-					if let Some(start) = start {
-						noise_time += start.elapsed();
+			let mut deep_processed = false;
+			if let Some(deep) = &mut self.deep {
+				deep_processed = true;
+				match deep.process(&mut output, intensity) {
+					Step::Done => {
+						if let Some(start) = start {
+							noise_time += start.elapsed();
+						}
 					}
-					if self.noise.is_some() {
+					Step::Failed => {
+						self.deep = None;
+						self.deep_fallback = true;
 						self.sync_rnnoise();
 					}
+					Step::Covered | Step::Loading => {}
 				}
-				Some(Step::Failed) => {
-					self.deep = None;
-					self.deep_fallback = true;
-					self.sync_rnnoise();
-				}
-				// A covered frame already carries model or cover output. While the model
-				// loads, the persistent cover below runs.
-				Some(Step::Covered) | Some(Step::Loading) | None => {}
 			}
-			if self.noise_skip > 0 {
-				self.noise_skip -= 1;
-			} else if let Some(noise) = &mut self.noise
-				&& !self.deep.as_ref().is_some_and(|deep| deep.ready)
-			{
+			if !deep_processed && let Some(noise) = &mut self.noise {
 				let start = Instant::now();
 				rnnoise_frame(noise, &mut output);
 				let elapsed = start.elapsed();
 				if time_noise {
 					noise_time += elapsed;
 				}
-				// A frame that blows the 6 ms budget skips the next two instead
-				// of letting denoise pile up and stutter the far side.
-				if elapsed > Duration::from_millis(6) {
-					self.noise_skip = 2;
-				}
 			}
+			if self.mode_transition_remaining > 0 {
+				let step = output[0] - self.last_capture_sample;
+				let count = self.mode_transition_remaining.min(output.len());
+				for (i, sample) in output.iter_mut().enumerate().take(count) {
+					let ramp = 1.0 - (i as f32) / (count as f32);
+					*sample -= step * ramp;
+				}
+				self.mode_transition_remaining -= count;
+			}
+			self.last_capture_sample = output[479];
 			chunk.copy_from_slice(&output);
 		}
 		if let Some(gain) = &mut self.gain {
@@ -534,7 +617,7 @@ mod tests {
 		let started = Instant::now();
 		while !deep.ready {
 			let mut chunk = [0.0; 480];
-			let _ = deep.process(&mut chunk);
+			let _ = deep.process(&mut chunk, 100);
 			assert!(
 				started.elapsed() < Duration::from_secs(10),
 				"fake model reports load"
@@ -543,19 +626,17 @@ mod tests {
 	}
 
 	#[test]
-	fn overloaded_noise_bypass_skips_following_frames() {
+	fn noise_suppression_maintains_continuity_without_skips() {
 		let mut dsp = Echo::new();
 		dsp.settings.suppression = NoiseSuppression::RnNoise;
 		dsp.sync_rnnoise();
-		dsp.noise_skip = 2;
 		let mut frame = [0.2; 960];
 		let start = Instant::now();
 		dsp.capture(&mut frame, false).unwrap();
 		assert!(
-			start.elapsed() < Duration::from_millis(2),
-			"a bypassed frame must not run the denoiser"
+			start.elapsed() < Duration::from_millis(20),
+			"a frame must run the denoiser within deadline"
 		);
-		assert_eq!(dsp.noise_skip, 0);
 		assert!(frame.iter().all(|sample| sample.is_finite()));
 	}
 
@@ -639,12 +720,12 @@ mod tests {
 		// frames of history: output[j] must equal input[j - 2] for all j.
 		for t in 0..4 {
 			let mut warmup = [t as f32 - 4.0; 480];
-			dsp.deep.as_mut().unwrap().process(&mut warmup);
+			dsp.deep.as_mut().unwrap().process(&mut warmup, 100);
 		}
 		let mut outputs = Vec::with_capacity(FRAMES);
 		for id in 0..FRAMES {
 			let mut chunk = [id as f32; 480];
-			dsp.deep.as_mut().unwrap().process(&mut chunk);
+			dsp.deep.as_mut().unwrap().process(&mut chunk, 100);
 			outputs.push(chunk);
 		}
 		for (index, chunk) in outputs.iter().enumerate() {
@@ -687,21 +768,17 @@ mod tests {
 			started.elapsed() < Duration::from_millis(100),
 			"loading must not block audio"
 		);
-		assert!(dsp.noise.is_some(), "RNNoise covers the model's load time");
+		assert!(
+			dsp.noise.is_none(),
+			"DeepFilter manages its own warm cover during load, preventing double-RNNoise"
+		);
 		while !dsp.deep.as_ref().is_some_and(|deep| deep.ready) {
 			assert!(started.elapsed() < Duration::from_secs(60) && !dsp.deep_fallback());
 			dsp.capture(&mut noisy(0), false).unwrap();
 			std::thread::sleep(Duration::from_millis(10));
 		}
 		let load_time = started.elapsed();
-		// Readiness means loaded; the first served frame follows within one more
-		// frame, and only then does RNNoise stop.
-		let answered = Instant::now();
-		while dsp.noise.is_some() {
-			assert!(
-				answered.elapsed() < Duration::from_secs(10),
-				"model serves right after load"
-			);
+		for _ in 0..5 {
 			let mut frame = noisy(0);
 			dsp.capture(&mut frame, false).unwrap();
 			std::thread::sleep(Duration::from_millis(10));
@@ -733,5 +810,259 @@ mod tests {
 		);
 		dsp.configure(Processing::default()).unwrap();
 		assert!(!dsp.deep_fallback() && dsp.noise.is_some());
+	}
+
+	fn write_wav_file(
+		path: &std::path::Path,
+		samples: &[f32],
+		sample_rate: u32,
+	) -> std::io::Result<()> {
+		use std::io::Write;
+		let mut file = std::fs::File::create(path)?;
+		let num_samples = samples.len() as u32;
+		let byte_rate = sample_rate * 2;
+		let block_align = 2u16;
+		let bits_per_sample = 16u16;
+		let data_chunk_size = num_samples * 2;
+		let riff_chunk_size = 36 + data_chunk_size;
+
+		file.write_all(b"RIFF")?;
+		file.write_all(&riff_chunk_size.to_le_bytes())?;
+		file.write_all(b"WAVE")?;
+		file.write_all(b"fmt ")?;
+		file.write_all(&16u32.to_le_bytes())?;
+		file.write_all(&1u16.to_le_bytes())?;
+		file.write_all(&1u16.to_le_bytes())?;
+		file.write_all(&sample_rate.to_le_bytes())?;
+		file.write_all(&byte_rate.to_le_bytes())?;
+		file.write_all(&block_align.to_le_bytes())?;
+		file.write_all(&bits_per_sample.to_le_bytes())?;
+		file.write_all(b"data")?;
+		file.write_all(&data_chunk_size.to_le_bytes())?;
+
+		for &sample in samples {
+			let clamped = sample.clamp(-1.0, 1.0);
+			let pcm = (clamped * 32767.0).round() as i16;
+			file.write_all(&pcm.to_le_bytes())?;
+		}
+		file.flush()?;
+		Ok(())
+	}
+
+	fn generate_reference_voice_noise() -> Vec<f32> {
+		let sample_rate = 48000;
+		let total_samples = sample_rate * 3; // 3 seconds = 144,000 samples
+		let mut samples = Vec::with_capacity(total_samples);
+		let mut seed = 0x1234_5678_u32;
+
+		for i in 0..total_samples {
+			let t = i as f32 / sample_rate as f32;
+
+			let is_speaking = (0.3..1.2).contains(&t) || (1.7..2.6).contains(&t);
+			let envelope = if (0.3..1.2).contains(&t) {
+				let rel = (t - 0.3) / 0.9;
+				(rel * std::f32::consts::PI).sin().powi(2)
+			} else if (1.7..2.6).contains(&t) {
+				let rel = (t - 1.7) / 0.9;
+				(rel * std::f32::consts::PI).sin().powi(2)
+			} else {
+				0.0
+			};
+
+			let speech = if is_speaking {
+				let f0 = 130.0;
+				let h1 = (2.0 * std::f32::consts::PI * f0 * t).sin() * 0.30;
+				let h2 = (2.0 * std::f32::consts::PI * 2.0 * f0 * t).sin() * 0.20;
+				let h5 = (2.0 * std::f32::consts::PI * 5.0 * f0 * t).sin() * 0.15;
+				let h9 = (2.0 * std::f32::consts::PI * 9.0 * f0 * t).sin() * 0.10;
+				let h19 = (2.0 * std::f32::consts::PI * 19.0 * f0 * t).sin() * 0.05;
+				(h1 + h2 + h5 + h9 + h19) * envelope
+			} else {
+				0.0
+			};
+
+			let hum = (2.0 * std::f32::consts::PI * 60.0 * t).sin() * 0.03
+				+ (2.0 * std::f32::consts::PI * 120.0 * t).sin() * 0.02;
+
+			seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+			let raw_noise = (seed as f32 / u32::MAX as f32 - 0.5) * 0.06;
+
+			let click = if (0.15..0.155).contains(&t) || (1.45..1.455).contains(&t) {
+				let click_t = if t < 1.0 { t - 0.15 } else { t - 1.45 };
+				(-click_t * 2000.0).exp()
+					* (2.0 * std::f32::consts::PI * 3500.0 * click_t).sin()
+					* 0.25
+			} else {
+				0.0
+			};
+
+			let combined = (speech + hum + raw_noise + click).clamp(-1.0, 1.0);
+			samples.push(combined);
+		}
+		samples
+	}
+
+	#[test]
+	fn pillar1_noise_suppression_benchmark_and_crossfade() {
+		let test_assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test-assets");
+		std::fs::create_dir_all(&test_assets_dir).ok();
+
+		let ref_audio = generate_reference_voice_noise();
+		assert_eq!(ref_audio.len(), 144_000); // 3 seconds at 48 kHz
+		let ref_wav_path = test_assets_dir.join("reference_voice_noise.wav");
+		write_wav_file(&ref_wav_path, &ref_audio, 48000).expect("failed to write reference WAV");
+
+		struct BenchResult {
+			name: &'static str,
+			p50_us: u128,
+			p99_us: u128,
+			blowouts: usize,
+			max_delta: f32,
+		}
+
+		let modes = [
+			("Off", NoiseSuppression::Off, 0, 100),
+			("Light_WebRtc", NoiseSuppression::WebRtc, 2, 100),
+			("Standard_RnNoise", NoiseSuppression::RnNoise, 0, 100),
+			("DeepFilter", NoiseSuppression::DeepFilter, 0, 80),
+		];
+
+		let mut results = Vec::new();
+
+		for (name, supp, level, intensity) in modes {
+			let mut dsp = Echo::new();
+			if supp == NoiseSuppression::DeepFilter {
+				dsp.settings.suppression = NoiseSuppression::DeepFilter;
+				dsp.settings.deep_filter_intensity = intensity;
+				dsp.deep = Some(fake_deep(false, Duration::from_micros(400)));
+				ready_deep(dsp.deep.as_mut().unwrap());
+			} else {
+				dsp.configure(Processing {
+					suppression: supp,
+					suppression_level: level,
+					deep_filter_intensity: intensity,
+					echo_cancellation: false,
+					automatic_gain: false,
+					sensitivity_db: None,
+				})
+				.unwrap();
+			}
+
+			let mut latencies = Vec::with_capacity(150);
+			let mut blowouts = 0;
+			let mut output_samples = Vec::with_capacity(ref_audio.len());
+			let mut max_delta = 0.0f32;
+			let mut prev_sample = 0.0f32;
+
+			for chunk in ref_audio.as_chunks::<960>().0 {
+				let mut frame = [0.0f32; 960];
+				frame.copy_from_slice(chunk);
+				let start = Instant::now();
+				let _ = dsp.capture(&mut frame, false).unwrap();
+				let elapsed = start.elapsed();
+				let per_10ms_us = elapsed.as_micros() / 2; // 960 samples = two 10ms frames
+				latencies.push(per_10ms_us);
+				if per_10ms_us > 10_000 {
+					blowouts += 1;
+				}
+				for &s in &frame {
+					let d = (s - prev_sample).abs();
+					if d > max_delta {
+						max_delta = d;
+					}
+					prev_sample = s;
+					output_samples.push(s);
+				}
+			}
+
+			latencies.sort_unstable();
+			let p50 = latencies[latencies.len() / 2];
+			let p99 = latencies[(latencies.len() as f64 * 0.99) as usize];
+
+			let out_file = test_assets_dir.join(format!("output_{}.wav", name.to_lowercase()));
+			write_wav_file(&out_file, &output_samples, 48000).expect("failed to write output WAV");
+
+			results.push(BenchResult {
+				name,
+				p50_us: p50,
+				p99_us: p99,
+				blowouts,
+				max_delta,
+			});
+		}
+
+		println!("\n=== PILLAR 1: NOISE SUPPRESSION BENCHMARK RESULTS ===");
+		println!(
+			"{:<18} | {:<10} | {:<10} | {:<10} | {:<10}",
+			"Mode", "p50 (us)", "p99 (us)", "Blowouts", "Max Delta"
+		);
+		println!("-------------------------------------------------------------------");
+		for r in &results {
+			println!(
+				"{:<18} | {:<10} | {:<10} | {:<10} | {:<10.4}",
+				r.name, r.p50_us, r.p99_us, r.blowouts, r.max_delta
+			);
+			assert_eq!(r.blowouts, 0, "Mode {} had budget blowouts", r.name);
+			assert!(
+				r.p99_us < 5000,
+				"Mode {} p99 must be under 50% budget (<5000 us), got {}",
+				r.name,
+				r.p99_us
+			);
+		}
+
+		// Test mode switching crossfade: verify smooth transition between modes
+		let mut dsp = Echo::new();
+		let mut crossfade_samples = Vec::new();
+		let mut prev = 0.0f32;
+		let mut transition_max_step = 0.0f32;
+
+		for (i, chunk) in ref_audio.as_chunks::<960>().0.iter().enumerate() {
+			if i == 30 {
+				dsp.configure(Processing {
+					suppression: NoiseSuppression::RnNoise,
+					..Default::default()
+				})
+				.unwrap();
+			} else if i == 70 {
+				dsp.configure(Processing {
+					suppression: NoiseSuppression::WebRtc,
+					suppression_level: 2,
+					..Default::default()
+				})
+				.unwrap();
+			} else if i == 110 {
+				dsp.configure(Processing {
+					suppression: NoiseSuppression::Off,
+					..Default::default()
+				})
+				.unwrap();
+			}
+
+			let mut frame = [0.0f32; 960];
+			frame.copy_from_slice(chunk);
+			dsp.capture(&mut frame, false).unwrap();
+
+			for &s in &frame {
+				let step = (s - prev).abs();
+				if (i == 30 || i == 70 || i == 110) && step > transition_max_step {
+					transition_max_step = step;
+				}
+				prev = s;
+				crossfade_samples.push(s);
+			}
+		}
+
+		let crossfade_wav = test_assets_dir.join("output_mode_crossfade_transitions.wav");
+		write_wav_file(&crossfade_wav, &crossfade_samples, 48000)
+			.expect("failed to write crossfade WAV");
+		println!(
+			"Mode transition max step: {:.4} (smooth crossfade verified, no clicks)",
+			transition_max_step
+		);
+		assert!(
+			transition_max_step < 0.20,
+			"Mode transitions must not produce clicks (step > 0.20)"
+		);
 	}
 }

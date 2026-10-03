@@ -1033,7 +1033,7 @@ async fn dispatch_voice_command(
 		emit(event)?;
 	}
 	if let client_core::voice::Command::Leave { channel, request }
-		| client_core::voice::Command::AbandonSession { channel, request } = command
+	| client_core::voice::Command::AbandonSession { channel, request } = command
 		&& packet.is_none()
 		&& !calls.has_call()
 	{

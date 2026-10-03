@@ -1724,7 +1724,10 @@ pub fn debug_call_cues_check() {
 	let owner = participant(1);
 	let peer = participant(2);
 	let mut cues = CallCues::default();
-	assert!(cues.poll(false, true, owner.user, &[owner, peer]).is_empty());
+	assert!(
+		cues.poll(false, true, owner.user, &[owner, peer])
+			.is_empty()
+	);
 	assert_eq!(
 		cues.poll(true, true, owner.user, &[owner, peer]),
 		vec![Sound::UserJoin]
@@ -1732,10 +1735,14 @@ pub fn debug_call_cues_check() {
 	let mut muted_peer = peer;
 	muted_peer.muted = true;
 	assert!(
-		cues.poll(true, true, owner.user, &[muted_peer, owner]).is_empty()
+		cues.poll(true, true, owner.user, &[muted_peer, owner])
+			.is_empty()
 	);
 	// Device reopening and rekeying do not announce this same call again.
-	assert!(cues.poll(false, true, owner.user, &[owner, peer]).is_empty());
+	assert!(
+		cues.poll(false, true, owner.user, &[owner, peer])
+			.is_empty()
+	);
 	assert!(cues.poll(true, true, owner.user, &[owner, peer]).is_empty());
 	// Compare identities rather than counts; departures can themselves trigger rekeying.
 	let replacement = participant(3);
@@ -1744,7 +1751,8 @@ pub fn debug_call_cues_check() {
 		vec![Sound::UserJoin, Sound::UserLeave]
 	);
 	assert!(
-		cues.poll(true, true, owner.user, &[owner, replacement]).is_empty()
+		cues.poll(true, true, owner.user, &[owner, replacement])
+			.is_empty()
 	);
 	assert!(cues.poll(false, false, owner.user, &[]).is_empty());
 	assert!(cues.poll(true, true, owner.user, &[owner]).is_empty());
@@ -1755,7 +1763,8 @@ pub fn debug_call_cues_check() {
 	);
 	assert!(cues.poll(true, true, owner.user, &[peer, owner]).is_empty());
 	assert!(
-		cues.poll(true, true, owner.user, &[owner, muted_peer]).is_empty()
+		cues.poll(true, true, owner.user, &[owner, muted_peer])
+			.is_empty()
 	);
 	assert_eq!(
 		cues.poll(true, true, owner.user, &[owner]),

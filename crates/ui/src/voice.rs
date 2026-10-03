@@ -5471,24 +5471,42 @@ mod tests {
 		// 1. Toggle off
 		view.set_noise_level(NoiseSuppression::RnNoise);
 		view.toggle_noise();
-		assert_eq!(view.voice_processing.effective().suppression, NoiseSuppression::Off);
+		assert_eq!(
+			view.voice_processing.effective().suppression,
+			NoiseSuppression::Off
+		);
 		assert_eq!(view.voice_noise_restore, NoiseSuppression::RnNoise);
 
 		// 2. Toggle back on restores RnNoise
 		view.toggle_noise();
-		assert_eq!(view.voice_processing.effective().suppression, NoiseSuppression::RnNoise);
+		assert_eq!(
+			view.voice_processing.effective().suppression,
+			NoiseSuppression::RnNoise
+		);
 
 		// 3. Switch to DeepFilter, then toggle off and back on restores DeepFilter
 		view.set_noise_level(NoiseSuppression::DeepFilter);
-		assert_eq!(view.voice_processing.effective().suppression, NoiseSuppression::DeepFilter);
+		assert_eq!(
+			view.voice_processing.effective().suppression,
+			NoiseSuppression::DeepFilter
+		);
 		view.toggle_noise();
-		assert_eq!(view.voice_processing.effective().suppression, NoiseSuppression::Off);
+		assert_eq!(
+			view.voice_processing.effective().suppression,
+			NoiseSuppression::Off
+		);
 		view.toggle_noise();
-		assert_eq!(view.voice_processing.effective().suppression, NoiseSuppression::DeepFilter);
+		assert_eq!(
+			view.voice_processing.effective().suppression,
+			NoiseSuppression::DeepFilter
+		);
 
 		// 4. Fallback from DeepFilter degrades safely to RnNoise
 		view.voice_noise_fallback();
-		assert_eq!(view.voice_processing.effective().suppression, NoiseSuppression::RnNoise);
+		assert_eq!(
+			view.voice_processing.effective().suppression,
+			NoiseSuppression::RnNoise
+		);
 		assert!(view.voice_noise_fell_back);
 	}
 

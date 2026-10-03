@@ -5509,9 +5509,10 @@ impl Desktop {
 				self.messaging.voice_deafened = target.deafened;
 			}
 			if let Some(message) = takeover_notice {
-				self.messaging
-					.toasts
-					.push(ui::design::Level::Info, ui::i18n::text(self.messaging.language, message));
+				self.messaging.toasts.push(
+					ui::design::Level::Info,
+					ui::i18n::text(self.messaging.language, message),
+				);
 			}
 			self.extensions.data_changed(data_changes);
 			self.extensions.cancel_stale_message_events(&self.state);

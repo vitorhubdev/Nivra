@@ -1956,7 +1956,9 @@ mod tests {
 			let ring = ch == dm_channel;
 			let cmd = state.start_call(ch, ring).expect("start call");
 			let req = match cmd {
-				crate::Command::Voice(Command::Join { channel, request, .. }) => {
+				crate::Command::Voice(Command::Join {
+					channel, request, ..
+				}) => {
 					assert_eq!(channel, ch);
 					request
 				}
@@ -1999,7 +2001,9 @@ mod tests {
 			let target_ch = Id(100 + (i % 10));
 			let cmd = state.start_call(target_ch, false).expect("channel switch");
 			current_req = match cmd {
-				crate::Command::Voice(Command::Join { channel, request, .. }) => {
+				crate::Command::Voice(Command::Join {
+					channel, request, ..
+				}) => {
 					assert_eq!(channel, target_ch);
 					request
 				}
@@ -2042,7 +2046,9 @@ mod tests {
 		assert_eq!(state.status, "This device's call session was replaced");
 
 		// 4. Stale takeover for past request does not affect new call
-		let new_cmd = state.start_call(dm_channel, false).expect("rejoin after takeover");
+		let new_cmd = state
+			.start_call(dm_channel, false)
+			.expect("rejoin after takeover");
 		let new_req = match new_cmd {
 			crate::Command::Voice(Command::Join { request, .. }) => request,
 			_ => unreachable!(),

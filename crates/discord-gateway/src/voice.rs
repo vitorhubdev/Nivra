@@ -874,9 +874,8 @@ impl Calls {
 		let request = if foreign_departure {
 			None
 		} else {
-			self.active.and_then(|(_, request)| {
-				(own || same_guild).then_some(request)
-			})
+			self.active
+				.and_then(|(_, request)| (own || same_guild).then_some(request))
 		};
 		let secret = secret.filter(|_| !taken_over);
 		let participant = participant(&state);

@@ -63,7 +63,9 @@ fn parse(source: &'static str) -> Table {
 		let Some((key, value)) = line.split_once(" = ") else {
 			continue;
 		};
-		let key = unescape(key.trim());
+		// Key whitespace is identity: callers pass trailing spaces ("Replying to ")
+		// and escaped newlines, and trimming would silently re-key them to English.
+		let key = unescape(key);
 		let Some(value) = value
 			.trim()
 			.strip_prefix('"')
@@ -74,6 +76,12 @@ fn parse(source: &'static str) -> Table {
 		table.entry(key).or_insert_with(|| unescape(value));
 	}
 	table
+}
+
+/// Parse every bundled table now so selecting a translated language cannot
+/// cause a first-frame hitch inside the render path.
+pub fn warm() {
+	bundled();
 }
 
 /// Every bundled table, parsed once on first use.
@@ -122,10 +130,10 @@ pub fn text(language: Language, english: &'static str) -> &'static str {
 	match translated {
 		Some(text) => text,
 		None => {
+			// Static strings always record: a missing catalog entry is a bug in the
+			// build, not a runtime condition. (Runtime `text_str` stays quiet.)
 			#[cfg(test)]
-			if known_keys().any(|key| key == english) {
-				UNTRANSLATED_KEYS.with(|keys| keys.borrow_mut().push(english.to_owned()));
-			}
+			UNTRANSLATED_KEYS.with(|keys| keys.borrow_mut().push(english.to_owned()));
 			english
 		}
 	}
@@ -225,6 +233,34 @@ mod tests {
 				.collect();
 			assert!(extra.is_empty(), "{language:?} has unknown keys: {extra:?}");
 		}
+	}
+
+	#[test]
+	fn key_whitespace_and_newlines_survive_lookup() {
+		assert_eq!(
+			text(Language::PortugueseBrazil, "Replying to "),
+			"Respondendo a "
+		);
+		assert_eq!(
+			text(
+				Language::PortugueseBrazil,
+				"Default Permissions\n@everyone · applies to all server members",
+			),
+			"Permissões padrão\n@everyone · se aplica a todos os membros do servidor"
+		);
+	}
+
+	#[test]
+	fn static_misses_record_even_for_unknown_keys() {
+		let _ = super::drain_untranslated_keys();
+		assert_eq!(
+			text(Language::Spanish, "Missing sentinel static"),
+			"Missing sentinel static"
+		);
+		assert_eq!(
+			super::drain_untranslated_keys(),
+			vec!["Missing sentinel static".to_owned()]
+		);
 	}
 
 	#[test]

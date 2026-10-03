@@ -1194,6 +1194,9 @@ pub fn show(
 	opening: &mut Option<String>,
 	formatted: &mut FormatCache,
 	confirm_links: bool,
+	allowed_domains: &mut std::collections::HashSet<String>,
+	add_allowed_domain: &mut Option<String>,
+	language: model::Language,
 	anchor: Pos2,
 ) -> Option<Action> {
 	let colors = design::palette(ui);
@@ -1866,7 +1869,14 @@ pub fn show(
 	if (pressed_outside || escape) && opening.is_none() && action.is_none() {
 		action = Some(Action::Close);
 	}
-	crate::markdown::confirm_external_link(ui.ctx(), opening, confirm_links);
+	crate::markdown::confirm_external_link(
+		ui.ctx(),
+		opening,
+		confirm_links,
+		allowed_domains,
+		add_allowed_domain,
+		language,
+	);
 	action
 }
 
@@ -2236,6 +2246,9 @@ mod tests {
 								&mut opening,
 								&mut FormatCache::default(),
 								true,
+								&mut Default::default(),
+								&mut None,
+								model::Language::English,
 								pos2(20.0, 70.0),
 							);
 						});
@@ -2321,6 +2334,9 @@ mod tests {
 					&mut opening,
 					&mut FormatCache::default(),
 					true,
+					&mut Default::default(),
+					&mut None,
+					model::Language::English,
 					pos2(20.0, 40.0),
 				);
 			});
@@ -2424,6 +2440,9 @@ mod tests {
 					&mut opening,
 					&mut FormatCache::default(),
 					true,
+					&mut Default::default(),
+					&mut None,
+					model::Language::English,
 					pos2(100.0, 100.0),
 				);
 			});
@@ -2477,6 +2496,9 @@ mod tests {
 						&mut opening,
 						&mut FormatCache::default(),
 						true,
+						&mut Default::default(),
+						&mut None,
+						model::Language::English,
 						anchor
 					)
 					.is_none()
@@ -2514,6 +2536,9 @@ mod tests {
 				&mut opening,
 				&mut FormatCache::default(),
 				true,
+				&mut Default::default(),
+				&mut None,
+				model::Language::English,
 				right_anchor,
 			);
 		});
@@ -2545,6 +2570,9 @@ mod tests {
 						&mut opening,
 						&mut FormatCache::default(),
 						true,
+						&mut Default::default(),
+						&mut None,
+						model::Language::English,
 						anchor
 					),
 					Some(Action::Close)
@@ -2602,6 +2630,9 @@ mod tests {
 					&mut opening,
 					&mut FormatCache::default(),
 					true,
+					&mut Default::default(),
+					&mut None,
+					model::Language::English,
 					pos2(20.0, 70.0),
 				);
 			});
@@ -2732,6 +2763,9 @@ mod tests {
 				&mut opening,
 				&mut FormatCache::default(),
 				true,
+				&mut Default::default(),
+				&mut None,
+				model::Language::English,
 				anchor,
 			);
 		});
@@ -2763,6 +2797,9 @@ mod tests {
 						&mut opening,
 						&mut FormatCache::default(),
 						true,
+						&mut Default::default(),
+						&mut None,
+						model::Language::English,
 						anchor,
 					);
 					assert_eq!(matches!(action, Some(Action::Close)), closes);

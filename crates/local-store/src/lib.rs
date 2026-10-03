@@ -561,6 +561,11 @@ impl LocalStore {
 			"CREATE TABLE IF NOT EXISTS stats(singleton INTEGER PRIMARY KEY CHECK(singleton=1), content_bytes INTEGER NOT NULL DEFAULT 0, message_count INTEGER NOT NULL DEFAULT 0);
 			 INSERT INTO stats(singleton) SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM stats WHERE singleton=1);",
 		)?;
+		connection.execute_batch(
+			"CREATE TABLE IF NOT EXISTS allowed_domains(
+				domain TEXT PRIMARY KEY NOT NULL CHECK(typeof(domain)='text' AND length(CAST(domain AS BLOB)) BETWEEN 1 AND 255)
+			);",
+		)?;
 		enable_incremental_vacuum(&connection)?;
 		Ok(Self(connection))
 	}
@@ -587,6 +592,51 @@ impl LocalStore {
             ON CONFLICT(singleton) DO UPDATE SET value=excluded.value",
 			[value],
 		)?;
+		Ok(())
+	}
+	pub fn allowed_domains(&self) -> Result<Vec<String>> {
+		let mut stmt = self
+			.0
+			.prepare("SELECT domain FROM allowed_domains ORDER BY domain ASC LIMIT 1000")?;
+		let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+		let mut domains = Vec::new();
+		for domain in rows {
+			domains.push(domain?);
+		}
+		Ok(domains)
+	}
+	pub fn add_allowed_domain(&self, domain: &str) -> Result<()> {
+		let domain = domain.trim().to_ascii_lowercase();
+		let domain = domain.strip_prefix("www.").unwrap_or(&domain);
+		if domain.is_empty() || domain.len() > 255 {
+			return Ok(());
+		}
+		let count: u32 = self
+			.0
+			.query_row("SELECT COUNT(*) FROM allowed_domains", [], |r| r.get(0))?;
+		if count >= 1000 {
+			self.0.execute(
+				"DELETE FROM allowed_domains WHERE domain = (SELECT domain FROM allowed_domains ORDER BY domain ASC LIMIT 1)",
+				[],
+			)?;
+		}
+		self.0.execute(
+			"INSERT OR IGNORE INTO allowed_domains(domain) VALUES (?1)",
+			params![domain],
+		)?;
+		Ok(())
+	}
+	pub fn remove_allowed_domain(&self, domain: &str) -> Result<()> {
+		let domain = domain.trim().to_ascii_lowercase();
+		let domain = domain.strip_prefix("www.").unwrap_or(&domain);
+		self.0.execute(
+			"DELETE FROM allowed_domains WHERE domain = ?1",
+			params![domain],
+		)?;
+		Ok(())
+	}
+	pub fn clear_allowed_domains(&self) -> Result<()> {
+		self.0.execute("DELETE FROM allowed_domains", [])?;
 		Ok(())
 	}
 	/// Application-wide opt-in; an absent override never enables activity sharing.
@@ -2699,6 +2749,37 @@ mod tests {
 			.execute_batch("DROP TABLE minimize_to_tray;")
 			.unwrap();
 		assert_eq!(store.minimize_to_tray(), Err(StoreError::Unavailable));
+		drop(store);
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn allowed_domains_crud_and_persistence() {
+		let root =
+			std::env::temp_dir().join(format!("nivra-synthetic-domains-{}", std::process::id()));
+		std::fs::create_dir_all(&root).unwrap();
+		let path = root.join("test.sqlite3");
+		let store = LocalStore::open(&path).unwrap();
+		assert!(store.allowed_domains().unwrap().is_empty());
+
+		store.add_allowed_domain("x.com").unwrap();
+		store.add_allowed_domain("WWW.GITHUB.COM").unwrap();
+		store.add_allowed_domain("x.com").unwrap(); // duplicate
+
+		let domains = store.allowed_domains().unwrap();
+		assert_eq!(domains, vec!["github.com".to_string(), "x.com".to_string()]);
+
+		store.remove_allowed_domain("github.com").unwrap();
+		assert_eq!(store.allowed_domains().unwrap(), vec!["x.com".to_string()]);
+
+		// Persistence across reopen
+		drop(store);
+		let store = LocalStore::open(&path).unwrap();
+		assert_eq!(store.allowed_domains().unwrap(), vec!["x.com".to_string()]);
+
+		store.clear_allowed_domains().unwrap();
+		assert!(store.allowed_domains().unwrap().is_empty());
+
 		drop(store);
 		std::fs::remove_dir_all(root).unwrap();
 	}

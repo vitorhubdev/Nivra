@@ -58,6 +58,9 @@ pub enum Operation {
 	SaveThemeVariant(Option<String>),
 	LoadReadingPreferences,
 	SaveReadingPreferences(model::ReadingPreferences),
+	LoadAllowedDomains,
+	AddAllowedDomain(String),
+	ClearAllowedDomains,
 	LoadGameActivity,
 	SaveGameActivity(bool),
 	LoadMinimizeToTray,
@@ -106,6 +109,9 @@ pub enum Outcome {
 	Appearance(Appearance, Option<String>),
 	ReadingPreferences(Result<model::ReadingPreferences, StoreError>),
 	ReadingPreferencesSaved(Result<(), StoreError>),
+	AllowedDomains(Result<Vec<String>, StoreError>),
+	AllowedDomainAdded(Result<(), StoreError>),
+	AllowedDomainsCleared(Result<(), StoreError>),
 	GameActivity(Result<bool, StoreError>),
 	GameActivitySaved(Result<(), StoreError>),
 	MinimizeToTray(Result<bool, StoreError>),
@@ -465,6 +471,24 @@ fn execute(
 				Err(error) => Err(*error),
 			});
 		}
+		Operation::LoadAllowedDomains => {
+			return Outcome::AllowedDomains(match store {
+				Ok(store) => store.allowed_domains(),
+				Err(error) => Err(*error),
+			});
+		}
+		Operation::AddAllowedDomain(domain) => {
+			return Outcome::AllowedDomainAdded(match store {
+				Ok(store) => store.add_allowed_domain(domain),
+				Err(error) => Err(*error),
+			});
+		}
+		Operation::ClearAllowedDomains => {
+			return Outcome::AllowedDomainsCleared(match store {
+				Ok(store) => store.clear_allowed_domains(),
+				Err(error) => Err(*error),
+			});
+		}
 		_ => {}
 	}
 	if matches!(
@@ -516,6 +540,9 @@ fn execute(
 		| Operation::SaveAppPreferences(_)
 		| Operation::LoadReadingPreferences
 		| Operation::SaveReadingPreferences(_)
+		| Operation::LoadAllowedDomains
+		| Operation::AddAllowedDomain(_)
+		| Operation::ClearAllowedDomains
 		| Operation::LoadGameActivity
 		| Operation::SaveGameActivity(_)
 		| Operation::LoadMinimizeToTray
@@ -533,6 +560,9 @@ fn execute(
 			| Operation::SaveAppPreferences(_)
 			| Operation::LoadReadingPreferences
 			| Operation::SaveReadingPreferences(_)
+			| Operation::LoadAllowedDomains
+			| Operation::AddAllowedDomain(_)
+			| Operation::ClearAllowedDomains
 			| Operation::LoadGameActivity
 			| Operation::SaveGameActivity(_)
 			| Operation::LoadMinimizeToTray

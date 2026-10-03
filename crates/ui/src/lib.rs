@@ -431,6 +431,9 @@ pub struct MessagingUi {
 	pub reconnect_requested: bool,
 	pub draft_changes: Vec<Id>,
 	pub draft_restore_pending: bool,
+	pub allowed_domains: std::collections::HashSet<String>,
+	pub add_allowed_domain_requested: Option<String>,
+	pub clear_allowed_domains_requested: bool,
 	pub attachment: Option<(String, u64)>,
 	pub attachment_files: Vec<(String, u64)>,
 	pub remove_attachment_index: Option<usize>,
@@ -4274,11 +4277,17 @@ impl MessagingUi {
 			&ctx,
 			&mut self.timeline.browser_opening,
 			self.reading_preferences.confirm_external_links,
+			&mut self.allowed_domains,
+			&mut self.add_allowed_domain_requested,
+			self.language,
 		);
 		markdown::confirm_external_link(
 			&ctx,
 			&mut self.timeline.opening,
 			self.reading_preferences.confirm_external_links,
+			&mut self.allowed_domains,
+			&mut self.add_allowed_domain_requested,
+			self.language,
 		);
 		let colors = crate::design::palette(ui);
 		let background = crate::design::window_palette(ui);
@@ -5194,6 +5203,9 @@ impl MessagingUi {
 				&mut self.profile_link,
 				&mut self.profile_formatted,
 				self.reading_preferences.confirm_external_links,
+				&mut self.allowed_domains,
+				&mut self.add_allowed_domain_requested,
+				self.language,
 				anchor,
 			) {
 				Some(profiles::Action::Avatar(media)) => {

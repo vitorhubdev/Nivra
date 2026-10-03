@@ -344,77 +344,253 @@ pub(super) fn discord_chat_link(input: &str) -> Option<ChatLink> {
 	})
 }
 
+pub const KNOWN_SHORTENERS: &[&str] = &[
+	"bit.ly",
+	"tinyurl.com",
+	"t.co",
+	"goo.gl",
+	"is.gd",
+	"buff.ly",
+	"ow.ly",
+	"rebrand.ly",
+	"cutt.ly",
+	"rb.gy",
+	"shorturl.at",
+	"tiny.cc",
+	"bit.do",
+	"lnkd.in",
+	"db.tt",
+	"qr.ae",
+	"adf.ly",
+	"bitly.com",
+	"cur.lv",
+	"ity.im",
+	"q.gs",
+	"po.st",
+	"bc.vc",
+	"twitthis.com",
+	"u.to",
+	"j.mp",
+	"buzurl.com",
+	"cutt.us",
+	"u.bb",
+	"yourls.org",
+	"x.co",
+	"prettylinkpro.com",
+	"scrnch.me",
+	"filoops.info",
+	"vzturl.com",
+	"qr.net",
+	"1url.com",
+	"tweez.me",
+	"v.gd",
+	"tr.im",
+	"link.zip",
+	"shortcm.li",
+	"bl.ink",
+	"s.id",
+];
+
+pub fn is_url_shortener(host: &str) -> bool {
+	let host = host.trim_start_matches("www.").to_ascii_lowercase();
+	KNOWN_SHORTENERS
+		.iter()
+		.any(|&shortener| host == shortener || host.ends_with(&format!(".{shortener}")))
+}
+
+pub fn is_disguised_link(label: &str, target_url: &str) -> bool {
+	let label = label.trim();
+	if label.contains(char::is_whitespace) {
+		return false;
+	}
+	let target = match url::Url::parse(target_url) {
+		Ok(u) => u,
+		Err(_) => return false,
+	};
+	let target_host = match target.host_str() {
+		Some(h) => h.trim_start_matches("www.").to_ascii_lowercase(),
+		None => return false,
+	};
+
+	let label_url = if label.starts_with("http://") || label.starts_with("https://") {
+		url::Url::parse(label).ok()
+	} else if label.contains('.') && !label.starts_with('.') && !label.ends_with('.') {
+		url::Url::parse(&format!("https://{label}")).ok()
+	} else {
+		None
+	};
+
+	if let Some(l_url) = label_url
+		&& let Some(l_host) = l_url.host_str()
+		&& l_host.contains('.')
+	{
+		let l_host = l_host.trim_start_matches("www.").to_ascii_lowercase();
+		if l_host != target_host {
+			return true;
+		}
+	}
+	false
+}
+
+#[cfg(test)]
+pub fn set_disguised_link_for_test(ctx: &egui::Context, disguised: bool) {
+	ctx.data_mut(|d| d.insert_temp(egui::Id::unique("markdown_disguised_link"), disguised));
+}
+
 pub(super) fn confirm_external_link(
 	ctx: &egui::Context,
 	opening: &mut Option<String>,
 	confirm_links: bool,
+	allowed_domains: &mut std::collections::HashSet<String>,
+	add_allowed_domain: &mut Option<String>,
+	language: model::Language,
 ) {
 	let Some(target) = opening.as_deref().and_then(external_url) else {
 		*opening = None;
 		return;
 	};
-	let discord = url::Url::parse(&target).is_ok_and(|url| {
-		url.scheme() == "https"
-			&& url.port().is_none()
-			&& url.host_str().is_some_and(|host| {
-				[
-					"discord.com",
-					"discord.gg",
-					"discordapp.com",
-					"discordapp.net",
-				]
-				.iter()
-				.any(|domain| {
-					host == *domain
-						|| host
-							.strip_suffix(domain)
-							.is_some_and(|prefix| prefix.ends_with('.'))
-				})
+
+	let parsed_target = url::Url::parse(&target).ok();
+	let target_scheme = parsed_target
+		.as_ref()
+		.map(|u| u.scheme())
+		.unwrap_or_default();
+	let target_host = parsed_target
+		.as_ref()
+		.and_then(|u| u.host_str())
+		.map(|h| h.trim_start_matches("www.").to_ascii_lowercase());
+	let target_port = parsed_target.as_ref().and_then(|u| u.port());
+
+	let discord = target_scheme == "https"
+		&& target_port.is_none()
+		&& target_host.as_deref().is_some_and(|host| {
+			[
+				"discord.com",
+				"discord.gg",
+				"discordapp.com",
+				"discordapp.net",
+			]
+			.iter()
+			.any(|domain| {
+				host == *domain
+					|| host
+						.strip_suffix(domain)
+						.is_some_and(|prefix| prefix.ends_with('.'))
 			})
+		});
+
+	let disguised_id = egui::Id::unique("markdown_disguised_link");
+	let disguised = ctx.data(|d| d.get_temp(disguised_id)).unwrap_or(false);
+	let is_shortener = target_host.as_deref().is_some_and(is_url_shortener);
+	let is_http_or_https = matches!(target_scheme, "http" | "https");
+	let is_safe = is_http_or_https && !disguised && !is_shortener;
+
+	let is_allowed = target_host.as_deref().is_some_and(|host| {
+		allowed_domains.iter().any(|allowed| {
+			let allowed = allowed.trim_start_matches("www.").to_ascii_lowercase();
+			host == allowed
+				|| host
+					.strip_suffix(&allowed)
+					.is_some_and(|p| p.ends_with('.'))
+		})
 	});
-	if !confirm_links || discord {
+
+	if (!disguised && discord) || (is_safe && (!confirm_links || is_allowed)) {
+		ctx.data_mut(|d| d.remove_temp::<bool>(disguised_id));
 		ctx.open_url(egui::OpenUrl::new_tab(target));
 		*opening = None;
 		return;
 	}
+
 	let mut confirm = false;
 	let mut cancel = false;
-	let response = crate::dialog::Dialog::new("confirm-external-link", "Open external link?")
-		.subtitle("This destination opens in your default browser.")
-		.width(460.0)
-		.show(ctx, |d| {
-			d.content(|ui| {
-				let colors = crate::design::palette(ui);
-				egui::Frame::new()
-					.fill(colors.base)
-					.stroke(egui::Stroke::new(1.0, colors.border))
-					.corner_radius(8)
-					.inner_margin(egui::Margin::symmetric(12, 10))
-					.show(ui, |ui| {
-						ui.set_width(ui.available_width());
-						ui.add(
-							egui::Label::new(egui::RichText::new(&target).monospace().size(13.0))
-								.wrap()
-								.selectable(true),
-						);
-					});
-			});
-			d.footer(|ui| {
-				confirm =
-					crate::dialog::action(ui, "Open in Browser", crate::dialog::Action::Primary)
-						.clicked();
-				cancel =
-					crate::dialog::action(ui, "Cancel", crate::dialog::Action::Neutral).clicked();
-			});
+	let remember_id = egui::Id::unique("confirm-external-link-remember");
+	let mut remember_site: bool = ctx.data(|d| d.get_temp(remember_id)).unwrap_or(false);
+
+	let response = crate::dialog::Dialog::new(
+		"confirm-external-link",
+		crate::i18n::text(language, "Open external link?"),
+	)
+	.subtitle(crate::i18n::text(
+		language,
+		"This destination opens in your default browser.",
+	))
+	.width(460.0)
+	.show(ctx, |d| {
+		d.content(|ui| {
+			let colors = crate::design::palette(ui);
+			egui::Frame::new()
+				.fill(colors.base)
+				.stroke(egui::Stroke::new(1.0, colors.border))
+				.corner_radius(8)
+				.inner_margin(egui::Margin::symmetric(12, 10))
+				.show(ui, |ui| {
+					ui.set_width(ui.available_width());
+					ui.add(
+						egui::Label::new(egui::RichText::new(&target).monospace().size(13.0))
+							.wrap()
+							.selectable(true),
+					);
+				});
+
+			if disguised {
+				ui.add_space(6.0);
+				ui.colored_label(
+					colors.danger,
+					crate::i18n::text(
+						language,
+						"Warning: The link text looks like a different web address.",
+					),
+				);
+			}
+
+			if !is_shortener && !disguised {
+				ui.add_space(8.0);
+				ui.checkbox(
+					&mut remember_site,
+					crate::i18n::text(language, "Do not ask again for this site"),
+				);
+			}
 		});
+		d.footer(|ui| {
+			confirm = crate::dialog::action(
+				ui,
+				crate::i18n::text(language, "Open in Browser"),
+				crate::dialog::Action::Primary,
+			)
+			.clicked();
+			cancel = crate::dialog::action(
+				ui,
+				crate::i18n::text(language, "Cancel"),
+				crate::dialog::Action::Neutral,
+			)
+			.clicked();
+		});
+	});
+
+	ctx.data_mut(|d| d.insert_temp(remember_id, remember_site));
 	cancel |= response.close;
-	if confirm && !cancel {
-		// Revalidate the exact normalized destination shown above before emitting an OS action.
-		if let Some(url) = external_url(&target) {
-			ctx.open_url(egui::OpenUrl::new_tab(url));
+	if confirm
+		&& !cancel
+		&& let Some(url) = external_url(&target)
+	{
+		if remember_site
+			&& is_safe
+			&& let Some(host) = target_host
+		{
+			let host = host.trim_start_matches("www.").to_ascii_lowercase();
+			if !host.is_empty() {
+				allowed_domains.insert(host.clone());
+				*add_allowed_domain = Some(host);
+			}
 		}
+		ctx.open_url(egui::OpenUrl::new_tab(url));
 	}
 	if confirm || cancel {
+		ctx.data_mut(|d| {
+			d.remove_temp::<bool>(remember_id);
+			d.remove_temp::<bool>(disguised_id);
+		});
 		*opening = None;
 	}
 }
@@ -1452,6 +1628,13 @@ impl Formatted {
 							egui::WidgetInfo::labeled(egui::Role::Link, ui.is_enabled(), &label)
 						});
 						if response.clicked() {
+							let is_disguised = is_disguised_link(&label, url);
+							ui.ctx().data_mut(|d| {
+								d.insert_temp(
+									egui::Id::unique("markdown_disguised_link"),
+									is_disguised,
+								);
+							});
 							*render.opening = Some(url.clone());
 						}
 					} else {
@@ -2563,9 +2746,18 @@ mod tests {
 			("https://example.com/", false, true),
 		] {
 			let ctx = egui::Context::default();
-			let mut opening = Some(target.to_owned());
+			let mut opening = Some(target.to_string());
+			let mut allowed = std::collections::HashSet::new();
+			let mut add = None;
 			let output = ctx.run_ui(Default::default(), |_| {
-				confirm_external_link(&ctx, &mut opening, confirm_links);
+				confirm_external_link(
+					&ctx,
+					&mut opening,
+					confirm_links,
+					&mut allowed,
+					&mut add,
+					model::Language::English,
+				);
 			});
 			assert_eq!(
 				!output.platform_output.commands.is_empty(),
@@ -2595,8 +2787,10 @@ mod tests {
 		for action in ["Cancel", "Escape", "Open in Browser"] {
 			let ctx = egui::Context::default();
 			let normalized = "https://example.com/b%20c";
-			let mut opening = Some("HTTPS://EXAMPLE.COM:443/a/../b c".into());
+			let mut opening = Some("HTTPS://EXAMPLE.COM:443/a/../b c".to_string());
 			let frame = |opening: &mut Option<String>, events| {
+				let mut allowed = std::collections::HashSet::new();
+				let mut add = None;
 				ctx.run_ui(
 					egui::RawInput {
 						screen_rect: Some(egui::Rect::from_min_size(
@@ -2606,7 +2800,16 @@ mod tests {
 						events,
 						..Default::default()
 					},
-					|_| confirm_external_link(&ctx, opening, true),
+					|_| {
+						confirm_external_link(
+							&ctx,
+							opening,
+							true,
+							&mut allowed,
+							&mut add,
+							model::Language::English,
+						)
+					},
 				)
 			};
 			let mut position = None;
@@ -2680,13 +2883,166 @@ mod tests {
 			output.drop_without_applying_deltas();
 		}
 		let ctx = egui::Context::default();
-		let mut invalid = Some("javascript:alert(1)".into());
+		let mut invalid = Some("javascript:alert(1)".to_string());
+		let mut allowed = std::collections::HashSet::new();
+		let mut add = None;
 		let output = ctx.run_ui(Default::default(), |_| {
-			confirm_external_link(&ctx, &mut invalid, true)
+			confirm_external_link(
+				&ctx,
+				&mut invalid,
+				true,
+				&mut allowed,
+				&mut add,
+				model::Language::English,
+			)
 		});
 		assert!(invalid.is_none());
 		assert!(output.platform_output.commands.is_empty());
 		output.drop_without_applying_deltas();
+	}
+
+	#[test]
+	fn external_link_safety_bypass_rules_and_whitelist() {
+		// 0. Disguised link detector unit check
+		assert!(is_disguised_link(
+			"https://paypal.com",
+			"https://evil.com/login"
+		));
+		assert!(!is_disguised_link("paypal.com", "https://paypal.com/login"));
+		assert!(!is_disguised_link("Click here", "https://evil.com"));
+
+		// 1. Allowed domain bypasses confirmation when safe
+		{
+			let ctx = egui::Context::default();
+			let mut opening = Some("https://x.com/status/123".to_string());
+			let mut allowed = std::collections::HashSet::from(["x.com".to_string()]);
+			let mut add = None;
+			let output = ctx.run_ui(Default::default(), |_| {
+				confirm_external_link(
+					&ctx,
+					&mut opening,
+					true,
+					&mut allowed,
+					&mut add,
+					model::Language::English,
+				);
+			});
+			assert!(
+				!output.platform_output.commands.is_empty(),
+				"allowed domain should open directly"
+			);
+			assert!(opening.is_none());
+			output.drop_without_applying_deltas();
+		}
+
+		// 2. Global switch bypasses confirmation when safe
+		{
+			let ctx = egui::Context::default();
+			let mut opening = Some("https://example.com/blog".to_string());
+			let mut allowed = std::collections::HashSet::new();
+			let mut add = None;
+			let output = ctx.run_ui(Default::default(), |_| {
+				confirm_external_link(
+					&ctx,
+					&mut opening,
+					false,
+					&mut allowed,
+					&mut add,
+					model::Language::English,
+				);
+			});
+			assert!(
+				!output.platform_output.commands.is_empty(),
+				"always open switch should open directly"
+			);
+			assert!(opening.is_none());
+			output.drop_without_applying_deltas();
+		}
+
+		// 3. Disguised link ALWAYS prompts even with global switch OFF/ON, domain allowed, or targeting Discord!
+		for (target, allowed_domain) in [
+			("https://evil.com/login", "evil.com"),
+			("https://discord.com/invite/fake", "discord.com"),
+		] {
+			for confirm_links in [true, false] {
+				let ctx = egui::Context::default();
+				set_disguised_link_for_test(&ctx, true);
+				let mut opening = Some(target.to_string());
+				let mut allowed = std::collections::HashSet::from([allowed_domain.to_string()]);
+				let mut add = None;
+				let output = ctx.run_ui(Default::default(), |_| {
+					confirm_external_link(
+						&ctx,
+						&mut opening,
+						confirm_links,
+						&mut allowed,
+						&mut add,
+						model::Language::English,
+					);
+				});
+				assert!(
+					output.platform_output.commands.is_empty(),
+					"disguised link to {target} MUST NOT open directly"
+				);
+				assert!(opening.is_some(), "disguised link must keep dialog open");
+				output.drop_without_applying_deltas();
+			}
+		}
+
+		// 4. URL shortener ALWAYS prompts even with global switch OFF/ON and domain allowed!
+		for shortener in [
+			"https://bit.ly/xyz",
+			"https://tinyurl.com/abc",
+			"https://t.co/123",
+		] {
+			for confirm_links in [true, false] {
+				let ctx = egui::Context::default();
+				let mut opening = Some(shortener.to_string());
+				let mut allowed = std::collections::HashSet::from([
+					"bit.ly".to_string(),
+					"tinyurl.com".to_string(),
+					"t.co".to_string(),
+				]);
+				let mut add = None;
+				let output = ctx.run_ui(Default::default(), |_| {
+					confirm_external_link(
+						&ctx,
+						&mut opening,
+						confirm_links,
+						&mut allowed,
+						&mut add,
+						model::Language::English,
+					);
+				});
+				assert!(
+					output.platform_output.commands.is_empty(),
+					"shortener {shortener} MUST NOT open directly"
+				);
+				assert!(opening.is_some(), "shortener must keep dialog open");
+				output.drop_without_applying_deltas();
+			}
+		}
+
+		// 5. Non-http/https is rejected/prompts
+		{
+			let ctx = egui::Context::default();
+			let mut opening = Some("ftp://example.com/file".to_string());
+			let mut allowed = std::collections::HashSet::from(["example.com".to_string()]);
+			let mut add = None;
+			let output = ctx.run_ui(Default::default(), |_| {
+				confirm_external_link(
+					&ctx,
+					&mut opening,
+					false,
+					&mut allowed,
+					&mut add,
+					model::Language::English,
+				);
+			});
+			assert!(output.platform_output.commands.is_empty());
+			assert!(opening.is_none());
+			output.drop_without_applying_deltas();
+		}
 	}
 
 	#[test]

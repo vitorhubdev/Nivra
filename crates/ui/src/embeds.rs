@@ -165,6 +165,27 @@ fn inline_image(embed: &Embed) -> Option<&model::EmbedMedia> {
 		.flatten()
 }
 
+/// The inline slot collapses when every image it could show is permanently
+/// unfetchable and no playable video takes the slot instead.
+fn inline_dead(images: &mut Avatars, embed: &Embed) -> bool {
+	let video_live = embed.video.as_ref().is_some_and(|video| {
+		video
+			.url
+			.as_deref()
+			.is_some_and(crate::avatars::media::is_motion_video)
+			|| video
+				.proxy_url
+				.as_deref()
+				.is_some_and(crate::avatars::media::is_motion_video)
+	});
+	!video_live
+		&& inline_image(embed).is_some_and(|media| images.collapsed_media(media))
+		&& embed
+			.thumbnail
+			.as_ref()
+			.is_none_or(|media| images.collapsed_media(media))
+}
+
 // Discord link previews carry additional images as same-URL embed entries.
 // Only consume continuations without independent content (or with repeated metadata).
 fn gallery_len(embeds: &[Embed]) -> usize {
@@ -222,14 +243,28 @@ fn gallery(
 	opening: &mut Option<String>,
 	download: &mut DownloadUi,
 	demo: bool,
-) {
+) -> bool {
+	// Permanently unfetchable images leave the gallery before layout so they
+	// take no space; the count below only covers what will actually paint.
+	let visible: Vec<_> = embeds
+		.iter()
+		.filter(|embed| {
+			embed
+				.image
+				.as_ref()
+				.is_some_and(|media| !images.collapsed_media(media))
+		})
+		.collect();
+	if visible.is_empty() {
+		return false;
+	}
 	let width = ui
 		.available_width()
 		.clamp(1.0, crate::avatars::media::MEDIA_MAX_WIDTH);
-	let height = gallery_rect(embeds.len(), embeds.len() - 1, width).bottom();
+	let height = gallery_rect(visible.len(), visible.len() - 1, width).bottom();
 	let (area, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-	for (index, embed) in embeds.iter().enumerate() {
-		let rect = gallery_rect(embeds.len(), index, width).translate(area.min.to_vec2());
+	for (index, embed) in visible.iter().enumerate() {
+		let rect = gallery_rect(visible.len(), index, width).translate(area.min.to_vec2());
 		ui.scope_builder(
 			egui::UiBuilder::new()
 				.id_salt(("gallery", index))
@@ -255,7 +290,7 @@ fn gallery(
 							egui::Role::Image
 						},
 						ui.is_enabled(),
-						format!("Open embed image {} of {}", index + 1, embeds.len()),
+						format!("Open embed image {} of {}", index + 1, visible.len()),
 					)
 				});
 				if response.has_focus() {
@@ -276,6 +311,7 @@ fn gallery(
 			},
 		);
 	}
+	true
 }
 
 fn gif_for_embed(embed: &Embed, gifs: &client_core::gifs::Gifs) -> Option<Gif> {
@@ -337,6 +373,11 @@ fn image_preview(
 	download: &mut DownloadUi,
 	demo: bool,
 ) {
+	// A permanently unfetchable image takes no space at all: no widget, not
+	// even a zero-size one, so no layout spacing leaks around it.
+	if images.collapsed_media(image) {
+		return;
+	}
 	let painted = images
 		.show_media(ui, image, size, demo, Surface::Inline)
 		.response;
@@ -375,11 +416,15 @@ pub fn show(
 		let embed = &group[0];
 		ui.push_id(("embed", index), |ui| {
 			if count > 1 && inline_image(embed).is_some() {
-				gallery(ui, group, images, opening, download, demo);
-				if group.iter().any(|e| e.limited) {
-					ui.small(crate::tr_ui!(ui, "Embed display limited"));
+				if gallery(ui, group, images, opening, download, demo) {
+					if group.iter().any(|e| e.limited) {
+						ui.small(crate::tr_ui!(ui, "Embed display limited"));
+					}
+					ui.add_space(6.0);
 				}
-				ui.add_space(6.0);
+				return;
+			}
+			if inline_dead(images, embed) {
 				return;
 			}
 			if let Some(image) = inline_image(embed) {
@@ -489,10 +534,9 @@ pub fn show(
 						.auto_shrink([false, true])
 						.show(ui, |ui| {
 							let part = 1 + index as u16 * 64;
-							let thumbnail = embed
-								.thumbnail
-								.as_ref()
-								.filter(|_| ui.available_width() >= 300.0);
+							let thumbnail = embed.thumbnail.as_ref().filter(|media| {
+								ui.available_width() >= 300.0 && !images.collapsed_media(media)
+							});
 							let body_width = (ui.available_width()
 								- if thumbnail.is_some() { 96.0 } else { 0.0 })
 							.max(1.0);
@@ -602,7 +646,9 @@ pub fn show(
 							}
 							if count > 1 {
 								gallery(ui, group, images, opening, download, demo);
-							} else if let Some(image) = &embed.image {
+							} else if let Some(image) = &embed.image
+								&& !images.collapsed_media(image)
+							{
 								image_preview(
 									ui,
 									image,
@@ -617,6 +663,7 @@ pub fn show(
 							}
 							if thumbnail.is_none()
 								&& let Some(image) = &embed.thumbnail
+								&& !images.collapsed_media(image)
 							{
 								image_preview(
 									ui,
@@ -655,8 +702,11 @@ pub fn show(
 											demo,
 										);
 									} else {
-										if let Some(thumb) =
-											embed.thumbnail.as_ref().or(embed.image.as_ref())
+										if let Some(thumb) = embed
+											.thumbnail
+											.as_ref()
+											.or(embed.image.as_ref())
+											.filter(|thumb| !images.collapsed_media(thumb))
 										{
 											image_preview(
 												ui,
@@ -1407,6 +1457,77 @@ mod tests {
 		.drop_without_applying_deltas();
 		assert!(download.request.is_none(), "{:?}", download.request);
 		assert!(download.copy_request.is_none());
+	}
+
+	#[test]
+	fn unfetchable_embed_media_collapses() {
+		let mut images = Avatars::default();
+		assert!(images.collapsed_media(&model::EmbedMedia::default()));
+		assert!(!images.collapsed_media(&model::EmbedMedia {
+			url: Some("https://cdn.discordapp.com/attachments/2/42/preview.png".into()),
+			proxy_url: None,
+			width: 160,
+			height: 90,
+			..Default::default()
+		}));
+	}
+
+	#[test]
+	fn failed_embed_image_collapses_to_imageless_height() {
+		fn message_with(thumbnail: Option<model::EmbedMedia>) -> Message {
+			let mut message = test_support::message(1, model::Id(2));
+			message.embeds = vec![Embed {
+				kind: "rich".into(),
+				title: Some("Synthetic post".into()),
+				description: Some("Synthetic body text".into()),
+				thumbnail,
+				..Default::default()
+			}];
+			message
+		}
+		fn height_of(message: &Message) -> f32 {
+			let ctx = egui::Context::default();
+			let mut images = Avatars::default();
+			let mut cache = FormatCache::default();
+			let mut opening = None;
+			let mut download = DownloadUi::default();
+			let mut height = 0.0;
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(640.0, 700.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					let mut profile = crate::profiles::ProfileSession::default();
+					show(
+						ui,
+						message,
+						&mut cache,
+						&mut images,
+						&mut opening,
+						&mut download,
+						&mut profile,
+						&mut crate::VideoUi::default(),
+						&client_core::State::default(),
+					);
+					height = ui.min_rect().height();
+				},
+			)
+			.drop_without_applying_deltas();
+			height
+		}
+		let broken = message_with(Some(model::EmbedMedia {
+			url: None,
+			proxy_url: None,
+			width: 640,
+			height: 360,
+			..Default::default()
+		}));
+		let plain = message_with(None);
+		assert_eq!(height_of(&broken), height_of(&plain));
 	}
 
 	#[test]

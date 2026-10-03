@@ -1178,6 +1178,16 @@ async fn download(
 			.content_length()
 			.is_some_and(|length| length > limit as u64)
 	{
+		if !response.status().is_success() {
+			let host = url::Url::parse(url)
+				.ok()
+				.and_then(|url| url.host_str().map(str::to_owned))
+				.unwrap_or_else(|| "?".into());
+			eprintln!(
+				"Nivra: image fetch refused: host={host} status={}",
+				response.status().as_u16()
+			);
+		}
 		return None;
 	}
 	let mut bytes =

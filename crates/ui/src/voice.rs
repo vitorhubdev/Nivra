@@ -2594,9 +2594,12 @@ impl MessagingUi {
 		};
 		// This is a live client event, not the explicit Settings preview.
 		// DND and per-sound preferences are applied by the desktop notification runtime.
-		if self.notification_cues.len() < 4 {
-			self.notification_cues.push(cue);
+		// The queue is bounded so a stuck drain cannot grow it; a full queue drops
+		// the oldest cue so rapid mute->unmute still plays the latest feedback.
+		if self.notification_cues.len() >= 4 {
+			self.notification_cues.remove(0);
 		}
+		self.notification_cues.push(cue);
 	}
 
 	/// Mute or deafen toggle: red slashed glyph while active, like Discord's user area.
@@ -5740,6 +5743,30 @@ mod tests {
 			view.notification_cues.last().copied(),
 			Some(Sound::Mute),
 			"sound preferences are applied when the cue is played"
+		);
+	}
+
+	#[test]
+	fn voice_toggle_cues_keep_the_newest_feedback_when_the_queue_is_full() {
+		use model::notification_preferences::Sound;
+
+		let mut view = MessagingUi::default();
+		// Six rapid toggles: mute, unmute, deafen, undeafen, mute, unmute.
+		for (deafen, active) in [
+			(false, true),
+			(false, false),
+			(true, true),
+			(true, false),
+			(false, true),
+			(false, false),
+		] {
+			view.queue_voice_toggle_cue(deafen, active);
+		}
+		// Bounded at 4, and the newest feedback survives: the last four cues
+		// in order, so a fast mute->unmute still plays Unmute last.
+		assert_eq!(
+			view.notification_cues.as_slice(),
+			&[Sound::Deafen, Sound::Undeafen, Sound::Mute, Sound::Unmute],
 		);
 	}
 

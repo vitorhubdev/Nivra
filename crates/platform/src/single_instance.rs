@@ -224,7 +224,7 @@ mod tests {
 		assert_eq!(held.len(), 1, "exactly one racer must hold the OS lock");
 		drop(held);
 		// Dropping all handles releases the OS lock; a later launch must succeed.
-		let _ = InstanceLock::acquire_at(&lock_path).unwrap();
+		assert!(InstanceLock::acquire_at(&lock_path).unwrap().is_some());
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 }

@@ -29,6 +29,20 @@ pub enum Voice {
 	Deafened,
 }
 
+/// Maps a call to its tray badge. Deafen wins over mute; anything that is not
+/// an active connected/waiting call shows idle (upstream Serein #504).
+pub fn call_voice(in_call: bool, muted: bool, deafened: bool) -> Voice {
+	if !in_call {
+		Voice::Idle
+	} else if deafened {
+		Voice::Deafened
+	} else if muted {
+		Voice::Muted
+	} else {
+		Voice::Connected
+	}
+}
+
 /// Square straight-alpha RGBA tray icon: the app icon scaled to `size`, with a red dot for
 /// unread mentions (top right) and a call dot (bottom right: green, or red with a slash when
 /// muted and a bar when deafened). Each dot is cut out of the icon so it reads at 16 px.
@@ -675,5 +689,34 @@ mod tests {
 		assert_eq!(events.take(), Some(Event::Unavailable));
 		assert_eq!(events.take(), Some(Event::Show));
 		assert_eq!(events.take(), None);
+	}
+}
+
+#[cfg(test)]
+mod voice_tests {
+	use super::*;
+
+	#[test]
+	fn call_voice_maps_the_four_owner_states_in_priority_order() {
+		assert_eq!(call_voice(false, false, false), Voice::Idle);
+		assert_eq!(call_voice(false, true, true), Voice::Idle);
+		assert_eq!(call_voice(true, false, false), Voice::Connected);
+		assert_eq!(call_voice(true, true, false), Voice::Muted);
+		assert_eq!(call_voice(true, false, true), Voice::Deafened);
+		assert_eq!(
+			call_voice(true, true, true),
+			Voice::Deafened,
+			"deafen wins over mute"
+		);
+	}
+
+	#[test]
+	fn status_icon_renders_all_four_badges() {
+		let png = include_bytes!("../../../packaging/windows/nivra.png");
+		for voice in [Voice::Idle, Voice::Connected, Voice::Muted, Voice::Deafened] {
+			let pixels = status_icon(png, 32, false, voice)
+				.unwrap_or_else(|| panic!("tray icon must render for {voice:?}"));
+			assert_eq!(pixels.len(), 32 * 32 * 4);
+		}
 	}
 }

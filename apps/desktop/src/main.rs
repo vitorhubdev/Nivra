@@ -2606,13 +2606,11 @@ impl Desktop {
 		};
 		let voice = match self.state.voice.active.as_ref() {
 			Some(call) if matches!(call.phase, Phase::Connected | Phase::Waiting) => {
-				if call.deafened || call.server_deafened {
-					Voice::Deafened
-				} else if call.muted || call.server_muted {
-					Voice::Muted
-				} else {
-					Voice::Connected
-				}
+				platform::tray::call_voice(
+					true,
+					call.muted || call.server_muted,
+					call.deafened || call.server_deafened,
+				)
 			}
 			_ => Voice::Idle,
 		};

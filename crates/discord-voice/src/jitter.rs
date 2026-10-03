@@ -51,6 +51,18 @@ impl Jitter {
 		}
 		self.missing += 1;
 		if self.missing > 3 {
+			if let Some((min_idx, _)) = self
+				.packets
+				.iter()
+				.enumerate()
+				.filter(|(_, (id, _))| id.wrapping_sub(next) < 32768)
+				.min_by_key(|(_, (id, _))| id.wrapping_sub(next))
+			{
+				let (seq, data) = self.packets.swap_remove(min_idx);
+				self.next = Some(seq.wrapping_add(1));
+				self.missing = 0;
+				return Some(data);
+			}
 			self.clear();
 			return None;
 		}
@@ -90,5 +102,29 @@ mod tests {
 		assert!(jitter.pop().is_none());
 		assert!(jitter.pop().is_none());
 		assert_eq!(jitter.pop(), Some(vec![7]));
+	}
+
+	#[test]
+	fn burst_loss_preserves_buffered_recovery_and_resets_on_far_jump() {
+		let mut jitter = Jitter::default();
+		jitter.push(0, vec![10]);
+		jitter.push(5, vec![15]);
+		jitter.push(6, vec![16]);
+		assert!(jitter.pop().is_none());
+		assert!(jitter.pop().is_none());
+		assert_eq!(jitter.pop(), Some(vec![10]));
+		// 3 packet loss concealment packets for 1, 2, 3
+		assert_eq!(jitter.pop(), Some(vec![]));
+		assert_eq!(jitter.pop(), Some(vec![]));
+		assert_eq!(jitter.pop(), Some(vec![]));
+		// Packet 4 is missing (missing > 3), but packets 5 and 6 were buffered:
+		// instead of dropping them with clear(), it jumps to packet 5 and delivers it.
+		assert_eq!(jitter.pop(), Some(vec![15]));
+		assert_eq!(jitter.pop(), Some(vec![16]));
+		// Once drained, 3 concealments then clear/None.
+		assert_eq!(jitter.pop(), Some(vec![]));
+		assert_eq!(jitter.pop(), Some(vec![]));
+		assert_eq!(jitter.pop(), Some(vec![]));
+		assert!(jitter.pop().is_none());
 	}
 }

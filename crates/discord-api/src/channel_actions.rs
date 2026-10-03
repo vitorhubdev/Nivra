@@ -28,7 +28,7 @@ fn channel_value(bytes: &[u8], guild: Id, channel: Option<Id>) -> Result<Value, 
 			.as_deref()
 			.is_some_and(client_core::channel_actions::valid_name)
 		|| dto.parent_id.is_some_and(|id| id.0 == 0)
-		|| !dto.recipients.is_empty()
+		|| !dto.recipients.items.is_empty()
 	{
 		return Err(Failure::Protocol);
 	}

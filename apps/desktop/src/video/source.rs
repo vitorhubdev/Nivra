@@ -4,7 +4,7 @@ use std::{
 	io::{self, Read, Seek, SeekFrom},
 	sync::{
 		Arc,
-		atomic::{AtomicBool, Ordering},
+		atomic::{AtomicBool, AtomicUsize, Ordering},
 	},
 	time::Duration,
 };
@@ -190,6 +190,7 @@ pub(super) fn source(
 	url: Option<url::Url>,
 	expected: usize,
 	cancelled: Arc<AtomicBool>,
+	log_budget: Arc<AtomicUsize>,
 	runtime: Handle,
 ) -> Result<Box<dyn platform::video::ReadSeek>, &'static str> {
 	let (input, len) = if let Some(url) = url {
@@ -248,6 +249,7 @@ pub(super) fn source(
 	Ok(Box::new(Source {
 		input,
 		cancelled,
+		log_budget,
 		len,
 		position: 0,
 		cache: VecDeque::new(),
@@ -270,6 +272,7 @@ enum Input {
 struct Source {
 	input: Input,
 	cancelled: Arc<AtomicBool>,
+	log_budget: Arc<AtomicUsize>,
 	len: usize,
 	position: usize,
 	cache: VecDeque<(usize, Vec<u8>)>,
@@ -390,22 +393,17 @@ impl Read for Source {
 		if count == 0 {
 			return Ok(0);
 		}
-		if !self.first_byte_logged {
-			self.first_byte_logged = true;
-			eprintln!(
-				"[Nivra video] first_byte: read in {:.3} ms",
-				self.start_time.elapsed().as_secs_f64() * 1000.0
-			);
-		}
 		#[cfg(feature = "demo")]
 		if let Input::Demo(bytes) = self.input {
 			output[..count].copy_from_slice(&bytes[self.position..self.position + count]);
 			self.position += count;
+			self.log_first_byte(count);
 			return Ok(count);
 		}
 		if let Input::Memory(bytes) = &self.input {
 			output[..count].copy_from_slice(&bytes[self.position..self.position + count]);
 			self.position += count;
+			self.log_first_byte(count);
 			return Ok(count);
 		}
 		if let Some(index) = self.cache.iter().position(|(start, bytes)| {
@@ -421,7 +419,22 @@ impl Read for Source {
 		count = count.min(bytes.len() - offset);
 		output[..count].copy_from_slice(&bytes[offset..offset + count]);
 		self.position += count;
+		self.log_first_byte(count);
 		Ok(count)
+	}
+}
+impl Source {
+	/// First-byte timing measures data actually handed out (after any range
+	/// request), not the moment the read was attempted (Codex PR #34 P2).
+	fn log_first_byte(&mut self, count: usize) {
+		if !self.first_byte_logged && count > 0 {
+			self.first_byte_logged = true;
+			vlog!(
+				&self.log_budget,
+				"first_byte: read in {:.3} ms",
+				self.start_time.elapsed().as_secs_f64() * 1000.0
+			);
+		}
 	}
 }
 impl Seek for Source {
@@ -443,6 +456,55 @@ impl Seek for Source {
 mod tests {
 	use super::*;
 	use std::{io::Write, net::TcpListener, sync::atomic::AtomicUsize};
+	#[test]
+	fn first_byte_timing_waits_for_handed_out_data() {
+		discord_api::ensure_tls_provider();
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let url = url::Url::parse(&format!(
+			"http://{}/synthetic.mov",
+			listener.local_addr().unwrap()
+		))
+		.unwrap();
+		let server = std::thread::spawn(move || {
+			let (mut socket, _) = listener.accept().unwrap();
+			let mut header = Vec::new();
+			while !header.ends_with(b"\r\n\r\n") {
+				let mut byte = [0];
+				if socket.read_exact(&mut byte).is_err() {
+					return;
+				}
+				header.push(byte[0]);
+			}
+			// The range request fails: no data is ever handed out.
+			write!(socket, "HTTP/1.1 500 Broken\r\nContent-Length: 0\r\n\r\n").unwrap();
+		});
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.unwrap();
+		let mut source = Source {
+			input: Input::Http {
+				client: media_client().unwrap(),
+				url,
+				runtime: runtime.handle().clone(),
+			},
+			cancelled: Arc::new(AtomicBool::new(false)),
+			log_budget: Arc::new(AtomicUsize::new(usize::MAX)),
+			len: CHUNK,
+			position: 0,
+			cache: VecDeque::new(),
+			start_time: std::time::Instant::now(),
+			first_byte_logged: false,
+		};
+		let mut chunk = vec![0; CHUNK];
+		assert!(source.read(&mut chunk).is_err());
+		assert!(
+			!source.first_byte_logged,
+			"failed reads hand out no data, so no first-byte timing"
+		);
+		server.join().unwrap();
+	}
 
 	#[test]
 	fn alternating_tracks_reuse_buffered_ranges() {
@@ -498,6 +560,7 @@ mod tests {
 			Some(url),
 			expected,
 			Arc::new(AtomicBool::new(false)),
+			Arc::new(AtomicUsize::new(usize::MAX)),
 			runtime.handle().clone(),
 		)
 		.unwrap();
@@ -564,7 +627,14 @@ mod tests {
 			.enable_all()
 			.build()
 			.unwrap();
-		let mut input = source(Some(url), CHUNK, cancelled, runtime.handle().clone()).unwrap();
+		let mut input = source(
+			Some(url),
+			CHUNK,
+			cancelled,
+			Arc::new(AtomicUsize::new(usize::MAX)),
+			runtime.handle().clone(),
+		)
+		.unwrap();
 		assert_eq!(
 			input.read(&mut [0]).unwrap_err().kind(),
 			io::ErrorKind::ConnectionAborted
@@ -627,6 +697,7 @@ mod tests {
 			Some(url.clone()),
 			expected,
 			cancelled.clone(),
+			Arc::new(AtomicUsize::new(usize::MAX)),
 			runtime.handle().clone(),
 		)
 		.unwrap();
@@ -676,6 +747,7 @@ mod tests {
 				Some(url),
 				MAX_BYTES + 1,
 				cancelled,
+				Arc::new(AtomicUsize::new(usize::MAX)),
 				runtime.handle().clone()
 			)
 			.is_err()
@@ -747,6 +819,7 @@ mod tests {
 				Some(url),
 				0,
 				Arc::new(AtomicBool::new(false)),
+				Arc::new(AtomicUsize::new(usize::MAX)),
 				runtime.handle().clone(),
 			)
 			.expect("embed preview without a size");
@@ -801,6 +874,7 @@ mod tests {
 				Some(url),
 				0,
 				Arc::new(AtomicBool::new(false)),
+				Arc::new(AtomicUsize::new(usize::MAX)),
 				runtime.handle().clone()
 			)
 			.is_err()

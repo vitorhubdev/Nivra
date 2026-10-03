@@ -47,18 +47,6 @@ fn try_acquire_video_worker(live: &AtomicUsize) -> bool {
 /// Startup transients free slots in milliseconds while stuck native opens do
 /// not: poll briefly so rapid zapping never fails, then refuse with a clean
 /// error instead of growing threads without bound.
-fn acquire_video_worker() -> bool {
-	if try_acquire_video_worker(&LIVE_VIDEO_WORKERS) {
-		return true;
-	}
-	for _ in 0..50 {
-		std::thread::sleep(Duration::from_millis(5));
-		if try_acquire_video_worker(&LIVE_VIDEO_WORKERS) {
-			return true;
-		}
-	}
-	false
-}
 struct WorkerSlot<'a>(&'a AtomicUsize);
 impl Drop for WorkerSlot<'_> {
 	fn drop(&mut self) {
@@ -235,7 +223,10 @@ impl Video {
 		};
 		let session_id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
 		let session = Arc::new(Session::new(volume, session_id));
-		if !acquire_video_worker() {
+		if !try_acquire_video_worker(&LIVE_VIDEO_WORKERS) {
+			// No waiting: start() runs on the render thread, and four healthy
+			// concurrent plays must fail fast instead of freezing input.
+			// Startup transients free their slot within milliseconds.
 			return Err("Video is busy finishing another open; retry in a moment");
 		}
 		let request = Request {
@@ -854,6 +845,60 @@ mod attachment_url_tests {
 		live.fetch_sub(1, Ordering::AcqRel);
 	}
 	#[test]
+	fn busy_video_open_fails_fast_without_blocking_the_render_thread() {
+		source::OFFLINE_PROBE.store(true, Ordering::Release);
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.unwrap();
+		// Hold every global slot so start() must refuse (transient holders from
+		// other tests clear within milliseconds; bounded retries keep this tight).
+		let mut held = Vec::new();
+		for _ in 0..500 {
+			while held.len() < MAX_VIDEO_WORKERS && try_acquire_video_worker(&LIVE_VIDEO_WORKERS) {
+				held.push(WorkerSlot(&LIVE_VIDEO_WORKERS));
+			}
+			if held.len() == MAX_VIDEO_WORKERS {
+				break;
+			}
+			std::thread::sleep(Duration::from_millis(1));
+		}
+		assert_eq!(held.len(), MAX_VIDEO_WORKERS, "all worker slots stay held");
+		let _held = held;
+		let attachment = model::Attachment {
+			id: model::Id(9001),
+			filename: "busy.mp4".into(),
+			description: None,
+			content_type: Some("video/mp4".into()),
+			size: 1024,
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+			media: model::EmbedMedia {
+				url: Some("https://cdn.discordapp.com/attachments/1/9001/busy.mp4?ex=68dc&is=68db&hm=abc&backend=b2".into()),
+				..Default::default()
+			},
+		};
+		let mut video = Video::default();
+		let started = std::time::Instant::now();
+		let error = video
+			.start(
+				attachment,
+				0.0,
+				runtime.handle(),
+				&eframe::egui::Context::default(),
+				false,
+			)
+			.expect_err("full slots refuse");
+		assert!(
+			started.elapsed() < Duration::from_millis(100),
+			"refusal must not wait"
+		);
+		assert!(error.contains("busy"));
+		source::OFFLINE_PROBE.store(false, Ordering::Release);
+	}
+	#[test]
 	fn diagnostic_budget_caps_lines_per_playback() {
 		let budget = AtomicUsize::new(2);
 		vlog(&budget, format_args!("one"));
@@ -1122,12 +1167,28 @@ mod attachment_url_tests {
 				},
 			};
 			video.command(
-				VideoCommand::Play(attachment),
+				VideoCommand::Play(attachment.clone()),
 				&mut player,
 				runtime.handle(),
 				&eframe::egui::Context::default(),
 				false,
 			);
+			// A tight loop outruns exiting workers; production clicks never do.
+			// Bounded retries (in the test only, never on the render thread)
+			// prove slots recycle instead of leaking.
+			for _ in 0..200 {
+				if video.session.is_some() {
+					break;
+				}
+				std::thread::sleep(Duration::from_millis(1));
+				video.command(
+					VideoCommand::Play(attachment.clone()),
+					&mut player,
+					runtime.handle(),
+					&eframe::egui::Context::default(),
+					false,
+				);
+			}
 			let s = video.session.clone().expect("session created");
 			sessions.push(s);
 		}

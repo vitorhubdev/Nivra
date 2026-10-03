@@ -1352,11 +1352,16 @@ impl State {
 						}
 						Action::Mute { channel, muted } => self.confirm_dm_muted(channel, muted)?,
 					}
-				} else if let Action::Mute { channel, .. } = action {
+				} else if let Action::Mute { channel, muted } = action {
 					// The settings event already carried the mute, but a stale expiry
 					// timer from an earlier temporary mute must still be cleared:
 					// otherwise it unmutes the DM when it fires (Codex PR #40).
-					self.clear_dm_mute_timer(channel);
+					// Unmute requests keep the timer: with a stale echo and an
+					// already-fired timer, expiry is what currently reports the
+					// requested unmute (Codex PR #71 P2).
+					if muted {
+						self.clear_dm_mute_timer(channel);
+					}
 				}
 			}
 		}
@@ -1480,6 +1485,60 @@ mod tests {
 			})
 			.unwrap();
 		assert_eq!(state.dm_muted(Id(10)), Some(true));
+	}
+	#[test]
+	fn observed_unmute_keeps_expiry_timer_until_fresh_settings_arrive() {
+		use crate::notifications::{Event as NotificationsEvent, Setting};
+		let timed = || Setting {
+			guild: None,
+			muted: None,
+			level: None,
+			suppress_everyone: None,
+			suppress_roles: None,
+			hide_muted_channels: None,
+			channels: vec![(Id(10), Some(true), None)],
+			channel_mute_until: vec![(Id(10), 1)],
+		};
+		let mut state = state();
+		state
+			.apply_notification_preferences(NotificationsEvent::Settings {
+				entries: vec![timed()],
+				replace: true,
+			})
+			.unwrap();
+		// The owner unmutes, but the settings echo still carries the old timed
+		// mute: expiry is what reports the requested unmute (Codex PR #71 P2).
+		assert!(state.set_dm_muted(Id(10), false).is_some());
+		let request = state
+			.user_actions
+			.pending
+			.as_ref()
+			.map(|(_, sequence, _)| *sequence)
+			.unwrap();
+		state
+			.apply_notification_preferences(NotificationsEvent::Settings {
+				entries: vec![timed()],
+				replace: false,
+			})
+			.unwrap();
+		assert!(
+			state
+				.user_actions
+				.pending
+				.as_ref()
+				.is_some_and(|(_, _, observed)| *observed)
+		);
+		state
+			.apply_user_action(Event::Written {
+				action: Action::Mute {
+					channel: Id(10),
+					muted: false,
+				},
+				request,
+				result: Ok(()),
+			})
+			.unwrap();
+		assert_eq!(state.dm_muted(Id(10)), Some(false));
 	}
 	#[test]
 	fn relationship_view_tracks_all_friend_inputs_and_failed_mutations() {

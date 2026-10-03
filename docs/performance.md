@@ -1898,6 +1898,44 @@ is an in-memory check, not native RSS or frame time. Text preview of
 20,000 ASCII characters in CI run 36819481221: macOS 557.708 µs, Ubuntu
 889.729 µs, Windows x64 924.6 µs, Windows ARM 1.0856 ms.
 
+# History copies and decoded-image backpressure (port) - October 2026
+
+Ported from upstream `35b8042c` without its hardware table: incremental history
+saves borrow loaded/changed rows instead of cloning the window, `finish_page`
+inherits author membership per incoming row instead of cloning a prior map, and
+decoded image results share a 128-item / 128 MiB allocation budget (final results
+wait cancellably, previews drop under pressure). No wall-clock/RSS before/after
+was measured for this port: release workloads are not run on the agent PC per
+repo rules, and CI runners are not stable hardware. The ignored synthetic
+workloads print comparable medians for on-hardware runs:
+`page_membership_benchmark` (session-cache), `benchmark_changed_row_save`
+(local-store, in-memory SQLite), `decoded_result_queue_workload` (avatars,
+`NIVRA_IMAGE_QUEUE_LEGACY=1` reproduces the old item-only queue),
+`timeline_cursor_workload` (client-core) and `watch_frame_memory_workload`
+(watch, `NIVRA_WATCH_FRAME_LEGACY=1` / `NIVRA_WATCH_FRAME_UPLOAD_EVERY=3`).
+Behavioral tests pin the bounds; no performance change is claimed until those
+workloads run on identical hardware.
+
+## History copies and decoded-image backpressure — measured October 2026
+
+Same-machine debug medians on the agent PC (Windows x64); debug inflates
+absolutes, the relative deltas are the signal. Release numbers on stable
+hardware remain pending.
+
+| Metric / method | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| Page completion, 500 membership-heavy rows + 50-row page, recent, µs | 2,011.6 | 1,030.0 | -48.8% |
+| Same, older, µs | 744.3 | 185.9 | -75.0% |
+| Same, append, µs | 778.4 | 236.1 | -69.7% |
+| 200 incremental SQLite saves, 500 rows, s | 2.18 | 1.93 | -11.4% |
+| Paused image consumer, queued pixel bytes | 536,870,912 | 130,023,424 | -75.8% |
+
+The queue workload's legacy comparator reproduces the old 128-item channel
+(`NIVRA_IMAGE_QUEUE_LEGACY=1`); the port admits 31 results (130,027,919
+charged bytes) then waits. Workloads: `page_membership_benchmark`,
+`benchmark_changed_row_save`, `decoded_result_queue_workload`. No RSS claim;
+excludes rendering and filesystem latency.
+
 # DX12 allocation reserves (port) - October 2026
 
 Ported from upstream `4c7cfd06` without its hardware table: on the DX12 backend
@@ -1908,6 +1946,7 @@ eframe's requirements untouched, pinned by
 No RSS before/after was measured for this port: it needs a Windows DX12 run on
 identical hardware (not this PC per repo rules). No performance change is
 claimed until such a run happens.
+
 # Timeline cursors and watch frame reuse (port) - October 2026
 
 Ported from upstream `eab1961a`. Measured on the agent PC (Windows x64) in

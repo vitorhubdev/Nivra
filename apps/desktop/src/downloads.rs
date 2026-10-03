@@ -29,6 +29,7 @@ pub enum Status {
 		filename: String,
 		path: PathBuf,
 		size: u64,
+		generation: u64,
 	},
 	Copied,
 	Cancelled,
@@ -43,6 +44,9 @@ struct Job {
 #[derive(Default)]
 pub struct Downloads {
 	job: Option<Job>,
+	/// Started-transfer counter; completions carry it so a fast re-download
+	/// announces even when its transient states were never observed.
+	generation: u64,
 	status: Status,
 	clipboard_owner: Option<std::sync::mpsc::SyncSender<()>>,
 	clipboard_thread: Option<std::thread::JoinHandle<()>>,
@@ -121,6 +125,8 @@ impl Downloads {
 		if self.is_active() {
 			return Err("A download or clipboard cleanup is already active");
 		}
+		self.generation = self.generation.wrapping_add(1);
+		let generation = self.generation;
 		// Construct on the native UI thread; Cocoa reads its application/window here.
 		let copying = parent.is_none();
 		let dialog = parent
@@ -228,6 +234,20 @@ impl Downloads {
 				if !copied_ok {
 					copied.take();
 				}
+				if result.is_ok()
+					&& !copying && let Some(path) = saved_path.as_ref()
+					&& attachment.id.0 != 0
+					&& let Ok(store) = local_store::LocalStore::open_default()
+				{
+					// The download worker is tracked by the job state, so this write
+					// cannot be cut off by window close after completion is shown.
+					if store
+						.record_download(attachment.id, path, attachment.size)
+						.is_err()
+					{
+						eprintln!("Nivra: download registry write failed");
+					}
+				}
 				publish(match result {
 					Ok(()) if copying => Status::Copied,
 					Ok(()) => saved_path
@@ -239,6 +259,7 @@ impl Downloads {
 								filename: attachment.filename.clone(),
 								path,
 								size: attachment.size,
+								generation,
 							})
 						})
 						.unwrap_or(Status::Cancelled),
@@ -863,6 +884,7 @@ mod tests {
 		});
 		let done = Arc::new(AtomicBool::new(false));
 		let mut downloads = Downloads {
+			generation: 0,
 			clipboard_owner: Some(owner),
 			job: Some(Job {
 				cancelled: Arc::new(AtomicBool::new(false)),

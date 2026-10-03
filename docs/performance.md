@@ -1936,6 +1936,17 @@ charged bytes) then waits. Workloads: `page_membership_benchmark`,
 `benchmark_changed_row_save`, `decoded_result_queue_workload`. No RSS claim;
 excludes rendering and filesystem latency.
 
+# DX12 allocation reserves (port) - October 2026
+
+Ported from upstream `4c7cfd06` without its hardware table: on the DX12 backend
+the device descriptor uses `MemoryHints::MemoryUsage` (smaller allocation
+blocks, not a cap on texture sizes or total memory); other backends keep
+eframe's requirements untouched, pinned by
+`gpu::tests::memory_policy_preserves_device_requirements_and_other_backends`.
+No RSS before/after was measured for this port: it needs a Windows DX12 run on
+identical hardware (not this PC per repo rules). No performance change is
+claimed until such a run happens.
+
 # Timeline cursors and watch frame reuse (port) - October 2026
 
 Ported from upstream `eab1961a`. Measured on the agent PC (Windows x64) in

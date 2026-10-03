@@ -541,7 +541,17 @@ impl Drop for Partial<'_> {
 /// written to disk and the transfer is refused up front when the declared size
 /// already exceeds the UI preview limit; the streaming loop enforces the same
 /// cap so a lying Content-Length cannot grow the buffer.
-pub(crate) async fn fetch_preview(url: url::Url, expected: u64) -> Result<Vec<u8>, &'static str> {
+///
+/// The signed CDN link may answer with a redirect (media proxy, `backend=b2`
+/// links, renewed signatures). Up to three redirects are followed when they
+/// stay on the same host or move between Discord's own HTTPS hosts; anything
+/// else keeps the original refusal. A 403/404 from the signed link retries once
+/// through the media proxy URL before giving up with the specific cause.
+pub(crate) async fn fetch_preview(
+	original: url::Url,
+	proxy: Option<url::Url>,
+	expected: u64,
+) -> Result<Vec<u8>, &'static str> {
 	let limit = ui::text_preview::MAX_PREVIEW_BYTES;
 	if expected == 0 || expected > limit {
 		return Err("File is too large to preview");
@@ -554,31 +564,128 @@ pub(crate) async fn fetch_preview(url: url::Url, expected: u64) -> Result<Vec<u8
 		.timeout(Duration::from_secs(60))
 		.build()
 		.map_err(|_| "Preview unavailable")?;
+	let mut bases = vec![original];
+	bases.extend(proxy);
+	let mut failure = "Preview unavailable; reload the conversation";
+	for base in &bases {
+		match fetch_preview_url(&client, base.clone(), expected, limit, 0).await {
+			Ok(bytes) => return Ok(bytes),
+			Err(PreviewError::Expired) => {
+				failure = "Attachment link expired; reload the conversation";
+				continue;
+			}
+			Err(PreviewError::Refused(reason)) => {
+				failure = reason;
+				break;
+			}
+		}
+	}
+	Err(failure)
+}
+
+enum PreviewError {
+	/// The signed link is dead (403/404): try the next base URL, if any.
+	Expired,
+	/// Anything else: report the specific cause, no further attempts.
+	Refused(&'static str),
+}
+
+/// Redirects stay on the same host or move between Discord's HTTPS hosts, so a
+/// compromised response cannot bounce the preview fetcher to an arbitrary site.
+fn preview_redirect_allowed(from: &url::Url, to: &url::Url) -> bool {
+	if to.host_str() == from.host_str() && to.scheme() == from.scheme() {
+		return true;
+	}
+	to.scheme() == "https"
+		&& to.port_or_known_default() == Some(443)
+		&& matches!(
+			to.host_str(),
+			Some("cdn.discordapp.com" | "media.discordapp.net")
+		)
+}
+
+async fn fetch_preview_url(
+	client: &reqwest::Client,
+	url: url::Url,
+	expected: u64,
+	limit: u64,
+	depth: usize,
+) -> Result<Vec<u8>, PreviewError> {
 	let response = client
-		.get(url)
+		.get(url.clone())
 		.header(reqwest::header::ACCEPT_ENCODING, "identity")
 		.send()
 		.await
-		.map_err(|_| "Preview request failed")?;
-	if response.status() != reqwest::StatusCode::OK {
-		return Err("Preview unavailable; reload the conversation");
+		.map_err(|_| {
+			eprintln!(
+				"Nivra: text preview refused: host={} status=send-failed",
+				url.host_str().unwrap_or("?")
+			);
+			PreviewError::Refused("Preview request failed")
+		})?;
+	let status = response.status();
+	if status.is_redirection() {
+		let location = response
+			.headers()
+			.get(reqwest::header::LOCATION)
+			.and_then(|value| value.to_str().ok())
+			.and_then(|raw| url.join(raw).ok());
+		eprintln!(
+			"Nivra: text preview redirect: host={} status={} location-host={}",
+			url.host_str().unwrap_or("?"),
+			status.as_u16(),
+			location
+				.as_ref()
+				.and_then(|to| to.host_str())
+				.unwrap_or("?")
+		);
+		let Some(to) = location else {
+			return Err(PreviewError::Refused("Preview redirect is invalid"));
+		};
+		if depth >= 3 || !preview_redirect_allowed(&url, &to) {
+			return Err(PreviewError::Refused("Preview redirect leaves Discord"));
+		}
+		return Box::pin(fetch_preview_url(client, to, expected, limit, depth + 1)).await;
+	}
+	if status == reqwest::StatusCode::FORBIDDEN
+		|| status == reqwest::StatusCode::NOT_FOUND
+		|| status == reqwest::StatusCode::GONE
+	{
+		eprintln!(
+			"Nivra: text preview refused: host={} status={}",
+			url.host_str().unwrap_or("?"),
+			status.as_u16()
+		);
+		return Err(PreviewError::Expired);
+	}
+	if status != reqwest::StatusCode::OK {
+		eprintln!(
+			"Nivra: text preview refused: host={} status={}",
+			url.host_str().unwrap_or("?"),
+			status.as_u16()
+		);
+		return Err(PreviewError::Refused(
+			"Preview unavailable; reload the conversation",
+		));
 	}
 	if response
 		.headers()
 		.get(reqwest::header::CONTENT_ENCODING)
 		.is_some_and(|encoding| encoding != "identity")
 	{
-		return Err("Unexpected encoding; reload the conversation");
+		return Err(PreviewError::Refused(
+			"Unexpected encoding; reload the conversation",
+		));
 	}
 	let mut response = response;
 	let mut bytes = Vec::new();
 	while let Some(chunk) = response
 		.chunk()
 		.await
-		.map_err(|_| "Preview transfer interrupted")?
+		.map_err(|_| PreviewError::Refused("Preview transfer interrupted"))?
 	{
 		if bytes.len() as u64 + chunk.len() as u64 > limit {
-			return Err("File is too large to preview");
+			return Err(PreviewError::Refused("File is too large to preview"));
 		}
 		bytes.extend_from_slice(&chunk);
 	}
@@ -1261,5 +1368,163 @@ mod tests {
 		assert!(cleanup_failed.load(Ordering::Acquire));
 		fs::remove_dir(&partial_path).unwrap();
 		fs::remove_dir_all(root).unwrap();
+	}
+
+	/// Serves each queued response to one request in order: (status, location, body).
+	async fn preview_responses(
+		responses: Vec<(u16, Option<String>, Vec<u8>)>,
+	) -> (url::Url, tokio::task::JoinHandle<()>) {
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let url = url::Url::parse(&format!(
+			"http://{}/attachment",
+			listener.local_addr().unwrap()
+		))
+		.unwrap();
+		let task = tokio::spawn(async move {
+			for (status, location, body) in responses {
+				let (mut socket, _) = listener.accept().await.unwrap();
+				let mut request = Vec::new();
+				let mut byte = [0u8; 1];
+				while !request.ends_with(b"\r\n\r\n") && request.len() < 8192 {
+					if socket.read_exact(&mut byte).await.is_err() {
+						return;
+					}
+					request.push(byte[0]);
+				}
+				let mut header = format!(
+					"HTTP/1.1 {status} \r\nContent-Length: {}\r\nConnection: close\r\n",
+					body.len()
+				);
+				if let Some(location) = location {
+					header.push_str(&format!("Location: {location}\r\n"));
+				}
+				header.push_str("\r\n");
+				if socket.write_all(header.as_bytes()).await.is_err() {
+					return;
+				}
+				let _ = socket.write_all(&body).await;
+			}
+		});
+		(url, task)
+	}
+
+	#[test]
+	fn preview_redirects_stay_within_discord_hosts() {
+		let cdn = url::Url::parse("https://cdn.discordapp.com/attachments/1/2/a.md").unwrap();
+		let media = url::Url::parse("https://media.discordapp.net/attachments/1/2/a.md").unwrap();
+		assert!(preview_redirect_allowed(&cdn, &cdn));
+		assert!(preview_redirect_allowed(&cdn, &media));
+		assert!(preview_redirect_allowed(&media, &cdn));
+		let evil = url::Url::parse("https://evil.test/a.md").unwrap();
+		assert!(!preview_redirect_allowed(&cdn, &evil));
+		let plain = url::Url::parse("http://cdn.discordapp.com/attachments/1/2/a.md").unwrap();
+		assert!(!preview_redirect_allowed(&cdn, &plain));
+		let local = url::Url::parse("http://127.0.0.1:9/a.md").unwrap();
+		let local_other = url::Url::parse("http://127.0.0.1:9/b.md").unwrap();
+		assert!(preview_redirect_allowed(&local, &local_other));
+	}
+
+	#[tokio::test]
+	async fn preview_follows_same_host_redirects() {
+		discord_api::ensure_tls_provider();
+		let body = b"# synthetic preview".to_vec();
+		// Learn a loopback address first so the redirect stays on the same host.
+		let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let addr = probe.local_addr().unwrap();
+		drop(probe);
+		let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+		let base = format!("http://{addr}");
+		let location = format!("{base}/file");
+		let task = tokio::spawn(async move {
+			for (status, where_to, payload) in [
+				(302u16, Some(location), Vec::new()),
+				(200u16, None, body.clone()),
+			] {
+				let (mut socket, _) = listener.accept().await.unwrap();
+				let mut request = Vec::new();
+				let mut byte = [0u8; 1];
+				while !request.ends_with(b"\r\n\r\n") && request.len() < 8192 {
+					socket.read_exact(&mut byte).await.unwrap();
+					request.push(byte[0]);
+				}
+				let mut header = format!(
+					"HTTP/1.1 {status} \r\nContent-Length: {}\r\nConnection: close\r\n",
+					payload.len()
+				);
+				if let Some(where_to) = where_to {
+					header.push_str(&format!("Location: {where_to}\r\n"));
+				}
+				header.push_str("\r\n");
+				socket.write_all(header.as_bytes()).await.unwrap();
+				let _ = socket.write_all(&payload).await;
+			}
+		});
+		let url = url::Url::parse(&format!("{base}/attachment")).unwrap();
+		let body = b"# synthetic preview".to_vec();
+		assert_eq!(
+			fetch_preview(url, None, body.len() as u64).await.unwrap(),
+			body
+		);
+		task.await.unwrap();
+	}
+
+	#[tokio::test]
+	async fn preview_refuses_off_host_redirects() {
+		discord_api::ensure_tls_provider();
+		let (url, task) = preview_responses(vec![(
+			302,
+			Some("https://evil.test/file".into()),
+			Vec::new(),
+		)])
+		.await;
+		assert_eq!(
+			fetch_preview(url, None, 64).await.unwrap_err(),
+			"Preview redirect leaves Discord"
+		);
+		task.abort();
+	}
+
+	#[tokio::test]
+	async fn preview_retries_expired_links_through_the_proxy() {
+		discord_api::ensure_tls_provider();
+		let body = b"# synthetic proxy preview".to_vec();
+		let (_, expired) = preview_responses(vec![(403, None, Vec::new())]).await;
+		let (proxy_url, proxy) = preview_responses(vec![(200, None, body.clone())]).await;
+		let (url, _) = preview_responses(vec![(403, None, Vec::new())]).await;
+		expired.abort();
+		assert_eq!(
+			fetch_preview(url, Some(proxy_url), body.len() as u64)
+				.await
+				.unwrap(),
+			body
+		);
+		proxy.await.unwrap();
+	}
+
+	#[tokio::test]
+	async fn preview_retries_gone_links_through_the_proxy() {
+		discord_api::ensure_tls_provider();
+		let body = b"# synthetic gone preview".to_vec();
+		let (proxy_url, proxy) = preview_responses(vec![(200, None, body.clone())]).await;
+		let (url, expired) = preview_responses(vec![(410, None, Vec::new())]).await;
+		assert_eq!(
+			fetch_preview(url, Some(proxy_url), body.len() as u64)
+				.await
+				.unwrap(),
+			body
+		);
+		expired.abort();
+		proxy.await.unwrap();
+	}
+
+	#[tokio::test]
+	async fn preview_reports_expiry_without_a_proxy() {
+		discord_api::ensure_tls_provider();
+		let (url, task) = preview_responses(vec![(404, None, Vec::new())]).await;
+		assert_eq!(
+			fetch_preview(url, None, 64).await.unwrap_err(),
+			"Attachment link expired; reload the conversation"
+		);
+		task.await.unwrap();
 	}
 }

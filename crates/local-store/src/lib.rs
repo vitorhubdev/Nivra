@@ -10,8 +10,12 @@ use std::{
 
 const MAX_MEDIA_JSON: usize = 256 * 1024;
 const MAX_WINDOW_BYTES: usize = 4 * 1024 * 1024;
-const NATIVE_SCHEMA: u32 = 25;
-const READABLE_SCHEMA: u32 = 25;
+const NATIVE_SCHEMA: u32 = 26;
+const READABLE_SCHEMA: u32 = 26;
+/// Local download registry: attachment id → saved path, size and date. Only path
+/// metadata is stored, never file content.
+const MAX_DOWNLOAD_ROWS: usize = 2000;
+const DOWNLOAD_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
 #[derive(serde::Deserialize)]
 struct CachedMentions(#[serde(deserialize_with = "model::deserialize_mentions")] Vec<User>);
 fn parse_author_roles(raw: &str) -> std::result::Result<Vec<Id>, StoreError> {
@@ -301,6 +305,7 @@ impl LocalStore {
             CREATE INDEX IF NOT EXISTS messages_channel_order ON messages(account,channel,length(id),id);
             CREATE TABLE IF NOT EXISTS channels(account TEXT NOT NULL,channel TEXT NOT NULL,touched INTEGER NOT NULL,PRIMARY KEY(account,channel));
             CREATE TABLE IF NOT EXISTS drafts(account TEXT NOT NULL,channel TEXT NOT NULL,content TEXT NOT NULL,PRIMARY KEY(account,channel));
+            CREATE TABLE IF NOT EXISTS downloads(attachment TEXT PRIMARY KEY NOT NULL,path TEXT NOT NULL CHECK(typeof(path)='text' AND length(CAST(path AS BLOB)) BETWEEN 1 AND 1024),size INTEGER NOT NULL CHECK(typeof(size)='integer' AND size>=0),saved_at INTEGER NOT NULL CHECK(typeof(saved_at)='integer' AND saved_at>=0));
             CREATE TABLE IF NOT EXISTS appearance(singleton INTEGER PRIMARY KEY CHECK(singleton=1),theme TEXT NOT NULL CHECK(theme IN ('light','dark')));
             CREATE TABLE IF NOT EXISTS theme_variant(singleton INTEGER PRIMARY KEY CHECK(singleton=1),variant TEXT NOT NULL CHECK(length(variant) BETWEEN 1 AND 32));
             CREATE TABLE IF NOT EXISTS gif_favorites(account TEXT NOT NULL,position INTEGER NOT NULL CHECK(typeof(position)='integer' AND position BETWEEN 0 AND 99),id TEXT NOT NULL CHECK(length(id) BETWEEN 1 AND 64),title TEXT NOT NULL CHECK(length(title) <= 256),url TEXT NOT NULL CHECK(length(url) BETWEEN 1 AND 512),preview TEXT NOT NULL CHECK(length(preview) BETWEEN 1 AND 512),width INTEGER NOT NULL CHECK(typeof(width)='integer' AND width BETWEEN 1 AND 4096),height INTEGER NOT NULL CHECK(typeof(height)='integer' AND height BETWEEN 1 AND 4096),PRIMARY KEY(account,position));
@@ -1031,6 +1036,66 @@ impl LocalStore {
 		}
 		Ok(())
 	}
+	/// Remember where an attachment was saved. Prunes the registry to the row and
+	/// age limits on every insert so it cannot grow without bound.
+	pub fn record_download(&self, attachment: Id, path: &std::path::Path, size: u64) -> Result<()> {
+		let Some(path) = path.to_str() else {
+			return Err(StoreError::Incompatible);
+		};
+		if path.len() > 1024 {
+			return Err(StoreError::Capacity);
+		}
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map_err(|_| StoreError::Incompatible)?
+			.as_secs();
+		self.0.execute(
+			"INSERT OR REPLACE INTO downloads(attachment,path,size,saved_at) VALUES(?1,?2,?3,?4)",
+			params![attachment.to_string(), path, size as i64, now as i64],
+		)?;
+		self.prune_downloads(now)
+	}
+	/// Saved path and size for an attachment, when the file still exists with the
+	/// recorded size. Stale rows (missing or resized files) are removed on read.
+	pub fn download_path(&self, attachment: Id) -> Result<Option<(std::path::PathBuf, u64)>> {
+		let row: Option<(String, i64)> = self
+			.0
+			.query_row(
+				"SELECT path,size FROM downloads WHERE attachment=?1",
+				params![attachment.to_string()],
+				|row| Ok((row.get(0)?, row.get(1)?)),
+			)
+			.optional()
+			.map_err(|_| StoreError::Incompatible)?;
+		let Some((path, size)) = row else {
+			return Ok(None);
+		};
+		let size = u64::try_from(size).map_err(|_| StoreError::Incompatible)?;
+		let path = std::path::PathBuf::from(path);
+		let fresh =
+			std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file() && meta.len() == size);
+		if !fresh {
+			self.0.execute(
+				"DELETE FROM downloads WHERE attachment=?1",
+				params![attachment.to_string()],
+			)?;
+			return Ok(None);
+		}
+		Ok(Some((path, size)))
+	}
+	/// Drop rows older than 30 days and everything past the 2,000 newest entries.
+	pub fn prune_downloads(&self, now: u64) -> Result<()> {
+		let cutoff = now.saturating_sub(DOWNLOAD_RETENTION_SECS) as i64;
+		self.0
+			.execute("DELETE FROM downloads WHERE saved_at<?1", params![cutoff])?;
+		self.0.execute(
+			&format!(
+				"DELETE FROM downloads WHERE attachment NOT IN (SELECT attachment FROM downloads ORDER BY saved_at DESC, attachment DESC LIMIT {MAX_DOWNLOAD_ROWS})"
+			),
+			[],
+		)?;
+		Ok(())
+	}
 	pub fn load_channel(&self, account: Id, channel: Id) -> Result<Vec<Message>> {
 		let mut query = self.0.prepare_cached("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook,account_kind,forwarded,author_roles,author_nick,components,application_id,original_flags,sticker_items,interaction,reactions FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
 		let mut rows = query.query(params![account.to_string(), channel.to_string()])?;
@@ -1726,6 +1791,54 @@ mod tests {
 		let loaded = store.load_channel(Id(1), Id(2)).unwrap();
 		assert_eq!(loaded.len(), 500);
 		assert!(loaded[250] == changed);
+	}
+
+	#[test]
+	fn download_registry_remembers_prunes_and_forgets_missing_files() {
+		let root =
+			std::env::temp_dir().join(format!("nivra-download-registry-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&root);
+		std::fs::create_dir_all(&root).unwrap();
+		let file = root.join("trae_exposed.md");
+		std::fs::write(&file, vec![7u8; 1024]).unwrap();
+		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+		assert_eq!(store.download_path(Id(11)).unwrap(), None);
+		store.record_download(Id(11), &file, 1024).unwrap();
+		assert_eq!(
+			store.download_path(Id(11)).unwrap(),
+			Some((file.clone(), 1024))
+		);
+		// A resized file no longer matches: the row is purged on read.
+		std::fs::write(&file, vec![7u8; 10]).unwrap();
+		assert_eq!(store.download_path(Id(11)).unwrap(), None);
+		assert_eq!(store.download_path(Id(11)).unwrap(), None);
+		// A removed file purges the same way.
+		store.record_download(Id(11), &file, 10).unwrap();
+		std::fs::remove_file(&file).unwrap();
+		assert_eq!(store.download_path(Id(11)).unwrap(), None);
+		// Rows older than 30 days go away; the newest 2,000 survive.
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap()
+			.as_secs();
+		std::fs::write(&file, vec![7u8; 10]).unwrap();
+		for id in 1..=2005u64 {
+			store.record_download(Id(id), &file, 10).unwrap();
+		}
+		let count: i64 = store
+			.0
+			.query_row("SELECT COUNT(*) FROM downloads", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(count, 2000);
+		assert!(store.download_path(Id(1)).unwrap().is_none());
+		assert!(store.download_path(Id(2005)).unwrap().is_some());
+		store.prune_downloads(now + 31 * 24 * 60 * 60).unwrap();
+		let count: i64 = store
+			.0
+			.query_row("SELECT COUNT(*) FROM downloads", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(count, 0);
+		std::fs::remove_dir_all(&root).unwrap();
 	}
 
 	#[test]

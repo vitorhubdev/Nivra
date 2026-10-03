@@ -24,7 +24,12 @@ pub enum Status {
 		received: u64,
 		total: u64,
 	},
-	Saved,
+	Saved {
+		id: model::Id,
+		filename: String,
+		path: PathBuf,
+		size: u64,
+	},
 	Copied,
 	Cancelled,
 	Failed(&'static str),
@@ -213,15 +218,30 @@ impl Downloads {
 							copied.take();
 						}
 					}
-					Ok(())
+					Ok(path)
 				});
+				let (result, saved_path) = match result {
+					Ok(path) => (Ok(()), Some(path)),
+					Err(error) => (Err(error), None),
+				};
 				let copied_ok = copying && result.is_ok();
 				if !copied_ok {
 					copied.take();
 				}
 				publish(match result {
 					Ok(()) if copying => Status::Copied,
-					Ok(()) => Status::Saved,
+					Ok(()) => saved_path
+						.and_then(|path| {
+							// A finished save always has a destination; copy jobs
+							// report Copied instead.
+							(!copying).then(|| Status::Saved {
+								id: attachment.id,
+								filename: attachment.filename.clone(),
+								path,
+								size: attachment.size,
+							})
+						})
+						.unwrap_or(Status::Cancelled),
 					Err("Cancelled") => Status::Cancelled,
 					Err(error) => Status::Failed(error),
 				});

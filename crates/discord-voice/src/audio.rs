@@ -805,20 +805,22 @@ fn open_input_stream(
 	Ok((stream, input_read, input_id))
 }
 fn choose(host: &cpal::Host, id: Option<&str>, input: bool) -> Result<cpal::Device, &'static str> {
-	if let Some(id) = id {
-		let id = id.parse().map_err(|_| "Invalid audio device selection")?;
-		if let Some(device) = host.device_by_id(&id) {
-			return Ok(device);
-		}
-	}
-	// Preserve the explicit preference, but keep calls usable while a USB/Bluetooth device
-	// is temporarily absent. default_changed switches back when the selected device returns.
 	if input {
-		host.default_input_device()
-	} else {
-		host.default_output_device()
+		if let Some(id) = id {
+			let id = id.parse().map_err(|_| "Invalid audio device selection")?;
+			if let Some(device) = host.device_by_id(&id) {
+				return Ok(device);
+			}
+		}
+		// Preserve the explicit preference, but keep calls usable while a USB/Bluetooth
+		// device is temporarily absent. default_changed switches back when it returns.
+		return host
+			.default_input_device()
+			.ok_or("No default audio device is available");
 	}
-	.ok_or("No default audio device is available")
+	// Output shares the single resolver with every other app sound: a corrupt stored
+	// id falls back to the default instead of failing the call.
+	crate::output::device(host, id).ok_or("No default audio device is available")
 }
 fn config(device: &cpal::Device, input: bool) -> Result<cpal::SupportedStreamConfig, &'static str> {
 	let supported: Vec<_> = if input {

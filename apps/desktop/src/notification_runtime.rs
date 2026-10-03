@@ -4,6 +4,7 @@ use model::{
 	Id, PresenceStatus,
 	notification_preferences::{Device, Sound},
 };
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 pub enum Alert {
@@ -24,13 +25,64 @@ pub struct Runtime {
 	badge: Option<u32>,
 	badge_check: Option<Instant>,
 	badge_status: &'static str,
-	/// Join/leave cue waiting for the audio worker to accept it.
-	pending_membership: Option<(Sound, u8)>,
+	/// Ordered join/leave cues with the earliest instant the next one may play.
+	/// Every arrival and every departure plays, in order, paced so rapid
+	/// sequences stay intelligible instead of collapsing into one slot.
+	membership: VecDeque<(Sound, u8)>,
+	membership_due: Option<Instant>,
 	membership_tries: u8,
+	/// Local toggle cues (mute/unmute/deafen, previews): the same cue twice in a
+	/// row collapses to one, opposite toggles both play in order, and the queue
+	/// retries while the worker is busy instead of dropping the press.
+	local: VecDeque<(Sound, u8)>,
+	local_tries: u8,
 }
+/// Minimum gap between two membership sounds so a rapid sequence stays
+/// intelligible instead of chopping one cue with the next.
+const MEMBERSHIP_GAP: Duration = Duration::from_millis(120);
+/// Membership queue bound: a storm of rejoins keeps the latest screenful.
+const MAX_MEMBERSHIP_CUES: usize = 8;
+/// Local toggle queue bound: presses stay responsive without growing.
+const MAX_LOCAL_CUES: usize = 4;
+
+fn membership_volume(options: Device, membership: bool) -> u8 {
+	if membership && options.volume == 0 {
+		100
+	} else {
+		options.volume
+	}
+}
+
+fn membership_due(due: Option<Instant>, now: Instant) -> bool {
+	due.is_none_or(|at| now.saturating_duration_since(at) >= MEMBERSHIP_GAP)
+}
+
+fn push_membership_cue(queue: &mut VecDeque<(Sound, u8)>, cue: Sound, volume: u8) {
+	// No collapsing here: consecutive joins belong to different people (the core
+	// already drops exact event repeats), so every transition keeps its sound.
+	if queue.len() >= MAX_MEMBERSHIP_CUES {
+		queue.pop_front();
+	}
+	queue.push_back((cue, volume));
+}
+
+fn push_local_cue(queue: &mut VecDeque<(Sound, u8)>, cue: Sound, volume: u8) {
+	// The same toggle twice in a row collapses; opposite toggles both play in order.
+	if queue.back().is_some_and(|(last, _)| *last == cue) {
+		return;
+	}
+	if queue.len() >= MAX_LOCAL_CUES {
+		queue.pop_front();
+	}
+	queue.push_back((cue, volume));
+}
+
 impl Runtime {
 	fn ring_cue(&mut self, ringing: Option<(Id, Sound)>, now: Instant) -> Option<Sound> {
 		if self.ring.map(|(key, _)| key) != ringing {
+			// A finished ring must not play from the queue after the call was answered.
+			self.local
+				.retain(|(cue, _)| !matches!(cue, Sound::IncomingRing | Sound::OutgoingRing));
 			if self.ring.is_some() {
 				self.sounds.stop();
 			}
@@ -130,49 +182,56 @@ impl Runtime {
 		if self.ring.is_some() {
 			ctx.request_repaint_after(Duration::from_millis(250));
 		}
+		if let Some(cue) = sound {
+			push_local_cue(&mut self.local, cue, membership_volume(options, false));
+		}
 		// Call membership sounds are part of the call, including while Do Not Disturb is on.
+		// Someone connecting or leaving the call you are in always makes a sound:
+		// membership cues keep their own paced queue so a burst never collapses.
 		while let Some(cue) = ui.notification_cues.first().copied() {
-			let membership = matches!(cue, Sound::UserJoin | Sound::UserLeave);
-			// Someone connecting or leaving the call you are in always makes a sound.
-			if membership || (audible && options.allows(cue)) {
-				ui.notification_cues.remove(0);
-				sound = Some(cue);
-				break;
-			}
 			ui.notification_cues.remove(0);
+			let membership = matches!(cue, Sound::UserJoin | Sound::UserLeave);
+			if membership {
+				push_membership_cue(&mut self.membership, cue, membership_volume(options, true));
+			} else if audible && options.allows(cue) {
+				push_local_cue(&mut self.local, cue, membership_volume(options, false));
+			}
 		}
 		if !ui.notification_cues.is_empty() {
 			ctx.request_repaint();
 		}
 		// Explicit previews are allowed in the offline demo and intentionally ignore automatic mute choices.
-		if !matches!(sound, Some(Sound::UserJoin | Sound::UserLeave))
-			&& let Some(preview) = ui.notification_preview.take()
+		if let Some(preview) = ui.notification_preview.take() {
+			push_local_cue(&mut self.local, preview, membership_volume(options, false));
+		}
+		let output = ui.voice_output.as_deref();
+		if membership_due(self.membership_due, Instant::now())
+			&& let Some((cue, volume)) = self.membership.pop_front()
 		{
-			sound = Some(preview);
-		}
-		if let Some(sound) = sound {
-			let membership = matches!(sound, Sound::UserJoin | Sound::UserLeave);
-			let volume = if membership && options.volume == 0 {
-				100
-			} else {
-				options.volume
-			};
-			if membership {
-				self.pending_membership = Some((sound, volume));
-				self.membership_tries = 0;
-			} else if self.pending_membership.is_none() {
-				let _ = self.sounds.play(sound, volume, ctx);
-			}
-		}
-		if let Some((cue, volume)) = self.pending_membership {
-			if self.sounds.play(cue, volume, ctx) {
-				self.pending_membership = None;
+			if self.sounds.play(cue, volume, ctx, output) {
+				self.membership_due = Some(Instant::now());
 				self.membership_tries = 0;
 			} else {
+				self.membership.push_front((cue, volume));
 				self.membership_tries = self.membership_tries.saturating_add(1);
 				if self.membership_tries > 30 {
-					self.pending_membership = None;
+					self.membership.pop_front();
 					self.membership_tries = 0;
+				} else {
+					ctx.request_repaint_after(Duration::from_millis(100));
+				}
+			}
+		}
+		if let Some((cue, volume)) = self.local.pop_front() {
+			if self.sounds.play(cue, volume, ctx, output) {
+				self.local_tries = 0;
+			} else {
+				self.local.push_front((cue, volume));
+				self.local_tries = self.local_tries.saturating_add(1);
+				if self.local_tries > 30 {
+					eprintln!("Nivra: local cue unplayed after 3 s of worker pressure: {cue:?}");
+					self.local.pop_front();
+					self.local_tries = 0;
 				} else {
 					ctx.request_repaint_after(Duration::from_millis(100));
 				}
@@ -220,6 +279,44 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn membership_pacing_keeps_rapid_sequences_intelligible() {
+		let now = Instant::now();
+		assert!(membership_due(None, now));
+		assert!(!membership_due(Some(now), now));
+		assert!(membership_due(Some(now), now + MEMBERSHIP_GAP));
+		assert!(!membership_due(
+			Some(now),
+			now + MEMBERSHIP_GAP - Duration::from_millis(1)
+		));
+	}
+
+	#[test]
+	fn cue_queues_keep_order_and_collapse_repeats() {
+		let mut membership = VecDeque::new();
+		push_membership_cue(&mut membership, Sound::UserLeave, 100);
+		push_membership_cue(&mut membership, Sound::UserJoin, 100);
+		push_membership_cue(&mut membership, Sound::UserJoin, 100);
+		assert_eq!(
+			membership.iter().map(|(cue, _)| *cue).collect::<Vec<_>>(),
+			vec![Sound::UserLeave, Sound::UserJoin, Sound::UserJoin]
+		);
+		let mut local = VecDeque::new();
+		push_local_cue(&mut local, Sound::Mute, 75);
+		push_local_cue(&mut local, Sound::Mute, 75);
+		push_local_cue(&mut local, Sound::Unmute, 75);
+		assert_eq!(
+			local.iter().map(|(cue, _)| *cue).collect::<Vec<_>>(),
+			vec![Sound::Mute, Sound::Unmute]
+		);
+		for _ in 0..8 {
+			push_local_cue(&mut local, Sound::Deafen, 75);
+			push_local_cue(&mut local, Sound::Undeafen, 75);
+		}
+		assert_eq!(local.len(), MAX_LOCAL_CUES);
+		assert_eq!(local.back().map(|(cue, _)| *cue), Some(Sound::Undeafen));
+	}
 
 	#[test]
 	fn ringtone_timer_repeats_each_cue_and_stops_on_clear() {

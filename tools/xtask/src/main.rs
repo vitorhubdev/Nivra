@@ -69,6 +69,7 @@ fn policy() -> Result<(), String> {
 	{
 		return Err("Native persistence controls changed".into());
 	}
+	output_device_policy()?;
 	let platform =
 		std::fs::read_to_string("crates/platform/src/lib.rs").map_err(|e| e.to_string())?;
 	if !platform.contains(".with_incognito(true)") {
@@ -78,6 +79,56 @@ fn policy() -> Result<(), String> {
 		"Policy checks passed: no eframe persistence, one renderer, no REST cookie jar, ephemeral login requested."
 	);
 	Ok(())
+}
+/// Every app sound must follow the configured call output through the single
+/// resolver. Direct `default_output_device()` calls outside it (and outside the
+/// device-listing code that shows the choices) silently play on the wrong device.
+fn output_device_policy() -> Result<(), String> {
+	let mut offenders = Vec::new();
+	for entry in walk_rs(std::path::Path::new(".")) {
+		let text = std::fs::read_to_string(&entry).map_err(|e| e.to_string())?;
+		if !text.contains("default_output_device()") {
+			continue;
+		}
+		let path = entry.to_string_lossy().replace('\\', "/");
+		// The policy source itself names the forbidden call in strings.
+		if path.ends_with("tools/xtask/src/main.rs") {
+			continue;
+		}
+		let allowed = path.ends_with("crates/discord-voice/src/output.rs")
+			|| path.ends_with("crates/discord-voice/src/audio.rs");
+		if !allowed {
+			offenders.push(path);
+		}
+	}
+	if !offenders.is_empty() {
+		return Err(format!(
+			"Audio output must resolve through discord_voice::output::device; direct default_output_device() in: {}",
+			offenders.join(", ")
+		));
+	}
+	println!("Policy check passed: one audio output resolver.");
+	Ok(())
+}
+fn walk_rs(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+	let mut files = Vec::new();
+	let entries = std::fs::read_dir(dir)
+		.map(|entries| entries.collect::<Vec<_>>())
+		.unwrap_or_default();
+	for entry in entries {
+		let Ok(entry) = entry else { continue };
+		let path = entry.path();
+		if path.is_dir() {
+			let name = entry.file_name().to_string_lossy().into_owned();
+			if name == "target" || name.starts_with('.') {
+				continue;
+			}
+			files.extend(walk_rs(&path));
+		} else if path.extension().is_some_and(|extension| extension == "rs") {
+			files.push(path);
+		}
+	}
+	files
 }
 fn licenses() -> Result<(), String> {
 	let version = Command::new("cargo-deny")

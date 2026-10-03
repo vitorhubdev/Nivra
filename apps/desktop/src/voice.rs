@@ -10,6 +10,7 @@ use discord_voice::{
 use eframe::egui;
 use model::{Id, notification_preferences::Sound};
 use std::{
+	collections::VecDeque,
 	sync::{Arc, OnceLock, mpsc},
 	time::{Duration, Instant},
 };
@@ -183,61 +184,37 @@ struct Live {
 #[derive(Default)]
 struct CallCues {
 	joined: bool,
-	peers: Option<[u64; voice::MAX_PARTICIPANTS]>,
 }
 impl CallCues {
 	fn self_leave(&self) -> Option<Sound> {
 		self.joined.then_some(Sound::UserLeave)
 	}
-	fn poll(
+	/// Drain queued membership transitions into call sounds for one frame.
+	/// A leave and a rejoin queued between two polls play as two sounds, in
+	/// order; transitions for other calls never leak into this one.
+	fn drain(
 		&mut self,
 		ready: bool,
-		gateway_connected: bool,
-		owner: Id,
-		participants: &[voice::Participant],
+		channel: Id,
+		events: &mut VecDeque<client_core::voice::MembershipEvent>,
 	) -> Vec<Sound> {
-		self.joined |= ready && gateway_connected;
-		if !self.joined {
-			return Vec::new();
-		}
-		if !gateway_connected {
-			// Keep the last roster. A reconnect must not turn people already here into
-			// fresh joins, and a person who connects during the gap must still be heard.
-			return Vec::new();
-		}
-		let mut peers = [0; voice::MAX_PARTICIPANTS];
-		for (slot, participant) in peers.iter_mut().zip(
-			participants
-				.iter()
-				.filter(|participant| participant.user != owner),
-		) {
-			*slot = participant.user.0;
-		}
-		// ponytail: membership scans are capped at 64 IDs; no per-frame set allocation.
-		let previous = self.peers.replace(peers);
-		let joined_peer = previous.is_some_and(|previous| {
-			peers
-				.iter()
-				.any(|user| *user != 0 && !previous.contains(user))
-		});
-		let departed = previous.is_some_and(|previous| {
-			previous
-				.iter()
-				.any(|user| *user != 0 && !peers.contains(user))
-		});
-		// The first roster is the baseline for other people. We still play once for
-		// ourselves, which covers joining and being moved into this call.
-		let mut cues = Vec::with_capacity(2);
-		if previous.is_none() {
-			cues.push(Sound::UserJoin);
-		}
-		if joined_peer {
-			cues.push(Sound::UserJoin);
-		}
-		if departed {
-			cues.push(Sound::UserLeave);
-		}
-		cues
+		self.joined |= ready;
+		events
+			.drain(..)
+			.filter_map(|event| match event {
+				client_core::voice::MembershipEvent::Joined { channel: known, .. }
+					if known == channel =>
+				{
+					Some(Sound::UserJoin)
+				}
+				client_core::voice::MembershipEvent::Left { channel: known, .. }
+					if known == channel =>
+				{
+					Some(Sound::UserLeave)
+				}
+				_ => None,
+			})
+			.collect()
 	}
 }
 fn push_membership_cue(cues: &mut Vec<Sound>, cue: Sound) {
@@ -957,23 +934,23 @@ impl Voice {
 				// Waiting alone still joins voice, but its audio devices may not be open yet.
 				let ready =
 					devices_ready && matches!(call.phase, Phase::Connected | Phase::Waiting);
-				let cues = live.cues.poll(
-					ready,
-					state.gateway_connected,
-					live.user,
-					&call.participants,
-				);
+				// Membership transitions observed by the core since the last frame become
+				// call sounds: every arrival and every departure plays, even when both
+				// happen between two polls. Join/leave sounds stay armed even when the
+				// voice devices themselves fail.
+				let channel = live.channel;
+				let cues = live
+					.cues
+					.drain(ready, channel, &mut state.voice.membership_events);
+				let mut drained = false;
 				for cue in cues {
-					let membership = matches!(cue, Sound::UserJoin | Sound::UserLeave);
 					if ui.notification_cues.len() >= 4 {
-						if !membership {
-							continue;
-						}
 						ui.notification_cues.remove(0);
 					}
 					ui.notification_cues.push(cue);
+					drained = true;
 				}
-				if !ui.notification_cues.is_empty() {
+				if drained {
 					ctx.request_repaint();
 				}
 			}
@@ -1723,59 +1700,50 @@ pub fn debug_call_cues_check() {
 	};
 	let owner = participant(1);
 	let peer = participant(2);
+
+	let channel = Id(20);
 	let mut cues = CallCues::default();
-	assert!(
-		cues.poll(false, true, owner.user, &[owner, peer])
-			.is_empty()
-	);
+	let mut events = VecDeque::new();
+	let drain = |cues: &mut CallCues,
+	             events: &mut VecDeque<client_core::voice::MembershipEvent>| {
+		cues.drain(true, channel, events)
+	};
+	// A leave and a rejoin queued between two polls play as two sounds, in order.
+	events.push_back(client_core::voice::MembershipEvent::Left {
+		channel: Id(20),
+		user: Id(2),
+	});
+	events.push_back(client_core::voice::MembershipEvent::Joined {
+		channel: Id(20),
+		user: Id(2),
+	});
 	assert_eq!(
-		cues.poll(true, true, owner.user, &[owner, peer]),
-		vec![Sound::UserJoin]
+		drain(&mut cues, &mut events),
+		vec![Sound::UserLeave, Sound::UserJoin]
 	);
-	let mut muted_peer = peer;
-	muted_peer.muted = true;
-	assert!(
-		cues.poll(true, true, owner.user, &[muted_peer, owner])
-			.is_empty()
-	);
-	// Device reopening and rekeying do not announce this same call again.
-	assert!(
-		cues.poll(false, true, owner.user, &[owner, peer])
-			.is_empty()
-	);
-	assert!(cues.poll(true, true, owner.user, &[owner, peer]).is_empty());
-	// Compare identities rather than counts; departures can themselves trigger rekeying.
-	let replacement = participant(3);
+	assert!(drain(&mut cues, &mut events).is_empty());
+	// Three people joining together announce three times.
+	for user in [3, 4, 5] {
+		events.push_back(client_core::voice::MembershipEvent::Joined {
+			channel,
+			user: Id(user),
+		});
+	}
 	assert_eq!(
-		cues.poll(false, true, owner.user, &[owner, replacement]),
-		vec![Sound::UserJoin, Sound::UserLeave]
+		drain(&mut cues, &mut events),
+		vec![Sound::UserJoin, Sound::UserJoin, Sound::UserJoin]
 	);
-	assert!(
-		cues.poll(true, true, owner.user, &[owner, replacement])
-			.is_empty()
-	);
-	assert!(cues.poll(false, false, owner.user, &[]).is_empty());
-	assert!(cues.poll(true, true, owner.user, &[owner]).is_empty());
-	// A remote join is audible even while it rekeys media, and only once.
-	assert_eq!(
-		cues.poll(false, true, owner.user, &[owner, peer]),
-		vec![Sound::UserJoin, Sound::UserLeave]
-	);
-	assert!(cues.poll(true, true, owner.user, &[peer, owner]).is_empty());
-	assert!(
-		cues.poll(true, true, owner.user, &[owner, muted_peer])
-			.is_empty()
-	);
-	assert_eq!(
-		cues.poll(true, true, owner.user, &[owner]),
-		vec![Sound::UserLeave]
-	);
-	assert!(cues.poll(true, true, owner.user, &[owner]).is_empty());
-	assert_eq!(
-		CallCues::default().poll(true, true, owner.user, &[owner]),
-		vec![Sound::UserJoin],
-		"a new explicitly started call has its own join cue"
-	);
+	// Transitions for another call never leak into this one.
+	events.push_back(client_core::voice::MembershipEvent::Joined {
+		channel: Id(21),
+		user: Id(6),
+	});
+	assert!(drain(&mut cues, &mut events).is_empty());
+	// Leaving the call ourselves still plays once through the joined flag.
+	assert!(cues.joined);
+	assert_eq!(cues.self_leave(), Some(Sound::UserLeave));
+	assert!(CallCues::default().self_leave().is_none());
+	let _ = (owner, peer, participant);
 	println!(
 		"Call cue debug check passed: local/remote joins, departures, rekeying and reconnect suppression. No audio devices opened."
 	);
@@ -1811,65 +1779,43 @@ mod tests {
 		};
 		let owner = participant(1);
 		let peer = participant(2);
+		let channel = Id(20);
 		let mut cues = CallCues::default();
-		assert!(
-			cues.poll(false, true, owner.user, &[owner, peer])
-				.is_empty()
-		);
+		let mut events = VecDeque::new();
+		// The drain maps queued transitions to sounds without opening devices.
+		events.push_back(client_core::voice::MembershipEvent::Joined {
+			channel: Id(20),
+			user: Id(1),
+		});
+		events.push_back(client_core::voice::MembershipEvent::Joined {
+			channel: Id(20),
+			user: Id(2),
+		});
 		assert_eq!(
-			cues.poll(true, true, owner.user, &[owner, peer]),
-			vec![Sound::UserJoin],
-			"connecting plays once and does not announce people already in the call"
+			cues.drain(true, channel, &mut events),
+			vec![Sound::UserJoin, Sound::UserJoin],
 		);
-		let mut muted_peer = peer;
-		muted_peer.muted = true;
-		assert!(
-			cues.poll(true, true, owner.user, &[muted_peer, owner])
-				.is_empty()
-		);
-		// Device reopening and rekeying do not announce this same call again.
-		assert!(
-			cues.poll(false, true, owner.user, &[owner, peer])
-				.is_empty()
-		);
-		assert!(cues.poll(true, true, owner.user, &[owner, peer]).is_empty());
-		// Compare identities rather than counts; departures can themselves trigger rekeying.
-		let replacement = participant(3);
+		// A leave and a rejoin queued between two polls play as two sounds, in order.
+		events.push_back(client_core::voice::MembershipEvent::Left {
+			channel: Id(20),
+			user: Id(2),
+		});
+		events.push_back(client_core::voice::MembershipEvent::Joined {
+			channel: Id(20),
+			user: Id(2),
+		});
 		assert_eq!(
-			cues.poll(false, true, owner.user, &[owner, replacement]),
-			vec![Sound::UserJoin, Sound::UserLeave]
+			cues.drain(true, channel, &mut events),
+			vec![Sound::UserLeave, Sound::UserJoin]
 		);
-		assert!(
-			cues.poll(true, true, owner.user, &[owner, replacement])
-				.is_empty()
-		);
-		assert!(cues.poll(false, false, owner.user, &[]).is_empty());
-		assert_eq!(
-			cues.poll(true, true, owner.user, &[owner, peer]),
-			vec![Sound::UserJoin, Sound::UserLeave],
-			"a person who connects while the gateway blinks is still announced"
-		);
-		assert_eq!(
-			cues.poll(true, true, owner.user, &[owner]),
-			vec![Sound::UserLeave]
-		);
-		assert!(cues.poll(true, true, owner.user, &[owner]).is_empty());
-		assert_eq!(
-			CallCues::default().poll(true, true, owner.user, &[owner]),
-			vec![Sound::UserJoin],
-			"joining or being moved into a call plays once for us"
-		);
-		let moved_in = participant(4);
-		assert_eq!(
-			cues.poll(true, true, owner.user, &[owner, moved_in]),
-			vec![Sound::UserJoin],
-			"a person moved into this call is announced"
-		);
-		assert_eq!(
-			cues.poll(true, true, owner.user, &[owner, peer]),
-			vec![Sound::UserJoin, Sound::UserLeave],
-			"a move that swaps people plays both sounds"
-		);
+		// Transitions for another call never leak into this one.
+		events.push_back(client_core::voice::MembershipEvent::Joined {
+			channel: Id(21),
+			user: Id(3),
+		});
+		assert!(cues.drain(true, channel, &mut events).is_empty());
+		assert!(events.is_empty());
+		let _ = (owner, peer, participant);
 	}
 
 	#[test]
@@ -1891,17 +1837,20 @@ mod tests {
 			"never joined means no leave sound"
 		);
 		let mut cues = CallCues::default();
-		assert!(
-			cues.poll(false, true, owner.user, &[owner, peer])
-				.is_empty()
-		);
-		assert!(
-			cues.self_leave().is_none(),
-			"not yet joined means no leave sound"
-		);
+		let channel = Id(20);
+		let mut events = VecDeque::from([
+			client_core::voice::MembershipEvent::Joined {
+				channel,
+				user: owner.user,
+			},
+			client_core::voice::MembershipEvent::Joined {
+				channel,
+				user: peer.user,
+			},
+		]);
 		assert_eq!(
-			cues.poll(true, true, owner.user, &[owner, peer]),
-			vec![Sound::UserJoin]
+			cues.drain(true, channel, &mut events),
+			vec![Sound::UserJoin, Sound::UserJoin]
 		);
 		assert_eq!(cues.self_leave(), Some(Sound::UserLeave));
 		let mut full = vec![Sound::UserJoin; 4];

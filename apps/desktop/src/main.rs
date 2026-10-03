@@ -6062,7 +6062,11 @@ impl eframe::App for Desktop {
 			self.video.stop();
 			self.messaging.video().stop();
 		}
-		self.video.poll(self.messaging.video(), ctx);
+		let voice_output = self.messaging.voice_output.clone();
+		self.video
+			.poll(self.messaging.video(), ctx, voice_output.as_deref());
+		self.audio
+			.set_output(self.messaging.voice_output.as_deref());
 		let audio = self.audio.poll();
 		let player = self.messaging.audio();
 		player.position = audio.position.as_secs_f64();
@@ -6608,6 +6612,7 @@ impl eframe::App for Desktop {
 			) {
 				commands.push(command);
 			}
+			let voice_output = self.messaging.voice_output.clone();
 			let player = self.messaging.audio();
 			if !player.seen
 				|| player.active.is_none()
@@ -6625,6 +6630,7 @@ impl eframe::App for Desktop {
 							self.runtime.handle(),
 							&ctx,
 							self.fixture_only || self.state.demo,
+							voice_output.as_deref(),
 						) {
 							player.state = ui::AudioState::Failed(error);
 						}

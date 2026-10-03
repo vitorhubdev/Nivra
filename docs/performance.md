@@ -1,4 +1,4 @@
-# Animated profile review fixes - September 22, 2026
+﻿# Animated profile review fixes - September 22, 2026
 
 Compared the PR head `ffa38ae` with `dda91ab` on Windows x64, Ryzen 7 7800X3D,
 32 GB RAM, Rust 1.98.1. One standard voice-enabled `cargo xtask package` build
@@ -158,7 +158,7 @@ standalone Wasm build with:
 cargo run --locked --release -p extensions --example sdk_check -- examples/extensions/target/wasm32-unknown-unknown/release
 ```
 
-# Navigation caches and process scanning — September 22, 2026
+# Navigation caches and process scanning â€” September 22, 2026
 
 Compared initial baseline `5fe88e52` with runtime commit `02e2acba` on macOS 27.0
 (26A428), Apple M1 Pro, 16 GiB RAM, pinned Rust 1.98.1 and locked dependencies.
@@ -175,7 +175,7 @@ older worktree artifact; the new regression-test names were verified in the exec
 | Same sidebar, unchanged state | 11.242 ms | 11.150 ms | -0.093 ms (-0.82%, small) |
 | 100 scans of 4,096 process paths, matching only | 231.388 ms | 116.444 ms | -114.945 ms (-49.68%) |
 | 100,000-event reducer replay | 53.495 ms | 54.204 ms | +0.709 ms (+1.33%) |
-| Retained timeline estimated bytes / records | 339,992–340,477 / 500 | 339,992–340,477 / 500 | Unchanged |
+| Retained timeline estimated bytes / records | 339,992â€“340,477 / 500 | 339,992â€“340,477 / 500 | Unchanged |
 | Standard release executable bytes | 55,992,336 | 55,992,336 | 0 |
 | Installed app bundle bytes | 61,937,873 | 61,937,873 | 0 |
 | Compressed app ZIP bytes | 41,206,777 | 41,208,325 | +1,548 (+0.004%, noise) |
@@ -183,13 +183,13 @@ older worktree artifact; the new regression-test names were verified in the exec
 Component timings are medians of five measured batches after one warmup batch;
 UI workloads also run ten initial warmup frames. Picker and sidebar churn apply
 real synthetic message events and include reducer work, unlike the earlier manual
-revision-bump benchmark. They render at 900×700 and 280×700 respectively, excluding
+revision-bump benchmark. They render at 900Ã—700 and 280Ã—700 respectively, excluding
 GPU presentation, network requests and whole-app frame latency. The matcher uses
 equal groups of misses, basename hits, longer suffix hits and macOS bundle hits;
 it excludes OS process enumeration. Replay binaries ran alternately, one warmup
 and five measured runs per revision. The small reducer-only increase is reported
-as a trade-off, not a speedup; its sample ranges overlapped (53.228–60.186 ms before,
-52.930–55.099 ms after). The large UI/matcher gains repeated in an earlier paired run,
+as a trade-off, not a speedup; its sample ranges overlapped (53.228â€“60.186 ms before,
+52.930â€“55.099 ms after). The large UI/matcher gains repeated in an earlier paired run,
 which had unrelated host builds active during part of the sample. Final timings
 were taken serially with no Cargo build observed running at their start.
 
@@ -211,7 +211,7 @@ unchanged apart from the executable. The small ZIP difference is not a performan
 
 Native checks used separate release builds with `--features demo`, launched with
 `--demo --demo-chat`, default viewport/appearance, wgpu on the same macOS display
-at 2× scale. Each of two launches per revision warmed up for ten seconds, then used
+at 2Ã— scale. Each of two launches per revision warmed up for ten seconds, then used
 30 main-process `ps` samples at one-second intervals (about 30.38 seconds elapsed).
 Settled RSS was 151,936 / 142,128 KiB before and 145,488 / 143,232 KiB after.
 CPU from process-time deltas was 0% / 0% before and 0.889% / 0% after; the first
@@ -267,7 +267,7 @@ Native screenshot/interaction evidence is unavailable because the computer-use
 native pipe cannot connect (`os error 2`); matched native CPU/RSS/frame timings
 and baseline package-size comparisons were not measured. No speedup is claimed.
 
-# Original Discord sound assets — September 21, 2026
+# Original Discord sound assets â€” September 21, 2026
 
 Baseline: `932dc60`; after: this change. Windows x64, Rust 1.98.1.
 The classic pack now preserves original 44.1 kHz MP3 bytes and adds outgoing-ring,
@@ -284,7 +284,7 @@ decoded ceiling and 192 kHz output ceiling are unchanged. No extra background
 worker or network fetch is added. Native frame timing, CPU/RSS and matched
 before/after release-package sizes were not measured; no runtime speedup is claimed.
 
-# UI frame work and stopped-video cleanup — September 21, 2026
+# UI frame work and stopped-video cleanup â€” September 21, 2026
 
 Baseline: `86027564`; after: this PR. macOS 27.0 (26A428), Apple M1 Pro,
 16 GiB RAM, pinned Rust 1.98.1, locked dependencies and the standard release
@@ -310,9 +310,9 @@ and punctuation, isolating repeated end-pass detection plus paint-list bookkeepi
 It excludes text layout, tessellation and GPU presentation. The new bounded weak
 job cache avoids rescanning unchanged text; shapes are still traversed. First-use
 CJK decoding and font coverage are unchanged. Its isolated process peak RSS was
-29,163,520 → 29,097,984 bytes, a small noisy difference, not a RAM improvement claim.
+29,163,520 â†’ 29,097,984 bytes, a small noisy difference, not a RAM improvement claim.
 
-The picker uses its actual popup renderer at 900×700 with ten initial warmup frames,
+The picker uses its actual popup renderer at 900Ã—700 with ten initial warmup frames,
 then six 200-frame batches. Cross-server cases contain 100 synthetic guilds with
 500 emoji each. Results refresh on state revision, generation, account, server or
 query changes. The churn case advances the state revision each frame and shows
@@ -320,17 +320,17 @@ no material improvement or regression; unrelated accepted events still invalidat
 The extra retained search data is at most 16,000 index bytes plus 256 query bytes
 and fixed metadata, without duplicating catalog strings.
 
-Media workloads render twelve cached 4×2 synthetic textures at 1200×300, with
-signed URL metadata describing 4096×2048 images. They exercise thumbnail, viewer
+Media workloads render twelve cached 4Ã—2 synthetic textures at 1200Ã—300, with
+signed URL metadata describing 4096Ã—2048 images. They exercise thumbnail, viewer
 and animation-key paths, not downloading, decoding, animated playback or GPU
 upload. URL parameter order/encoding, signatures, source selection, dimensions,
 request bounds and thumbnail fallback have behavioral coverage. No media cache
 or rendition limit changes.
 
-Repeat medians (baseline → after, ms): font 290.228 → 16.642; picker server
-20.588 → 20.388, hit 104.214 → 11.884, miss 33.809 → 4.671, broad matches
-26.059 → 21.553, churn 104.294 → 104.934; media thumbnail 23.542 → 20.155,
-viewer 40.381 → 28.413, animation-enabled 24.976 → 21.091. Small server/churn
+Repeat medians (baseline â†’ after, ms): font 290.228 â†’ 16.642; picker server
+20.588 â†’ 20.388, hit 104.214 â†’ 11.884, miss 33.809 â†’ 4.671, broad matches
+26.059 â†’ 21.553, churn 104.294 â†’ 104.934; media thumbnail 23.542 â†’ 20.155,
+viewer 40.381 â†’ 28.413, animation-enabled 24.976 â†’ 21.091. Small server/churn
 differences are noise; these component results are not whole-app frame percentiles.
 
 | Standard voice-enabled macOS package | Baseline | After | Delta |
@@ -349,7 +349,7 @@ not a package-reduction claim. No dependencies, bundled fonts or emoji assets we
 
 Native sampling used release `demo` builds and
 `--demo --demo-friends --demo-frame-sample=8,15`, configured WGPU rendering,
-1120×760 logical pixels and 2× display scale. `ps` sampled RSS and cumulative
+1120Ã—760 logical pixels and 2Ã— display scale. `ps` sampled RSS and cumulative
 process CPU every 200 ms after the instrumented eight-second warmup. Child PIDs
 were checked separately. Both revisions include the same synthetic member fixture
 repair required to compile release demos; the standard packages do not enable it.
@@ -358,7 +358,7 @@ This repairs the demo-build blocker recorded in the historical section below.
 The first baseline run completed 73 samples over 15.068 seconds: 0.929% of one CPU
 core, settled RSS 146,931,712 bytes, sampled peak RSS 147,062,784 bytes, no children.
 All 30 UI callbacks were inputless with the viewport and search focused; callback
-wall-time buckets contained 17 below 1 ms and 13 below 2 ms (maximum 1,661 µs).
+wall-time buckets contained 17 below 1 ms and 13 below 2 ms (maximum 1,661 Âµs).
 These callback timings exclude tessellation and presentation.
 
 **No valid native before/after idle comparison was obtained.** The first head run
@@ -390,7 +390,7 @@ cargo test --release --locked -p ui --lib --test startup_memory --no-run
 cargo test --locked -p discord-voice --lib decoder_cleanup
 ```
 
-# Reviewed RAM findings — September 21, 2026
+# Reviewed RAM findings â€” September 21, 2026
 
 Baseline: `b3130c37`; after: this PR. macOS 27.0 (26A428), Apple M1 Pro,
 16 GiB RAM, Rust 1.98.1, locked dependencies and the standard release profile.
@@ -421,14 +421,14 @@ less peak component RSS. A reversed-order repeat confirmed the tradeoff: baselin
 27.765 ms / 41,877,504 bytes versus after 30.399 ms / 25,378,816 bytes. This one-time
 cost per atlas load is retained for the memory saving; no rendering-speed claim is made.
 
-Font samples (ms): [98.126, 99.103, 93.948, 93.158, 96.035] →
+Font samples (ms): [98.126, 99.103, 93.948, 93.158, 96.035] â†’
 [0.034, 0.01, 0.009, 0.009, 0.008].
-Atlas samples (ms): [27.168, 26.817, 26.613, 26.527, 26.341] →
+Atlas samples (ms): [27.168, 26.817, 26.613, 26.527, 26.341] â†’
 [31.357, 30.002, 30.008, 30.147, 30.072].
-Reducer samples (ms): [50.660667, 50.672459, 51.051333, 50.243792, 50.794125] →
+Reducer samples (ms): [50.660667, 50.672459, 51.051333, 50.243792, 50.794125] â†’
 [49.542625, 49.921333, 50.384125, 50.29825, 50.565542]. The reducer is unchanged;
 its small timing difference is treated as noise. Retained timeline remains
-323,992–324,477 estimated bytes / 500 records. It does not exercise compressed
+323,992â€“324,477 estimated bytes / 500 records. It does not exercise compressed
 Gateway input.
 
 The deterministic changes remove the unnecessary 16,467,736-byte CJK decode at
@@ -465,7 +465,7 @@ unchanged. Partial media texture updates were deferred because occluded video
 continues polling without rendering; partial deltas would accumulate instead
 of replacing the single pending frame.
 
-# Reviewed performance findings — September 19, 2026
+# Reviewed performance findings â€” September 19, 2026
 
 Baseline: `9fca898`, with the new benchmark-only test harness applied before runtime
 edits. After: guild miss caching, ASCII BiDi bypass, indexed/cached SQLite channel
@@ -489,7 +489,7 @@ measured runs per revision. Earlier runs during background compilation were excl
 | Scratch length changes in that decode workload | 120 | 1 | -119 |
 | Peak requested scratch capacity | 8,294,400 bytes | 8,294,400 bytes | 0 |
 | 100,000-event reducer replay | 45.733 ms | 45.269 ms | -0.464 ms (-1.02%, noise) |
-| Replay retained timeline | 284,992–285,477 bytes / 500 records | Same | 0 |
+| Replay retained timeline | 284,992â€“285,477 bytes / 500 records | Same | 0 |
 
 The lookup workload models repeated unknown-guild invite previews. SQLite uses
 synthetic in-memory databases and includes row decoding/destruction; it measures
@@ -507,12 +507,12 @@ components, spoilers, timestamps, invite-like links and non-empty reactions are 
 from reuse; the result is not a whole-app frame-time claim.
 
 The BiDi numbers measure only direction analysis, not parsing, complete message
-layout or native frame latency. Mixed RTL initially measured 700.684 → 723.470 ms;
-a reversed-order repeat measured 699.148 → 699.886 ms (+0.11%). The plain ASCII repeat
-was 668.086 → 1.346 ms. There is no consistent material RTL regression in these runs.
+layout or native frame latency. Mixed RTL initially measured 700.684 â†’ 723.470 ms;
+a reversed-order repeat measured 699.148 â†’ 699.886 ms (+0.11%). The plain ASCII repeat
+was 668.086 â†’ 1.346 ms. There is no consistent material RTL regression in these runs.
 The five-sample ranges for the primary 500-row SQLite comparison were
-122.296–126.581 → 74.313–76.612 ms. Video ranges were 478.539–504.481 →
-473.184–476.857 ms: the small elapsed-time difference is not a live playback claim.
+122.296â€“126.581 â†’ 74.313â€“76.612 ms. Video ranges were 478.539â€“504.481 â†’
+473.184â€“476.857 ms: the small elapsed-time difference is not a live playback claim.
 That workload repeatedly decodes two synthetic OpenH264 keyframes, without devices
 or network. Buffer reuse is verified separately with alternating real software decodes;
 its high-water allocation remains until the decoder worker exits.
@@ -557,7 +557,7 @@ Separate release builds with `--features demo` launched explicitly with `--demo`
 using the default initial scene and no interaction on both revisions. Each had
 30 seconds of warmup, followed by 21 `ps -p PID -o time=,rss=` observations at
 one-second intervals (20 intervals). Renderer logs identify Apple M1 Pro / Metal;
-the built-in display is 3024×1964 Retina (2×), with the default requested 1120×760
+the built-in display is 3024Ã—1964 Retina (2Ã—), with the default requested 1120Ã—760
 window and demo zoom. No builds ran during sampling. RSS excludes driver/GPU
 allocations and its peak covers only the sample window, not startup. These single
 idle samples and the CPU clock's coarse resolution do not establish a CPU or memory
@@ -803,7 +803,7 @@ but native demo CPU, memory, and frame timing were unavailable because desktop
 window capture/control is unavailable in this session. Synthetic tests and
 package sizes do not prove the installed live app's visual result.
 
-# Thread participant loading — September 15, 2026
+# Thread participant loading â€” September 15, 2026
 
 Baseline: `aec1f19a10a045d3607de995f65723c7f749be66`. After: that revision plus
 `fix/thread-member-list`. macOS 27.0 (26A428), Apple M1 Pro, 16 GiB RAM,
@@ -826,7 +826,7 @@ For each revision, `cargo replay` builds the workload; its preserved executable
 then runs once to warm up and five times for measurement, with no concurrent task
 build during sampling. Baseline samples (ms): 42.059334, 41.580417, 41.680334, 42.050667, 42.022708.
 After samples (ms): 41.9055, 41.592916, 41.557208, 42.451125, 41.7255.
-Both retain 500 records / 236,992–237,477 estimated timeline bytes. This generic
+Both retain 500 records / 236,992â€“237,477 estimated timeline bytes. This generic
 100,000-event reducer does not exercise the thread REST request or measure UI
 latency, process RSS or live Discord behavior. Small shared-workstation samples
 are noisy; no speed improvement is claimed.
@@ -987,7 +987,7 @@ an equivalent-workload speedup. READY apply and work after `FrameMetrics::finish
 remain outside this fix. Synthetic regression checks do not prove live service
 compatibility; rollout still requires owner-controlled native verification.
 
-# Notification sound replacement — September 13, 2026
+# Notification sound replacement â€” September 13, 2026
 
 Baseline: `6d9e32222d1e3bd4d4edfd01f30854033788b11f` (synthesized mono cues).
 After: embedded owner-supplied MP3 cues, decoded to stereo on the existing worker.
@@ -1015,7 +1015,7 @@ run outside UI/audio callbacks; the callback copies prepared samples and tracks
 the final device playback timestamp. Memory ceilings are documented in
 [storage-policy.md](storage-policy.md).
 
-## Title-strip dragging — September 13, 2026
+## Title-strip dragging â€” September 13, 2026
 
 Baseline: `7eb23fa`, built in a detached worktree. After: the title-strip press handling
 and nonselectable caption text from `fix/titlebar-drag`, on that same baseline.
@@ -1036,7 +1036,7 @@ tests verify command timing and caption-button isolation, not actual OS movement
 Native CPU, RSS, frame timing and drag latency are unmeasured: native computer-control APIs
 are disabled in this session and the Orca CLI is absent. No runtime speed claim is made.
 
-# Empty-channel welcome — September 13, 2026
+# Empty-channel welcome â€” September 13, 2026
 
 Baseline: `7eb23fa` with the same new offline empty-channel fixture injected for
 the preview only. Both previews were built with
@@ -1044,18 +1044,18 @@ the preview only. Both previews were built with
 `--demo --demo-empty-channel`. Standard packages exclude that fixture.
 
 Ubuntu 26.04.1 x64, Ryzen 5 7535U (12 logical CPUs), 14 GiB usable RAM,
-Rust 1.98.1, eframe/wgpu, default dark palette, 1× scale, 1120×760.
+Rust 1.98.1, eframe/wgpu, default dark palette, 1Ã— scale, 1120Ã—760.
 The comparison used an isolated Xvfb 21.1.22 display with hardware presentation
 unavailable, rather than the owner's interactive desktop. No builds ran during
-sampling. The window was resized to 1120×760 after three seconds, then left
+sampling. The window was resized to 1120Ã—760 after three seconds, then left
 untouched for five more seconds before one ten-second sample (11 readings at
 one-second intervals). Both windows were unfocused, with no caret animation.
 
 | Process metric | Baseline | Welcome | Delta |
 | --- | ---: | ---: | ---: |
 | Idle CPU, one core = 100% | 0.0% | 0.0% | 0.0 percentage points |
-| Settled RSS | 255,496 KiB | 241,488 KiB | −14,008 KiB (−5.48%) |
-| Peak RSS through sample end | 255,496 KiB | 241,488 KiB | −14,008 KiB (−5.48%) |
+| Settled RSS | 255,496 KiB | 241,488 KiB | âˆ’14,008 KiB (âˆ’5.48%) |
+| Peak RSS through sample end | 255,496 KiB | 241,488 KiB | âˆ’14,008 KiB (âˆ’5.48%) |
 
 CPU comes from `/proc/<pid>/stat` user/system tick deltas over the actual sample
 duration; no CPU ticks were observed in either idle interval. Settled RSS is the
@@ -1213,7 +1213,7 @@ No owner-account or live load test was performed. Account budgets are finite com
 allocation estimates (128 MiB navigation/permission and 64 MiB permission sub-budget),
 not whole-process memory guarantees; decoding and old/new state replacement add peak memory.
 
-## Linux and Windows stream audio — September 15, 2026
+## Linux and Windows stream audio â€” September 15, 2026
 
 Compared baseline `0628052` with stream-audio commit `79d1bc0` on macOS 27.0
 (26A428), Apple M1 Pro, 16 GiB RAM, Rust 1.98.1. Both use `cargo xtask package`:
@@ -1347,7 +1347,7 @@ Matched Windows x64, Rust 1.98.1 MSVC, standard voice-enabled packages contain t
 Both builds passed with the same nonfatal OpenH264 LNK4255 warning. `makensis` is unavailable,
 so these are unsigned portable distributions. Native UI measurements remain unavailable because
 desktop capture/control is disabled and Orca is absent; no runtime performance claim is made.
-## Linux and Windows stream audio — September 15, 2026
+## Linux and Windows stream audio â€” September 15, 2026
 
 Compared baseline `0628052` with the stream-audio implementation on macOS 27.0
 (26A428), Apple M1 Pro, 16 GiB RAM, Rust 1.98.1. Both use `cargo xtask package`:
@@ -1429,7 +1429,7 @@ has a 72,580,608-byte executable (+2,048), 76,649,684 total package bytes (+2,04
 and a 43,295,212-byte Optimal ZIP (+95); still 187 files. Native capture clients are
 released and recreated sequentially on encryption epoch changes, preserving existing
 packet and queue bounds. No dependency change. The owner confirmed audible shared
-browser audio; the release sender log records about 50 audio packets/s and 19–22
+browser audio; the release sender log records about 50 audio packets/s and 19â€“22
 video frames/s after negotiation. These are sender counters from one owner test,
 not a controlled performance comparison or proof of smooth viewer playback.
 The owner still reports intermittent lag; the subsequently supplied viewer log stops
@@ -1454,7 +1454,7 @@ thread or dependency. The localhost test verifies repeated idle-viewer pings and
 subsequent encrypted audio/video delivery. Live freeze recovery, CPU/RSS and
 end-to-end latency remain unmeasured; no playback improvement is claimed yet.
 
-# Theme transparency and blur — September 19, 2026
+# Theme transparency and blur â€” September 19, 2026
 
 Baseline: `9fca8980`. After: this rebased transparency branch. Standard
 voice-enabled macOS packages and release demo builds used Rust 1.98.1 on macOS
@@ -1466,7 +1466,7 @@ uses the same opaque native window and GPU surface selection as baseline.
 | Release executable, bytes | 53,624,384 | 53,640,848 | +16,464 (+0.031%) |
 | Installed app bundle, bytes | 59,558,087 | 59,574,551 | +16,464 (+0.028%) |
 | ZIP, `ditto --keepParent`, bytes | 39,702,949 | 39,711,200 | +8,251 (+0.021%) |
-| Disabled idle CPU, median of 3 × 30 s after 10 s warmup | 0.067% | 0.100% | +0.033 percentage points |
+| Disabled idle CPU, median of 3 Ã— 30 s after 10 s warmup | 0.067% | 0.100% | +0.033 percentage points |
 | Disabled settled RSS, median | 199,248 KiB | 199,088 KiB | -160 KiB (-0.08%) |
 | Disabled physical footprint, median | 158,090,320 B | 158,925,856 B | +835,536 B (+0.53%) |
 
@@ -1478,7 +1478,7 @@ or extra draw passes; it exits window-effect synchronization before theme lookup
 No helper processes were present. Frame callback timing is unmeasured because an
 idle event-driven window did not produce enough callbacks for a useful comparison.
 
-## Unicode mathematical-letter fallback — September 20, 2026
+## Unicode mathematical-letter fallback â€” September 20, 2026
 
 Package baseline: `4c3c53a`. After: this branch. The idle sample compared
 `f0cb74d` with the same font patch before its clean rebase. Both comparisons used
@@ -1507,7 +1507,7 @@ Noto Sans Math face plus its notice and small integration changes. Native screen
 capture was unavailable because the Windows computer-use helper failed to initialize
 with OS error 3; no visual, frame-time, startup, or live Discord claim is made.
 
-## Large settings-proto responses — September 20, 2026
+## Large settings-proto responses â€” September 20, 2026
 
 Baseline: `0ffd9b3`. After: this branch. Both used the standard voice-enabled
 `cargo xtask package` profile with Rust 1.98.1 on Windows. One 195-file package
@@ -1559,7 +1559,7 @@ queued display requests. Login CPU, RSS and frame/teardown latency are unmeasure
 separate offline Wayland validation confirmed teardown behavior without measuring
 latency. That check used debug demo builds, a local HTML page and a synthetic
 XHR-header handoff without sending the request, on Weston 15 inside an isolated
-1280×960 Xvfb display. The native window remained after handoff on the baseline
+1280Ã—960 Xvfb display. The native window remained after handoff on the baseline
 and disappeared with the fix. This was not a live Discord login test.
 
 ## SDK account/channel data and invalidation events - September 22, 2026
@@ -1891,12 +1891,12 @@ still succeeds. The normal save path is different: it drops the oldest
 cached channel to make room, then retries. `secure_delete=ON` stays: each freed page is overwritten before
 reuse, so a delete costs about one extra page write, and message text does
 not remain in free pages. CI run 36817239730 printed, for 20 loads of 50
-rows and a rejected write: macOS 5.524875 ms and 68.334 µs, Ubuntu
-10.755904 ms and 104.756 µs, Windows x64 9.7182 ms and 128 µs, Windows
-ARM 10.0717 ms and 134.8 µs. The synthetic file was 110,592 bytes. This
+rows and a rejected write: macOS 5.524875 ms and 68.334 Âµs, Ubuntu
+10.755904 ms and 104.756 Âµs, Windows x64 9.7182 ms and 128 Âµs, Windows
+ARM 10.0717 ms and 134.8 Âµs. The synthetic file was 110,592 bytes. This
 is an in-memory check, not native RSS or frame time. Text preview of
-20,000 ASCII characters in CI run 36819481221: macOS 557.708 µs, Ubuntu
-889.729 µs, Windows x64 924.6 µs, Windows ARM 1.0856 ms.
+20,000 ASCII characters in CI run 36819481221: macOS 557.708 Âµs, Ubuntu
+889.729 Âµs, Windows x64 924.6 Âµs, Windows ARM 1.0856 ms.
 
 # History copies and decoded-image backpressure (port) - October 2026
 
@@ -1916,7 +1916,7 @@ workloads print comparable medians for on-hardware runs:
 Behavioral tests pin the bounds; no performance change is claimed until those
 workloads run on identical hardware.
 
-## History copies and decoded-image backpressure — measured October 2026
+## History copies and decoded-image backpressure â€” measured October 2026
 
 Same-machine debug medians on the agent PC (Windows x64); debug inflates
 absolutes, the relative deltas are the signal. Release numbers on stable
@@ -1924,9 +1924,9 @@ hardware remain pending.
 
 | Metric / method | Before | After | Delta |
 | --- | ---: | ---: | ---: |
-| Page completion, 500 membership-heavy rows + 50-row page, recent, µs | 2,011.6 | 1,030.0 | -48.8% |
-| Same, older, µs | 744.3 | 185.9 | -75.0% |
-| Same, append, µs | 778.4 | 236.1 | -69.7% |
+| Page completion, 500 membership-heavy rows + 50-row page, recent, Âµs | 2,011.6 | 1,030.0 | -48.8% |
+| Same, older, Âµs | 744.3 | 185.9 | -75.0% |
+| Same, append, Âµs | 778.4 | 236.1 | -69.7% |
 | 200 incremental SQLite saves, 500 rows, s | 2.18 | 1.93 | -11.4% |
 | Paused image consumer, queued pixel bytes | 536,870,912 | 130,023,424 | -75.8% |
 
@@ -1960,8 +1960,35 @@ Release numbers on stable hardware remain pending.
 | Same, retained deleted tail, ms | 20,824.3 | 704.6 | ~-96.6% (~30x) |
 | Watch 1080p x120 frames, ms | 434.9 | 335.7 | ~-22.8% |
 
-Old cursor code walked the whole filtered timeline per query (`Iterator::last`
-+ full `all` scan); the port reads the back directly (`next_back`). Workloads:
-`timeline_cursor_workload` (client-core, ignored) and
-`watch_frame_memory_workload` (watch, ignored; `NIVRA_WATCH_FRAME_LEGACY=1`
+Old cursor code walked the whole filtered timeline per query (Iterator::last
++ full ll scan); the port reads the back directly (
+ext_back). Workloads:
+	imeline_cursor_workload (client-core, ignored) and
+watch_frame_memory_workload (watch, ignored; NIVRA_WATCH_FRAME_LEGACY=1
 reproduces the allocation-per-frame path). No RSS claim; excludes rendering.
+
+## Voice session takeover and local call release (October 2, 2026)
+
+Raw samples and binary hashes:
+[oice-call-takeover/final-measurements.json](pr-evidence/voice-call-takeover/final-measurements.json).
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Standard desktop executable | 62,137,600 B | 62,154,064 B | +16,464 B / +0.0265% |
+| Installed package, 206 regular files | 68,148,029 B | 68,164,493 B | +16,464 B / +0.0242% |
+| Distribution ZIP, ditto | 43,310,944 B | 43,321,311 B | +10,367 B / +0.0239% |
+| Optimized native CPU, ten-sample median | 0.0% | 0.0% | 0 percentage points |
+| Optimized native peak RSS | 124,720 KiB | 124,640 KiB | −80 KiB / −0.064% |
+| Optimized settled RSS, last-five median | 124,672 KiB | 124,592 KiB | −80 KiB / −0.064% |
+| Reducer 100,000 events, alternating-five-pair median | 53.559125 ms | 53.624750 ms | +0.065625 ms / +0.123% |
+| Estimated retained timeline, 500 records | 331,992–332,477 B | 331,992–332,477 B | unchanged |
+
+Negotiation retains one replaceable validated credential candidate and a scoped
+u64 revision under the original 30-second deadline. Media/ringing readiness waits
+for an exact transport confirmation and Gateway acknowledgement. An unconfirmed
+attempt abandons locally; confirmed replacement clears the old local scope without
+an account-wide hangup. Existing eight-slot control admission now retains one
+fixed-metadata pending Abandon under pressure; a new Join cannot overtake cleanup,
+and an unsent full-queue Join fails only its own attempt. No persistent cache or
+new background worker is introduced. Server acceptance establishes a submitted
+candidate, not a physical-client identity.

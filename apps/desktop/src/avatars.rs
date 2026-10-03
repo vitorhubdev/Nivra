@@ -5,7 +5,7 @@ use model::Id;
 use rasterlottie::{Animation as Lottie, RenderConfig, Renderer, Rgba8};
 use sha2::{Digest, Sha256};
 use std::{
-	collections::{BinaryHeap, VecDeque},
+	collections::{BinaryHeap, HashMap, VecDeque},
 	fs::{self, OpenOptions},
 	io::{self, Cursor, Read, Write},
 	path::{Path, PathBuf},
@@ -1179,14 +1179,7 @@ async fn download(
 			.is_some_and(|length| length > limit as u64)
 	{
 		if !response.status().is_success() {
-			let host = url::Url::parse(url)
-				.ok()
-				.and_then(|url| url.host_str().map(str::to_owned))
-				.unwrap_or_else(|| "?".into());
-			eprintln!(
-				"Nivra: image fetch refused: host={host} status={}",
-				response.status().as_u16()
-			);
+			log_fetch_refusal(url, response.status().as_u16());
 		}
 		return None;
 	}
@@ -1199,6 +1192,33 @@ async fn download(
 		bytes.extend_from_slice(&chunk);
 	}
 	Some(bytes)
+}
+
+/// Logs one refused fetch per host+status per minute so a permanently broken
+/// image cannot fill diagnostics while the media state retries it. Bounded and
+/// content-free: only the host and the numeric status are recorded.
+fn log_fetch_refusal(url: &str, status: u16) {
+	static LOGGED: LazyLock<std::sync::Mutex<HashMap<String, Instant>>> =
+		LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+	let host = url::Url::parse(url)
+		.ok()
+		.and_then(|url| url.host_str().map(str::to_owned))
+		.unwrap_or_else(|| "?".into());
+	let key = format!("{host} {status}");
+	let now = Instant::now();
+	let mut logged = LOGGED.lock().expect("fetch refusal log poisoned");
+	if logged
+		.get(&key)
+		.is_some_and(|at| now.saturating_duration_since(*at) < Duration::from_secs(60))
+	{
+		return;
+	}
+	if logged.len() >= 64 {
+		logged.clear();
+	}
+	logged.insert(key, now);
+	drop(logged);
+	eprintln!("Nivra: image fetch refused: host={host} status={status}");
 }
 
 fn decode(bytes: &[u8], budget: &Budget) -> Option<egui::ColorImage> {

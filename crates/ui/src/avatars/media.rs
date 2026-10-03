@@ -866,15 +866,16 @@ fn pick(media: &model::EmbedMedia, animate: bool) -> Option<(&str, bool)> {
 }
 
 impl Avatars {
-	/// True when no fetch can ever produce this embed image: no usable URL, or a
-	/// source the fetcher rejects. Callers skip the image block entirely so a dead
-	/// image collapses instead of reserving a black square. Transient fetch
-	/// failures still paint the retrying stand-in.
+	/// True when this embed image sits in a settled terminal state: no usable
+	/// URL, a source the fetcher rejects, or a slot the decoder ruled unplayable.
+	/// Callers skip the image block entirely so a dead image collapses instead of
+	/// reserving a black square. Anything else (loading, retryable fetch failure)
+	/// still paints the retrying stand-in.
 	pub(crate) fn collapsed_media(&mut self, media: &model::EmbedMedia) -> bool {
 		let Some((raw, _)) = pick(media, self.animate_gifs) else {
 			return true;
 		};
-		self.media.source(raw).is_none()
+		!self.media.playable(raw)
 	}
 
 	pub(crate) fn show_media(
@@ -1116,5 +1117,15 @@ mod stand_in_tests {
 			crate::i18n::text(model::Language::PortugueseBrazil, "Couldn't load"),
 			"Couldn't load"
 		);
+	}
+
+	#[test]
+	fn unplayable_slots_count_as_settled_terminal_state() {
+		let mut library = super::MediaLibrary::default();
+		let raw = "https://cdn.discordapp.com/attachments/2/42/preview.png";
+		let source = library.source(raw).expect("valid source");
+		assert!(library.playable(raw));
+		library.slot(&source).learned = super::Learned::Unplayable;
+		assert!(!library.playable(raw));
 	}
 }

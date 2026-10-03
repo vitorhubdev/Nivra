@@ -866,6 +866,18 @@ fn pick(media: &model::EmbedMedia, animate: bool) -> Option<(&str, bool)> {
 }
 
 impl Avatars {
+	/// True when this embed image sits in a settled terminal state: no usable
+	/// URL, a source the fetcher rejects, or a slot the decoder ruled unplayable.
+	/// Callers skip the image block entirely so a dead image collapses instead of
+	/// reserving a black square. Anything else (loading, retryable fetch failure)
+	/// still paints the retrying stand-in.
+	pub(crate) fn collapsed_media(&mut self, media: &model::EmbedMedia) -> bool {
+		let Some((raw, _)) = pick(media, self.animate_gifs) else {
+			return true;
+		};
+		!self.media.playable(raw)
+	}
+
 	pub(crate) fn show_media(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -1068,7 +1080,13 @@ impl Avatars {
 				colors.accent,
 			);
 		}
-		let caption = stand_in_caption(demo, failed);
+		let caption = if demo {
+			crate::tr_ui!(ui, "Synthetic preview")
+		} else if failed {
+			crate::tr_ui!(ui, "Couldn't load")
+		} else {
+			crate::tr_ui!(ui, "Image preview")
+		};
 		if !caption.is_empty() && rect.width() >= 100.0 && rect.height() >= 32.0 {
 			ui.painter().text(
 				rect.center(),
@@ -1082,23 +1100,32 @@ impl Avatars {
 	}
 }
 
-fn stand_in_caption(demo: bool, failed: bool) -> &'static str {
-	if demo {
-		"Synthetic preview"
-	} else if failed {
-		"Couldn't load"
-	} else {
-		"Image preview"
-	}
-}
-
 #[cfg(test)]
 mod stand_in_tests {
 	#[test]
 	fn failed_fetch_without_a_thumbhash_is_not_a_blank_caption() {
-		assert_eq!(super::stand_in_caption(false, true), "Couldn't load");
-		assert!(!super::stand_in_caption(false, true).is_empty());
-		assert_eq!(super::stand_in_caption(false, false), "Image preview");
-		assert_eq!(super::stand_in_caption(true, true), "Synthetic preview");
+		for language in [
+			model::Language::English,
+			model::Language::PortugueseBrazil,
+			model::Language::Spanish,
+		] {
+			assert!(!crate::i18n::text(language, "Couldn't load").is_empty());
+			assert!(!crate::i18n::text(language, "Image preview").is_empty());
+			assert!(!crate::i18n::text(language, "Synthetic preview").is_empty());
+		}
+		assert_ne!(
+			crate::i18n::text(model::Language::PortugueseBrazil, "Couldn't load"),
+			"Couldn't load"
+		);
+	}
+
+	#[test]
+	fn unplayable_slots_count_as_settled_terminal_state() {
+		let mut library = super::MediaLibrary::default();
+		let raw = "https://cdn.discordapp.com/attachments/2/42/preview.png";
+		let source = library.source(raw).expect("valid source");
+		assert!(library.playable(raw));
+		library.slot(&source).learned = super::Learned::Unplayable;
+		assert!(!library.playable(raw));
 	}
 }

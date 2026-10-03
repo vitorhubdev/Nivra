@@ -322,9 +322,12 @@ impl MessagingUi {
 						);
 						ui.add(
 							egui::Label::new(
-								egui::RichText::new(&self.updates.status)
-									.size(12.0)
-									.color(colors.muted),
+								egui::RichText::new(
+									crate::i18n::text_str(self.language, &self.updates.status)
+										.into_owned(),
+								)
+								.size(12.0)
+								.color(colors.muted),
 							)
 							.wrap(),
 						);
@@ -359,9 +362,12 @@ impl MessagingUi {
 							);
 							ui.add(
 								egui::Label::new(
-									egui::RichText::new(&self.updates.status)
-										.size(13.0)
-										.color(colors.muted),
+									egui::RichText::new(
+										crate::i18n::text_str(self.language, &self.updates.status)
+											.into_owned(),
+									)
+									.size(13.0)
+									.color(colors.muted),
 								)
 								.wrap(),
 							);
@@ -394,7 +400,10 @@ impl MessagingUi {
 				design::notice(
 					ui,
 					design::Level::Warning,
-					"Could not load or save update preferences. Changes may not survive restart.",
+					crate::i18n::text(
+						self.language,
+						"Could not load or save update preferences. Changes may not survive restart.",
+					),
 				);
 			}
 		});
@@ -429,6 +438,79 @@ impl MessagingUi {
 #[cfg(test)]
 mod tests {
 	use crate::{MessagingUi, State};
+	#[test]
+	fn updates_panel_renders_without_untranslated_keys_in_all_languages() {
+		for language in [
+			model::Language::English,
+			model::Language::PortugueseBrazil,
+			model::Language::Spanish,
+		] {
+			let ctx = egui::Context::default();
+			crate::design::apply(&ctx);
+			crate::i18n::store_interface_language(&ctx, language);
+			let _ = crate::i18n::drain_untranslated_keys();
+			let mut view = MessagingUi {
+				language,
+				updates_save_failed: true,
+				..Default::default()
+			};
+			let mut output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(420.0, 800.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					view.updates_menu(ui, false);
+				},
+			);
+			output.textures_delta.clear();
+			let mut rendered = String::new();
+			fn walk(shape: &egui::Shape, out: &mut String) {
+				match shape {
+					egui::Shape::Text(text) => out.push_str(&text.galley.job.text),
+					egui::Shape::Vec(shapes) => {
+						for shape in shapes {
+							walk(shape, out);
+						}
+					}
+					_ => {}
+				}
+			}
+			for shape in &output.shapes {
+				walk(&shape.shape, &mut rendered);
+			}
+			let (status, notice) = match language {
+				model::Language::English => (
+					"Updates have not been checked yet.",
+					"Could not load or save update preferences.",
+				),
+				model::Language::PortugueseBrazil => (
+					"As atualizações ainda não foram verificadas.",
+					"Não foi possível carregar ou salvar",
+				),
+				model::Language::Spanish => (
+					"Las actualizaciones aún no se han comprobado.",
+					"No se pudieron cargar ni guardar",
+				),
+			};
+			assert!(
+				rendered.contains(status),
+				"translated status missing in {language:?}"
+			);
+			assert!(
+				rendered.contains(notice),
+				"translated save notice missing in {language:?}"
+			);
+			let missing = crate::i18n::drain_untranslated_keys();
+			assert!(
+				missing.is_empty(),
+				"untranslated updates keys in {language:?}: {missing:?}"
+			);
+		}
+	}
 
 	/// Rectangles of the banner's text and icon shapes, in paint order.
 	fn scan(

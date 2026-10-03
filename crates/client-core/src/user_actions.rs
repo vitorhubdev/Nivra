@@ -1352,6 +1352,16 @@ impl State {
 						}
 						Action::Mute { channel, muted } => self.confirm_dm_muted(channel, muted)?,
 					}
+				} else if let Action::Mute { channel, muted } = action {
+					// The settings event already carried the mute, but a stale expiry
+					// timer from an earlier temporary mute must still be cleared:
+					// otherwise it unmutes the DM when it fires (Codex PR #40).
+					// Unmute requests keep the timer: with a stale echo and an
+					// already-fired timer, expiry is what currently reports the
+					// requested unmute (Codex PR #71 P2).
+					if muted {
+						self.clear_dm_mute_timer(channel);
+					}
 				}
 			}
 		}
@@ -1412,6 +1422,124 @@ fn valid_friend(user: &model::User, username: &str) -> bool {
 mod tests {
 	use super::*;
 	use crate::{Envelope, Event as CoreEvent};
+	#[test]
+	fn definitive_dm_mute_clears_stale_timer_even_when_observed() {
+		use crate::notifications::{Event as NotificationsEvent, Setting};
+		let dm = || Setting {
+			guild: None,
+			muted: None,
+			level: None,
+			suppress_everyone: None,
+			suppress_roles: None,
+			hide_muted_channels: None,
+			channels: vec![(Id(10), Some(true), None)],
+			channel_mute_until: vec![],
+		};
+		let timed = || {
+			let mut setting = dm();
+			setting.channel_mute_until = vec![(Id(10), 1)];
+			setting
+		};
+		let mut state = state();
+		// An earlier temporary mute left an expiry timer behind (already fired:
+		// with the timer present the DM reads unmuted even though it is muted).
+		state
+			.apply_notification_preferences(NotificationsEvent::Settings {
+				entries: vec![timed()],
+				replace: true,
+			})
+			.unwrap();
+		// The owner now mutes the DM for good.
+		assert!(state.set_dm_muted(Id(10), true).is_some());
+		let request = state
+			.user_actions
+			.pending
+			.as_ref()
+			.map(|(_, sequence, _)| *sequence)
+			.unwrap();
+		// A global settings event arrives first and already carries the mute —
+		// but the server echo still lists the old timer (cleanup lags one event).
+		state
+			.apply_notification_preferences(NotificationsEvent::Settings {
+				entries: vec![timed()],
+				replace: false,
+			})
+			.unwrap();
+		assert!(
+			state
+				.user_actions
+				.pending
+				.as_ref()
+				.is_some_and(|(_, _, observed)| *observed)
+		);
+		// The write confirms: the mute sticks and the stale timer is gone,
+		// even though the confirmation was observed (audit #8 / Codex PR #40).
+		state
+			.apply_user_action(Event::Written {
+				action: Action::Mute {
+					channel: Id(10),
+					muted: true,
+				},
+				request,
+				result: Ok(()),
+			})
+			.unwrap();
+		assert_eq!(state.dm_muted(Id(10)), Some(true));
+	}
+	#[test]
+	fn observed_unmute_keeps_expiry_timer_until_fresh_settings_arrive() {
+		use crate::notifications::{Event as NotificationsEvent, Setting};
+		let timed = || Setting {
+			guild: None,
+			muted: None,
+			level: None,
+			suppress_everyone: None,
+			suppress_roles: None,
+			hide_muted_channels: None,
+			channels: vec![(Id(10), Some(true), None)],
+			channel_mute_until: vec![(Id(10), 1)],
+		};
+		let mut state = state();
+		state
+			.apply_notification_preferences(NotificationsEvent::Settings {
+				entries: vec![timed()],
+				replace: true,
+			})
+			.unwrap();
+		// The owner unmutes, but the settings echo still carries the old timed
+		// mute: expiry is what reports the requested unmute (Codex PR #71 P2).
+		assert!(state.set_dm_muted(Id(10), false).is_some());
+		let request = state
+			.user_actions
+			.pending
+			.as_ref()
+			.map(|(_, sequence, _)| *sequence)
+			.unwrap();
+		state
+			.apply_notification_preferences(NotificationsEvent::Settings {
+				entries: vec![timed()],
+				replace: false,
+			})
+			.unwrap();
+		assert!(
+			state
+				.user_actions
+				.pending
+				.as_ref()
+				.is_some_and(|(_, _, observed)| *observed)
+		);
+		state
+			.apply_user_action(Event::Written {
+				action: Action::Mute {
+					channel: Id(10),
+					muted: false,
+				},
+				request,
+				result: Ok(()),
+			})
+			.unwrap();
+		assert_eq!(state.dm_muted(Id(10)), Some(false));
+	}
 	#[test]
 	fn relationship_view_tracks_all_friend_inputs_and_failed_mutations() {
 		let mut state = state();

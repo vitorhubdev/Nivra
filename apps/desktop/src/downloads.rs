@@ -465,21 +465,29 @@ fn attachment_cdn_url(raw: &str, attachment: &Attachment, host: &str) -> Option<
 	}
 	let url = url::Url::parse(raw).ok()?;
 	let path: Vec<_> = url.path_segments()?.collect();
+	// Classic shape: /attachments/{channel}/{attachment}/{file}. Message-scoped
+	// shape (forwards, modern voice notes, upstream Serein #540):
+	// /attachments/{channel}/{message}/{attachment}/{file}.
+	let (channel, id, file) = match path.as_slice() {
+		["attachments", channel, id, file] => (*channel, *id, *file),
+		["attachments", channel, message, id, file] if message.parse::<model::Id>().is_ok() => {
+			(*channel, *id, *file)
+		}
+		_ => return None,
+	};
 	(url.scheme() == "https"
 		&& url.host_str() == Some(host)
 		&& url.port_or_known_default() == Some(443)
 		&& url.username().is_empty()
 		&& url.password().is_none()
 		&& url.fragment().is_none()
-		&& path.len() == 4
-		&& path[0] == "attachments"
-		&& path[1].parse::<model::Id>().is_ok()
-		&& path[2] == attachment.id.to_string()
-		&& !path[3].is_empty()
-		&& !path[3].contains('\\')
+		&& channel.parse::<model::Id>().is_ok()
+		&& id == attachment.id.to_string()
+		&& !file.is_empty()
+		&& !file.contains('\\')
 		&& !["%2f", "%5c"]
 			.iter()
-			.any(|escape| path[3].to_ascii_lowercase().contains(escape))
+			.any(|escape| file.to_ascii_lowercase().contains(escape))
 		&& signed_attachment_query(&url))
 	.then_some(url)
 }
@@ -875,6 +883,68 @@ pub(crate) async fn download(
 mod tests {
 	use super::*;
 	use tokio::io::{AsyncReadExt, AsyncWriteExt};
+	fn voice_attachment() -> Attachment {
+		Attachment {
+			id: model::Id(333),
+			filename: "voice-message.ogg".into(),
+			description: None,
+			content_type: Some("audio/ogg".into()),
+			size: 1000,
+			media: model::EmbedMedia {
+				url: None,
+				proxy_url: None,
+				width: 0,
+				height: 0,
+				placeholder: Vec::new(),
+			},
+			spoiler: false,
+			duration_ms: Some(1000),
+			waveform: Vec::new(),
+		}
+	}
+	#[test]
+	fn message_scoped_attachment_paths_keep_admission_guards() {
+		let attachment = voice_attachment();
+		let query = "ex=1&is=2&hm=3";
+		// Classic 4-segment shape still admitted.
+		assert!(
+			attachment_cdn_url(
+				&format!(
+					"https://cdn.discordapp.com/attachments/111/333/voice-message.ogg?{query}"
+				),
+				&attachment,
+				"cdn.discordapp.com"
+			)
+			.is_some()
+		);
+		// Message-scoped 5-segment shape (forwards, modern voice notes).
+		assert!(
+			attachment_cdn_url(
+				&format!(
+					"https://cdn.discordapp.com/attachments/111/222/333/voice-message.ogg?{query}"
+				),
+				&attachment,
+				"cdn.discordapp.com"
+			)
+			.is_some()
+		);
+		// Guards hold on both shapes: non-numeric message, wrong id, traversal.
+		for raw in [
+			format!(
+				"https://cdn.discordapp.com/attachments/111/notanid/333/voice-message.ogg?{query}"
+			),
+			format!("https://cdn.discordapp.com/attachments/111/222/999/voice-message.ogg?{query}"),
+			format!(
+				"https://cdn.discordapp.com/attachments/111/222/333/..%2fvoice-message.ogg?{query}"
+			),
+			"https://cdn.discordapp.com/attachments/111/222/333/voice-message.ogg".to_string(),
+		] {
+			assert!(
+				attachment_cdn_url(&raw, &attachment, "cdn.discordapp.com").is_none(),
+				"{raw}"
+			);
+		}
+	}
 	#[test]
 	fn cancelling_copy_cannot_restore_a_late_copied_status() {
 		let (owner, _keep_alive) = std::sync::mpsc::sync_channel(0);

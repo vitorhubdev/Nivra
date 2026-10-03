@@ -1965,3 +1965,29 @@ Old cursor code walked the whole filtered timeline per query (`Iterator::last`
 `timeline_cursor_workload` (client-core, ignored) and
 `watch_frame_memory_workload` (watch, ignored; `NIVRA_WATCH_FRAME_LEGACY=1`
 reproduces the allocation-per-frame path). No RSS claim; excludes rendering.
+
+## Voice session takeover and local call release (October 2, 2026)
+
+Raw samples and binary hashes:
+[`voice-call-takeover/final-measurements.json`](pr-evidence/voice-call-takeover/final-measurements.json).
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Standard desktop executable | 62,137,600 B | 62,154,064 B | +16,464 B / +0.0265% |
+| Installed package, 206 regular files | 68,148,029 B | 68,164,493 B | +16,464 B / +0.0242% |
+| Distribution ZIP, ditto | 43,310,944 B | 43,321,311 B | +10,367 B / +0.0239% |
+| Optimized native CPU, ten-sample median | 0.0% | 0.0% | 0 percentage points |
+| Optimized native peak RSS | 124,720 KiB | 124,640 KiB | −80 KiB / −0.064% |
+| Optimized settled RSS, last-five median | 124,672 KiB | 124,592 KiB | −80 KiB / −0.064% |
+| Reducer 100,000 events, alternating-five-pair median | 53.559125 ms | 53.624750 ms | +0.065625 ms / +0.123% |
+| Estimated retained timeline, 500 records | 331,992–332,477 B | 331,992–332,477 B | unchanged |
+
+Negotiation retains one replaceable validated credential candidate and a scoped
+u64 revision under the original 30-second deadline. Media/ringing readiness waits
+for an exact transport confirmation and Gateway acknowledgement. An unconfirmed
+attempt abandons locally; confirmed replacement clears the old local scope without
+an account-wide hangup. Existing eight-slot control admission now retains one
+fixed-metadata pending Abandon under pressure; a new Join cannot overtake cleanup,
+and an unsent full-queue Join fails only its own attempt. No persistent cache or
+new background worker is introduced. Server acceptance establishes a submitted
+candidate, not a physical-client identity.

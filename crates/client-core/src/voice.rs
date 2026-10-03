@@ -144,6 +144,17 @@ impl State {
 }
 #[derive(Clone, Copy, Debug)]
 pub enum Command {
+	/// Retire an unconfirmed local negotiation without changing service voice state.
+	AbandonSession {
+		channel: Id,
+		request: u64,
+	},
+	/// Local transport accepted this Gateway negotiation candidate; never sent on the wire.
+	ConfirmSession {
+		channel: Id,
+		request: u64,
+		revision: u64,
+	},
 	Sync {
 		channel: Id,
 	},
@@ -199,6 +210,24 @@ pub enum Command {
 	},
 }
 pub enum Event {
+	/// Gateway accepted the current local transport candidate, scoped to its attempt.
+	SessionConfirmed {
+		channel: Id,
+		request: u64,
+		revision: u64,
+	},
+	/// Local confirmation admission failed; only the exact unconfirmed candidate may consume it.
+	SessionConfirmationFailed {
+		channel: Id,
+		request: u64,
+		revision: u64,
+		message: &'static str,
+	},
+	/// The confirmed local voice session was replaced. No service hangup is needed.
+	TakenOver {
+		channel: Id,
+		request: u64,
+	},
 	Departed {
 		channel: Id,
 		request: u64,
@@ -226,6 +255,8 @@ pub enum Event {
 		channel: Option<Id>,
 		user: Id,
 		session: Option<Secret>,
+		/// Bounded Gateway candidate identity; not a Discord session identifier.
+		negotiation_revision: Option<u64>,
 		muted: bool,
 		deafened: bool,
 		video: bool,
@@ -234,6 +265,7 @@ pub enum Event {
 	Server {
 		request: u64,
 		channel: Id,
+		negotiation_revision: Option<u64>,
 		token: Option<Secret>,
 		endpoint: Option<String>,
 	},
@@ -506,6 +538,19 @@ impl ClientState {
 	}
 	pub fn apply_voice(&mut self, event: Event) {
 		match event {
+			Event::TakenOver { channel, request } => {
+				if self
+					.voice
+					.active
+					.as_ref()
+					.is_some_and(|call| call.channel == channel && call.request == request)
+				{
+					self.voice.active = None;
+					self.voice.outgoing = None;
+					self.voice.departed = Some((channel, request));
+					self.status = "This device's call session was replaced";
+				}
+			}
 			Event::Departed { channel, request } => {
 				self.voice.departed = Some((channel, request));
 			}
@@ -819,7 +864,11 @@ impl ClientState {
 					call.participants.clear();
 				}
 			}
-			Event::Server { .. } | Event::Stream { .. } | Event::Watch { .. } => {} // The desktop consumes negotiation material; core never retains it.
+			Event::SessionConfirmed { .. }
+			| Event::SessionConfirmationFailed { .. }
+			| Event::Server { .. }
+			| Event::Stream { .. }
+			| Event::Watch { .. } => {} // The desktop consumes negotiation material; core never retains it.
 		}
 	}
 	fn update_roster(&mut self, entry: RosterEntry) -> bool {
@@ -1051,6 +1100,7 @@ mod tests {
 			user: Id(2),
 			request: None,
 			session: None,
+			negotiation_revision: None,
 			member: None,
 			muted: false,
 			deafened: true,
@@ -1322,6 +1372,7 @@ mod tests {
 			user: Id(120),
 			request: None,
 			session: None,
+			negotiation_revision: None,
 			member: None,
 			muted: false,
 			deafened: false,
@@ -1414,6 +1465,7 @@ mod tests {
 			channel: None,
 			user: Id(3),
 			session: None,
+			negotiation_revision: None,
 			member: None,
 			muted: false,
 			deafened: false,
@@ -1433,6 +1485,7 @@ mod tests {
 			channel: Some(Id(2)),
 			user: Id(3),
 			session: None,
+			negotiation_revision: None,
 			member: None,
 			muted: true,
 			deafened: false,
@@ -1726,6 +1779,7 @@ mod tests {
 					channel: (end == "peer-state").then_some(Id(2)),
 					user: if end == "peer-state" { Id(3) } else { Id(1) },
 					session: None,
+					negotiation_revision: None,
 					muted: false,
 					deafened: false,
 					video: false,
@@ -1809,6 +1863,7 @@ mod tests {
 			user: Id(1),
 			request,
 			session: None,
+			negotiation_revision: None,
 			member: None,
 			muted: true,
 			deafened: false,
@@ -1831,5 +1886,196 @@ mod tests {
 		assert_eq!(state.voice.follow.unwrap().channel, Id(20));
 		state.apply_voice(moved(None, None));
 		assert!(state.voice.follow.is_none());
+	}
+
+	#[test]
+	fn takeover_clears_only_the_matching_call_and_allows_an_explicit_rejoin() {
+		let mut state = dm_state();
+		state.start_call(Id(2), false).unwrap();
+		let request = state.voice.active.as_ref().unwrap().request;
+		state.apply_voice(Event::TakenOver {
+			channel: Id(2),
+			request: request + 1,
+		});
+		assert!(state.voice.active.is_some());
+		state.apply_voice(Event::TakenOver {
+			channel: Id(3),
+			request,
+		});
+		assert!(state.voice.active.is_some());
+		state.apply_voice(Event::TakenOver {
+			channel: Id(2),
+			request,
+		});
+		assert!(state.voice.active.is_none());
+		assert!(state.voice.outgoing.is_none());
+		assert_eq!(state.voice.departed, Some((Id(2), request)));
+		assert_eq!(state.status, "This device's call session was replaced");
+		assert!(state.start_call(Id(2), false).is_some());
+		let next = state.voice.active.as_ref().unwrap().request;
+		assert_ne!(request, next);
+		state.apply_voice(Event::TakenOver {
+			channel: Id(2),
+			request,
+		});
+		assert_eq!(state.voice.active.as_ref().unwrap().request, next);
+	}
+
+	#[test]
+	fn voice_state_stress_test_50x_join_leave_20x_channel_switch_takeover_drop() {
+		let mut state = dm_state();
+		let dm_channel = Id(2);
+		state.guilds.push(model::Guild {
+			stickers: None,
+			id: Id(10),
+			name: "Stress Guild".into(),
+			icon: None,
+			emojis: None,
+			premium_tier: 0,
+		});
+		for id in 100..120 {
+			state.channels.push(Channel {
+				id: Id(id),
+				guild: Some(Id(10)),
+				kind: 2,
+				name: format!("Voice {id}"),
+				last_message: None,
+				parent_id: None,
+				position: 0,
+				recipients: Vec::new(),
+				icon: None,
+				member_list_id: None,
+				message_count: None,
+			});
+		}
+		crate::tests::grant_permissions(&mut state);
+
+		// 1. 50x join / leave cycles in DM and Guild channels
+		for i in 0u64..50 {
+			let ch = if i % 2 == 0 { dm_channel } else { Id(100) };
+			let ring = ch == dm_channel;
+			let cmd = state.start_call(ch, ring).expect("start call");
+			let req = match cmd {
+				crate::Command::Voice(Command::Join {
+					channel, request, ..
+				}) => {
+					assert_eq!(channel, ch);
+					request
+				}
+				_ => panic!("expected Voice Join"),
+			};
+			assert!(state.voice.active.is_some());
+			assert_eq!(state.voice.active.as_ref().unwrap().channel, ch);
+			assert_eq!(state.voice.active.as_ref().unwrap().request, req);
+
+			// Confirmation from gateway
+			state.apply_voice(Event::State {
+				guild: if ch == Id(100) { Some(Id(10)) } else { None },
+				channel: Some(ch),
+				user: state.user.as_ref().unwrap().id,
+				session: None,
+				muted: false,
+				deafened: false,
+				server_muted: false,
+				server_deafened: false,
+				video: false,
+				streaming: false,
+				member: None,
+				request: Some(req),
+				negotiation_revision: Some(i + 1),
+			});
+			assert!(state.voice.active.is_some());
+
+			// Leave
+			let leave_cmd = state.leave_call().expect("leave call");
+			assert!(matches!(
+				leave_cmd,
+				crate::Command::Voice(Command::Leave { channel, request }) if channel == ch && request == req
+			));
+			assert!(state.voice.active.is_none());
+		}
+
+		// 2. 20x channel transitions (leave previous -> join next)
+		let mut current_req = 0;
+		for i in 0u64..20 {
+			let target_ch = Id(100 + (i % 10));
+			let cmd = state.start_call(target_ch, false).expect("channel switch");
+			current_req = match cmd {
+				crate::Command::Voice(Command::Join {
+					channel, request, ..
+				}) => {
+					assert_eq!(channel, target_ch);
+					request
+				}
+				_ => panic!("expected Voice Join"),
+			};
+			assert_eq!(state.voice.active.as_ref().unwrap().channel, target_ch);
+			assert_eq!(state.voice.active.as_ref().unwrap().request, current_req);
+
+			// State confirmation
+			state.apply_voice(Event::State {
+				guild: Some(Id(10)),
+				channel: Some(target_ch),
+				user: state.user.as_ref().unwrap().id,
+				session: None,
+				muted: false,
+				deafened: false,
+				server_muted: false,
+				server_deafened: false,
+				video: false,
+				streaming: false,
+				member: None,
+				request: Some(current_req),
+				negotiation_revision: Some(100 + i),
+			});
+			assert_eq!(state.voice.active.as_ref().unwrap().channel, target_ch);
+
+			if i < 19 {
+				state.leave_call().expect("leave before switch");
+				assert!(state.voice.active.is_none());
+			}
+		}
+
+		// 3. Takeover during active call
+		let active_ch = state.voice.active.as_ref().unwrap().channel;
+		state.apply_voice(Event::TakenOver {
+			channel: active_ch,
+			request: current_req,
+		});
+		assert!(state.voice.active.is_none());
+		assert_eq!(state.status, "This device's call session was replaced");
+
+		// 4. Stale takeover for past request does not affect new call
+		let new_cmd = state
+			.start_call(dm_channel, false)
+			.expect("rejoin after takeover");
+		let new_req = match new_cmd {
+			crate::Command::Voice(Command::Join { request, .. }) => request,
+			_ => unreachable!(),
+		};
+		state.apply_voice(Event::TakenOver {
+			channel: active_ch,
+			request: current_req,
+		});
+		assert!(state.voice.active.is_some());
+		assert_eq!(state.voice.active.as_ref().unwrap().request, new_req);
+
+		// 5. Network drop / connection teardown
+		state.apply_voice(Event::State {
+			guild: None,
+			channel: None,
+			user: state.user.as_ref().unwrap().id,
+			session: None,
+			muted: false,
+			deafened: false,
+			server_muted: false,
+			server_deafened: false,
+			video: false,
+			streaming: false,
+			member: None,
+			request: Some(new_req),
+			negotiation_revision: None,
+		});
+		assert!(state.voice.active.is_none());
 	}
 }

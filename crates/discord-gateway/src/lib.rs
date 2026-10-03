@@ -929,6 +929,17 @@ async fn dispatch_voice_command(
 	socket: &mut (impl SinkExt<Frame> + Unpin),
 	emit: &impl Fn(Event) -> Result<(), Failure>,
 ) -> Result<bool, Failure> {
+	if let client_core::voice::Command::ConfirmSession {
+		channel,
+		request,
+		revision,
+	} = command
+	{
+		if let Some(event) = calls.confirm_session(channel, request, revision) {
+			emit(event)?;
+		}
+		return Ok(false);
+	}
 	if let client_core::voice::Command::Join {
 		channel, request, ..
 	} = command
@@ -937,6 +948,10 @@ async fn dispatch_voice_command(
 		while let Ok(next) = voice_controls.try_recv() {
 			match next {
 				client_core::voice::Command::Leave {
+					channel: left,
+					request: left_request,
+				}
+				| client_core::voice::Command::AbandonSession {
 					channel: left,
 					request: left_request,
 				} if left == channel && left_request == request => {
@@ -1017,7 +1032,8 @@ async fn dispatch_voice_command(
 	if let Some(event) = calls.take_replaced_departure() {
 		emit(event)?;
 	}
-	if let client_core::voice::Command::Leave { channel, request } = command
+	if let client_core::voice::Command::Leave { channel, request }
+	| client_core::voice::Command::AbandonSession { channel, request } = command
 		&& packet.is_none()
 		&& !calls.has_call()
 	{
@@ -3038,6 +3054,7 @@ mod tests {
 			let (controls, receive) = mpsc::channel(8);
 			let (deleted, mut deletion) = watch::channel(false);
 			let observed = std::sync::Mutex::new(Vec::new());
+			let (client_finished, terminal_observed) = tokio::sync::oneshot::channel();
 			let server = async {
 				let (stream, _) = listener.accept().await.unwrap();
 				let mut socket = accept_async(stream).await.unwrap();
@@ -3068,7 +3085,10 @@ mod tests {
 						}
 					}
 				}
-				socket.close(Some(CloseFrame { code: CloseCode::Library(4004), reason: "synthetic stop".into() })).await.unwrap();
+				socket.send(Frame::Close(Some(CloseFrame { code: CloseCode::Library(4004), reason: "synthetic stop".into() }))).await.unwrap();
+				// Keep TCP alive until the terminal frame is consumed: unread heartbeats can
+				// otherwise reset the socket on drop and discard Close on Windows ARM.
+				terminal_observed.await.unwrap();
 			};
 			let client = run_inner(
 				Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),
@@ -3089,6 +3109,7 @@ mod tests {
 					Ok(())
 				}, Arc::new(Notify::new()), Some(&endpoint),
 			);
+			let client = async { let result = client.await; let _ = client_finished.send(()); result };
 			let ((), result) = tokio::join!(server, client);
 			assert_eq!(result, Err(Failure::Expired));
 			assert_eq!(*observed.lock().unwrap(), ["create", "update", "state", "delete"]);

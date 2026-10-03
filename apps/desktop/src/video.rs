@@ -67,11 +67,11 @@ impl Video {
 		let Some(session) = &self.session else {
 			return;
 		};
-		if let Ok(mut wanted) = session.output.lock() {
-			let fresh = output.map(str::to_owned);
-			if *wanted != fresh {
-				*wanted = fresh;
-			}
+		let fresh = output.map(str::to_owned);
+		if let Ok(mut wanted) = session.output.lock()
+			&& *wanted != fresh
+		{
+			*wanted = fresh;
 		}
 		if let Ok(mut update) = session.update.try_lock() {
 			player.state = update.state;

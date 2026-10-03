@@ -233,10 +233,10 @@ impl Audio {
 	/// Refresh the wanted voice output selection; in-flight playback migrates on it.
 	pub fn set_output(&self, output: Option<&str>) {
 		let wanted = output.map(str::to_owned);
-		if let Ok(mut current) = self.gate.output.lock() {
-			if *current != wanted {
-				*current = wanted;
-			}
+		if let Ok(mut current) = self.gate.output.lock()
+			&& *current != wanted
+		{
+			*current = wanted;
 		}
 	}
 	pub fn volume(&mut self, volume: f32) {

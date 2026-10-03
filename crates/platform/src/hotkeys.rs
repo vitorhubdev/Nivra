@@ -132,6 +132,7 @@ impl NativeInput {
 	}
 
 	/// Held state set by the Windows mouse poller (same slot as a global hotkey).
+	#[cfg(target_os = "windows")]
 	fn apply(&self, index: usize, pressed: bool) {
 		let mut state = self.state.lock().expect("native hotkey state poisoned");
 		match (index, pressed) {

@@ -114,7 +114,20 @@ fn try_acquire_os_lock(name: &str) -> std::io::Result<Option<OsLock>> {
 }
 
 #[cfg(unix)]
-pub struct OsLock(std::fs::File);
+pub struct OsLock(#[allow(dead_code)] std::fs::File);
+
+#[cfg(unix)]
+impl Drop for OsLock {
+	fn drop(&mut self) {
+		use std::os::unix::io::AsRawFd;
+		unsafe extern "C" {
+			fn flock(fd: i32, operation: i32) -> i32;
+		}
+		const LOCK_UN: i32 = 8;
+		let fd = self.0.as_raw_fd();
+		let _ = unsafe { flock(fd, LOCK_UN) };
+	}
+}
 
 #[cfg(unix)]
 fn try_acquire_os_lock(path: &Path) -> std::io::Result<Option<OsLock>> {

@@ -536,6 +536,7 @@ impl Audio {
 	/// Changes are coalesced and applied on the worker, never in device callbacks.
 	pub fn set_processing(&self, mut settings: Processing) {
 		settings.suppression_level = settings.suppression_level.min(3);
+		settings.deep_filter_intensity = settings.deep_filter_intensity.min(100);
 		settings.sensitivity_db = settings.sensitivity_db.map(|db| db.clamp(-80, 0));
 		self.processing.send_if_modified(|current| {
 			if *current == settings {

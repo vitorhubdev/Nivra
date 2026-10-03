@@ -194,4 +194,37 @@ mod tests {
 		drop(lock2);
 		let _ = std::fs::remove_dir_all(&dir);
 	}
+
+	#[test]
+	fn concurrent_acquisitions_leave_exactly_one_winner() {
+		use std::sync::{Arc, Barrier};
+		let dir = std::env::temp_dir().join(format!("nivra-test-race-{}", std::process::id()));
+		let _ = std::fs::create_dir_all(&dir);
+		let lock_path = dir.join("race.lock");
+		const RACERS: usize = 8;
+		let barrier = Arc::new(Barrier::new(RACERS));
+		let racers: Vec<_> = (0..RACERS)
+			.map(|_| {
+				let barrier = barrier.clone();
+				let path = lock_path.clone();
+				// Return the lock itself so the winner stays held until every
+				// racer finished: dropping early would let a latecomer win too.
+				std::thread::spawn(move || {
+					barrier.wait();
+					InstanceLock::acquire_at(&path).unwrap()
+				})
+			})
+			.collect();
+		let mut held = Vec::new();
+		for racer in racers {
+			if let Some(lock) = racer.join().unwrap() {
+				held.push(lock);
+			}
+		}
+		assert_eq!(held.len(), 1, "exactly one racer must hold the OS lock");
+		drop(held);
+		// Dropping all handles releases the OS lock; a later launch must succeed.
+		let _ = InstanceLock::acquire_at(&lock_path).unwrap();
+		let _ = std::fs::remove_dir_all(&dir);
+	}
 }

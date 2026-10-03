@@ -1192,8 +1192,7 @@ Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files; each file must
 Add custom emoji that anyone can use in this server. Animated GIF emoji may be used by members with Discord Nitro. = "Adicione emoji personalizados que qualquer pessoa possa usar neste servidor. Membros com Discord Nitro podem usar emoji GIF animados."
 Add custom stickers for members to use in this server. Artwork is cropped and resized to 320 × 320 pixels before upload. = "Adicione figurinhas personalizadas para os membros usarem neste servidor. A arte é recortada e redimensionada para 320 × 320 pixels antes do envio."
 Create an invite link to welcome people to this server. = "Crie um link de convite para receber pessoas neste servidor."
-Default Permissions
-@everyone · applies to all server members = "Permissões padrão\n@everyone · se aplica a todos os membros do servidor"
+Default Permissions\n@everyone · applies to all server members = "Permissões padrão\n@everyone · se aplica a todos os membros do servidor"
 Drag and drop up to 10 images onto this page, or choose files. Review their names before uploading. = "Arraste e solte até 10 imagens nesta página ou escolha arquivos. Revise os nomes antes de enviar."
 Emoji name: 2–32 letters, numbers, or underscores = "Emoji name: 2–32 letters, numbers, or underscores"
 Members use the color of their highest role on the roles list. = "Os membros usam a cor do cargo mais alto que têm na lista de cargos."

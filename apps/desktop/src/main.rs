@@ -71,6 +71,9 @@ const SIGN_IN_HEADER_HEIGHT: f32 = if cfg!(target_os = "windows") {
 
 fn main() -> eframe::Result {
 	discord_api::ensure_tls_provider();
+	// Parse locale tables before the first frame so a translated language
+	// never pays table parsing inside the render path.
+	ui::i18n::warm();
 	if std::env::args().any(|arg| arg == "--version") {
 		println!("Nivra {}", env!("CARGO_PKG_VERSION"));
 		return Ok(());

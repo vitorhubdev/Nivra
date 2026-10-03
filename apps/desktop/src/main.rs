@@ -755,6 +755,8 @@ struct Desktop {
 	/// Bounded text preview fetched off the render thread, drained each frame.
 	preview_done:
 		Option<std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>>>,
+	/// Last finished download already recorded and announced, so the toast fires once.
+	announced_download: Option<(model::Id, std::path::PathBuf)>,
 	audio: audio::Audio,
 	video: video::Video,
 	/// Offline fixture flags start (and optionally pause) the demo attachment without input.
@@ -1944,6 +1946,7 @@ impl Desktop {
 			batch_downloads: batch_downloads::BatchDownloads::default(),
 			save_txt_done: None,
 			preview_done: None,
+			announced_download: None,
 			audio: audio::Audio::default(),
 			video: video::Video::default(),
 			demo_video_autoplay: if std::env::args().any(|arg| arg == "--demo-video-paused") {
@@ -6266,9 +6269,25 @@ impl eframe::App for Desktop {
 			downloads::Status::Downloading { received, total } => {
 				format!("Downloading: {} / {} KiB", received / 1024, total / 1024)
 			}
-			downloads::Status::Saved | downloads::Status::Cancelled | downloads::Status::Copied => {
+			downloads::Status::Saved {
+				id,
+				filename,
+				path,
+				size,
+			} => {
+				let key = (*id, path.clone());
+				if self.announced_download.as_ref() != Some(&key) {
+					self.announced_download = Some(key);
+					if let Ok(store) = local_store::LocalStore::open_default() {
+						let _ = store.record_download(*id, path, *size);
+					}
+					self.messaging
+						.toasts
+						.push(ui::design::Level::Success, format!("Baixado: {filename}"));
+				}
 				String::new()
 			}
+			downloads::Status::Cancelled | downloads::Status::Copied => String::new(),
 			downloads::Status::Failed(error) => (*error).into(),
 		};
 		self.messaging.downloads().active = self.downloads.is_active();

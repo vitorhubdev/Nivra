@@ -26,6 +26,7 @@ const VOICE: &[KeybindAction] = &[
 	KeybindAction::ToggleMute,
 	KeybindAction::ToggleDeafen,
 	KeybindAction::PushToTalk,
+	KeybindAction::PushToMute,
 ];
 
 pub(super) fn show(
@@ -136,6 +137,15 @@ impl Default for ConflictNotice {
 	}
 }
 
+/// Set on the frame a shortcut button starts capture, so the Enter or Space that
+/// activated it from the keyboard is not recorded as the new binding.
+#[derive(Clone, Copy, Default)]
+struct CaptureStarted;
+
+fn capture_started_id() -> egui::Id {
+	egui::Id::unique("keybind_capture_started")
+}
+
 fn capture(
 	ui: &mut egui::Ui,
 	bindings: &mut Keybinds,
@@ -143,24 +153,55 @@ fn capture(
 	_language: model::Language,
 ) {
 	if let Some(action) = *capturing {
+		if ui
+			.data_mut(|data| data.remove_temp::<CaptureStarted>(capture_started_id()))
+			.is_some()
+		{
+			return;
+		}
 		let mut captured = None;
 		let mut cancelled = false;
 		for event in ui.input(|input| input.events.clone()) {
-			if let Event::Key {
-				key,
-				pressed: true,
-				repeat: false,
-				modifiers,
-				..
-			} = event
-			{
-				if key == Key::Escape {
-					cancelled = true;
-				} else if let Some(name) = key_name(key) {
-					captured = Some(KeyChord::new(name, modifier_bits(modifiers)));
+			match event {
+				Event::Key {
+					key,
+					pressed: true,
+					repeat: false,
+					modifiers,
+					..
+				} => {
+					if key == Key::Escape {
+						cancelled = true;
+					} else if let Some(name) = key_name(key) {
+						captured = Some(KeyChord::new(name, modifier_bits(modifiers)));
+					}
+					break;
 				}
-				break;
+				// Left and right click stay reserved for pointing, so either one cancels.
+				Event::PointerButton {
+					button,
+					pressed: true,
+					modifiers,
+					..
+				} => {
+					match button_name(button) {
+						Some(name) => {
+							captured = Some(KeyChord::new(name, modifier_bits(modifiers)))
+						}
+						None => cancelled = true,
+					}
+					break;
+				}
+				_ => {}
 			}
+		}
+		if cancelled || captured.is_some() {
+			// The press that ended capture must not also act on the rest of this frame.
+			ui.input_mut(|input| {
+				input
+					.events
+					.retain(|event| !matches!(event, Event::PointerButton { pressed: true, .. }));
+			});
 		}
 		if cancelled {
 			*capturing = None;
@@ -289,6 +330,7 @@ fn row(
 				*capturing = Some(action);
 				ui.data_mut(|data| {
 					data.remove_temp::<ConflictNotice>(egui::Id::unique("keybind_conflict"));
+					data.insert_temp(capture_started_id(), CaptureStarted);
 				});
 			}
 		});
@@ -323,11 +365,23 @@ fn egui_modifiers(bits: u8) -> Modifiers {
 }
 
 pub(crate) fn pressed(input: &mut InputState, chord: &KeyChord) -> bool {
-	key_name_to_egui(&chord.key)
-		.is_some_and(|key| input.consume_key(egui_modifiers(chord.modifiers), key))
+	if let Some(button) = button_from_name(&chord.key) {
+		let wanted = egui_modifiers(chord.modifiers);
+		consume_button(input, button, |modifiers| {
+			modifiers.matches_logically(wanted)
+		})
+	} else {
+		key_name_to_egui(&chord.key)
+			.is_some_and(|key| input.consume_key(egui_modifiers(chord.modifiers), key))
+	}
 }
 
 pub(crate) fn pressed_exact(input: &mut InputState, chord: &KeyChord) -> bool {
+	if let Some(button) = button_from_name(&chord.key) {
+		return consume_button(input, button, |modifiers| {
+			modifier_bits(modifiers) == chord.modifiers
+		});
+	}
 	let Some(key) = key_name_to_egui(&chord.key) else {
 		return false;
 	};
@@ -338,13 +392,33 @@ pub(crate) fn pressed_exact(input: &mut InputState, chord: &KeyChord) -> bool {
 	matched && input.consume_key(egui_modifiers(chord.modifiers), key)
 }
 
+/// Removes this frame's presses of `button` when one matches, like `consume_key`.
+fn consume_button(
+	input: &mut InputState,
+	button: egui::PointerButton,
+	matches: impl Fn(Modifiers) -> bool,
+) -> bool {
+	let matched = input.events.iter().any(|event| {
+		matches!(event, Event::PointerButton { button: pressed_button, pressed: true, modifiers, .. }
+			if *pressed_button == button && matches(*modifiers))
+	});
+	if matched {
+		input.events.retain(|event| {
+			!matches!(event, Event::PointerButton { button: pressed_button, pressed: true, .. }
+				if *pressed_button == button)
+		});
+	}
+	matched
+}
+
 pub(crate) fn down(input: &InputState, chord: &KeyChord) -> bool {
-	key_name_to_egui(&chord.key).is_some_and(|key| {
-		input.key_down(key)
-			&& input
-				.modifiers
-				.matches_logically(egui_modifiers(chord.modifiers))
-	})
+	let held = match button_from_name(&chord.key) {
+		Some(button) => input.pointer.button_down(button),
+		None => key_name_to_egui(&chord.key).is_some_and(|key| input.key_down(key)),
+	};
+	held && input
+		.modifiers
+		.matches_logically(egui_modifiers(chord.modifiers))
 }
 
 fn chord_parts(chord: &KeyChord) -> Vec<String> {
@@ -471,6 +545,7 @@ fn shortcut_button(
 
 fn display_key(name: &str) -> String {
 	match name {
+		"" => "Unassigned".into(),
 		"ArrowUp" => "↑".into(),
 		"ArrowDown" => "↓".into(),
 		"ArrowLeft" => "←".into(),
@@ -481,6 +556,9 @@ fn display_key(name: &str) -> String {
 		"PageDown" => "PgDn".into(),
 		"PageUp" => "PgUp".into(),
 		"Insert" => "Ins".into(),
+		"MouseMiddle" => "Mouse 3".into(),
+		"MouseExtra1" => "Mouse 4".into(),
+		"MouseExtra2" => "Mouse 5".into(),
 		name if name
 			.strip_prefix("Num")
 			.is_some_and(|digit| digit.len() == 1) =>
@@ -489,6 +567,27 @@ fn display_key(name: &str) -> String {
 		}
 		other => other.to_uppercase(),
 	}
+}
+
+/// Bindable mouse buttons, named for [`model::keybinds::is_mouse_button`].
+const BUTTONS: &[(egui::PointerButton, &str)] = &[
+	(egui::PointerButton::Middle, "MouseMiddle"),
+	(egui::PointerButton::Extra1, "MouseExtra1"),
+	(egui::PointerButton::Extra2, "MouseExtra2"),
+];
+
+fn button_name(button: egui::PointerButton) -> Option<&'static str> {
+	BUTTONS
+		.iter()
+		.find(|(candidate, _)| *candidate == button)
+		.map(|(_, name)| *name)
+}
+
+pub(crate) fn button_from_name(name: &str) -> Option<egui::PointerButton> {
+	BUTTONS
+		.iter()
+		.find(|(_, candidate)| *candidate == name)
+		.map(|(button, _)| *button)
 }
 
 fn key_name(key: Key) -> Option<&'static str> {
@@ -579,6 +678,102 @@ const KEYS: &[(Key, &str)] = &[
 mod tests {
 	use super::*;
 
+	#[test]
+	fn mouse_buttons_bind_hold_and_display() {
+		assert_eq!(display_key("MouseMiddle"), "Mouse 3");
+		assert_eq!(display_key("MouseExtra1"), "Mouse 4");
+		assert_eq!(display_key("MouseExtra2"), "Mouse 5");
+		for (button, name) in BUTTONS {
+			assert!(model::keybinds::is_mouse_button(name));
+			assert_eq!(button_from_name(name), Some(*button));
+		}
+		let mut bindings = Keybinds::default();
+		let mut capturing = Some(KeybindAction::PushToTalk);
+		let ctx = egui::Context::default();
+		let press = |button| Event::PointerButton {
+			pos: egui::Pos2::ZERO,
+			button,
+			pressed: true,
+			modifiers: Modifiers::NONE,
+		};
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				events: vec![press(egui::PointerButton::Extra1)],
+				..Default::default()
+			},
+			|ui| {
+				super::capture(ui, &mut bindings, &mut capturing, model::Language::English);
+			},
+		);
+		output.textures_delta.clear();
+		assert_eq!(capturing, None);
+		assert_eq!(
+			bindings.chord(KeybindAction::PushToTalk),
+			&KeyChord::new("MouseExtra1", 0)
+		);
+		let mut held = false;
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				events: vec![press(egui::PointerButton::Extra1)],
+				..Default::default()
+			},
+			|ui| held = ui.input(|input| down(input, bindings.chord(KeybindAction::PushToTalk))),
+		);
+		output.textures_delta.clear();
+		assert!(held);
+	}
+
+	#[test]
+	fn push_to_mute_starts_unassigned_and_binds() {
+		let mut bindings = Keybinds::default();
+		assert!(bindings.is_valid());
+		assert_eq!(
+			chord_parts(bindings.chord(KeybindAction::PushToMute)),
+			vec!["Unassigned"]
+		);
+		let ctx = egui::Context::default();
+		let mut sounded = true;
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				events: vec![Event::PointerButton {
+					pos: egui::Pos2::ZERO,
+					button: egui::PointerButton::Middle,
+					pressed: true,
+					modifiers: Modifiers::NONE,
+				}],
+				..Default::default()
+			},
+			|ui| {
+				sounded = ui.input_mut(|input| {
+					pressed(input, bindings.chord(KeybindAction::PushToMute))
+						|| down(input, bindings.chord(KeybindAction::PushToMute))
+				});
+			},
+		);
+		output.textures_delta.clear();
+		assert!(!sounded);
+		let mut capturing = Some(KeybindAction::PushToMute);
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				events: vec![Event::PointerButton {
+					pos: egui::Pos2::ZERO,
+					button: egui::PointerButton::Extra2,
+					pressed: true,
+					modifiers: Modifiers::NONE,
+				}],
+				..Default::default()
+			},
+			|ui| {
+				super::capture(ui, &mut bindings, &mut capturing, model::Language::English);
+			},
+		);
+		output.textures_delta.clear();
+		assert_eq!(
+			chord_parts(bindings.chord(KeybindAction::PushToMute)),
+			vec!["Mouse 5"]
+		);
+		assert!(bindings.is_valid());
+	}
 	#[test]
 	fn default_push_to_talk_does_not_consume_typing() {
 		let bindings = Keybinds::default();

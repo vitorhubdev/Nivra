@@ -41,6 +41,11 @@ impl KeyChord {
 	}
 }
 
+/// Mouse buttons a binding may use. Left and right click stay reserved for ordinary pointing.
+pub fn is_mouse_button(name: &str) -> bool {
+	matches!(name, "MouseMiddle" | "MouseExtra1" | "MouseExtra2")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeybindAction {
 	ShowShortcuts,
@@ -57,12 +62,13 @@ pub enum KeybindAction {
 	CodeBlock,
 	Spoiler,
 	PushToTalk,
+	PushToMute,
 	ToggleMute,
 	ToggleDeafen,
 }
 
 impl KeybindAction {
-	pub const ALL: [Self; 16] = [
+	pub const ALL: [Self; 17] = [
 		Self::ShowShortcuts,
 		Self::SwitchConversation,
 		Self::CloseOverlay,
@@ -77,6 +83,7 @@ impl KeybindAction {
 		Self::CodeBlock,
 		Self::Spoiler,
 		Self::PushToTalk,
+		Self::PushToMute,
 		Self::ToggleMute,
 		Self::ToggleDeafen,
 	];
@@ -97,15 +104,21 @@ impl KeybindAction {
 			Self::CodeBlock => "Code Block",
 			Self::Spoiler => "Spoiler",
 			Self::PushToTalk => "Push to Talk",
+			Self::PushToMute => "Push to Mute",
 			Self::ToggleMute => "Toggle Mute",
 			Self::ToggleDeafen => "Toggle Deafen",
 		}
 	}
 
+	/// Actions that may stay unassigned, stored as an empty key.
+	pub const fn is_optional(self) -> bool {
+		matches!(self, Self::PushToMute)
+	}
+
 	pub const fn is_global(self) -> bool {
 		matches!(
 			self,
-			Self::PushToTalk | Self::ToggleMute | Self::ToggleDeafen
+			Self::PushToTalk | Self::PushToMute | Self::ToggleMute | Self::ToggleDeafen
 		)
 	}
 }
@@ -127,6 +140,8 @@ pub struct Keybinds {
 	pub code_block: KeyChord,
 	pub spoiler: KeyChord,
 	pub push_to_talk: KeyChord,
+	/// Unassigned by default; the empty key is valid only for optional actions.
+	pub push_to_mute: KeyChord,
 	pub toggle_mute: KeyChord,
 	pub toggle_deafen: KeyChord,
 }
@@ -148,6 +163,7 @@ impl Default for Keybinds {
 			code_block: KeyChord::new("C", PRIMARY | SHIFT),
 			spoiler: KeyChord::new("P", PRIMARY | SHIFT),
 			push_to_talk: KeyChord::new("V", 0),
+			push_to_mute: KeyChord::new("", 0),
 			toggle_mute: KeyChord::new("M", PRIMARY | SHIFT),
 			toggle_deafen: KeyChord::new("D", PRIMARY | SHIFT),
 		}
@@ -171,6 +187,7 @@ impl Keybinds {
 			KeybindAction::CodeBlock => &self.code_block,
 			KeybindAction::Spoiler => &self.spoiler,
 			KeybindAction::PushToTalk => &self.push_to_talk,
+			KeybindAction::PushToMute => &self.push_to_mute,
 			KeybindAction::ToggleMute => &self.toggle_mute,
 			KeybindAction::ToggleDeafen => &self.toggle_deafen,
 		}
@@ -192,14 +209,39 @@ impl Keybinds {
 			KeybindAction::CodeBlock => &mut self.code_block,
 			KeybindAction::Spoiler => &mut self.spoiler,
 			KeybindAction::PushToTalk => &mut self.push_to_talk,
+			KeybindAction::PushToMute => &mut self.push_to_mute,
 			KeybindAction::ToggleMute => &mut self.toggle_mute,
 			KeybindAction::ToggleDeafen => &mut self.toggle_deafen,
 		}
 	}
 
 	pub fn is_valid(&self) -> bool {
-		KeybindAction::ALL
-			.into_iter()
-			.all(|action| self.chord(action).is_valid())
+		KeybindAction::ALL.into_iter().all(|action| {
+			let chord = self.chord(action);
+			chord.is_valid()
+				|| (action.is_optional() && chord.key.is_empty() && chord.modifiers == 0)
+		})
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn push_to_mute_starts_unassigned_but_valid() {
+		let bindings = Keybinds::default();
+		assert_eq!(
+			bindings.chord(KeybindAction::PushToMute),
+			&KeyChord::new("", 0)
+		);
+		assert!(KeybindAction::PushToMute.is_optional());
+		assert!(KeybindAction::PushToMute.is_global());
+		assert!(bindings.is_valid());
+		let mut assigned = bindings;
+		*assigned.chord_mut(KeybindAction::PushToMute) = KeyChord::new("MouseExtra1", 0);
+		assert!(assigned.is_valid());
+		assert!(is_mouse_button("MouseExtra1"));
+		assert!(!is_mouse_button("V"));
 	}
 }

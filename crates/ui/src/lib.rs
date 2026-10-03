@@ -543,6 +543,7 @@ pub struct MessagingUi {
 	/// Server folders the owner left open; restored from device preferences at startup.
 	pub expanded_folders: Vec<u64>,
 	pub voice_ptt_active: bool,
+	pub voice_ptm_active: bool,
 	pub voice_privacy_code: Option<String>,
 	/// A non-DAVE participant removed end-to-end encryption. The call itself stays up.
 	pub voice_unencrypted: bool,
@@ -676,8 +677,13 @@ impl MessagingUi {
 	}
 
 	/// Feed the frame's middle button before `show`. Never fed means never pressed.
+	/// A bound middle button does not also start autoscroll.
 	pub fn middle_button(&mut self, middle: scroll::Middle) {
-		self.scroll.middle(middle);
+		if self.button_claimed(egui::PointerButton::Middle) {
+			self.scroll.middle(scroll::Middle::default());
+		} else {
+			self.scroll.middle(middle);
+		}
 	}
 
 	/// Feed mouse 4 / mouse 5 edge presses before `show`. Flags OR so a second feed cannot clear a press.
@@ -699,35 +705,63 @@ impl MessagingUi {
 
 	/// Returns whether the configured push-to-talk chord is held in the focused window.
 	pub fn push_to_talk_down(&self, ctx: &egui::Context) -> bool {
-		ctx.input(|input| {
-			input.focused
-				&& !ctx.egui_wants_keyboard_input()
-				&& crate::keybinds::down(
-					input,
-					self.keybinds.chord(model::KeybindAction::PushToTalk),
-				)
-		})
+		self.voice_hold_down(ctx, model::KeybindAction::PushToTalk)
+	}
+
+	/// Returns whether the configured push-to-mute chord is held in the focused window.
+	pub fn push_to_mute_down(&self, ctx: &egui::Context) -> bool {
+		self.voice_hold_down(ctx, model::KeybindAction::PushToMute)
+	}
+
+	/// Text entry suppresses held keys, but a held mouse button is never typing.
+	fn voice_hold_down(&self, ctx: &egui::Context, action: model::KeybindAction) -> bool {
+		let chord = self.keybinds.chord(action);
+		if !model::keybinds::is_mouse_button(&chord.key) && ctx.egui_wants_keyboard_input() {
+			return false;
+		}
+		ctx.input(|input| input.focused && crate::keybinds::down(input, chord))
+	}
+
+	/// Whether egui must see mouse 3–5: one is bound, or a binding is being recorded.
+	/// Otherwise the host strips them for autoscroll and history navigation.
+	pub fn wants_mouse_buttons(&self) -> bool {
+		[
+			egui::PointerButton::Middle,
+			egui::PointerButton::Extra1,
+			egui::PointerButton::Extra2,
+		]
+		.into_iter()
+		.any(|button| self.button_claimed(button))
+	}
+
+	/// Whether a binding claims `button`, or a capture may, instead of its built-in role.
+	fn button_claimed(&self, button: egui::PointerButton) -> bool {
+		self.keybind_capture.is_some()
+			|| model::KeybindAction::ALL.into_iter().any(|action| {
+				crate::keybinds::button_from_name(&self.keybinds.chord(action).key) == Some(button)
+			})
 	}
 
 	/// Returns focused-window mute/deafen presses that were not claimed by a native global hotkey.
 	pub fn voice_toggle_pressed(&self, ctx: &egui::Context, global_mask: u8) -> u8 {
-		if !ctx.input(|input| input.focused) || ctx.egui_wants_keyboard_input() {
+		if !ctx.input(|input| input.focused) {
 			return 0;
 		}
+		let wants_keyboard = ctx.egui_wants_keyboard_input();
 		ctx.input_mut(|input| {
 			let mut toggles = 0;
+			let mute_chord = self.keybinds.chord(model::KeybindAction::ToggleMute);
 			if global_mask & 1 == 0
-				&& crate::keybinds::pressed(
-					input,
-					self.keybinds.chord(model::KeybindAction::ToggleMute),
-				) {
+				&& (!wants_keyboard || model::keybinds::is_mouse_button(&mute_chord.key))
+				&& crate::keybinds::pressed(input, mute_chord)
+			{
 				toggles |= 1;
 			}
+			let deafen_chord = self.keybinds.chord(model::KeybindAction::ToggleDeafen);
 			if global_mask & 2 == 0
-				&& crate::keybinds::pressed(
-					input,
-					self.keybinds.chord(model::KeybindAction::ToggleDeafen),
-				) {
+				&& (!wants_keyboard || model::keybinds::is_mouse_button(&deafen_chord.key))
+				&& crate::keybinds::pressed(input, deafen_chord)
+			{
 				toggles |= 2;
 			}
 			toggles
@@ -4101,6 +4135,11 @@ impl MessagingUi {
 		self.timeline.audio.seen = false;
 		self.timeline.video.seen = false;
 		let side = self.drain_side_press();
+		// Bound side buttons run their binding instead of history navigation.
+		let side = scroll::SidePress {
+			back: side.back && !self.button_claimed(egui::PointerButton::Extra1),
+			forward: side.forward && !self.button_claimed(egui::PointerButton::Extra2),
+		};
 		let mut commands = Vec::new();
 		if self.timeline.batch_restore_notice {
 			self.timeline.batch_restore_notice = false;
@@ -5437,6 +5476,37 @@ fn batch_delete_gap_secs() -> f64 {
 #[cfg(test)]
 mod composer_tests {
 	use super::*;
+
+	#[test]
+	fn a_bound_mouse_button_holds_push_to_mute_instead_of_navigating() {
+		let mut view = MessagingUi::default();
+		assert!(!view.wants_mouse_buttons());
+		assert!(!view.button_claimed(egui::PointerButton::Middle));
+		view.keybinds.push_to_mute = model::KeyChord::new("MouseExtra1", 0);
+		assert!(view.wants_mouse_buttons());
+		assert!(view.button_claimed(egui::PointerButton::Extra1));
+		assert!(!view.button_claimed(egui::PointerButton::Extra2));
+		let ctx = egui::Context::default();
+		for focused in [true, false] {
+			ctx.run_ui(
+				egui::RawInput {
+					focused,
+					events: vec![egui::Event::PointerButton {
+						pos: egui::pos2(10.0, 10.0),
+						button: egui::PointerButton::Extra1,
+						pressed: true,
+						modifiers: egui::Modifiers::NONE,
+					}],
+					..Default::default()
+				},
+				|ui| {
+					assert_eq!(view.push_to_mute_down(ui.ctx()), focused);
+					assert!(!view.push_to_talk_down(ui.ctx()));
+				},
+			)
+			.drop_without_applying_deltas();
+		}
+	}
 
 	fn dm_state() -> State {
 		State {

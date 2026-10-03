@@ -647,7 +647,10 @@ async fn fetch_preview_url(
 		}
 		return Box::pin(fetch_preview_url(client, to, expected, limit, depth + 1)).await;
 	}
-	if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::NOT_FOUND {
+	if status == reqwest::StatusCode::FORBIDDEN
+		|| status == reqwest::StatusCode::NOT_FOUND
+		|| status == reqwest::StatusCode::GONE
+	{
 		eprintln!(
 			"Nivra: text preview refused: host={} status={}",
 			url.host_str().unwrap_or("?"),
@@ -1495,6 +1498,22 @@ mod tests {
 				.unwrap(),
 			body
 		);
+		proxy.await.unwrap();
+	}
+
+	#[tokio::test]
+	async fn preview_retries_gone_links_through_the_proxy() {
+		discord_api::ensure_tls_provider();
+		let body = b"# synthetic gone preview".to_vec();
+		let (proxy_url, proxy) = preview_responses(vec![(200, None, body.clone())]).await;
+		let (url, expired) = preview_responses(vec![(410, None, Vec::new())]).await;
+		assert_eq!(
+			fetch_preview(url, Some(proxy_url), body.len() as u64)
+				.await
+				.unwrap(),
+			body
+		);
+		expired.abort();
 		proxy.await.unwrap();
 	}
 

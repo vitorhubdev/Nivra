@@ -234,19 +234,18 @@ impl Downloads {
 				if !copied_ok {
 					copied.take();
 				}
-				if result.is_ok() && !copying {
-					if let Some(path) = saved_path.as_ref()
-						&& attachment.id.0 != 0
-						&& let Ok(store) = local_store::LocalStore::open_default()
+				if result.is_ok()
+					&& !copying && let Some(path) = saved_path.as_ref()
+					&& attachment.id.0 != 0
+					&& let Ok(store) = local_store::LocalStore::open_default()
+				{
+					// The download worker is tracked by the job state, so this write
+					// cannot be cut off by window close after completion is shown.
+					if store
+						.record_download(attachment.id, path, attachment.size)
+						.is_err()
 					{
-						// The download worker is tracked by the job state, so this write
-						// cannot be cut off by window close after completion is shown.
-						if store
-							.record_download(attachment.id, path, attachment.size)
-							.is_err()
-						{
-							eprintln!("Nivra: download registry write failed");
-						}
+						eprintln!("Nivra: download registry write failed");
 					}
 				}
 				publish(match result {

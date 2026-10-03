@@ -2518,6 +2518,7 @@ impl State {
 				unreachable!("startup is applied atomically before ordinary events")
 			}
 			Event::StartupWarnings(warnings) => {
+				self.startup_warnings.entries |= warnings.entries;
 				self.startup_warnings.read_state |= warnings.read_state;
 				self.startup_warnings.notifications |= warnings.notifications;
 				self.startup_warnings.sessions |= warnings.sessions;
@@ -4198,6 +4199,22 @@ impl Event {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn startup_warnings_merge_keeps_dropped_entry_notice() {
+		let mut state = super::State::default();
+		let generation = state.generation;
+		state.apply(super::Envelope {
+			generation,
+			event: super::Event::StartupWarnings(model::account::Warnings {
+				entries: true,
+				..Default::default()
+			}),
+		});
+		assert!(
+			state.startup_warnings.entries,
+			"dropped guilds/channels must keep their banner (audit #9)"
+		);
+	}
 	#[test]
 	fn guild_lookup_caches_misses_and_tracks_navigation_changes() {
 		let guild = |id| Guild {

@@ -331,8 +331,14 @@ fn waveform(
 		{
 			*position =
 				f64::from(((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0)) * duration;
-			// Commit clicks at once; drags commit on release so decoding restarts a single time.
-			commit = response.clicked() || response.drag_stopped();
+			// Clicks commit at once; drags update live and commit on release so
+			// decoding restarts a single time.
+			commit = response.clicked();
+		}
+		// On the release frame `dragged()` is already false, so the release
+		// commit is checked outside the drag predicate (else the seek is lost).
+		if response.drag_stopped() {
+			commit = true;
 		}
 		if response.has_focus() {
 			let keyed = *position;
@@ -398,6 +404,59 @@ fn timestamp(seconds: f64) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn waveform_drag_commits_seek_on_release() {
+		struct Fixture {
+			samples: Vec<u8>,
+			position: f64,
+			duration: f64,
+			committed: bool,
+		}
+		let fixture = Fixture {
+			samples: vec![128; 64],
+			position: 0.0,
+			duration: 12.0,
+			committed: false,
+		};
+		let mut harness = egui_kittest::Harness::new_ui_state(
+			|ui, fixture: &mut Fixture| {
+				let colors = crate::design::palette(ui);
+				// Latch: the release frame commits once; later frames stay quiet.
+				fixture.committed |= waveform(
+					ui,
+					&fixture.samples,
+					&mut fixture.position,
+					fixture.duration,
+					true,
+					&colors,
+				);
+			},
+			fixture,
+		);
+		harness.run();
+		// Press near the left third, drag right, release: the release frame
+		// must commit the seek (before the fix the seek was silently lost).
+		let from = egui::pos2(100.0, 16.0);
+		let to = egui::pos2(250.0, 16.0);
+		harness.hover_at(from);
+		harness.step();
+		harness.drag_at(from);
+		harness.step();
+		harness.hover_at(to);
+		harness.step();
+		assert!(
+			harness.state().position > 0.0,
+			"the drag must engage the waveform"
+		);
+		assert!(
+			!harness.state().committed,
+			"drag frames update live without committing"
+		);
+		harness.drop_at(to);
+		harness.step();
+		assert!(harness.state().committed, "release commits the seek");
+	}
+
 	#[test]
 	fn audio_is_explicit_keyboard_operable_and_fits_narrow_cards() {
 		let state = test_support::audio_demo_state();

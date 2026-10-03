@@ -23,6 +23,9 @@ struct Session {
 	/// Wanted voice output selection, refreshed by the UI (`None` = default).
 	output: std::sync::Mutex<Option<String>>,
 	cancelled: Arc<AtomicBool>,
+	/// Set by the 20 s open watchdog together with `cancelled`: a stall surfaces
+	/// as `Failed` (with retry) instead of freezing the player in `Loading`.
+	open_timed_out: Arc<AtomicBool>,
 	paused: Arc<AtomicBool>,
 	volume: Arc<AtomicU32>,
 	seek: Arc<AtomicU64>,
@@ -34,6 +37,7 @@ impl Session {
 			id,
 			output: std::sync::Mutex::new(None),
 			cancelled: Arc::new(AtomicBool::new(false)),
+			open_timed_out: Arc::new(AtomicBool::new(false)),
 			paused: Arc::new(AtomicBool::new(false)),
 			volume: Arc::new(AtomicU32::new(volume.to_bits())),
 			seek: Arc::new(AtomicU64::new(u64::MAX)),
@@ -182,7 +186,7 @@ impl Video {
 				}));
 				match result {
 					Ok(Err(error)) => {
-						if !worker_session.cancelled.load(Ordering::Acquire) {
+						if report_worker_error(&worker_session) {
 							if let Ok(mut update) = worker_session
 								.update
 								.try_lock()
@@ -228,6 +232,12 @@ fn frame_reaches(pts: f64, target: f64) -> bool {
 	pts >= target - 0.01
 }
 
+/// A 20 s open watchdog and a voluntary stop both set `cancelled`; only the
+/// watchdog also sets `open_timed_out`. A stall must surface as `Failed` (with
+/// retry) instead of freezing the player in `Loading`.
+fn report_worker_error(session: &Session) -> bool {
+	!session.cancelled.load(Ordering::Acquire) || session.open_timed_out.load(Ordering::Acquire)
+}
 fn play(
 	request: &Request,
 	runtime: &tokio::runtime::Handle,
@@ -271,8 +281,8 @@ fn play(
 	);
 	let open_started = Instant::now();
 	eprintln!("[Nivra video] open_decoder: starting");
-	let open_timed_out = Arc::new(AtomicBool::new(false));
-	let open_timed_out_clone = open_timed_out.clone();
+	session.open_timed_out.store(false, Ordering::Release);
+	let open_timed_out_clone = session.open_timed_out.clone();
 	let cancelled_clone = session.cancelled.clone();
 	let watchdog = runtime.spawn(async move {
 		tokio::time::sleep(Duration::from_secs(20)).await;
@@ -283,7 +293,7 @@ fn play(
 	#[cfg(target_os = "macos")]
 	let decoder = match decoder {
 		Err(platform::video::UNSUPPORTED | platform::video::INVALID)
-			if !open_timed_out.load(Ordering::Acquire) =>
+			if !session.open_timed_out.load(Ordering::Acquire) =>
 		{
 			let source = source::source(
 				url.clone(),
@@ -296,7 +306,7 @@ fn play(
 		result => result,
 	};
 	watchdog.abort();
-	if open_timed_out.load(Ordering::Acquire) {
+	if session.open_timed_out.load(Ordering::Acquire) {
 		eprintln!("[Nivra video] open_decoder: timed out after 20s");
 		return Err("Video buffering stalled; retry or download to play externally");
 	}
@@ -743,6 +753,19 @@ mod tests {
 #[cfg(test)]
 mod attachment_url_tests {
 	use super::*;
+	#[test]
+	fn decoder_timeout_surfaces_failed_instead_of_sticking_in_loading() {
+		let session = Session::new(0., 1);
+		// Ordinary decode error with a live session: reported.
+		assert!(report_worker_error(&session));
+		// Voluntary stop: a cancelled session stays quiet, no Failed state.
+		session.cancelled.store(true, Ordering::Release);
+		assert!(!report_worker_error(&session));
+		// Watchdog stall: cancelled by the 20 s timer, but the timeout flag
+		// distinguishes it from a voluntary stop, so the player shows Failed.
+		session.open_timed_out.store(true, Ordering::Release);
+		assert!(report_worker_error(&session));
+	}
 
 	#[test]
 	fn frames_before_the_seek_target_are_dropped() {

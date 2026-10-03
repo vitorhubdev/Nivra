@@ -408,6 +408,13 @@ impl State {
 		self.read_state.activity.clear_notifications();
 		self.check_notification_capacity()
 	}
+	/// A definitive mute confirmed while its settings event was already observed
+	/// still cancels a stale temporary-mute timer (audit #8 / Codex PR #40).
+	pub(crate) fn clear_dm_mute_timer(&mut self, channel: Id) {
+		if let Some(setting) = self.notification_preferences.settings.get_mut(&None) {
+			setting.channel_mute_until.retain(|(id, _)| *id != channel);
+		}
+	}
 	/// Latest known message activity, retained across deletion for navigation ordering.
 	pub fn channel_activity(&self, channel: &model::Channel) -> Id {
 		self.read_state

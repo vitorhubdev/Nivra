@@ -1228,7 +1228,8 @@ fn decode(bytes: &[u8], budget: &Budget) -> Option<egui::ColorImage> {
 	// iPhone photos: the bundled decoder cannot read HEIC; try the OS codec
 	// first (Windows WIC) and keep the download fallback everywhere else.
 	if platform::image::is_heic(bytes)
-		&& let Some((rgba, width, height)) = platform::image::decode_heic(bytes)
+		&& let Some((rgba, width, height)) =
+			platform::image::decode_heic(bytes, budget.canvas, budget.alloc / 4)
 	{
 		let image = image::RgbaImage::from_raw(width, height, rgba).filter(|image| {
 			image.width() <= budget.canvas

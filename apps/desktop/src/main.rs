@@ -431,9 +431,18 @@ fn demo_check_updates() {
 	settings.current = serde_json::from_str(&encoded).unwrap();
 	settings.apply(&mut messaging);
 	assert!(!messaging.updates.auto_update && !messaging.updates.nightly);
+	messaging.updates.new_version = Some("99.0.0".into());
+	messaging.updates.release_notes =
+		Some("• Improved updater layout and spacing.\n• Background automatic verification.".into());
 	messaging.open_update_settings();
 	let mut state = test_support::demo_state();
-	for size in [[1120.0, 760.0], [760.0, 520.0]] {
+	for size in [
+		[760.0, 520.0],
+		[900.0, 600.0],
+		[1120.0, 760.0],
+		[1280.0, 720.0],
+		[1920.0, 1080.0],
+	] {
 		for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
 			ctx.set_theme(theme);
 			let output = ctx.run_ui(
@@ -5978,6 +5987,19 @@ impl eframe::App for Desktop {
 			{
 				self.command(command);
 			}
+		}
+		let call_active = self
+			.state
+			.voice
+			.active
+			.as_ref()
+			.is_some_and(|call| call.phase != client_core::voice::Phase::Failed);
+		let upload_active = self.uploads.has_unsent() || self.messaging.upload_busy;
+		self.messaging.updates.blocked_by_call_or_upload = call_active || upload_active;
+		if self.messaging.updates.restart_requested
+			&& self.messaging.updates.blocked_by_call_or_upload
+		{
+			self.messaging.updates.restart_requested = false;
 		}
 		if self.updater.sync(
 			ctx,

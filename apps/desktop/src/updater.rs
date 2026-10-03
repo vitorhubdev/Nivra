@@ -21,7 +21,8 @@ mod install;
 const RELEASES: &str = "https://api.github.com/repos/vitorhubdev/Nivra/releases";
 const MAX_METADATA: usize = 2 * 1024 * 1024;
 const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
-const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Deserialize)]
 struct Asset {
@@ -34,11 +35,13 @@ struct Release {
 	tag_name: String,
 	draft: bool,
 	prerelease: bool,
+	body: Option<String>,
 	assets: Vec<Asset>,
 }
 #[derive(Clone)]
 struct Package {
 	version: String,
+	notes: Option<String>,
 	// `None` on an installation with no in-app installer: the version is still reported,
 	// but there is nothing here to download.
 	archive: Option<Asset>,
@@ -80,16 +83,31 @@ pub struct Updater {
 }
 impl Updater {
 	pub fn new(demo: bool) -> Self {
+		let startup_error = if !demo && cfg!(windows) {
+			std::env::current_exe().ok().and_then(|exe| {
+				let log_path = exe.parent()?.join("update-error.log");
+				if log_path.is_file() {
+					let content = std::fs::read_to_string(&log_path).ok();
+					let _ = std::fs::remove_file(&log_path);
+					content.map(|c| format!("Last update attempt failed: {}", c.trim()))
+				} else {
+					None
+				}
+			})
+		} else {
+			None
+		};
+		let status = startup_error.unwrap_or_else(|| "Updates have not been checked yet.".into());
 		Self {
 			demo,
 			channel: None,
-			next_check: Instant::now(),
+			next_check: Instant::now() + STARTUP_CHECK_DELAY,
 			last_check: None,
 			job: None,
 			package: None,
 			staged: None,
 			cleanup_pending: None,
-			status: "Updates have not been checked yet.".into(),
+			status,
 			armed: false,
 			helper: None,
 			close_requested: false,
@@ -140,6 +158,11 @@ impl Updater {
 			view.busy = false;
 			view.progress = None;
 			view.supported = true;
+			if self.demo_available {
+				view.new_version = Some("99.0.0".into());
+				view.release_notes =
+					Some("• Synthetic release notes preview.\n• Verified without network.".into());
+			}
 			return false;
 		}
 		let supported = cfg!(any(target_os = "macos", windows)) || install::appimage_session();
@@ -320,6 +343,10 @@ impl Updater {
 			|| self.job.as_ref().is_some_and(|job| job.total > 0);
 		view.ready = self.staged.is_some() && self.job.is_none();
 		view.status.clone_from(&self.status);
+		if let Some(package) = &self.package {
+			view.new_version = Some(package.version.clone());
+			view.release_notes = package.notes.clone();
+		}
 		if self.job.is_some() {
 			ctx.request_repaint_after(Duration::from_millis(200));
 		} else if self.staged.is_none() {
@@ -579,6 +606,7 @@ fn select_release(
 	let Some(wanted) = asset_name(&release.tag_name) else {
 		return Ok(Some(Package {
 			version: version.to_string(),
+			notes: release.body.clone(),
 			archive: None,
 			checksums: None,
 			zsync: None,
@@ -617,6 +645,7 @@ fn select_release(
 	}
 	Ok(Some(Package {
 		version: version.to_string(),
+		notes: release.body.clone(),
 		archive: Some(archive),
 		checksums: Some(checksums),
 		zsync,

@@ -1040,27 +1040,48 @@ fn export_row(message: &model::Message, dated: bool) -> crate::batch_select::Txt
 	} else {
 		format!("{:02}:{:02}", when.hour(), when.minute())
 	};
+	let mut attachments: Vec<String> = message
+		.attachments
+		.iter()
+		.map(|attachment| attachment.filename.clone())
+		.collect();
+	let mut links: Vec<Option<String>> = message
+		.attachments
+		.iter()
+		.map(|attachment| {
+			attachment
+				.media
+				.url
+				.clone()
+				.or_else(|| attachment.media.proxy_url.clone())
+				.filter(|url| !url.is_empty())
+		})
+		.collect();
+
+	for embed in &message.embeds {
+		if let Some(media) = embed.image.as_ref().or(embed.thumbnail.as_ref())
+			&& let Some(url) = media.url.as_deref().or(media.proxy_url.as_deref())
+		{
+			let filename = url
+				.split('?')
+				.next()
+				.unwrap_or(url)
+				.rsplit('/')
+				.next()
+				.filter(|name| !name.is_empty() && name.contains('.'))
+				.unwrap_or("image.png")
+				.to_owned();
+			attachments.push(filename);
+			links.push(Some(url.to_owned()));
+		}
+	}
+
 	crate::batch_select::TxtMessage {
 		author: message.author.name.clone(),
 		when,
 		text: message.display_text().into_owned(),
-		attachments: message
-			.attachments
-			.iter()
-			.map(|attachment| attachment.filename.clone())
-			.collect(),
-		links: message
-			.attachments
-			.iter()
-			.map(|attachment| {
-				attachment
-					.media
-					.url
-					.clone()
-					.or_else(|| attachment.media.proxy_url.clone())
-					.filter(|url| !url.is_empty())
-			})
-			.collect(),
+		attachments,
+		links,
 	}
 }
 
@@ -4185,34 +4206,88 @@ impl TimelineView {
 			} else {
 				10.0
 			};
+			let bar_alpha = crate::anim::bool_alpha(
+				ui.ctx(),
+				ui.scope_id().with("batch-bar-anim"),
+				self.select_mode,
+				0.15,
+			);
+			let offset_y = (1.0 - bar_alpha) * 12.0;
 			let rect = egui::Rect::from_min_size(
 				egui::pos2(
 					area.left() + 16.0,
-					(area.bottom() - height - bottom_inset).max(area.top()),
+					(area.bottom() - height - bottom_inset + offset_y).max(area.top()),
 				),
 				egui::vec2((area.width() - 32.0).max(1.0), height),
 			);
 			let deleting = self.batch_progress;
 			let language = self.language;
 			let own = state.user.as_ref().map(|user| user.id);
-			let deletable = self
+			let deletable_ids: Vec<Id> = self
+				.batch_delete
+				.iter()
+				.copied()
+				.filter(|id| {
+					state.timeline.get(*id).is_some_and(|message| {
+						Some(message.author.id) == own && state.can_delete(message.channel, *id)
+					})
+				})
+				.take(crate::batch_select::MAX_DELETE)
+				.collect();
+			let deletable = deletable_ids.len();
+
+			let mut media_attachments = Vec::new();
+			for id in &self.batch_delete {
+				if let Some(message) = state.timeline.get(*id) {
+					for attachment in &message.attachments {
+						if media_attachments.len() >= crate::batch_select::MAX_DOWNLOAD {
+							break;
+						}
+						media_attachments.push(attachment.clone());
+					}
+					for embed in &message.embeds {
+						if media_attachments.len() >= crate::batch_select::MAX_DOWNLOAD {
+							break;
+						}
+						if let Some(media) = embed.image.as_ref().or(embed.thumbnail.as_ref())
+							&& let Some(url) = media.url.as_deref().or(media.proxy_url.as_deref())
+						{
+							let filename = url
+								.split('?')
+								.next()
+								.unwrap_or(url)
+								.rsplit('/')
+								.next()
+								.filter(|name| !name.is_empty() && name.contains('.'))
+								.unwrap_or("image.png")
+								.to_owned();
+							media_attachments.push(model::Attachment {
+								id: message.id,
+								filename,
+								description: None,
+								content_type: Some("image/png".to_owned()),
+								size: 0,
+								media: media.clone(),
+								spoiler: false,
+								duration_ms: None,
+								waveform: Vec::new(),
+							});
+						}
+					}
+				}
+			}
+			let attach_count = media_attachments.len();
+			let text_count = self
 				.batch_delete
 				.iter()
 				.filter(|id| {
-					state.timeline.get(**id).is_some_and(|message| {
-						Some(message.author.id) == own && state.can_delete(message.channel, **id)
-					})
+					state
+						.timeline
+						.get(**id)
+						.is_some_and(|m| !m.content.trim().is_empty())
 				})
 				.count();
-			let delete_reason =
-				crate::batch_select::delete_disabled_reason(deletable, self.batch_delete.len());
-			let attach_count: usize = self
-				.batch_delete
-				.iter()
-				.filter_map(|id| state.timeline.get(*id))
-				.map(|message| message.attachments.len())
-				.sum();
-			let download_reason = crate::batch_select::download_disabled_reason(attach_count);
+
 			overlay_bar(
 				ui,
 				rect,
@@ -4259,6 +4334,240 @@ impl TimelineView {
 									)
 									.color(colors.text_strong),
 								);
+								ui.menu_button(crate::i18n::text(language, "Select…"), |ui| {
+									let ordered = self.last_visible.clone();
+									let own = state.user.as_ref().map(|u| u.id);
+
+									if ui
+										.button(crate::i18n::text(language, "Last 5 messages"))
+										.clicked()
+									{
+										crate::batch_select::apply_quick_filter(
+											&ordered,
+											crate::batch_select::QuickFilter::Last(5),
+											&mut self.batch_delete,
+											own,
+											&|id| {
+												state.timeline.get(id).map(|m| {
+													(
+														m.content.clone(),
+														m.attachments.clone(),
+														m.embeds.clone(),
+														m.author.id,
+													)
+												})
+											},
+										);
+										ui.close();
+									}
+									if ui
+										.button(crate::i18n::text(language, "Last 10 messages"))
+										.clicked()
+									{
+										crate::batch_select::apply_quick_filter(
+											&ordered,
+											crate::batch_select::QuickFilter::Last(10),
+											&mut self.batch_delete,
+											own,
+											&|id| {
+												state.timeline.get(id).map(|m| {
+													(
+														m.content.clone(),
+														m.attachments.clone(),
+														m.embeds.clone(),
+														m.author.id,
+													)
+												})
+											},
+										);
+										ui.close();
+									}
+									if ui
+										.button(crate::i18n::text(language, "Last 20 messages"))
+										.clicked()
+									{
+										crate::batch_select::apply_quick_filter(
+											&ordered,
+											crate::batch_select::QuickFilter::Last(20),
+											&mut self.batch_delete,
+											own,
+											&|id| {
+												state.timeline.get(id).map(|m| {
+													(
+														m.content.clone(),
+														m.attachments.clone(),
+														m.embeds.clone(),
+														m.author.id,
+													)
+												})
+											},
+										);
+										ui.close();
+									}
+									if ui
+										.button(crate::i18n::text(language, "Select all visible"))
+										.clicked()
+									{
+										crate::batch_select::apply_quick_filter(
+											&ordered,
+											crate::batch_select::QuickFilter::AllVisible,
+											&mut self.batch_delete,
+											own,
+											&|id| {
+												state.timeline.get(id).map(|m| {
+													(
+														m.content.clone(),
+														m.attachments.clone(),
+														m.embeds.clone(),
+														m.author.id,
+													)
+												})
+											},
+										);
+										ui.close();
+									}
+									ui.separator();
+									if ui
+										.button(crate::i18n::text(language, "Only text"))
+										.clicked()
+									{
+										crate::batch_select::apply_quick_filter(
+											&ordered,
+											crate::batch_select::QuickFilter::OnlyText,
+											&mut self.batch_delete,
+											own,
+											&|id| {
+												state.timeline.get(id).map(|m| {
+													(
+														m.content.clone(),
+														m.attachments.clone(),
+														m.embeds.clone(),
+														m.author.id,
+													)
+												})
+											},
+										);
+										ui.close();
+									}
+									if ui
+										.button(crate::i18n::text(language, "Only images"))
+										.clicked()
+									{
+										crate::batch_select::apply_quick_filter(
+											&ordered,
+											crate::batch_select::QuickFilter::OnlyImages,
+											&mut self.batch_delete,
+											own,
+											&|id| {
+												state.timeline.get(id).map(|m| {
+													(
+														m.content.clone(),
+														m.attachments.clone(),
+														m.embeds.clone(),
+														m.author.id,
+													)
+												})
+											},
+										);
+										ui.close();
+									}
+									if ui
+										.button(crate::i18n::text(language, "Only videos"))
+										.clicked()
+									{
+										crate::batch_select::apply_quick_filter(
+											&ordered,
+											crate::batch_select::QuickFilter::OnlyVideos,
+											&mut self.batch_delete,
+											own,
+											&|id| {
+												state.timeline.get(id).map(|m| {
+													(
+														m.content.clone(),
+														m.attachments.clone(),
+														m.embeds.clone(),
+														m.author.id,
+													)
+												})
+											},
+										);
+										ui.close();
+									}
+									if ui
+										.button(crate::i18n::text(language, "Photos & videos"))
+										.clicked()
+									{
+										crate::batch_select::apply_quick_filter(
+											&ordered,
+											crate::batch_select::QuickFilter::Media,
+											&mut self.batch_delete,
+											own,
+											&|id| {
+												state.timeline.get(id).map(|m| {
+													(
+														m.content.clone(),
+														m.attachments.clone(),
+														m.embeds.clone(),
+														m.author.id,
+													)
+												})
+											},
+										);
+										ui.close();
+									}
+									if ui.button(crate::i18n::text(language, "Files")).clicked() {
+										crate::batch_select::apply_quick_filter(
+											&ordered,
+											crate::batch_select::QuickFilter::Files,
+											&mut self.batch_delete,
+											own,
+											&|id| {
+												state.timeline.get(id).map(|m| {
+													(
+														m.content.clone(),
+														m.attachments.clone(),
+														m.embeds.clone(),
+														m.author.id,
+													)
+												})
+											},
+										);
+										ui.close();
+									}
+									if own.is_some() {
+										ui.separator();
+										if ui
+											.button(crate::i18n::text(language, "Only my messages"))
+											.clicked()
+										{
+											crate::batch_select::apply_quick_filter(
+												&ordered,
+												crate::batch_select::QuickFilter::OnlyMine,
+												&mut self.batch_delete,
+												own,
+												&|id| {
+													state.timeline.get(id).map(|m| {
+														(
+															m.content.clone(),
+															m.attachments.clone(),
+															m.embeds.clone(),
+															m.author.id,
+														)
+													})
+												},
+											);
+											ui.close();
+										}
+									}
+									ui.separator();
+									if ui
+										.button(crate::i18n::text(language, "Clear selection"))
+										.clicked()
+									{
+										self.batch_delete.clear();
+										ui.close();
+									}
+								});
 								ui.label(
 									egui::RichText::new(crate::i18n::text(
 										language,
@@ -4288,95 +4597,89 @@ impl TimelineView {
 						if deleting.is_none() {
 							ui.horizontal_wrapped(|ui| {
 								ui.spacing_mut().item_spacing.x = 6.0;
-								let delete_label = if delete_reason.is_none() {
-									format!(
+
+								// 1. Delete mine (only if user has messages to delete)
+								if deletable > 0 {
+									let delete_label = format!(
 										"{} ({deletable})",
-										crate::i18n::text(language, "Delete")
-									)
-								} else {
-									crate::i18n::text(language, "Delete").to_owned()
-								};
-								let delete = egui::Button::new(delete_label);
-								if let Some(reason) = delete_reason {
-									ui.add_enabled(false, delete).on_disabled_hover_text(
-										crate::i18n::text(language, reason),
+										crate::i18n::text(language, "Delete mine")
 									);
-								} else if ui.add_enabled(true, delete).clicked() {
-									self.batch_delete_requested = true;
-								}
-								let download_label = if download_reason.is_none() {
-									format!(
-										"{} ({attach_count})",
-										crate::i18n::text(language, "Download attachments")
-									)
-								} else {
-									crate::i18n::text(language, "Download attachments").to_owned()
-								};
-								let download = egui::Button::new(download_label);
-								if let Some(reason) = download_reason {
-									ui.add_enabled(false, download).on_disabled_hover_text(
-										crate::i18n::text(language, reason),
-									);
-								} else if ui.add_enabled(true, download).clicked() {
-									let mut attachments = Vec::new();
-									for id in &self.batch_delete {
-										if let Some(message) = state.timeline.get(*id) {
-											for attachment in &message.attachments {
-												if attachments.len()
-													>= crate::batch_select::MAX_DOWNLOAD
-												{
-													break;
-												}
-												attachments.push(attachment.clone());
-											}
-										}
+									if ui.button(delete_label).clicked() {
+										self.batch_delete = deletable_ids.into_iter().collect();
+										self.batch_delete_requested = true;
 									}
-									self.batch_files = attachments
-										.iter()
-										.map(|attachment| crate::batch_select::BatchFileView {
-											name: attachment.filename.clone(),
-											received: 0,
-											total: attachment.size,
-											status: crate::batch_select::BatchFileStatus::Queued,
-											error: None,
-										})
-										.collect();
-									self.batch_download_attachments = attachments;
-									self.batch_mgr_folder = None;
-									self.batch_mgr_open = true;
-									self.batch_download_requested = true;
 								}
-								if ui
-									.button(crate::i18n::text(language, "Copy text"))
-									.clicked()
-								{
-									ui.ctx().copy_text(selection_txt(state, &self.batch_delete));
-								}
-								if ui
-									.button(crate::i18n::text(language, "Save .txt"))
-									.clicked()
-								{
-									let text = selection_txt(state, &self.batch_delete);
-									self.save_txt_request =
-										Some(("messages.txt".to_owned(), text.into_bytes()));
-								}
-								if ui.button(crate::i18n::text(language, "Save .md")).clicked() {
-									let text = crate::batch_select::format_md(&selection_rows(
-										state,
-										&self.batch_delete,
-									));
-									self.save_txt_request =
-										Some(("messages.md".to_owned(), text.into_bytes()));
-								}
-								if ui
-									.button(crate::i18n::text(language, "Select all visible"))
-									.clicked()
-								{
-									let ordered = self.last_visible.clone();
-									let _ = crate::batch_select::select_all_visible(
-										&ordered,
-										&mut self.batch_delete,
+
+								// 2. Download media (if selection contains attachments or embeds)
+								if attach_count > 0 {
+									let download_label = format!(
+										"{} ({attach_count})",
+										crate::i18n::text(language, "Download media")
 									);
+									if ui.button(download_label).clicked() {
+										self.batch_files = media_attachments
+											.iter()
+											.map(|attachment| crate::batch_select::BatchFileView {
+												name: attachment.filename.clone(),
+												received: 0,
+												total: attachment.size,
+												status:
+													crate::batch_select::BatchFileStatus::Queued,
+												error: None,
+											})
+											.collect();
+										self.batch_download_attachments = media_attachments;
+										self.batch_mgr_folder = None;
+										self.batch_mgr_open = true;
+										self.batch_download_requested = true;
+									}
+								}
+
+								// 3. Text actions (only when selection has text)
+								if text_count > 0 {
+									if ui
+										.button(crate::i18n::text(language, "Copy text"))
+										.clicked()
+									{
+										ui.ctx()
+											.copy_text(selection_txt(state, &self.batch_delete));
+									}
+									if ui
+										.button(crate::i18n::text(language, "Save .txt"))
+										.clicked()
+									{
+										let text = selection_txt(state, &self.batch_delete);
+										self.save_txt_request =
+											Some(("messages.txt".to_owned(), text.into_bytes()));
+									}
+									if ui.button(crate::i18n::text(language, "Save .md")).clicked()
+									{
+										let text = crate::batch_select::format_md(&selection_rows(
+											state,
+											&self.batch_delete,
+										));
+										self.save_txt_request =
+											Some(("messages.md".to_owned(), text.into_bytes()));
+									}
+								}
+
+								// 4. HTML export (if text or media present)
+								if (attach_count > 0 || text_count > 0)
+									&& ui
+										.button(crate::i18n::text(language, "Export (HTML)"))
+										.clicked()
+								{
+									let channel_name = state
+										.selected
+										.and_then(|id| state.channel(id))
+										.map(|c| c.name.as_str())
+										.unwrap_or("messages");
+									let html = crate::batch_select::format_html(
+										channel_name,
+										&selection_rows(state, &self.batch_delete),
+									);
+									self.save_txt_request =
+										Some((format!("{channel_name}.html"), html.into_bytes()));
 								}
 							});
 						}
@@ -4858,6 +5161,151 @@ mod tests {
 		assert!(carried.job.is_some());
 		assert!(!carried.cancelled);
 		assert_eq!(carried.save.unwrap().0, "chat.txt");
+	}
+
+	#[test]
+	fn batch_selection_dynamic_actions_and_author_agnostic_download() {
+		let mut state = State {
+			auth: client_core::auth::AuthState::Authenticated,
+			gateway_connected: true,
+			user: Some(model::User {
+				id: Id(100),
+				name: "Me".into(),
+				avatar: None,
+				webhook: false,
+				kind: Default::default(),
+				discriminator: 0,
+				primary_guild: None,
+			}),
+			channels: vec![model::Channel {
+				id: Id(1),
+				guild: None,
+				parent_id: None,
+				position: 0,
+				name: "general".into(),
+				kind: 1,
+				recipients: vec![],
+				member_list_id: None,
+				message_count: None,
+				icon: None,
+				last_message: Some(Id(30)),
+			}],
+			selected: Some(Id(1)),
+			..Default::default()
+		};
+
+		// Message 1: Own text message
+		let mut m1 = text_message(10);
+		m1.channel = Id(1);
+		m1.author.id = Id(100);
+		m1.author.name = "Me".into();
+		m1.content = "My own note".into();
+		m1.attachments = vec![];
+		m1.embeds = vec![];
+		state.timeline.insert(m1, false, false).unwrap();
+
+		// Message 2: Another user's image message
+		let mut m2 = text_message(20);
+		m2.channel = Id(1);
+		m2.author.id = Id(200);
+		m2.author.name = "Other".into();
+		m2.content = "".into();
+		m2.attachments = vec![model::Attachment {
+			id: Id(201),
+			filename: "other_pic.png".into(),
+			size: 1024,
+			media: model::EmbedMedia {
+				url: Some("https://cdn.discordapp.com/other_pic.png".into()),
+				proxy_url: None,
+				width: 100,
+				height: 100,
+				placeholder: vec![],
+			},
+			content_type: Some("image/png".into()),
+			description: None,
+			spoiler: false,
+			duration_ms: None,
+			waveform: vec![],
+		}];
+		m2.embeds = vec![];
+		state.timeline.insert(m2, false, false).unwrap();
+
+		// Message 3: Another user's embed image (e.g. from X/Twitter)
+		let mut m3 = text_message(30);
+		m3.channel = Id(1);
+		m3.author.id = Id(300);
+		m3.author.name = "ThirdUser".into();
+		m3.content = "".into();
+		m3.attachments = vec![];
+		m3.embeds = vec![model::Embed {
+			kind: "image".into(),
+			image: Some(model::EmbedMedia {
+				url: Some("https://pbs.twimg.com/media/xyz.jpg".into()),
+				proxy_url: None,
+				width: 100,
+				height: 100,
+				placeholder: vec![],
+			}),
+			..Default::default()
+		}];
+		state.timeline.insert(m3, false, false).unwrap();
+
+		let view = TimelineView {
+			select_mode: true,
+			batch_delete: [Id(10), Id(20), Id(30)].into_iter().collect(),
+			..TimelineView::default()
+		};
+
+		// Verify deletable items: only Id(10) is own and deletable
+		let own = state.user.as_ref().map(|u| u.id);
+		let deletable_ids: Vec<Id> = view
+			.batch_delete
+			.iter()
+			.copied()
+			.filter(|id| {
+				state.timeline.get(*id).is_some_and(|message| {
+					Some(message.author.id) == own && state.can_delete(message.channel, *id)
+				})
+			})
+			.collect();
+		assert_eq!(deletable_ids, vec![Id(10)]);
+
+		// Verify media collection from any author (including embed images!)
+		let mut media = Vec::new();
+		for id in &view.batch_delete {
+			if let Some(msg) = state.timeline.get(*id) {
+				for att in &msg.attachments {
+					media.push(att.clone());
+				}
+				for embed in &msg.embeds {
+					if let Some(em) = embed.image.as_ref().or(embed.thumbnail.as_ref())
+						&& let Some(_url) = em.url.as_deref().or(em.proxy_url.as_deref())
+					{
+						media.push(model::Attachment {
+							id: msg.id,
+							filename: "image.png".into(),
+							description: None,
+							content_type: Some("image/png".into()),
+							size: 0,
+							media: em.clone(),
+							spoiler: false,
+							duration_ms: None,
+							waveform: vec![],
+						});
+					}
+				}
+			}
+		}
+		assert_eq!(media.len(), 2);
+		assert_eq!(media[0].filename, "other_pic.png");
+		assert_eq!(media[1].filename, "image.png");
+
+		// Verify HTML export includes all messages and links
+		let rows = selection_rows(&state, &view.batch_delete);
+		let html = crate::batch_select::format_html("general", &rows);
+		assert!(html.contains("My own note"));
+		assert!(html.contains("other_pic.png"));
+		assert!(html.contains("xyz.jpg"));
 	}
 
 	#[test]

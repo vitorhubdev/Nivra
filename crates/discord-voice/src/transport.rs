@@ -162,17 +162,24 @@ fn discard_stale_mix(mixer: &mut crate::mixer::Mixer, stalled: bool) {
 /// A DAVE rekey mid-stream leaves `deadline` disarmed (`waiting` clears it and a
 /// secured stream sets it to `None`); if the gateway answer never arrives the
 /// stream parks in `Securing` forever. Re-arm a 30 s bound while negotiating
-/// with a peer. Sole-member waiting stays unbounded by design: nobody is there
-/// to answer. The timeout message already names a stuck transition via
-/// `dave.pending` (`negotiation_timeout`).
+/// with a peer. A pending transition counts as insecure even when the old
+/// session still looks secure (mid-stream rekey answers op 22). Sole-member
+/// waiting stays unbounded by design: nobody is there to answer. The timeout
+/// message already names a stuck transition via `dave.pending`
+/// (`negotiation_timeout`).
 fn arm_negotiation_deadline(
 	deadline: &mut Option<Instant>,
 	now: Instant,
 	secure: bool,
 	waiting: bool,
+	pending: bool,
 ) {
-	if !secure && !waiting {
+	if !waiting && (!secure || pending) {
 		deadline.get_or_insert(now + Duration::from_secs(30));
+	} else if secure && !pending {
+		// A completed rekey (or a secure tick after the announce path): a stale
+		// armed deadline must not kill a healthy secured stream (Codex PR #72 P1).
+		*deadline = None;
 	}
 }
 /// Receive errors that describe one lost or rejected datagram rather than a dead socket.
@@ -1396,7 +1403,7 @@ async fn run_stream_inner(
 					waiting_announced=waiting;
 				}
 				let secure=(dave.transport_only||dave.session.is_ready())&&dave.ready&&encryption.is_some()&&!discovering;
-				arm_negotiation_deadline(&mut deadline,now,secure,waiting);
+				arm_negotiation_deadline(&mut deadline,now,secure,waiting,dave.pending.is_some());
 				if secure && let Some(video)=&video && let Some(target)=rate.tick(now) {
 					video.bitrate.store(target,Ordering::Release);
 				}
@@ -1671,18 +1678,29 @@ mod tests {
 		let now = Instant::now();
 		// Mid-stream rekey: not secure, peer present, deadline disarmed.
 		let mut deadline = None;
-		arm_negotiation_deadline(&mut deadline, now, false, false);
+		arm_negotiation_deadline(&mut deadline, now, false, false, false);
 		assert_eq!(deadline, Some(now + Duration::from_secs(30)));
 		// An armed deadline is never shortened by later ticks.
 		let armed = now + Duration::from_secs(5);
 		let mut deadline = Some(armed);
-		arm_negotiation_deadline(&mut deadline, now, false, false);
+		arm_negotiation_deadline(&mut deadline, now, false, false, false);
 		assert_eq!(deadline, Some(armed));
+		// A pending transition counts as insecure even while the old session
+		// still looks secure (mid-stream rekey waiting for op 22).
+		let mut deadline = None;
+		arm_negotiation_deadline(&mut deadline, now, true, false, true);
+		assert_eq!(deadline, Some(now + Duration::from_secs(30)));
 		// Secured streams and sole-member waiting stay untouched.
 		let mut deadline = None;
-		arm_negotiation_deadline(&mut deadline, now, true, false);
+		arm_negotiation_deadline(&mut deadline, now, true, false, false);
 		assert_eq!(deadline, None);
-		arm_negotiation_deadline(&mut deadline, now, false, true);
+		arm_negotiation_deadline(&mut deadline, now, false, true, false);
+		assert_eq!(deadline, None);
+		arm_negotiation_deadline(&mut deadline, now, true, true, true);
+		assert_eq!(deadline, None);
+		// A completed rekey disarms the deadline it armed while pending.
+		let mut deadline = Some(now + Duration::from_secs(30));
+		arm_negotiation_deadline(&mut deadline, now, true, false, false);
 		assert_eq!(deadline, None);
 	}
 

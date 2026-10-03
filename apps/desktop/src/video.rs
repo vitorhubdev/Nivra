@@ -406,7 +406,7 @@ fn play_decoded(
 			let wanted = wanted_output();
 			// Explicit switches migrate every frame; a moved system default is re-resolved about once a second.
 			let default_moved = wanted.is_none()
-				&& ticks % 60 == 0
+				&& ticks.is_multiple_of(60)
 				&& opened.as_ref().map(|(_, id)| id)
 					!= discord_voice::output::default_id(&cpal::default_host()).as_ref();
 			if output.is_some()

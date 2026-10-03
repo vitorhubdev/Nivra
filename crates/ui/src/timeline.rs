@@ -4236,47 +4236,33 @@ impl TimelineView {
 				.collect();
 			let deletable = deletable_ids.len();
 
-			let mut media_attachments = Vec::new();
+			let mut attach_count = 0;
 			for id in &self.batch_delete {
 				if let Some(message) = state.timeline.get(*id) {
-					for attachment in &message.attachments {
-						if media_attachments.len() >= crate::batch_select::MAX_DOWNLOAD {
+					for _attachment in &message.attachments {
+						attach_count += 1;
+						if attach_count >= crate::batch_select::MAX_DOWNLOAD {
 							break;
 						}
-						media_attachments.push(attachment.clone());
+					}
+					if attach_count >= crate::batch_select::MAX_DOWNLOAD {
+						break;
 					}
 					for embed in &message.embeds {
-						if media_attachments.len() >= crate::batch_select::MAX_DOWNLOAD {
-							break;
-						}
 						if let Some(media) = embed.image.as_ref().or(embed.thumbnail.as_ref())
-							&& let Some(url) = media.url.as_deref().or(media.proxy_url.as_deref())
+							&& (media.url.is_some() || media.proxy_url.is_some())
 						{
-							let filename = url
-								.split('?')
-								.next()
-								.unwrap_or(url)
-								.rsplit('/')
-								.next()
-								.filter(|name| !name.is_empty() && name.contains('.'))
-								.unwrap_or("image.png")
-								.to_owned();
-							media_attachments.push(model::Attachment {
-								id: message.id,
-								filename,
-								description: None,
-								content_type: Some("image/png".to_owned()),
-								size: 0,
-								media: media.clone(),
-								spoiler: false,
-								duration_ms: None,
-								waveform: Vec::new(),
-							});
+							attach_count += 1;
+							if attach_count >= crate::batch_select::MAX_DOWNLOAD {
+								break;
+							}
 						}
+					}
+					if attach_count >= crate::batch_select::MAX_DOWNLOAD {
+						break;
 					}
 				}
 			}
-			let attach_count = media_attachments.len();
 			let text_count = self
 				.batch_delete
 				.iter()
@@ -4284,7 +4270,7 @@ impl TimelineView {
 					state
 						.timeline
 						.get(**id)
-						.is_some_and(|m| !m.content.trim().is_empty())
+						.is_some_and(|m| !m.display_text().trim().is_empty())
 				})
 				.count();
 
@@ -4337,6 +4323,16 @@ impl TimelineView {
 								ui.menu_button(crate::i18n::text(language, "Select…"), |ui| {
 									let ordered = self.last_visible.clone();
 									let own = state.user.as_ref().map(|u| u.id);
+									let lookup = |id| {
+										state.timeline.get(id).map(|m| {
+											(
+												m.display_text().into_owned(),
+												m.attachments.clone(),
+												m.embeds.clone(),
+												m.author.id,
+											)
+										})
+									};
 
 									if ui
 										.button(crate::i18n::text(language, "Last 5 messages"))
@@ -4347,16 +4343,7 @@ impl TimelineView {
 											crate::batch_select::QuickFilter::Last(5),
 											&mut self.batch_delete,
 											own,
-											&|id| {
-												state.timeline.get(id).map(|m| {
-													(
-														m.content.clone(),
-														m.attachments.clone(),
-														m.embeds.clone(),
-														m.author.id,
-													)
-												})
-											},
+											&lookup,
 										);
 										ui.close();
 									}
@@ -4369,16 +4356,7 @@ impl TimelineView {
 											crate::batch_select::QuickFilter::Last(10),
 											&mut self.batch_delete,
 											own,
-											&|id| {
-												state.timeline.get(id).map(|m| {
-													(
-														m.content.clone(),
-														m.attachments.clone(),
-														m.embeds.clone(),
-														m.author.id,
-													)
-												})
-											},
+											&lookup,
 										);
 										ui.close();
 									}
@@ -4391,16 +4369,7 @@ impl TimelineView {
 											crate::batch_select::QuickFilter::Last(20),
 											&mut self.batch_delete,
 											own,
-											&|id| {
-												state.timeline.get(id).map(|m| {
-													(
-														m.content.clone(),
-														m.attachments.clone(),
-														m.embeds.clone(),
-														m.author.id,
-													)
-												})
-											},
+											&lookup,
 										);
 										ui.close();
 									}
@@ -4413,16 +4382,7 @@ impl TimelineView {
 											crate::batch_select::QuickFilter::AllVisible,
 											&mut self.batch_delete,
 											own,
-											&|id| {
-												state.timeline.get(id).map(|m| {
-													(
-														m.content.clone(),
-														m.attachments.clone(),
-														m.embeds.clone(),
-														m.author.id,
-													)
-												})
-											},
+											&lookup,
 										);
 										ui.close();
 									}
@@ -4436,16 +4396,7 @@ impl TimelineView {
 											crate::batch_select::QuickFilter::OnlyText,
 											&mut self.batch_delete,
 											own,
-											&|id| {
-												state.timeline.get(id).map(|m| {
-													(
-														m.content.clone(),
-														m.attachments.clone(),
-														m.embeds.clone(),
-														m.author.id,
-													)
-												})
-											},
+											&lookup,
 										);
 										ui.close();
 									}
@@ -4458,16 +4409,7 @@ impl TimelineView {
 											crate::batch_select::QuickFilter::OnlyImages,
 											&mut self.batch_delete,
 											own,
-											&|id| {
-												state.timeline.get(id).map(|m| {
-													(
-														m.content.clone(),
-														m.attachments.clone(),
-														m.embeds.clone(),
-														m.author.id,
-													)
-												})
-											},
+											&lookup,
 										);
 										ui.close();
 									}
@@ -4480,16 +4422,7 @@ impl TimelineView {
 											crate::batch_select::QuickFilter::OnlyVideos,
 											&mut self.batch_delete,
 											own,
-											&|id| {
-												state.timeline.get(id).map(|m| {
-													(
-														m.content.clone(),
-														m.attachments.clone(),
-														m.embeds.clone(),
-														m.author.id,
-													)
-												})
-											},
+											&lookup,
 										);
 										ui.close();
 									}
@@ -4502,16 +4435,7 @@ impl TimelineView {
 											crate::batch_select::QuickFilter::Media,
 											&mut self.batch_delete,
 											own,
-											&|id| {
-												state.timeline.get(id).map(|m| {
-													(
-														m.content.clone(),
-														m.attachments.clone(),
-														m.embeds.clone(),
-														m.author.id,
-													)
-												})
-											},
+											&lookup,
 										);
 										ui.close();
 									}
@@ -4521,16 +4445,7 @@ impl TimelineView {
 											crate::batch_select::QuickFilter::Files,
 											&mut self.batch_delete,
 											own,
-											&|id| {
-												state.timeline.get(id).map(|m| {
-													(
-														m.content.clone(),
-														m.attachments.clone(),
-														m.embeds.clone(),
-														m.author.id,
-													)
-												})
-											},
+											&lookup,
 										);
 										ui.close();
 									}
@@ -4545,16 +4460,7 @@ impl TimelineView {
 												crate::batch_select::QuickFilter::OnlyMine,
 												&mut self.batch_delete,
 												own,
-												&|id| {
-													state.timeline.get(id).map(|m| {
-														(
-															m.content.clone(),
-															m.attachments.clone(),
-															m.embeds.clone(),
-															m.author.id,
-														)
-													})
-												},
+												&lookup,
 											);
 											ui.close();
 										}
@@ -4617,6 +4523,62 @@ impl TimelineView {
 										crate::i18n::text(language, "Download media")
 									);
 									if ui.button(download_label).clicked() {
+										let mut media_attachments = Vec::new();
+										for id in &self.batch_delete {
+											if let Some(message) = state.timeline.get(*id) {
+												for attachment in &message.attachments {
+													if media_attachments.len()
+														>= crate::batch_select::MAX_DOWNLOAD
+													{
+														break;
+													}
+													media_attachments.push(attachment.clone());
+												}
+												for embed in &message.embeds {
+													if media_attachments.len()
+														>= crate::batch_select::MAX_DOWNLOAD
+													{
+														break;
+													}
+													if let Some(media) = embed
+														.image
+														.as_ref()
+														.or(embed.thumbnail.as_ref()) && let Some(
+														url,
+													) = media
+														.url
+														.as_deref()
+														.or(media.proxy_url.as_deref())
+													{
+														let filename = url
+															.split('?')
+															.next()
+															.unwrap_or(url)
+															.rsplit('/')
+															.next()
+															.filter(|name| {
+																!name.is_empty()
+																	&& name.contains('.')
+															})
+															.unwrap_or("image.png")
+															.to_owned();
+														media_attachments.push(model::Attachment {
+															id: message.id,
+															filename,
+															description: None,
+															content_type: Some(
+																"image/png".to_owned(),
+															),
+															size: 0,
+															media: media.clone(),
+															spoiler: false,
+															duration_ms: None,
+															waveform: Vec::new(),
+														});
+													}
+												}
+											}
+										}
 										self.batch_files = media_attachments
 											.iter()
 											.map(|attachment| crate::batch_select::BatchFileView {

@@ -311,6 +311,22 @@ fn main() -> eframe::Result {
 		demo_check_updates();
 		return Ok(());
 	}
+	let _instance_lock = if !demo && !std::env::args().any(|arg| arg.starts_with("--demo")) {
+		match platform::single_instance::InstanceLock::acquire() {
+			Ok(Some(lock)) => Some(lock),
+			Ok(None) => {
+				eprintln!("Another instance of Nivra is already running. Exiting.");
+				return Ok(());
+			}
+			Err(err) => {
+				eprintln!("Warning: Could not acquire single instance lock: {err}");
+				None
+			}
+		}
+	} else {
+		None
+	};
+
 	// Native GPU/window capabilities are selected before the first window exists.
 	let preferences = if demo {
 		Ok(local_store::AppPreferences::default())

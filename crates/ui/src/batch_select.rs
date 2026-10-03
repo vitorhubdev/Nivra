@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 /// Max messages per delete action. Matches `timeline.rs`.
 pub const MAX_DELETE: usize = 5;
 /// Max messages in one selection. Six through this cap is a download batch.
-pub const MAX_SELECT: usize = 15;
+pub const MAX_SELECT: usize = 25;
 /// Max attachments per download action.
 pub const MAX_DOWNLOAD: usize = 15;
 /// Removal animation: height and opacity to 0.
@@ -919,12 +919,12 @@ mod tests {
 
 	#[test]
 	fn shift_range_selects_in_order_with_limit() {
-		let ordered: Vec<Id> = (1..=20).map(Id).collect();
+		let ordered: Vec<Id> = (1..=30).map(Id).collect();
 		let mut sel = BTreeSet::new();
 		let added = range_select(&ordered, Some(Id(2)), Id(5), &mut sel);
 		assert_eq!(added, 4);
 		assert!(sel.contains(&Id(2)) && sel.contains(&Id(5)));
-		let added2 = range_select(&ordered, Some(Id(1)), Id(20), &mut sel);
+		let added2 = range_select(&ordered, Some(Id(1)), Id(30), &mut sel);
 		assert_eq!(added2, MAX_SELECT - 4);
 		assert_eq!(sel.len(), MAX_SELECT);
 	}
@@ -932,7 +932,7 @@ mod tests {
 	#[test]
 	fn delete_and_download_limits_with_reasons() {
 		let mut sel = BTreeSet::new();
-		for i in 1..=15u64 {
+		for i in 1..=MAX_SELECT as u64 {
 			assert!(toggle(&mut sel, Id(i)));
 		}
 		assert!(!toggle(&mut sel, Id(99)));
@@ -1077,7 +1077,7 @@ mod tests {
 
 	#[test]
 	fn select_all_visible_fills_in_order_up_to_select_cap() {
-		let ordered: Vec<Id> = (1..=20).map(Id).collect();
+		let ordered: Vec<Id> = (1..=30).map(Id).collect();
 		let mut sel = BTreeSet::new();
 		sel.insert(Id(3));
 		let added = select_all_visible(&ordered, &mut sel);
@@ -1258,6 +1258,18 @@ mod tests {
 		assert_eq!(count, 5); // 1, 2, 3, 7, 8
 		assert!(selected.contains(&Id(7)));
 		assert!(selected.contains(&Id(8)));
+
+		// Last 20 on an array of 25 messages selects exactly 20 messages
+		let ordered_25: Vec<Id> = (1..=25).map(Id).collect();
+		let count_20 = apply_quick_filter(
+			&ordered_25,
+			QuickFilter::Last(20),
+			&mut selected,
+			Some(Id(100)),
+			&mock_lookup,
+		);
+		assert_eq!(count_20, 20);
+		assert_eq!(selected.len(), 20);
 	}
 
 	#[test]

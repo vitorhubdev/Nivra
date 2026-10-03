@@ -1302,6 +1302,78 @@ impl MessagingUi {
 				),
 			);
 		});
+		design::group(
+			ui,
+			crate::i18n::text(self.language, "External links"),
+			|ui| {
+				let colors = design::palette(ui);
+				let mut always_open = !self.reading_preferences.confirm_external_links;
+				if design::switch(
+					ui,
+					crate::i18n::text(self.language, "Open external links without asking"),
+					Some(crate::i18n::text(
+						self.language,
+						"Open links directly in your default browser. Suspicious or disguised links will still ask.",
+					)),
+					&mut always_open,
+				)
+				.changed()
+				{
+					let mut preferences = self.reading_preferences;
+					preferences.confirm_external_links = !always_open;
+					self.apply_reading_preferences(ui.ctx(), preferences);
+				}
+
+				design::card_divider(ui);
+
+				ui.horizontal(|ui| {
+					ui.label(design::eyebrow(
+						ui,
+						crate::i18n::text(self.language, "Allowed sites"),
+						colors.muted,
+					));
+					if !self.allowed_domains.is_empty() {
+						ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+							if design::button(
+								ui,
+								crate::i18n::text(self.language, "Clear"),
+								design::ButtonKind::Outline,
+							)
+							.clicked()
+							{
+								self.allowed_domains.clear();
+								self.clear_allowed_domains_requested = true;
+							}
+						});
+					}
+				});
+
+				if self.allowed_domains.is_empty() {
+					design::hint(
+						ui,
+						crate::i18n::text(self.language, "No sites remembered yet."),
+					);
+				} else {
+					ui.horizontal_wrapped(|ui| {
+						let mut sorted: Vec<_> = self.allowed_domains.iter().collect();
+						sorted.sort();
+						for domain in sorted {
+							let chip = egui::Frame::new()
+								.fill(colors.base)
+								.stroke(egui::Stroke::new(1.0, colors.border))
+								.corner_radius(4)
+								.inner_margin(egui::Margin::symmetric(8, 4))
+								.show(ui, |ui| {
+									ui.label(
+										RichText::new(domain).size(12.0).color(colors.text_strong),
+									);
+								});
+							chip.response.on_hover_text(domain);
+						}
+					});
+				}
+			},
+		);
 	}
 }
 

@@ -1460,6 +1460,13 @@ impl Desktop {
 			} else {
 				reading.restore(Err(local_store::StoreError::Unavailable));
 			}
+			if cache.queue(
+				state.generation,
+				model::Id(0),
+				cache::Operation::LoadAllowedDomains,
+			) {
+				cache_pending += 1;
+			}
 		}
 		#[cfg(feature = "demo")]
 		let synthetic_id = state
@@ -2483,6 +2490,28 @@ impl Desktop {
 		}
 		if let Some(delay) = self.reading.remaining(now) {
 			ctx.request_repaint_after(delay);
+		}
+		if let Some(domain) = self.messaging.add_allowed_domain_requested.take() {
+			if let Some(cache) = &self.cache {
+				if cache.queue(
+					self.state.generation,
+					model::Id(0),
+					cache::Operation::AddAllowedDomain(domain),
+				) {
+					self.cache_pending += 1;
+				}
+			}
+		}
+		if std::mem::take(&mut self.messaging.clear_allowed_domains_requested) {
+			if let Some(cache) = &self.cache {
+				if cache.queue(
+					self.state.generation,
+					model::Id(0),
+					cache::Operation::ClearAllowedDomains,
+				) {
+					self.cache_pending += 1;
+				}
+			}
 		}
 		self.messaging.reading_status = self.reading.status();
 	}
@@ -5070,6 +5099,24 @@ impl Desktop {
 					self.reading.saved(*result);
 					continue;
 				}
+				cache::Outcome::AllowedDomains(result) => {
+					if let Ok(domains) = result {
+						self.messaging.allowed_domains = domains.iter().cloned().collect();
+					}
+					continue;
+				}
+				cache::Outcome::AllowedDomainAdded(result) => {
+					if result.is_err() {
+						self.cache_error = true;
+					}
+					continue;
+				}
+				cache::Outcome::AllowedDomainsCleared(result) => {
+					if result.is_err() {
+						self.cache_error = true;
+					}
+					continue;
+				}
 				cache::Outcome::Appearance(appearance, variant) => {
 					if !self.state.demo && !self.appearance_changed {
 						self.appearance = match appearance {
@@ -5236,7 +5283,10 @@ impl Desktop {
 				| cache::Outcome::HistoryCleared
 				| cache::Outcome::Failed { .. }
 				| cache::Outcome::AccountPresences(_)
-				| cache::Outcome::AccountPresenceSaved(_) => unreachable!(),
+				| cache::Outcome::AccountPresenceSaved(_)
+				| cache::Outcome::AllowedDomains(_)
+				| cache::Outcome::AllowedDomainAdded(_)
+				| cache::Outcome::AllowedDomainsCleared(_) => unreachable!(),
 			}
 		}
 		self.retry_history_clears();

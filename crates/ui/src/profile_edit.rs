@@ -78,7 +78,7 @@ pub(super) struct Editor {
 	baseline: Option<Draft>,
 	submitted: Option<u64>,
 	saved: bool,
-	preview_link: Option<String>,
+	pub(crate) preview_link: Option<String>,
 	/// Set when the picture button is pressed; the desktop shell opens the native picker.
 	pub avatar_request: Option<(u64, Id, u64)>,
 	revision: u64,
@@ -354,7 +354,15 @@ impl Editor {
 				false,
 			);
 		}
-		crate::markdown::confirm_external_link(ui.ctx(), &mut self.preview_link, true);
+		let language = crate::i18n::interface_language(ui.ctx());
+		crate::markdown::confirm_external_link(
+			ui.ctx(),
+			&mut self.preview_link,
+			true,
+			&mut Default::default(),
+			&mut None,
+			language,
+		);
 		if !state.demo && !state.gateway_connected {
 			design::hint(ui, "Reconnect to save your profile.");
 		}

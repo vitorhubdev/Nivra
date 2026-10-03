@@ -144,6 +144,16 @@ fn the_guard_reports_only_keys_the_manifest_knows() {
 		"Presence unavailable",
 		"Mobile",
 		"Offline preview",
+		"Open external link?",
+		"This destination opens in your default browser.",
+		"Open in Browser",
+		"Do not ask again for this site",
+		"Open external links without asking",
+		"Open links directly in your default browser. Suspicious or disguised links will still ask.",
+		"Allowed sites",
+		"No sites remembered yet.",
+		"Warning: The link text looks like a different web address.",
+		"External links",
 	] {
 		for language in LANGUAGES {
 			assert_ne!(

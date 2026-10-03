@@ -6398,6 +6398,121 @@ mod tests {
 	}
 
 	#[test]
+	fn voice_state_updates_show_the_right_icon_in_one_frame() {
+		use egui_kittest::kittest::Queryable as _;
+		struct Fixture {
+			view: MessagingUi,
+			state: State,
+		}
+		fn member(id: u64, name: &str) -> model::Member {
+			model::Member {
+				user: model::User {
+					id: Id(id),
+					name: name.into(),
+					avatar: None,
+					webhook: false,
+					kind: Default::default(),
+					discriminator: 0,
+					primary_guild: None,
+				},
+				nick: None,
+				roles: vec![],
+				status: None,
+				custom_status: None,
+				activities: vec![],
+				clients: model::ClientPlatforms::default(),
+			}
+		}
+		fn voice_state(
+			channel: Option<Id>,
+			user: u64,
+			muted: bool,
+			deafened: bool,
+			server_muted: bool,
+		) -> client_core::voice::Event {
+			let name = if user == 1 { "Owner" } else { "Robin" };
+			client_core::voice::Event::State {
+				guild: Some(Id(10)),
+				member: Some(Box::new(member(user, name))),
+				server_muted,
+				server_deafened: false,
+				request: None,
+				session: None,
+				negotiation_revision: None,
+				channel,
+				user: Id(user),
+				muted,
+				deafened,
+				video: false,
+				streaming: false,
+			}
+		}
+		let mut fixture = Fixture {
+			view: MessagingUi::default(),
+			state: test_support::voice_demo_state(),
+		};
+		// Peer joins unmuted: no mute icon after a single frame.
+		fixture.state.voice.roster.clear();
+		fixture
+			.state
+			.apply_voice(voice_state(Some(Id(25)), 2, false, false, false));
+		let mut harness = egui_kittest::Harness::new_ui_state(
+			|ui, fixture: &mut Fixture| {
+				for entry in fixture
+					.state
+					.voice
+					.roster
+					.iter()
+					.filter(|entry| entry.channel == Id(25) || entry.channel == Id(26))
+				{
+					fixture
+						.view
+						.voice_participant(ui, &fixture.state, entry, false);
+				}
+			},
+			fixture,
+		);
+		harness.run();
+		assert!(harness.query_by_label("Microphone muted").is_none());
+		// Self mute shows the icon on our own row in the same frame.
+		harness
+			.state_mut()
+			.state
+			.apply_voice(voice_state(Some(Id(25)), 1, true, false, false));
+		harness.step();
+		assert!(harness.query_by_label("Microphone muted").is_some());
+		// Server mute swaps the caption.
+		harness
+			.state_mut()
+			.state
+			.apply_voice(voice_state(Some(Id(25)), 2, true, false, true));
+		harness.step();
+		assert!(harness.query_by_label("Muted by server").is_some());
+		// Deafen swaps the caption again.
+		harness
+			.state_mut()
+			.state
+			.apply_voice(voice_state(Some(Id(25)), 2, true, true, false));
+		harness.step();
+		assert!(harness.query_by_label("Deafened").is_some());
+		// Leaving removes the row (and its icons) in the same frame.
+		harness
+			.state_mut()
+			.state
+			.apply_voice(voice_state(None, 2, false, false, false));
+		harness.step();
+		assert!(harness.query_by_label("Deafened").is_none());
+		// Switching channels moves the row instead of duplicating it: one row
+		// renders as three accesskit nodes (row button, name and hover text).
+		harness
+			.state_mut()
+			.state
+			.apply_voice(voice_state(Some(Id(26)), 2, false, false, false));
+		harness.step();
+		assert_eq!(harness.query_all_by_label("Robin").count(), 3);
+	}
+
+	#[test]
 	fn voice_roster_marks_streaming_participants_live() {
 		let mut state = test_support::demo_state();
 		state.voice.roster = vec![RosterEntry {

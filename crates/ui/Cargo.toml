@@ -27,6 +27,7 @@ flate2.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true
+egui_kittest.workspace = true
 skrifa = { version = "=0.44.0", default-features = false, features = ["std"] }
 
 [lints]

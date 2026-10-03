@@ -1951,7 +1951,7 @@ mod tests {
 		crate::tests::grant_permissions(&mut state);
 
 		// 1. 50x join / leave cycles in DM and Guild channels
-		for i in 0..50 {
+		for i in 0u64..50 {
 			let ch = if i % 2 == 0 { dm_channel } else { Id(100) };
 			let ring = ch == dm_channel;
 			let cmd = state.start_call(ch, ring).expect("start call");
@@ -1982,7 +1982,7 @@ mod tests {
 				streaming: false,
 				member: None,
 				request: Some(req),
-				negotiation_revision: Some(i as u64 + 1),
+				negotiation_revision: Some(i + 1),
 			});
 			assert!(state.voice.active.is_some());
 
@@ -1997,7 +1997,7 @@ mod tests {
 
 		// 2. 20x channel transitions (leave previous -> join next)
 		let mut current_req = 0;
-		for i in 0..20 {
+		for i in 0u64..20 {
 			let target_ch = Id(100 + (i % 10));
 			let cmd = state.start_call(target_ch, false).expect("channel switch");
 			current_req = match cmd {
@@ -2026,7 +2026,7 @@ mod tests {
 				streaming: false,
 				member: None,
 				request: Some(current_req),
-				negotiation_revision: Some(100 + i as u64),
+				negotiation_revision: Some(100 + i),
 			});
 			assert_eq!(state.voice.active.as_ref().unwrap().channel, target_ch);
 

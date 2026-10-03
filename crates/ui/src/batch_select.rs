@@ -431,6 +431,333 @@ pub enum BatchFileStatus {
 	Cancelled,
 }
 
+/// Classification of a message's content for smart batch selection.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MessageContentKind {
+	TextOnly,
+	MediaOnly,
+	Mixed,
+	FileOnly,
+	Empty,
+}
+
+/// Dynamic summary of currently selected messages.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SelectionSummary {
+	pub total_selected: usize,
+	pub text_count: usize,
+	pub media_count: usize,
+	pub file_count: usize,
+	pub deletable_count: usize,
+}
+
+impl SelectionSummary {
+	pub fn is_only_media(&self) -> bool {
+		self.media_count > 0 && self.text_count == 0 && self.file_count == 0
+	}
+
+	pub fn is_only_text(&self) -> bool {
+		self.text_count > 0 && self.media_count == 0 && self.file_count == 0
+	}
+
+	pub fn is_mixed(&self) -> bool {
+		(self.text_count > 0 && (self.media_count > 0 || self.file_count > 0))
+			|| (self.media_count > 0 && self.file_count > 0)
+	}
+}
+
+/// Categorize a single message into its content kind.
+pub fn classify_message(
+	content: &str,
+	attachments: &[model::Attachment],
+	embeds: &[model::Embed],
+) -> MessageContentKind {
+	let has_text = !content.trim().is_empty();
+	let mut has_media = false;
+	let mut has_other_file = false;
+
+	for attachment in attachments {
+		if attachment.is_image() || attachment.is_video() {
+			has_media = true;
+		} else {
+			has_other_file = true;
+		}
+	}
+
+	for embed in embeds {
+		if embed.image.is_some() || embed.video.is_some() || embed.thumbnail.is_some() {
+			has_media = true;
+		}
+	}
+
+	match (has_text, has_media, has_other_file) {
+		(true, false, false) => MessageContentKind::TextOnly,
+		(false, true, false) => MessageContentKind::MediaOnly,
+		(false, false, true) => MessageContentKind::FileOnly,
+		(false, false, false) => MessageContentKind::Empty,
+		_ => MessageContentKind::Mixed,
+	}
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QuickFilter {
+	Last(usize),
+	AllVisible,
+	OnlyText,
+	OnlyImages,
+	OnlyVideos,
+	Media,
+	Files,
+	OnlyMine,
+}
+
+pub type MessageLookupFn<'a> =
+	dyn Fn(Id) -> Option<(String, Vec<model::Attachment>, Vec<model::Embed>, Id)> + 'a;
+
+pub fn apply_quick_filter(
+	ordered: &[Id],
+	filter: QuickFilter,
+	selected: &mut BTreeSet<Id>,
+	own_user: Option<Id>,
+	lookup: &MessageLookupFn<'_>,
+) -> usize {
+	selected.clear();
+	let mut added = 0;
+
+	match filter {
+		QuickFilter::Last(count) => {
+			for id in ordered.iter().rev().take(count) {
+				if selected.len() >= MAX_SELECT {
+					break;
+				}
+				if selected.insert(*id) {
+					added += 1;
+				}
+			}
+		}
+		QuickFilter::AllVisible => {
+			for id in ordered {
+				if selected.len() >= MAX_SELECT {
+					break;
+				}
+				if selected.insert(*id) {
+					added += 1;
+				}
+			}
+		}
+		QuickFilter::OnlyText => {
+			for id in ordered.iter().rev() {
+				if selected.len() >= MAX_SELECT {
+					break;
+				}
+				if let Some((content, attachments, embeds, _author)) = lookup(*id)
+					&& classify_message(&content, &attachments, &embeds)
+						== MessageContentKind::TextOnly
+					&& selected.insert(*id)
+				{
+					added += 1;
+				}
+			}
+		}
+		QuickFilter::OnlyImages => {
+			for id in ordered.iter().rev() {
+				if selected.len() >= MAX_SELECT {
+					break;
+				}
+				if let Some((_, attachments, embeds, _author)) = lookup(*id) {
+					let has_img = attachments.iter().any(|a| a.is_image())
+						|| embeds
+							.iter()
+							.any(|e| e.image.is_some() || e.thumbnail.is_some());
+					if has_img && selected.insert(*id) {
+						added += 1;
+					}
+				}
+			}
+		}
+		QuickFilter::OnlyVideos => {
+			for id in ordered.iter().rev() {
+				if selected.len() >= MAX_SELECT {
+					break;
+				}
+				if let Some((_, attachments, embeds, _author)) = lookup(*id) {
+					let has_vid = attachments.iter().any(|a| a.is_video())
+						|| embeds.iter().any(|e| e.video.is_some());
+					if has_vid && selected.insert(*id) {
+						added += 1;
+					}
+				}
+			}
+		}
+		QuickFilter::Media => {
+			for id in ordered.iter().rev() {
+				if selected.len() >= MAX_SELECT {
+					break;
+				}
+				if let Some((_, attachments, embeds, _author)) = lookup(*id) {
+					let has_media = attachments.iter().any(|a| a.is_image() || a.is_video())
+						|| embeds.iter().any(|e| {
+							e.image.is_some() || e.video.is_some() || e.thumbnail.is_some()
+						});
+					if has_media && selected.insert(*id) {
+						added += 1;
+					}
+				}
+			}
+		}
+		QuickFilter::Files => {
+			for id in ordered.iter().rev() {
+				if selected.len() >= MAX_SELECT {
+					break;
+				}
+				if let Some((_, attachments, _, _author)) = lookup(*id) {
+					let has_file = attachments.iter().any(|a| !a.is_image() && !a.is_video());
+					if has_file && selected.insert(*id) {
+						added += 1;
+					}
+				}
+			}
+		}
+		QuickFilter::OnlyMine => {
+			if let Some(own) = own_user {
+				for id in ordered.iter().rev() {
+					if selected.len() >= MAX_SELECT {
+						break;
+					}
+					if let Some((_, _, _, author)) = lookup(*id)
+						&& author == own && selected.insert(*id)
+					{
+						added += 1;
+					}
+				}
+			}
+		}
+	}
+	added
+}
+
+/// Formats messages as a self-contained, responsive HTML file in Telegram/Discord export style.
+pub fn format_html(channel_name: &str, messages: &[TxtMessage]) -> String {
+	let mut out = String::with_capacity(messages.len() * 512 + 1024);
+	out.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
+	out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
+	out.push_str("<title>Nivra Export - ");
+	out.push_str(&html_escape(channel_name));
+	out.push_str("</title>\n<style>\n");
+	out.push_str("body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 24px; background: #1e1f22; color: #dbdee1; }\n");
+	out.push_str(".export-container { max-width: 760px; margin: 0 auto; }\n");
+	out.push_str(
+		".header { border-bottom: 1px solid #35363c; padding-bottom: 16px; margin-bottom: 24px; }\n",
+	);
+	out.push_str(".header h1 { margin: 0 0 8px 0; font-size: 20px; color: #f2f3f5; }\n");
+	out.push_str(".header .meta { font-size: 13px; color: #949ba4; }\n");
+	out.push_str(
+		".message { display: flex; margin-bottom: 16px; padding: 4px 8px; border-radius: 6px; }\n",
+	);
+	out.push_str(".message:hover { background: #2b2d31; }\n");
+	out.push_str(".avatar { width: 40px; height: 40px; border-radius: 50%; background: #5865f2; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 16px; margin-right: 12px; flex-shrink: 0; }\n");
+	out.push_str(".msg-body { flex: 1; min-width: 0; }\n");
+	out.push_str(".msg-header { margin-bottom: 4px; }\n");
+	out.push_str(
+		".author { font-weight: 600; color: #f2f3f5; margin-right: 8px; font-size: 14px; }\n",
+	);
+	out.push_str(".time { font-size: 11px; color: #949ba4; }\n");
+	out.push_str(".text { font-size: 14px; line-height: 1.4; word-break: break-word; white-space: pre-wrap; margin-bottom: 6px; }\n");
+	out.push_str(".attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }\n");
+	out.push_str(".attachment-link { display: inline-flex; align-items: center; padding: 6px 10px; background: #2b2d31; border: 1px solid #35363c; border-radius: 4px; color: #00a8fc; text-decoration: none; font-size: 13px; }\n");
+	out.push_str(".attachment-link:hover { text-decoration: underline; background: #313338; }\n");
+	out.push_str(".media-preview { max-width: 320px; max-height: 240px; border-radius: 6px; display: block; margin-top: 6px; }\n");
+	out.push_str(".footer { border-top: 1px solid #35363c; padding-top: 16px; margin-top: 32px; font-size: 12px; color: #949ba4; text-align: center; }\n");
+	out.push_str("@media (prefers-color-scheme: light) {\n");
+	out.push_str("  body { background: #ffffff; color: #313338; }\n");
+	out.push_str("  .header { border-bottom-color: #e3e5e8; }\n");
+	out.push_str("  .header h1 { color: #060607; }\n");
+	out.push_str("  .header .meta { color: #5c64f4; }\n");
+	out.push_str("  .message:hover { background: #f2f3f5; }\n");
+	out.push_str("  .author { color: #060607; }\n");
+	out.push_str("  .time { color: #5c5f66; }\n");
+	out.push_str(
+		"  .attachment-link { background: #f2f3f5; border-color: #e3e5e8; color: #006ce7; }\n",
+	);
+	out.push_str("  .attachment-link:hover { background: #e3e5e8; }\n");
+	out.push_str("  .footer { border-top-color: #e3e5e8; color: #5c5f66; }\n");
+	out.push_str("}\n</style>\n</head>\n<body>\n<div class=\"export-container\">\n");
+	out.push_str("<div class=\"header\">\n<h1>");
+	out.push_str(&html_escape(channel_name));
+	out.push_str("</h1>\n<div class=\"meta\">");
+	out.push_str(&format!("{} messages exported", messages.len()));
+	out.push_str("</div>\n</div>\n");
+
+	for m in messages {
+		out.push_str("<div class=\"message\">\n");
+		let initial = m.author.chars().next().unwrap_or('?').to_uppercase();
+		out.push_str(&format!("<div class=\"avatar\">{initial}</div>\n"));
+		out.push_str("<div class=\"msg-body\">\n<div class=\"msg-header\">\n");
+		out.push_str("<span class=\"author\">");
+		out.push_str(&html_escape(&m.author));
+		out.push_str("</span><span class=\"time\">");
+		out.push_str(&html_escape(&m.when));
+		out.push_str("</span></div>\n");
+		if !m.text.trim().is_empty() {
+			out.push_str("<div class=\"text\">");
+			out.push_str(&html_escape(&m.text));
+			out.push_str("</div>\n");
+		}
+		if !m.attachments.is_empty() {
+			out.push_str("<div class=\"attachments\">\n");
+			for (idx, name) in m.attachments.iter().enumerate() {
+				let link = m.links.get(idx).and_then(|l| l.as_deref()).unwrap_or("");
+				let is_img = name.ends_with(".png")
+					|| name.ends_with(".jpg")
+					|| name.ends_with(".jpeg")
+					|| name.ends_with(".webp")
+					|| name.ends_with(".gif");
+				if is_img && !link.is_empty() {
+					out.push_str(&format!(
+						"<a href=\"{}\" target=\"_blank\"><img class=\"media-preview\" src=\"{}\" alt=\"{}\" loading=\"lazy\" /></a>\n",
+						html_escape(link),
+						html_escape(link),
+						html_escape(name)
+					));
+				} else if !link.is_empty() {
+					out.push_str(&format!(
+						"<a class=\"attachment-link\" href=\"{}\" target=\"_blank\">📎 {}</a>\n",
+						html_escape(link),
+						html_escape(name)
+					));
+				} else {
+					out.push_str(&format!(
+						"<span class=\"attachment-link\">📎 {}</span>\n",
+						html_escape(name)
+					));
+				}
+			}
+			out.push_str("</div>\n");
+		}
+		out.push_str("</div>\n</div>\n");
+	}
+
+	out.push_str("<div class=\"footer\">\n");
+	out.push_str("Exported with Nivra client\n");
+	out.push_str("</div>\n</div>\n</body>\n</html>\n");
+	out
+}
+
+fn html_escape(s: &str) -> String {
+	let mut escaped = String::with_capacity(s.len());
+	for c in s.chars() {
+		match c {
+			'&' => escaped.push_str("&amp;"),
+			'<' => escaped.push_str("&lt;"),
+			'>' => escaped.push_str("&gt;"),
+			'"' => escaped.push_str("&quot;"),
+			'\'' => escaped.push_str("&#39;"),
+			other => escaped.push(other),
+		}
+	}
+	escaped
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -651,5 +978,208 @@ mod tests {
 		assert!(sel.contains(&Id(9)));
 		let added2 = select_all_visible(&ordered, &mut sel);
 		assert_eq!(added2, 0);
+	}
+
+	fn test_attachment(id: Id, filename: &str, content_type: Option<&str>) -> model::Attachment {
+		model::Attachment {
+			id,
+			filename: filename.into(),
+			description: None,
+			content_type: content_type.map(str::to_string),
+			size: 100,
+			media: model::EmbedMedia::default(),
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+		}
+	}
+
+	#[test]
+	fn classify_message_distinguishes_content_types() {
+		assert_eq!(classify_message("", &[], &[]), MessageContentKind::Empty);
+		assert_eq!(
+			classify_message("hello world", &[], &[]),
+			MessageContentKind::TextOnly
+		);
+
+		let img_attachment = test_attachment(Id(1), "image.png", Some("image/png"));
+		let doc_attachment = test_attachment(Id(2), "notes.pdf", Some("application/pdf"));
+
+		assert_eq!(
+			classify_message("", std::slice::from_ref(&img_attachment), &[]),
+			MessageContentKind::MediaOnly
+		);
+		assert_eq!(
+			classify_message("", std::slice::from_ref(&doc_attachment), &[]),
+			MessageContentKind::FileOnly
+		);
+		assert_eq!(
+			classify_message("look at this", &[img_attachment], &[]),
+			MessageContentKind::Mixed
+		);
+
+		let embed_with_img = model::Embed {
+			image: Some(model::EmbedMedia {
+				url: Some("https://example.com/pic.jpg".into()),
+				proxy_url: None,
+				width: 100,
+				height: 100,
+				placeholder: Vec::new(),
+			}),
+			..Default::default()
+		};
+		assert_eq!(
+			classify_message("", &[], &[embed_with_img]),
+			MessageContentKind::MediaOnly
+		);
+	}
+
+	#[test]
+	fn selection_summary_helpers() {
+		let media_only = SelectionSummary {
+			total_selected: 3,
+			text_count: 0,
+			media_count: 3,
+			file_count: 0,
+			deletable_count: 0,
+		};
+		assert!(media_only.is_only_media());
+		assert!(!media_only.is_only_text());
+		assert!(!media_only.is_mixed());
+
+		let text_only = SelectionSummary {
+			total_selected: 2,
+			text_count: 2,
+			media_count: 0,
+			file_count: 0,
+			deletable_count: 2,
+		};
+		assert!(text_only.is_only_text());
+		assert!(!text_only.is_only_media());
+		assert!(!text_only.is_mixed());
+
+		let mixed = SelectionSummary {
+			total_selected: 2,
+			text_count: 1,
+			media_count: 1,
+			file_count: 0,
+			deletable_count: 1,
+		};
+		assert!(mixed.is_mixed());
+		assert!(!mixed.is_only_text());
+		assert!(!mixed.is_only_media());
+	}
+
+	#[test]
+	fn apply_quick_filter_rules() {
+		let ordered: Vec<Id> = (1..=10).map(Id).collect();
+		let mut selected = BTreeSet::new();
+
+		let mock_lookup =
+			|id: Id| -> Option<(String, Vec<model::Attachment>, Vec<model::Embed>, Id)> {
+				match id.0 {
+					1..=3 => Some((
+						"text msg".into(),
+						vec![],
+						vec![],
+						Id(100), // author 100
+					)),
+					4..=6 => Some((
+						"".into(),
+						vec![test_attachment(id, "pic.png", Some("image/png"))],
+						vec![],
+						Id(200), // author 200
+					)),
+					7..=8 => Some((
+						"".into(),
+						vec![test_attachment(id, "video.mp4", Some("video/mp4"))],
+						vec![],
+						Id(100),
+					)),
+					_ => Some(("doc".into(), vec![], vec![], Id(300))),
+				}
+			};
+
+		// Last 5
+		let count = apply_quick_filter(
+			&ordered,
+			QuickFilter::Last(5),
+			&mut selected,
+			Some(Id(100)),
+			&mock_lookup,
+		);
+		assert_eq!(count, 5);
+		assert_eq!(selected.len(), 5);
+		assert!(selected.contains(&Id(10)));
+		assert!(selected.contains(&Id(6)));
+
+		// OnlyText
+		let count = apply_quick_filter(
+			&ordered,
+			QuickFilter::OnlyText,
+			&mut selected,
+			Some(Id(100)),
+			&mock_lookup,
+		);
+		assert_eq!(count, 5); // 1, 2, 3, 9, 10
+		assert!(selected.contains(&Id(1)));
+		assert!(selected.contains(&Id(2)));
+		assert!(selected.contains(&Id(3)));
+
+		// OnlyImages
+		let count = apply_quick_filter(
+			&ordered,
+			QuickFilter::OnlyImages,
+			&mut selected,
+			Some(Id(100)),
+			&mock_lookup,
+		);
+		assert_eq!(count, 3); // 4, 5, 6
+		assert!(selected.contains(&Id(4)));
+		assert!(selected.contains(&Id(5)));
+		assert!(selected.contains(&Id(6)));
+
+		// OnlyMine
+		let count = apply_quick_filter(
+			&ordered,
+			QuickFilter::OnlyMine,
+			&mut selected,
+			Some(Id(100)),
+			&mock_lookup,
+		);
+		assert_eq!(count, 5); // 1, 2, 3, 7, 8
+		assert!(selected.contains(&Id(7)));
+		assert!(selected.contains(&Id(8)));
+	}
+
+	#[test]
+	fn html_export_contains_structure_and_escapes() {
+		let messages = vec![
+			TxtMessage {
+				author: "Alice <script>".into(),
+				when: "14:30".into(),
+				text: "Check & verify \"quotes\"".into(),
+				attachments: vec!["pic.png".into()],
+				links: vec![Some("https://cdn.example.com/pic.png".into())],
+			},
+			TxtMessage {
+				author: "Bob".into(),
+				when: "14:32".into(),
+				text: "Regular file".into(),
+				attachments: vec!["notes.txt".into()],
+				links: vec![Some("https://cdn.example.com/notes.txt".into())],
+			},
+		];
+
+		let html = format_html("general & alerts", &messages);
+		assert!(html.contains("Nivra Export - general &amp; alerts"));
+		assert!(html.contains("Alice &lt;script&gt;"));
+		assert!(html.contains("Check &amp; verify &quot;quotes&quot;"));
+		assert!(
+			html.contains("<img class=\"media-preview\" src=\"https://cdn.example.com/pic.png\"")
+		);
+		assert!(html.contains("📎 notes.txt"));
+		assert!(html.contains("<!DOCTYPE html>"));
+		assert!(html.contains("Exported with Nivra client"));
 	}
 }

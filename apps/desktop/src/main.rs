@@ -764,8 +764,8 @@ struct Desktop {
 	/// Bounded text preview fetched off the render thread, drained each frame.
 	preview_done:
 		Option<std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>>>,
-	/// Last finished download already recorded and announced, so the toast fires once.
-	announced_download: Option<(model::Id, std::path::PathBuf)>,
+	/// Generation of the last announced download, so the toast fires once per job.
+	announced_generation: Option<u64>,
 	audio: audio::Audio,
 	video: video::Video,
 	/// Offline fixture flags start (and optionally pause) the demo attachment without input.
@@ -1939,7 +1939,7 @@ impl Desktop {
 			batch_downloads: batch_downloads::BatchDownloads::default(),
 			save_txt_done: None,
 			preview_done: None,
-			announced_download: None,
+			announced_generation: None,
 			audio: audio::Audio::default(),
 			video: video::Video::default(),
 			demo_video_autoplay: if std::env::args().any(|arg| arg == "--demo-video-paused") {
@@ -6254,40 +6254,19 @@ impl eframe::App for Desktop {
 
 		let download_status = match self.downloads.poll() {
 			downloads::Status::Idle | downloads::Status::Choosing => String::new(),
-			downloads::Status::Downloading { total: 0, .. } => {
-				self.announced_download = None;
-				"Loading image…".into()
-			}
+			downloads::Status::Downloading { total: 0, .. } => "Loading image…".into(),
 			downloads::Status::Downloading { received, total } => {
-				self.announced_download = None;
 				format!("Downloading: {} / {} KiB", received / 1024, total / 1024)
 			}
 			downloads::Status::Saved {
-				id,
 				filename,
-				path,
-				size,
+				generation,
+				..
 			} => {
-				let key = (*id, path.clone());
-				if self.announced_download.as_ref() != Some(&key) {
-					self.announced_download = Some(key);
-					// Embedded saves carry a synthetic id/size for transfer only; the
-					// persistent registry is keyed by real attachment ids.
-					if id.0 != 0 {
-						let record = (*id, path.clone(), *size);
-						std::thread::Builder::new()
-							.name("nivra-download-registry".into())
-							.spawn(move || {
-								if let Ok(store) = local_store::LocalStore::open_default()
-									&& store
-										.record_download(record.0, &record.1, record.2)
-										.is_err()
-								{
-									eprintln!("Nivra: download registry write failed");
-								}
-							})
-							.ok();
-					}
+				// The generation identifies the job, so a fast re-download announces
+				// even when its transient states were never observed between frames.
+				if self.announced_generation != Some(*generation) {
+					self.announced_generation = Some(*generation);
 					let done = ui::i18n::text(self.messaging.language, "Download complete");
 					self.messaging
 						.toasts

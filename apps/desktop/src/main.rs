@@ -362,7 +362,7 @@ fn main() -> eframe::Result {
 							gpu::select(gpu_preference, adapters, surface)
 						},
 					)),
-					..eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle()
+					..gpu::setup()
 				},
 			),
 			// Keep eframe's low-latency surface policy. Forcing FIFO adds an avoidable

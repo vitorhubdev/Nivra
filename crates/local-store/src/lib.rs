@@ -50,6 +50,9 @@ pub struct AppPreferences {
 	/// Off for older preferences; mirrored from the direct-messages heading.
 	#[serde(default)]
 	pub hide_bot_dms: bool,
+	/// IRC-style compact timeline (time gutter, no avatars, tight rows).
+	#[serde(default)]
+	pub compact_timeline: bool,
 	pub hide_title_bar: bool,
 	pub language: model::Language,
 	/// False until the owner picks a language or the first launch copies the system language.
@@ -149,6 +152,7 @@ impl Default for AppPreferences {
 			show_hidden_channels: false,
 			hide_offline_members: false,
 			hide_bot_dms: false,
+			compact_timeline: false,
 			hide_title_bar: false,
 			language: Default::default(),
 			language_chosen: false,

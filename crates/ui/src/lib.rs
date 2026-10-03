@@ -593,6 +593,8 @@ pub struct MessagingUi {
 	pub theme_variant_changed: Option<design::Variant>,
 	pub primary_color: Option<[u8; 3]>,
 	pub transparency_blur: bool,
+	/// IRC-style single-line headers: time gutter instead of avatars, tight rows.
+	pub compact_timeline: bool,
 	pub transparency: u8,
 	pub blur: u8,
 	pub transparent_all: bool,
@@ -4771,6 +4773,7 @@ impl MessagingUi {
 					.show(ui, |ui| {
 						design::paint_chat_background(ui, ui.available_rect_before_wrap());
 						self.timeline.hide_media_links = self.reading_preferences.hide_media_links;
+						self.timeline.compact_timeline = self.compact_timeline;
 						self.timeline.instant_scrolling =
 							!self.reading_preferences.smooth_scrolling;
 						self.timeline.extension_actions = self.extensions.message_actions();

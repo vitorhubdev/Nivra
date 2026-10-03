@@ -1125,6 +1125,17 @@ impl MessagingUi {
 			},
 		);
 		self.layout_settings(ui, demo);
+		design::group(ui, crate::i18n::text(self.language, "Messages"), |ui| {
+			design::switch(
+				ui,
+				crate::i18n::text(self.language, "Compact timeline"),
+				Some(crate::i18n::text(
+					self.language,
+					"Time gutter instead of avatars, with tight rows. Anchors, unread markers and selection keep working.",
+				)),
+				&mut self.compact_timeline,
+			);
+		});
 	}
 
 	fn chat_settings(&mut self, ui: &mut egui::Ui, demo: bool) {

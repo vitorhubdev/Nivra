@@ -22,6 +22,7 @@ ui = { path = "crates/ui" }
 test-support = { path = "crates/test-support" }
 eframe = { git = "https://github.com/emilk/egui", rev = "99df44a801749aee958295ed96fccad8dfecb289", default-features = false, features = ["wgpu_no_default_features", "default_fonts", "system_fonts", "accesskit", "wayland", "x11", "links"] }
 egui = { git = "https://github.com/emilk/egui", rev = "99df44a801749aee958295ed96fccad8dfecb289", default-features = false, features = ["default_fonts"] }
+egui_kittest = { git = "https://github.com/emilk/egui", rev = "99df44a801749aee958295ed96fccad8dfecb289", default-features = false }
 tokio = { version = "1.50", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }

@@ -3010,3 +3010,7 @@ mod tests {
 #[cfg(test)]
 #[path = "test_stream.rs"]
 mod test_stream;
+
+#[cfg(test)]
+#[path = "test_voice.rs"]
+mod test_voice;

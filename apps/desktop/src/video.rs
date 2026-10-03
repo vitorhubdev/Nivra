@@ -20,6 +20,8 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 struct Session {
 	id: u64,
+	/// Wanted voice output selection, refreshed by the UI (`None` = default).
+	output: std::sync::Mutex<Option<String>>,
 	cancelled: Arc<AtomicBool>,
 	paused: Arc<AtomicBool>,
 	volume: Arc<AtomicU32>,
@@ -30,6 +32,7 @@ impl Session {
 	fn new(volume: f32, id: u64) -> Self {
 		Self {
 			id,
+			output: std::sync::Mutex::new(None),
 			cancelled: Arc::new(AtomicBool::new(false)),
 			paused: Arc::new(AtomicBool::new(false)),
 			volume: Arc::new(AtomicU32::new(volume.to_bits())),
@@ -60,10 +63,16 @@ impl Video {
 		}
 		self.worker = None;
 	}
-	pub fn poll(&self, player: &mut VideoUi, ctx: &eframe::egui::Context) {
+	pub fn poll(&self, player: &mut VideoUi, ctx: &eframe::egui::Context, output: Option<&str>) {
 		let Some(session) = &self.session else {
 			return;
 		};
+		if let Ok(mut wanted) = session.output.lock() {
+			let fresh = output.map(str::to_owned);
+			if *wanted != fresh {
+				*wanted = fresh;
+			}
+		}
 		if let Ok(mut update) = session.update.try_lock() {
 			player.state = update.state;
 			player.position = update.position;
@@ -332,19 +341,28 @@ fn play_decoded(
 		let position = Arc::new(AtomicU64::new(0));
 		let eof = Arc::new(AtomicBool::new(false));
 		let failed = Arc::new(AtomicBool::new(false));
+		let wanted_output = || session.output.lock().ok().and_then(|guard| guard.clone());
+		let mut opened: Option<(Option<String>, String)> = None;
 		let mut output = if info.sample_rate > 0 {
-			Some(output::open(
-				info.sample_rate,
-				output::Controls {
-					cancelled: session.cancelled.clone(),
-					paused: session.paused.clone(),
-					seek: session.seek.clone(),
-					volume: session.volume.clone(),
-					position: position.clone(),
-					eof: eof.clone(),
-					failed: failed.clone(),
-				},
-			)?)
+			Some(
+				output::open(
+					info.sample_rate,
+					output::Controls {
+						cancelled: session.cancelled.clone(),
+						paused: session.paused.clone(),
+						seek: session.seek.clone(),
+						volume: session.volume.clone(),
+						position: position.clone(),
+						eof: eof.clone(),
+						failed: failed.clone(),
+					},
+					wanted_output().as_deref(),
+				)
+				.map(|(output, id)| {
+					opened.replace((wanted_output(), id));
+					output
+				})?,
+			)
 		} else {
 			None
 		};
@@ -380,6 +398,18 @@ fn play_decoded(
 			}
 			if failed.load(Ordering::Acquire) {
 				return Err("Video audio output stopped");
+			}
+			// A changed voice output re-seeks in place: the seek cycle drops the
+			// device and reopens it on the new selection without losing position.
+			if output.is_some()
+				&& opened
+					.as_ref()
+					.and_then(|(selection, _)| selection.as_ref())
+					!= wanted_output().as_ref()
+			{
+				session
+					.seek
+					.store((previous_position * 1000.0) as u64, Ordering::Release);
 			}
 			let now = Instant::now();
 			let elapsed = now.duration_since(last_tick).as_secs_f64();

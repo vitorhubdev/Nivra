@@ -1,5 +1,5 @@
 //! One second of decoded stereo PCM; the device callback only touches its ring and atomics.
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use std::sync::{
 	Arc,
 	atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
@@ -106,14 +106,16 @@ impl Playback {
 		}
 	}
 }
-pub fn open(rate: u32, controls: Controls) -> Result<Output, &'static str> {
+pub fn open(
+	rate: u32,
+	controls: Controls,
+	output_id: Option<&str>,
+) -> Result<(Output, String), &'static str> {
 	if !(8000..=96000).contains(&rate) {
 		return Err("Unsupported video audio sample rate");
 	}
 	let host = cpal::default_host();
-	let device = host
-		.default_output_device()
-		.ok_or("No audio output device")?;
+	let device = discord_voice::output::device(&host, output_id).ok_or("No audio output device")?;
 	let supported = device
 		.default_output_config()
 		.map_err(|_| "Audio output unavailable")?;
@@ -140,10 +142,14 @@ pub fn open(rate: u32, controls: Controls) -> Result<Output, &'static str> {
 	}
 	.map_err(|_| "Audio output unavailable")?;
 	stream.play().map_err(|_| "Could not start audio output")?;
-	Ok(Output {
-		producer,
-		_stream: stream,
-	})
+	let id = device.id().map(|id| id.to_string()).unwrap_or_default();
+	Ok((
+		Output {
+			producer,
+			_stream: stream,
+		},
+		id,
+	))
 }
 fn output<T: cpal::SizedSample + cpal::FromSample<f32>>(
 	device: &cpal::Device,

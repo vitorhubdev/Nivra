@@ -50,6 +50,8 @@ pub struct Status {
 
 struct Gate {
 	generation: AtomicU64,
+	/// Wanted voice output selection (`None` = system default), refreshed by the UI.
+	output: std::sync::Mutex<Option<String>>,
 	paused: AtomicBool,
 	volume: AtomicU32,
 	seek_millis: AtomicU64,
@@ -69,6 +71,7 @@ impl Default for Gate {
 			failed: AtomicBool::new(false),
 			buffering: AtomicBool::new(true),
 			sample_rate: AtomicU32::new(0),
+			output: std::sync::Mutex::new(None),
 		}
 	}
 }
@@ -80,6 +83,8 @@ impl Gate {
 #[derive(Clone)]
 struct Request {
 	generation: u64,
+	/// Voice output selection at play time (`None` = system default).
+	output: Option<String>,
 	url: Option<url::Url>,
 	expected: usize,
 	#[cfg(feature = "demo")]
@@ -105,9 +110,10 @@ impl Audio {
 		runtime: &tokio::runtime::Handle,
 		context: &eframe::egui::Context,
 		demo: bool,
+		output: Option<&str>,
 	) -> Result<(), &'static str> {
 		self.stop();
-		let result = self.start_inner(attachment, runtime, context, demo);
+		let result = self.start_inner(attachment, runtime, context, demo, output);
 		if let Err(error) = result {
 			self.status.state = State::Failed(error);
 		}
@@ -120,6 +126,7 @@ impl Audio {
 		runtime: &tokio::runtime::Handle,
 		context: &eframe::egui::Context,
 		demo: bool,
+		output: Option<&str>,
 	) -> Result<(), &'static str> {
 		let expected = usize::try_from(attachment.size)
 			.ok()
@@ -168,6 +175,7 @@ impl Audio {
 		}
 		worker.requests.send_replace(Some(Request {
 			generation,
+			output: output.map(str::to_owned),
 			url,
 			expected,
 			#[cfg(feature = "demo")]
@@ -220,6 +228,15 @@ impl Audio {
 		self.gate.seek_millis.store(millis, Ordering::Release);
 		if let Some(worker) = &self.worker {
 			worker.wake.notify_one();
+		}
+	}
+	/// Refresh the wanted voice output selection; in-flight playback migrates on it.
+	pub fn set_output(&self, output: Option<&str>) {
+		let wanted = output.map(str::to_owned);
+		if let Ok(mut current) = self.gate.output.lock() {
+			if *current != wanted {
+				*current = wanted;
+			}
 		}
 	}
 	pub fn volume(&mut self, volume: f32) {
@@ -870,7 +887,7 @@ fn check_large_attachment_admission() {
 	};
 	attachment.size = 24 * 1024 * 1024;
 	assert_eq!(
-		audio.start(attachment.clone(), runtime.handle(), &context, false),
+		audio.start(attachment.clone(), runtime.handle(), &context, false, None),
 		Ok(())
 	);
 	assert_eq!(audio.status.state, State::Loading);
@@ -887,7 +904,7 @@ fn check_large_attachment_admission() {
 		attachment.size = size;
 		assert!(
 			audio
-				.start(attachment.clone(), runtime.handle(), &context, false)
+				.start(attachment.clone(), runtime.handle(), &context, false, None)
 				.is_err()
 		);
 		assert!(matches!(audio.status.state, State::Failed(_)));
@@ -908,6 +925,7 @@ pub fn debug_voice_message_check() {
 	for voice_message in [false, true] {
 		let request = Request {
 			generation: 0,
+			output: None,
 			url: None,
 			expected: 1,
 			voice_message,

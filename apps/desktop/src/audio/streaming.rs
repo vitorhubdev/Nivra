@@ -1,6 +1,6 @@
 //! One second of PCM ahead of playback; decoder reads drive bounded HTTP ranges.
 use super::*;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use rtrb::{Consumer, RingBuffer};
 
 struct Playback {
@@ -83,15 +83,18 @@ impl Playback {
 	}
 }
 
+fn current_default_id() -> Option<String> {
+	discord_voice::output::default_id(&cpal::default_host())
+}
+
 fn open_output(
 	playback: Playback,
 	gate: Arc<Gate>,
 	generation: u64,
-) -> Result<cpal::Stream, &'static str> {
+	output_id: Option<&str>,
+) -> Result<(cpal::Stream, String), &'static str> {
 	let host = cpal::default_host();
-	let device = host
-		.default_output_device()
-		.ok_or("No audio output device")?;
+	let device = discord_voice::output::device(&host, output_id).ok_or("No audio output device")?;
 	let supported = device
 		.default_output_config()
 		.map_err(|_| "Audio output unavailable")?;
@@ -108,7 +111,8 @@ fn open_output(
 	}
 	.map_err(|_| "Audio output unavailable")?;
 	stream.play().map_err(|_| "Could not start audio output")?;
-	Ok(stream)
+	let id = device.id().map(|id| id.to_string()).unwrap_or_default();
+	Ok((stream, id))
 }
 
 fn output<T: cpal::SizedSample + cpal::FromSample<f32>>(
@@ -158,10 +162,29 @@ pub(super) fn play(
 		});
 		let mut producer = None;
 		let mut stream = None;
+		let mut opened: Option<(Option<String>, String)> = None;
 		let eof = Arc::new(AtomicBool::new(false));
 		let finished = Arc::new(AtomicBool::new(false));
 		let mut total_frames = 0u64;
 		let mut rate = 0;
+		// A changed voice output migrates live playback: drop the stream so the
+		// next decoded chunk reopens it, keeping the current position. A "Default"
+		// choice also follows the system default when it moves underneath us.
+		let wanted = gate.output.lock().ok().and_then(|guard| guard.clone());
+		let stale = stream.is_some()
+			&& opened.as_ref().is_some_and(|(selection, id)| {
+				selection != &wanted
+					|| (wanted.is_none() && Some(id) != current_default_id().as_ref())
+			});
+		if stale {
+			if rate > 0 {
+				target = gate.position_frames.load(Ordering::Acquire) * 1000 / u64::from(rate);
+			}
+			stream = None;
+			producer = None;
+			opened = None;
+		}
+
 		let wait = || {
 			runtime.block_on(async {
 			tokio::select! { _ = wake.notified() => {}, _ = tokio::time::sleep(Duration::from_millis(20)) => {} }
@@ -189,7 +212,7 @@ pub(super) fn play(
 						if producer.is_none() {
 							let (sender, frames) = RingBuffer::new(rate as usize);
 							gate.position_frames.store(target_frame, Ordering::Release);
-							stream = Some(open_output(
+							let (live, id) = open_output(
 								Playback {
 									frames,
 									current: None,
@@ -201,7 +224,10 @@ pub(super) fn play(
 								},
 								gate.clone(),
 								request.generation,
-							)?);
+								request.output.as_deref(),
+							)?;
+							stream = Some(live);
+							opened = Some((request.output.clone(), id));
 							producer = Some(sender);
 							publish(Status {
 								state: State::Playing,

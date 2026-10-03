@@ -1,5 +1,5 @@
 //! One bounded, lazy audio worker. Bundled cues never interrupt attachment playback.
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use model::notification_preferences::Sound;
 use std::{
 	io::Cursor,
@@ -17,9 +17,18 @@ pub const OUTGOING_RING_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Default)]
 pub struct Sounds {
-	send: Option<SyncSender<(u64, Sound, u8)>>,
+	send: Option<SyncSender<Cue>>,
 	generation: Arc<AtomicU64>,
 	status: Arc<AtomicU8>,
+}
+/// One queued cue: what to play, how loud, and on which output. The output is
+/// resolved per cue so a changed default (or a changed voice setting) applies
+/// to the next sound without migrating live streams.
+struct Cue {
+	request: u64,
+	sound: Sound,
+	volume: u8,
+	output: Option<String>,
 }
 impl Sounds {
 	pub fn status(&self) -> &'static str {
@@ -34,25 +43,33 @@ impl Sounds {
 		self.status.store(0, Ordering::Release);
 	}
 	/// Returns whether the worker accepted the cue. A full queue leaves the caller to retry.
-	pub fn play(&mut self, sound: Sound, volume: u8, ctx: &eframe::egui::Context) -> bool {
+	/// `output` is the voice output selection (`None` = system default).
+	pub fn play(
+		&mut self,
+		sound: Sound,
+		volume: u8,
+		ctx: &eframe::egui::Context,
+		output_id: Option<&str>,
+	) -> bool {
 		if self.send.is_none() {
-			let (send, receive) = mpsc::sync_channel::<(u64, Sound, u8)>(1);
+			let (send, receive) = mpsc::sync_channel::<Cue>(8);
 			let generation = self.generation.clone();
 			let status = self.status.clone();
 			let context = ctx.clone();
 			if std::thread::Builder::new()
 				.name("nivra-notification-audio".into())
 				.spawn(move || {
-					while let Ok((request, sound, volume)) = receive.recv() {
-						if generation.load(Ordering::Acquire) != request {
+					while let Ok(cue) = receive.recv() {
+						if generation.load(Ordering::Acquire) != cue.request {
 							continue;
 						}
 						let finished = Arc::new(AtomicBool::new(false));
 						match open(
-							sound,
-							volume,
+							cue.sound,
+							cue.volume,
+							cue.output.as_deref(),
 							generation.clone(),
-							request,
+							cue.request,
 							status.clone(),
 							finished.clone(),
 						) {
@@ -60,13 +77,13 @@ impl Sounds {
 								let deadline = Instant::now() + duration + Duration::from_secs(2);
 								while !finished.load(Ordering::Acquire) && Instant::now() < deadline
 								{
-									if generation.load(Ordering::Acquire) != request {
+									if generation.load(Ordering::Acquire) != cue.request {
 										break;
 									}
 									std::thread::sleep(Duration::from_millis(20));
 								}
 								drop(stream);
-								if generation.load(Ordering::Acquire) == request {
+								if generation.load(Ordering::Acquire) == cue.request {
 									let _ = status.compare_exchange(
 										1,
 										if finished.load(Ordering::Acquire) {
@@ -80,7 +97,7 @@ impl Sounds {
 								}
 							}
 							Err(()) => {
-								if generation.load(Ordering::Acquire) == request {
+								if generation.load(Ordering::Acquire) == cue.request {
 									status.store(2, Ordering::Release);
 								}
 							}
@@ -103,7 +120,12 @@ impl Sounds {
 			.send
 			.as_ref()
 			.expect("worker started")
-			.try_send((request, sound, volume))
+			.try_send(Cue {
+				request,
+				sound,
+				volume,
+				output: output_id.map(str::to_owned),
+			})
 			.is_err()
 		{
 			self.generation.store(previous, Ordering::Release);
@@ -204,12 +226,15 @@ fn samples(sound: Sound, rate: u32, current: &impl Fn() -> bool) -> Result<Vec<[
 fn open(
 	sound: Sound,
 	volume: u8,
+	output_id: Option<&str>,
 	generation: Arc<AtomicU64>,
 	request: u64,
 	status: Arc<AtomicU8>,
 	finished: Arc<AtomicBool>,
 ) -> Result<(cpal::Stream, Duration), ()> {
-	let device = cpal::default_host().default_output_device().ok_or(())?;
+	// Every interface sound follows the configured call output (or the system
+	// default while the choice is "Default"); see discord_voice::output.
+	let device = discord_voice::output::device(&cpal::default_host(), output_id).ok_or(())?;
 	let supported = device.default_output_config().map_err(|_| ())?;
 	let config = supported.config();
 	if !(8000..=192000).contains(&config.sample_rate) || !(1..=8).contains(&config.channels) {

@@ -7,6 +7,7 @@ mod crypto;
 mod diagnostics;
 mod jitter;
 mod mixer;
+pub mod output;
 pub mod screen;
 mod stream_playout;
 mod timer;

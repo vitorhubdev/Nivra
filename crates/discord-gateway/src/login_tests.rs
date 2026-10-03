@@ -59,15 +59,36 @@ async fn login_metadata(
 	metadata: Value,
 	warnings: model::account::Warnings,
 ) {
+	let expected_guilds = guilds.len();
+	let expected_channels: usize = guilds
+		.iter()
+		.map(|g| g["channels"].as_array().map_or(0, Vec::len))
+		.sum();
+	login_counts(
+		users,
+		guilds,
+		supplemental,
+		metadata,
+		warnings,
+		expected_guilds,
+		expected_channels,
+	)
+	.await;
+}
+
+async fn login_counts(
+	users: Vec<Value>,
+	guilds: Vec<Value>,
+	supplemental: Option<Value>,
+	metadata: Value,
+	warnings: model::account::Warnings,
+	expected_guilds: usize,
+	expected_channels: usize,
+) {
 	measured("synthetic login", async {
 		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 		let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
 		let ready = AtomicBool::new(false);
-		let expected_guilds = guilds.len();
-		let expected_channels: usize = guilds
-			.iter()
-			.map(|g| g["channels"].as_array().map_or(0, Vec::len))
-			.sum();
 		let state = std::sync::Mutex::new(client_core::State::default());
 		let server = async {
 			let (stream, _) = listener.accept().await.unwrap();
@@ -227,6 +248,27 @@ async fn optional_metadata_faults_do_not_abort_large_login() {
 			presence: true,
 			emojis: true,
 		},
+	)
+	.await;
+}
+
+#[tokio::test]
+async fn malformed_guild_is_dropped_without_aborting_login() {
+	use model::account::Warnings;
+	let mut guilds = large_guilds(1);
+	// No id: the guild cannot decode and is dropped alone; the session stays.
+	guilds.push(json!({"name":"Broken","channels":[{"id":"9901","type":0}]}));
+	login_counts(
+		Vec::new(),
+		guilds,
+		None,
+		json!({}),
+		Warnings {
+			entries: true,
+			..Default::default()
+		},
+		1,
+		100,
 	)
 	.await;
 }

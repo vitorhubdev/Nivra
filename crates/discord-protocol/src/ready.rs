@@ -307,6 +307,14 @@ impl<'de> Deserialize<'de> for Guilds {
 				while let Some(raw) = seq.next_element::<&'de RawValue>()? {
 					index += 1;
 					let Ok(guild) = serde_json::from_str::<Guild<'de>>(raw.get()) else {
+						// A discarded guild still occupies an account slot: without the
+						// bound a flood of invalid entries would grow `dropped` unbounded.
+						entries += 1;
+						if entries > model::account::MAX_ENTRIES {
+							return Err(serde::de::Error::custom(
+								"Account navigation capacity exceeded",
+							));
+						}
 						out.skipped = true;
 						out.dropped.push(index - 1);
 						continue;
@@ -419,6 +427,22 @@ mod tests {
 		assert_eq!(
 			diagnose(&serde_json::to_vec(&fixture()).unwrap()),
 			"READY decoded; a later size or consistency check failed"
+		);
+	}
+
+	#[test]
+	fn oversized_invalid_guild_arrays_hit_capacity_instead_of_growing_dropped() {
+		let mut payload = fixture();
+		payload["guilds"] = (0..150_000).map(|_| json!(7)).collect();
+		let bytes = serde_json::to_vec(&payload).unwrap();
+		let envelope = decode(&bytes).unwrap();
+		// DecodeError carries no payload by design (no wire content in errors);
+		// the bound is proven by contrast: a handful of bad guilds still logs in
+		// (`malformed_entries_are_dropped_instead_of_rejecting_login`), while
+		// 150k invalid entries trip the capacity error instead of growing `dropped`.
+		assert!(
+			envelope.navigation().is_err(),
+			"150k invalid guilds must hit the capacity bound"
 		);
 	}
 

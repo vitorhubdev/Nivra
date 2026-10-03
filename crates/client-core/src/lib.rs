@@ -2518,6 +2518,7 @@ impl State {
 				unreachable!("startup is applied atomically before ordinary events")
 			}
 			Event::StartupWarnings(warnings) => {
+				self.startup_warnings.entries |= warnings.entries;
 				self.startup_warnings.read_state |= warnings.read_state;
 				self.startup_warnings.notifications |= warnings.notifications;
 				self.startup_warnings.sessions |= warnings.sessions;

@@ -696,8 +696,17 @@ pub fn format_html(channel_name: &str, messages: &[TxtMessage]) -> String {
 
 	for m in messages {
 		out.push_str("<div class=\"message\">\n");
-		let initial = m.author.chars().next().unwrap_or('?').to_uppercase();
-		out.push_str(&format!("<div class=\"avatar\">{initial}</div>\n"));
+		let initial: String = m
+			.author
+			.chars()
+			.next()
+			.unwrap_or('?')
+			.to_uppercase()
+			.collect();
+		out.push_str(&format!(
+			"<div class=\"avatar\">{}</div>\n",
+			html_escape(&initial)
+		));
 		out.push_str("<div class=\"msg-body\">\n<div class=\"msg-header\">\n");
 		out.push_str("<span class=\"author\">");
 		out.push_str(&html_escape(&m.author));
@@ -712,7 +721,12 @@ pub fn format_html(channel_name: &str, messages: &[TxtMessage]) -> String {
 		if !m.attachments.is_empty() {
 			out.push_str("<div class=\"attachments\">\n");
 			for (idx, name) in m.attachments.iter().enumerate() {
-				let link = m.links.get(idx).and_then(|l| l.as_deref()).unwrap_or("");
+				let link = m
+					.links
+					.get(idx)
+					.and_then(|l| l.as_deref())
+					.filter(|l| export_link(l).is_some())
+					.unwrap_or("");
 				let is_img = name.ends_with(".png")
 					|| name.ends_with(".jpg")
 					|| name.ends_with(".jpeg")
@@ -851,6 +865,12 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 	result
 }
 
+/// Exported HTML opens in a real browser: only `http(s)` links become anchors.
+/// Anything else (notably `javascript:`) stays out of `href`/`src` entirely.
+fn export_link(link: &str) -> Option<&str> {
+	let scheme = link.split(':').next().unwrap_or("").to_ascii_lowercase();
+	(scheme == "http" || scheme == "https").then_some(link)
+}
 fn html_escape(s: &str) -> String {
 	let mut escaped = String::with_capacity(s.len());
 	for c in s.chars() {
@@ -963,6 +983,44 @@ mod tests {
 			Some("You can download up to 15 attachments at a time")
 		);
 		assert_eq!(download_disabled_reason(15), None);
+	}
+
+	#[test]
+	fn html_export_neutralizes_javascript_links_and_markup_initials() {
+		let msgs = vec![
+			TxtMessage {
+				author: "<img src=x>".into(),
+				when: "10:00".into(),
+				text: "click".into(),
+				attachments: vec!["evil.png".into(), "note.txt".into()],
+				links: vec![
+					Some("javascript:alert(1)".into()),
+					Some("JaVaScRiPt:alert(2)".into()),
+				],
+			},
+			TxtMessage {
+				author: "Fine".into(),
+				when: "10:01".into(),
+				text: "ok".into(),
+				attachments: vec!["b.png".into()],
+				links: vec![Some("https://cdn.example/b.png".into())],
+			},
+		];
+		let out = format_html("chan", &msgs);
+		let lower = out.to_lowercase();
+		assert!(
+			!lower.contains("javascript:"),
+			"no script scheme may reach href/src in any casing"
+		);
+		assert!(
+			!out.contains("<img src=x>"),
+			"avatar initial must be escaped"
+		);
+		assert!(out.contains("&lt;"), "escaped initial keeps a visible mark");
+		assert!(
+			out.contains("<a href=\"https://cdn.example/b.png\""),
+			"plain https links keep working"
+		);
 	}
 
 	#[test]

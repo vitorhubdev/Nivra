@@ -6254,8 +6254,12 @@ impl eframe::App for Desktop {
 
 		let download_status = match self.downloads.poll() {
 			downloads::Status::Idle | downloads::Status::Choosing => String::new(),
-			downloads::Status::Downloading { total: 0, .. } => "Loading image…".into(),
+			downloads::Status::Downloading { total: 0, .. } => {
+				self.announced_download = None;
+				"Loading image…".into()
+			}
 			downloads::Status::Downloading { received, total } => {
+				self.announced_download = None;
 				format!("Downloading: {} / {} KiB", received / 1024, total / 1024)
 			}
 			downloads::Status::Saved {
@@ -6267,12 +6271,28 @@ impl eframe::App for Desktop {
 				let key = (*id, path.clone());
 				if self.announced_download.as_ref() != Some(&key) {
 					self.announced_download = Some(key);
-					if let Ok(store) = local_store::LocalStore::open_default() {
-						let _ = store.record_download(*id, path, *size);
+					// Embedded saves carry a synthetic id/size for transfer only; the
+					// persistent registry is keyed by real attachment ids.
+					if id.0 != 0 {
+						let record = (*id, path.clone(), *size);
+						std::thread::Builder::new()
+							.name("nivra-download-registry".into())
+							.spawn(move || {
+								if let Ok(store) = local_store::LocalStore::open_default() {
+									if store
+										.record_download(record.0, &record.1, record.2)
+										.is_err()
+									{
+										eprintln!("Nivra: download registry write failed");
+									}
+								}
+							})
+							.ok();
 					}
+					let done = ui::i18n::text(self.messaging.language, "Download complete");
 					self.messaging
 						.toasts
-						.push(ui::design::Level::Success, format!("Baixado: {filename}"));
+						.push(ui::design::Level::Success, format!("{done}: {filename}"));
 				}
 				String::new()
 			}

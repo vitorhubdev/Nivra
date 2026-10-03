@@ -79,6 +79,10 @@ test-support.workspace = true
 name = "profile_preview"
 required-features = ["demo"]
 
+[[example]]
+name = "tray_preview"
+required-features = ["demo"]
+
 [package.metadata.cargo-machete]
 ignored = ["log"]
 

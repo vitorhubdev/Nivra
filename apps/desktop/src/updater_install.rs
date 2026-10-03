@@ -28,7 +28,8 @@ const WINDOWS_FILES: &[&str] = &[
 ];
 
 fn windows_executable(name: Option<&std::ffi::OsStr>) -> bool {
-	matches!(name.and_then(|name| name.to_str()), Some("Nivra.exe"))
+	name.and_then(|name| name.to_str())
+		.is_some_and(|s| s.eq_ignore_ascii_case("Nivra.exe"))
 }
 
 pub(super) fn flatpak_session() -> bool {
@@ -915,6 +916,11 @@ try {
   $exe = Join-Path $installation 'Nivra.exe'
   Start-Process -FilePath $exe -WorkingDirectory $installation
 } catch {
+  $err = $_.ToString()
+  try {
+    $errLog = Join-Path $installation 'update-error.log'
+    [IO.File]::WriteAllText($errLog, $err)
+  } catch {}
   foreach ($name in $replaced) {
     $target = Join-Path $installation $name
     if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination (Join-Path (Join-Path $stage 'package') $name) -ErrorAction SilentlyContinue }

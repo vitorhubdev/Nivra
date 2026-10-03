@@ -425,6 +425,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			} else {
 				test_support::demo_state()
 			};
+			if args.iter().any(|arg| arg == "--timeline-text") {
+				// Text-only fixture for timeline density shots: six short rows with
+				// alternating authors in the selected channel (synthetic, disclosed).
+				let channel = state.selected.unwrap();
+				state.timeline.clear();
+				state.older_exhausted = true;
+				for i in 0..6u64 {
+					let mut m = test_support::message(100 + i, channel);
+					m.id = model::Id(
+						((1_788_998_100_000u64 + i * 60_000 - 1_420_070_400_000) << 22) | 1,
+					);
+					m.content = format!("Synthetic timeline row {i} for density comparison.");
+					state.timeline.insert(m, false, false).unwrap();
+				}
+			}
 			if page == "profile" {
 				prime_profile(&mut state);
 			}

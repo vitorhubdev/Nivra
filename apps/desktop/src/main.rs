@@ -5995,11 +5995,11 @@ impl eframe::App for Desktop {
 			.as_ref()
 			.is_some_and(|call| call.phase != client_core::voice::Phase::Failed);
 		let upload_active = self.uploads.has_unsent() || self.messaging.upload_busy;
-		self.messaging.updates.blocked_by_call_or_upload = call_active || upload_active;
-		if self.messaging.updates.restart_requested
-			&& self.messaging.updates.blocked_by_call_or_upload
-		{
+		let blocked = call_active || upload_active;
+		self.messaging.updates.blocked_by_call_or_upload = blocked;
+		if blocked {
 			self.messaging.updates.restart_requested = false;
+			self.updater.cancel_restart();
 		}
 		if self.updater.sync(
 			ctx,
@@ -6010,8 +6010,12 @@ impl eframe::App for Desktop {
 				&& !self.state.demo
 				&& (self.app_settings.loaded || self.app_settings.state.touched),
 		) {
-			// Installing needs a real exit, so this close must not stop at the tray.
-			self.tray_window.quit(ctx);
+			if !blocked {
+				// Installing needs a real exit, so this close must not stop at the tray.
+				self.tray_window.quit(ctx);
+			} else {
+				self.updater.cancel_restart();
+			}
 		}
 		self.state.expire_interaction(std::time::Instant::now());
 		if self.state.interactions.busy() {

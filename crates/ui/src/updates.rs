@@ -242,98 +242,136 @@ impl MessagingUi {
 	pub(super) fn update_settings(&mut self, ui: &mut egui::Ui, demo: bool) {
 		self.updates.nightly = false;
 		let colors = design::palette(ui);
+		let narrow = ui.available_width() < 380.0;
 		design::card(ui, |ui| {
-			ui.horizontal(|ui| {
-				ui.spacing_mut().item_spacing.x = 14.0;
-				let (badge, _) =
-					ui.allocate_exact_size(egui::Vec2::splat(44.0), egui::Sense::hover());
-				ui.painter()
-					.rect_filled(badge, 12, colors.accent.gamma_multiply(0.16));
-				crate::icons::paint(
-					ui.painter(),
-					crate::icons::Icon::Nivra,
-					badge.shrink(10.0),
-					colors.accent,
-				);
-				let button_width = 160.0;
-				let available_for_info = (ui.available_width() - button_width - 16.0).max(120.0);
-				ui.allocate_ui_with_layout(
-					egui::vec2(available_for_info, 44.0),
-					egui::Layout::top_down(egui::Align::Min),
-					|ui| {
+			let mut show_button = |ui: &mut egui::Ui| {
+				if self.updates.ready {
+					ui.add_enabled_ui(
+						!self.updates.busy && !self.updates.blocked_by_call_or_upload,
+						|ui| {
+							if design::button(
+								ui,
+								crate::i18n::text(self.language, "Install and restart"),
+								design::ButtonKind::Primary,
+							)
+							.clicked()
+							{
+								self.updates.restart_requested = true;
+							}
+						},
+					);
+				} else if self.updates.available && self.updates.supported {
+					ui.add_enabled_ui(!self.updates.busy, |ui| {
+						if design::button(
+							ui,
+							crate::i18n::text(self.language, "Download update"),
+							design::ButtonKind::Primary,
+						)
+						.clicked()
+						{
+							self.updates.download_requested = true;
+						}
+					});
+				} else {
+					let allowed = (!cfg!(debug_assertions) || demo) && !self.updates.busy;
+					ui.add_enabled_ui(allowed, |ui| {
+						if design::button(
+							ui,
+							crate::i18n::text(self.language, "Check for updates"),
+							design::ButtonKind::Outline,
+						)
+						.on_disabled_hover_text(if cfg!(debug_assertions) && !demo {
+							crate::i18n::text(
+								self.language,
+								"Update checks are disabled in debug builds.",
+							)
+						} else {
+							crate::i18n::text(
+								self.language,
+								"Finish the current update before checking again.",
+							)
+						})
+						.clicked()
+						{
+							self.updates.check_requested = true;
+						}
+					});
+				}
+				if self.updates.busy {
+					ui.add(egui::Spinner::new().size(16.0));
+				}
+			};
+			if narrow {
+				ui.horizontal(|ui| {
+					ui.spacing_mut().item_spacing.x = 12.0;
+					let (badge, _) =
+						ui.allocate_exact_size(egui::Vec2::splat(40.0), egui::Sense::hover());
+					ui.painter()
+						.rect_filled(badge, 10, colors.accent.gamma_multiply(0.16));
+					crate::icons::paint(
+						ui.painter(),
+						crate::icons::Icon::Nivra,
+						badge.shrink(8.0),
+						colors.accent,
+					);
+					ui.vertical(|ui| {
 						ui.spacing_mut().item_spacing.y = 2.0;
 						ui.label(
-							design::semibold(ui, format!("Nivra {}", self.build.version), 17.0)
+							design::semibold(ui, format!("Nivra {}", self.build.version), 16.0)
 								.color(colors.text_strong),
 						);
 						ui.add(
 							egui::Label::new(
 								egui::RichText::new(&self.updates.status)
-									.size(13.0)
+									.size(12.0)
 									.color(colors.muted),
 							)
 							.wrap(),
 						);
-					},
-				);
-				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-					if self.updates.ready {
-						ui.add_enabled_ui(
-							!self.updates.busy && !self.updates.blocked_by_call_or_upload,
-							|ui| {
-								if design::button(
-									ui,
-									crate::i18n::text(self.language, "Install and restart"),
-									design::ButtonKind::Primary,
-								)
-								.clicked()
-								{
-									self.updates.restart_requested = true;
-								}
-							},
-						);
-					} else if self.updates.available && self.updates.supported {
-						ui.add_enabled_ui(!self.updates.busy, |ui| {
-							if design::button(
-								ui,
-								crate::i18n::text(self.language, "Download update"),
-								design::ButtonKind::Primary,
-							)
-							.clicked()
-							{
-								self.updates.download_requested = true;
-							}
-						});
-					} else {
-						let allowed = (!cfg!(debug_assertions) || demo) && !self.updates.busy;
-						ui.add_enabled_ui(allowed, |ui| {
-							if design::button(
-								ui,
-								crate::i18n::text(self.language, "Check for updates"),
-								design::ButtonKind::Outline,
-							)
-							.on_disabled_hover_text(if cfg!(debug_assertions) && !demo {
-								crate::i18n::text(
-									self.language,
-									"Update checks are disabled in debug builds.",
-								)
-							} else {
-								crate::i18n::text(
-									self.language,
-									"Finish the current update before checking again.",
-								)
-							})
-							.clicked()
-							{
-								self.updates.check_requested = true;
-							}
-						});
-					}
-					if self.updates.busy {
-						ui.add(egui::Spinner::new().size(16.0));
-					}
+					});
 				});
-			});
+				ui.add_space(8.0);
+				show_button(ui);
+			} else {
+				ui.horizontal(|ui| {
+					ui.spacing_mut().item_spacing.x = 14.0;
+					let (badge, _) =
+						ui.allocate_exact_size(egui::Vec2::splat(44.0), egui::Sense::hover());
+					ui.painter()
+						.rect_filled(badge, 12, colors.accent.gamma_multiply(0.16));
+					crate::icons::paint(
+						ui.painter(),
+						crate::icons::Icon::Nivra,
+						badge.shrink(10.0),
+						colors.accent,
+					);
+					let button_width = 160.0;
+					let available_for_info =
+						(ui.available_width() - button_width - 16.0).max(120.0);
+					ui.allocate_ui_with_layout(
+						egui::vec2(available_for_info, 44.0),
+						egui::Layout::top_down(egui::Align::Min),
+						|ui| {
+							ui.spacing_mut().item_spacing.y = 2.0;
+							ui.label(
+								design::semibold(ui, format!("Nivra {}", self.build.version), 17.0)
+									.color(colors.text_strong),
+							);
+							ui.add(
+								egui::Label::new(
+									egui::RichText::new(&self.updates.status)
+										.size(13.0)
+										.color(colors.muted),
+								)
+								.wrap(),
+							);
+						},
+					);
+					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+						show_button(ui);
+					});
+				});
+			}
 			if let Some(progress) = self.updates.progress {
 				ui.add_space(10.0);
 				ui.add(

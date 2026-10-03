@@ -185,7 +185,9 @@ impl Updater {
 			.into();
 			return false;
 		}
-		if self.channel != Some(view.nightly) {
+		if self.channel.is_none() {
+			self.channel = Some(view.nightly);
+		} else if self.channel != Some(view.nightly) {
 			if let Some(job) = &self.job {
 				job.cancel.store(true, Ordering::Relaxed);
 			}
@@ -247,11 +249,19 @@ impl Updater {
 							}
 							Ok(Outcome::Cleaned) => {}
 							Ok(Outcome::Prepared(helper)) => {
-								self.helper = Some(helper);
-								self.armed = true;
-								self.close_requested = true;
-								self.status =
-									"Update ready. Close Nivra to install and restart.".into();
+								if view.blocked_by_call_or_upload {
+									helper.stop();
+									self.armed = false;
+									self.close_requested = false;
+									self.status =
+										"Update waiting for call or upload to end.".into();
+								} else {
+									self.helper = Some(helper);
+									self.armed = true;
+									self.close_requested = true;
+									self.status =
+										"Update ready. Close Nivra to install and restart.".into();
+								}
 							}
 							Err(error) => {
 								self.auto_download = false;
@@ -901,12 +911,14 @@ pub fn debug_check() -> Result<(), String> {
 		tag_name: "v1.0.3".into(),
 		draft: false,
 		prerelease: false,
+		body: None,
 		assets,
 	};
 	let nightly_release = Release {
 		tag_name: "v1.0.4-nightly.1".into(),
 		draft: false,
 		prerelease: true,
+		body: None,
 		assets: Vec::new(),
 	};
 	let found = select_release(vec![stable.clone(), nightly_release], false, &current)?;
@@ -935,6 +947,7 @@ pub fn debug_check() -> Result<(), String> {
 				tag_name: "v1.0.3".into(),
 				draft: false,
 				prerelease: false,
+				body: None,
 				assets: vec![
 					Asset {
 						name: name.clone(),

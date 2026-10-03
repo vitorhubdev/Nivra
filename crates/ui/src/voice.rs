@@ -5464,6 +5464,35 @@ mod tests {
 	}
 
 	#[test]
+	fn noise_suppression_toggle_and_fallback_state_machine() {
+		let mut view = MessagingUi::default();
+		assert_eq!(view.voice_noise_restore, NoiseSuppression::RnNoise);
+
+		// 1. Toggle off
+		view.set_noise_level(NoiseSuppression::RnNoise);
+		view.toggle_noise();
+		assert_eq!(view.voice_processing.effective().suppression, NoiseSuppression::Off);
+		assert_eq!(view.voice_noise_restore, NoiseSuppression::RnNoise);
+
+		// 2. Toggle back on restores RnNoise
+		view.toggle_noise();
+		assert_eq!(view.voice_processing.effective().suppression, NoiseSuppression::RnNoise);
+
+		// 3. Switch to DeepFilter, then toggle off and back on restores DeepFilter
+		view.set_noise_level(NoiseSuppression::DeepFilter);
+		assert_eq!(view.voice_processing.effective().suppression, NoiseSuppression::DeepFilter);
+		view.toggle_noise();
+		assert_eq!(view.voice_processing.effective().suppression, NoiseSuppression::Off);
+		view.toggle_noise();
+		assert_eq!(view.voice_processing.effective().suppression, NoiseSuppression::DeepFilter);
+
+		// 4. Fallback from DeepFilter degrades safely to RnNoise
+		view.voice_noise_fallback();
+		assert_eq!(view.voice_processing.effective().suppression, NoiseSuppression::RnNoise);
+		assert!(view.voice_noise_fell_back);
+	}
+
+	#[test]
 	fn call_header_holds_green_through_short_flaps() {
 		// A 200 ms dip never reaches the header; an 800 ms one does. The
 		// title and its color move in the same branch, so the title proves

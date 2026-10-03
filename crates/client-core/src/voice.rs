@@ -1920,4 +1920,156 @@ mod tests {
 		});
 		assert_eq!(state.voice.active.as_ref().unwrap().request, next);
 	}
+
+	#[test]
+	fn voice_state_stress_test_50x_join_leave_20x_channel_switch_takeover_drop() {
+		let mut state = dm_state();
+		let dm_channel = Id(2);
+		state.guilds.push(model::Guild {
+			stickers: None,
+			id: Id(10),
+			name: "Stress Guild".into(),
+			icon: None,
+			emojis: None,
+			premium_tier: 0,
+		});
+		for id in 100..120 {
+			state.channels.push(Channel {
+				id: Id(id),
+				guild: Some(Id(10)),
+				kind: 2,
+				name: format!("Voice {id}"),
+				last_message: None,
+				parent_id: None,
+				position: 0,
+				recipients: Vec::new(),
+				icon: None,
+				member_list_id: None,
+				message_count: None,
+			});
+		}
+		crate::tests::grant_permissions(&mut state);
+
+		// 1. 50x join / leave cycles in DM and Guild channels
+		for i in 0..50 {
+			let ch = if i % 2 == 0 { dm_channel } else { Id(100) };
+			let ring = ch == dm_channel;
+			let cmd = state.start_call(ch, ring).expect("start call");
+			let req = match cmd {
+				crate::Command::Voice(Command::Join { channel, request, .. }) => {
+					assert_eq!(channel, ch);
+					request
+				}
+				_ => panic!("expected Voice Join"),
+			};
+			assert!(state.voice.active.is_some());
+			assert_eq!(state.voice.active.as_ref().unwrap().channel, ch);
+			assert_eq!(state.voice.active.as_ref().unwrap().request, req);
+
+			// Confirmation from gateway
+			state.apply_voice(Event::State {
+				guild: if ch == Id(100) { Some(Id(10)) } else { None },
+				channel: Some(ch),
+				user: state.user.as_ref().unwrap().id,
+				session: None,
+				muted: false,
+				deafened: false,
+				server_muted: false,
+				server_deafened: false,
+				video: false,
+				streaming: false,
+				member: None,
+				request: Some(req),
+				negotiation_revision: Some(i as u64 + 1),
+			});
+			assert!(state.voice.active.is_some());
+
+			// Leave
+			let leave_cmd = state.leave_call().expect("leave call");
+			assert!(matches!(
+				leave_cmd,
+				crate::Command::Voice(Command::Leave { channel, request }) if channel == ch && request == req
+			));
+			assert!(state.voice.active.is_none());
+		}
+
+		// 2. 20x channel transitions (leave previous -> join next)
+		let mut current_req = 0;
+		for i in 0..20 {
+			let target_ch = Id(100 + (i % 10));
+			let cmd = state.start_call(target_ch, false).expect("channel switch");
+			current_req = match cmd {
+				crate::Command::Voice(Command::Join { channel, request, .. }) => {
+					assert_eq!(channel, target_ch);
+					request
+				}
+				_ => panic!("expected Voice Join"),
+			};
+			assert_eq!(state.voice.active.as_ref().unwrap().channel, target_ch);
+			assert_eq!(state.voice.active.as_ref().unwrap().request, current_req);
+
+			// State confirmation
+			state.apply_voice(Event::State {
+				guild: Some(Id(10)),
+				channel: Some(target_ch),
+				user: state.user.as_ref().unwrap().id,
+				session: None,
+				muted: false,
+				deafened: false,
+				server_muted: false,
+				server_deafened: false,
+				video: false,
+				streaming: false,
+				member: None,
+				request: Some(current_req),
+				negotiation_revision: Some(100 + i as u64),
+			});
+			assert_eq!(state.voice.active.as_ref().unwrap().channel, target_ch);
+
+			if i < 19 {
+				state.leave_call().expect("leave before switch");
+				assert!(state.voice.active.is_none());
+			}
+		}
+
+		// 3. Takeover during active call
+		let active_ch = state.voice.active.as_ref().unwrap().channel;
+		state.apply_voice(Event::TakenOver {
+			channel: active_ch,
+			request: current_req,
+		});
+		assert!(state.voice.active.is_none());
+		assert_eq!(state.status, "This device's call session was replaced");
+
+		// 4. Stale takeover for past request does not affect new call
+		let new_cmd = state.start_call(dm_channel, false).expect("rejoin after takeover");
+		let new_req = match new_cmd {
+			crate::Command::Voice(Command::Join { request, .. }) => request,
+			_ => unreachable!(),
+		};
+		state.apply_voice(Event::TakenOver {
+			channel: active_ch,
+			request: current_req,
+		});
+		assert!(state.voice.active.is_some());
+		assert_eq!(state.voice.active.as_ref().unwrap().request, new_req);
+
+		// 5. Network drop / connection teardown
+		state.apply_voice(Event::State {
+			guild: None,
+			channel: None,
+			user: state.user.as_ref().unwrap().id,
+			session: None,
+			muted: false,
+			deafened: false,
+			server_muted: false,
+			server_deafened: false,
+			video: false,
+			streaming: false,
+			member: None,
+			request: Some(new_req),
+			negotiation_revision: None,
+		});
+		assert!(state.voice.active.is_none());
+	}
 }

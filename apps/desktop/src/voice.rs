@@ -1700,6 +1700,7 @@ pub fn debug_call_cues_check() {
 	};
 	let owner = participant(1);
 	let peer = participant(2);
+
 	let channel = Id(20);
 	let mut cues = CallCues::default();
 	let mut events = VecDeque::new();

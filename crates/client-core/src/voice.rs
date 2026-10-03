@@ -568,6 +568,7 @@ impl ClientState {
 					self.voice.outgoing = None;
 					self.voice.departed = Some((channel, request));
 					self.status = "This device's call session was replaced";
+
 					self.clear_call_membership(channel);
 				}
 			}

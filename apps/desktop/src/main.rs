@@ -6278,13 +6278,12 @@ impl eframe::App for Desktop {
 						std::thread::Builder::new()
 							.name("nivra-download-registry".into())
 							.spawn(move || {
-								if let Ok(store) = local_store::LocalStore::open_default() {
-									if store
+								if let Ok(store) = local_store::LocalStore::open_default()
+									&& store
 										.record_download(record.0, &record.1, record.2)
 										.is_err()
-									{
-										eprintln!("Nivra: download registry write failed");
-									}
+								{
+									eprintln!("Nivra: download registry write failed");
 								}
 							})
 							.ok();

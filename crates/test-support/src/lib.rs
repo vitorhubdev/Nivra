@@ -143,6 +143,7 @@ pub fn message(id: u64, channel: Id) -> Message {
 		flags: 0,
 		ephemeral: false,
 		extra_content: Default::default(),
+		poll: None,
 		embeds: demo_embeds(id),
 		attachments: if id == 500 {
 			vec![
@@ -251,6 +252,44 @@ fn demo_embeds(id: u64) -> Vec<Embed> {
         image: Some(EmbedMedia { url: Some("https://example.com/synthetic-image-3.png".into()), width: 320, height: 320, ..Default::default() }),
         ..Default::default()
     }]
+}
+/// Synthetic poll card fixture: two answers, a live tally and no service calls.
+pub fn synthetic_poll() -> model::Poll {
+	model::Poll {
+		question: "Which layout should Nivra keep?".into(),
+		answers: vec![
+			model::PollAnswer {
+				answer_id: 1,
+				text: "Cozy".into(),
+				emoji: None,
+			},
+			model::PollAnswer {
+				answer_id: 2,
+				text: "Compact".into(),
+				emoji: Some(model::PollEmoji {
+					id: None,
+					name: Some("🧸".into()),
+				}),
+			},
+		],
+		counts: vec![
+			model::PollCount {
+				answer_id: 1,
+				count: 7,
+				me_voted: false,
+			},
+			model::PollCount {
+				answer_id: 2,
+				count: 3,
+				me_voted: false,
+			},
+		],
+		counts_known: true,
+		expiry: None,
+		allow_multiselect: false,
+		finalized: false,
+		duration: 24,
+	}
 }
 pub fn demo_state() -> State {
 	let mut state = State {
@@ -1040,6 +1079,11 @@ pub fn chat_demo_state() -> State {
 		}
 	}
 	let read = state.timeline.iter().nth(6).unwrap().id;
+	// One synthetic poll card so the offline preview exercises voting end to end.
+	let poll_message = state.timeline.iter().nth(5).map(|m| m.id);
+	if let Some(message) = poll_message {
+		let _ = state.timeline.set_poll(message, Some(synthetic_poll()));
+	}
 	state.apply(Envelope {
 		generation: state.generation,
 		event: Event::ReadState(client_core::read_state::Event::Ack {

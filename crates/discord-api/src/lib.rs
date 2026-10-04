@@ -915,6 +915,39 @@ impl DiscordApi {
 					}
 				})
 			}
+			Command::Polls(command) => {
+				use client_core::polls::{Command as P, Event as E};
+				Event::Polls(match command {
+					P::Vote {
+						channel,
+						message,
+						answer_ids,
+						request,
+					} => {
+						// The normal-user shape is one PUT with the full selection; an empty
+						// list clears every vote. A zero or oversized selection is refused.
+						let result = if answer_ids.len() <= model::MAX_POLL_ANSWERS
+							&& answer_ids.iter().all(|answer| *answer != 0)
+						{
+							self.request(
+								Method::PUT,
+								&poll_vote_path(channel, message),
+								Some(serde_json::json!({ "answer_ids": answer_ids })),
+							)
+							.await
+							.map(|_| ())
+						} else {
+							Err(Failure::Protocol)
+						};
+						E::Written {
+							channel,
+							message,
+							request,
+							result,
+						}
+					}
+				})
+			}
 			Command::Profile {
 				user,
 				guild,
@@ -1423,6 +1456,9 @@ fn reaction_path(
 	Some(format!(
 		"/channels/{channel}/messages/{message}/reactions/{encoded}/@me"
 	))
+}
+fn poll_vote_path(channel: model::Id, message: model::Id) -> String {
+	format!("/channels/{channel}/polls/{message}/answers/@me")
 }
 fn reaction_users_path(
 	channel: model::Id,
@@ -2198,6 +2234,90 @@ mod tests {
 			)
 			.is_none()
 		);
+	}
+
+	#[tokio::test]
+	async fn poll_vote_puts_the_selection_and_rejects_unsafe_ids() {
+		crate::ensure_tls_provider();
+		use client_core::polls::{Command as P, Event as E};
+		use model::Id;
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let mut api = DiscordApi::new(Arc::new(
+			SessionSecret::from_owner_input("SYNTHETIC_POLL_TOKEN".into()).unwrap(),
+		))
+		.unwrap();
+		api.base = format!("http://{}", listener.local_addr().unwrap());
+		let server = tokio::spawn(async move {
+			for answer_ids in [vec![7u64], Vec::new()] {
+				let (mut socket, _) = listener.accept().await.unwrap();
+				let mut request = Vec::new();
+				loop {
+					let mut bytes = [0; 1024];
+					let n = socket.read(&mut bytes).await.unwrap();
+					assert!(n > 0);
+					request.extend_from_slice(&bytes[..n]);
+					assert!(request.len() < 4096);
+					if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+						let headers = String::from_utf8_lossy(&request[..end]);
+						let length: usize = headers
+							.lines()
+							.find_map(|line| {
+								line.to_ascii_lowercase()
+									.strip_prefix("content-length: ")
+									.map(str::to_owned)
+							})
+							.unwrap()
+							.parse()
+							.unwrap();
+						if request.len() >= end + 4 + length {
+							assert!(
+								headers.starts_with("PUT /channels/1/polls/2/answers/@me HTTP/1.1"),
+								"{headers}"
+							);
+							assert!(headers.contains("SYNTHETIC_POLL_TOKEN"));
+							let body: serde_json::Value =
+								serde_json::from_slice(&request[end + 4..end + 4 + length])
+									.unwrap();
+							assert_eq!(body["answer_ids"], serde_json::json!(answer_ids));
+							break;
+						}
+					}
+				}
+				socket
+					.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+					.await
+					.unwrap();
+			}
+		});
+		for (answer_ids, request) in [(vec![7u64], 1), (Vec::new(), 2)] {
+			assert!(matches!(
+				api.execute(Command::Polls(P::Vote {
+					channel: Id(1),
+					message: Id(2),
+					answer_ids,
+					request,
+				}))
+				.await,
+				Event::Polls(E::Written { result: Ok(()), .. })
+			));
+		}
+		// A zero answer or an oversized selection never builds a request.
+		for answer_ids in [vec![0u64], vec![1; model::MAX_POLL_ANSWERS + 1]] {
+			assert!(matches!(
+				api.execute(Command::Polls(P::Vote {
+					channel: Id(1),
+					message: Id(2),
+					answer_ids,
+					request: 3,
+				}))
+				.await,
+				Event::Polls(E::Written {
+					result: Err(Failure::Protocol),
+					..
+				})
+			));
+		}
+		server.await.unwrap();
 	}
 
 	#[tokio::test]

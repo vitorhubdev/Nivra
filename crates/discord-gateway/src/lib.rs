@@ -80,6 +80,28 @@ pub fn validated_url(value: &str) -> Result<String, Failure> {
 	Ok(url.to_string())
 }
 
+fn poll_vote_event(
+	name: &str,
+	bytes: &[u8],
+	sequenced: bool,
+) -> Result<client_core::polls::Event, Failure> {
+	use client_core::polls::Event as PollEvent;
+	if sequenced
+		&& let Ok(delta) = decode::<PollVoteDelta>(bytes)
+		&& delta.answer_id != 0
+		&& delta.user_id.0 != 0
+	{
+		return Ok(PollEvent::Delta {
+			channel: delta.channel_id,
+			message: delta.message_id,
+			answer_id: delta.answer_id,
+			user: delta.user_id,
+			add: name == "MESSAGE_POLL_VOTE_ADD",
+		});
+	}
+	Err(Failure::Protocol)
+}
+
 fn reaction_event(
 	name: &str,
 	bytes: &[u8],
@@ -1610,7 +1632,7 @@ async fn run_inner(
 							// Reaction counts are additive: do not apply a repeated dispatch or
 							// move the resume cursor backwards when one is replayed.
 							if packet.op == 0
-								&& matches!(packet.t.as_deref(), Some("MESSAGE_REACTION_ADD" | "MESSAGE_REACTION_REMOVE" | "MESSAGE_REACTION_REMOVE_ALL" | "MESSAGE_REACTION_REMOVE_EMOJI"))
+								&& matches!(packet.t.as_deref(), Some("MESSAGE_REACTION_ADD" | "MESSAGE_REACTION_REMOVE" | "MESSAGE_REACTION_REMOVE_ALL" | "MESSAGE_REACTION_REMOVE_EMOJI" | "MESSAGE_POLL_VOTE_ADD" | "MESSAGE_POLL_VOTE_REMOVE"))
 								&& packet.s.zip(state.sequence).is_some_and(|(next, last)| next <= last)
 							{ continue; }
 							if let Some(sequence) = packet.s { state.sequence = Some(sequence); }
@@ -1920,6 +1942,9 @@ async fn run_inner(
 									"MESSAGE_UPDATE" => emit(Event::Patch(decode::<PatchDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model()))?,
 									"MESSAGE_REACTION_ADD" | "MESSAGE_REACTION_REMOVE" | "MESSAGE_REACTION_REMOVE_ALL" | "MESSAGE_REACTION_REMOVE_EMOJI" => {
 										emit(Event::Reactions(reaction_event(packet.t.as_deref().unwrap_or(""), packet.d.get().as_bytes(), packet.s.is_some())?))?;
+									}
+									"MESSAGE_POLL_VOTE_ADD" | "MESSAGE_POLL_VOTE_REMOVE" => {
+										emit(Event::Polls(poll_vote_event(packet.t.as_deref().unwrap_or(""), packet.d.get().as_bytes(), packet.s.is_some())?))?;
 									}
 									"MESSAGE_DELETE" => { let d: Deleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; emit(Event::Delete { channel:d.channel_id, id:d.id })?; }
 									"MESSAGE_DELETE_BULK" => { let d: BulkDeleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; if d.ids.len() > 100 { return Err(Failure::Capacity); } emit(Event::DeleteBulk { channel:d.channel_id, ids: d.ids })?; }
@@ -2466,6 +2491,38 @@ mod tests {
 			),
 			Err(Failure::Protocol)
 		));
+	}
+
+	#[test]
+	fn poll_vote_dispatch_preserves_the_answer_and_rejects_unsafe_details() {
+		use client_core::polls::Event as PollEvent;
+		let wire = json!({"channel_id":"2","message_id":"3","user_id":"4","answer_id":7});
+		for (name, adding) in [
+			("MESSAGE_POLL_VOTE_ADD", true),
+			("MESSAGE_POLL_VOTE_REMOVE", false),
+		] {
+			let event = poll_vote_event(name, &serde_json::to_vec(&wire).unwrap(), true).unwrap();
+			assert!(matches!(event, PollEvent::Delta {
+				channel: Id(2), message: Id(3), user: Id(4), answer_id: 7, add,
+			} if add == adding));
+		}
+		// A zero answer, a zero voter, a missing answer and an unsequenced
+		// dispatch cannot change a tally.
+		for bytes in [
+			br#"{"channel_id":"2","message_id":"3","user_id":"4","answer_id":0}"#.as_slice(),
+			br#"{"channel_id":"2","message_id":"3","user_id":"0","answer_id":7}"#,
+			br#"{"channel_id":"2","message_id":"3","user_id":"4"}"#,
+		] {
+			assert!(poll_vote_event("MESSAGE_POLL_VOTE_ADD", bytes, true).is_err());
+		}
+		assert!(
+			poll_vote_event(
+				"MESSAGE_POLL_VOTE_ADD",
+				&serde_json::to_vec(&wire).unwrap(),
+				false
+			)
+			.is_err()
+		);
 	}
 
 	#[tokio::test]

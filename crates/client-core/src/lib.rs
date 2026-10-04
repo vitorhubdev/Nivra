@@ -22,6 +22,7 @@ pub mod member_search;
 pub mod message_actions;
 pub mod messaging_permissions;
 pub mod notifications;
+pub mod polls;
 pub mod presence;
 pub mod profile;
 pub mod reactions;
@@ -202,6 +203,7 @@ pub enum Command {
 		request: u64,
 	},
 	Reactions(reactions::Command),
+	Polls(polls::Command),
 	Profile {
 		user: Id,
 		guild: Option<Id>,
@@ -488,6 +490,7 @@ pub enum Event {
 	ReadState(read_state::Event),
 	NotificationPreferences(notifications::Event),
 	Reactions(reactions::Event),
+	Polls(polls::Event),
 	Profile {
 		user: Id,
 		guild: Option<Id>,
@@ -677,6 +680,7 @@ pub struct State {
 	pub startup_warnings: model::account::Warnings,
 	pub notification_preferences: notifications::Preferences,
 	pub reactions: reactions::Reactions,
+	pub polls: polls::Polls,
 	pub profile: Option<profile::ProfileView>,
 	pub profile_request: u64,
 	pub profile_cache: profile::ProfileCache,
@@ -933,6 +937,7 @@ impl Default for State {
 			startup_warnings: Default::default(),
 			notification_preferences: notifications::Preferences::default(),
 			reactions: reactions::Reactions::default(),
+			polls: polls::Polls::default(),
 			profile: None,
 			profile_request: 0,
 			profile_cache: Default::default(),
@@ -1224,6 +1229,7 @@ impl State {
 		self.search_target = None;
 		self.restore_scroll = false;
 		self.reactions.reset();
+		self.polls.reset();
 		self.interactions.reset();
 		let scope = self.application_command_scope(channel);
 		self.application_commands.retain(scope);
@@ -2357,6 +2363,9 @@ impl State {
 			self.interrupt_stickers();
 			self.posts.clear_summaries();
 			self.interactions.reset();
+			// A lifecycle transition invalidates the single in-flight vote, so a lost
+			// response can never leave every poll button disabled.
+			self.polls.reset();
 			self.application_commands.clear();
 			self.local_game_activity = Default::default();
 			self.invalidate_messaging_permissions(None);
@@ -2704,6 +2713,7 @@ impl State {
 				Ok(())
 			}
 			Event::Reactions(event) => self.apply_reactions(event),
+			Event::Polls(event) => self.apply_polls(event),
 			Event::InviteChallenge { request, challenge } => {
 				self.apply_invite_challenge(request, *challenge);
 				Ok(())
@@ -3847,6 +3857,7 @@ impl State {
 	fn cancel_history(&mut self) {
 		self.typing.clear();
 		self.reactions.reset();
+		self.polls.reset();
 		self.interactions.reset();
 		self.search_target = None;
 		self.request += 1;
@@ -4185,6 +4196,9 @@ impl Event {
 						_ => 0,
 					} + match &p.embeds {
 						Patch::Value(embeds) => model::embed_bytes(embeds),
+						_ => 0,
+					} + match &p.poll {
+						Patch::Value(Some(poll)) => poll.bytes(),
 						_ => 0,
 					}
 				}
@@ -4601,6 +4615,7 @@ mod tests {
 			.timeline
 			.insert(
 				model::Message {
+					poll: None,
 					sticker_items: vec![],
 					id: Id(100),
 					channel: Id(20),
@@ -5427,6 +5442,7 @@ mod tests {
 	}
 	pub(super) fn message(id: u64) -> Message {
 		Message {
+			poll: None,
 			sticker_items: Vec::new(),
 			reactions: Some(vec![]),
 			id: Id(id),

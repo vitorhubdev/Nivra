@@ -1388,6 +1388,7 @@ pub fn debug_role_mentions_check(state: &mut State) {
 			forwarded: false,
 			unsupported: false,
 			extra_content: Default::default(),
+			poll: None,
 			components: vec![],
 			application_id: None,
 			ephemeral: false,

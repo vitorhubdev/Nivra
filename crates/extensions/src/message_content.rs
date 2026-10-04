@@ -67,7 +67,8 @@ pub struct MessageReferenceSnapshot {
 	pub deleted: bool,
 	pub forwarded: bool,
 }
-/// Poll questions/options/results are not retained by the client protocol decoder.
+/// The extension snapshot does not expose poll questions/options/results even
+/// though the native client retains and renders them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PollAvailability {

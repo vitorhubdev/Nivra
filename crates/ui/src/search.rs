@@ -992,6 +992,7 @@ impl SearchUi {
 				forwarded: false,
 				unsupported: false,
 				extra_content: Default::default(),
+				poll: None,
 				embeds: hit.embeds.clone(),
 				embeds_suppressed: false,
 				attachments: hit.attachments.clone(),

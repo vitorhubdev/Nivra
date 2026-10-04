@@ -36,7 +36,8 @@ Rich message content adds at most 10 loaded nondeleted/nonephemeral summaries /
 sticker labels; nested message rows share 2 KiB and each embed's fields share
 768 bytes. Only bounded embed text, labels, media-presence booleans and reference
 markers are copied, never media URL fields/bytes or referenced text. A poll is
-only an absent/unsupported marker; questions, options and results are not retained.
+only an absent/unsupported marker in extension snapshots; questions, options and
+results are not exposed there.
 Forum data adds ten resident readable child threads / 6 KiB, with optional loaded
 post flags and no tags or archive discovery. Conversation activity adds up to
 eight current typing IDs and twenty IDs from a loaded successful pin page / 2 KiB.
@@ -510,7 +511,8 @@ No schema change or persistent deletion journal is introduced.
 
 Schema 7 adds one integer extra_content column (0..31) for presence of polls, sticker_items,
 legacy stickers, component arrays and the Components V2 flag. RAM uses five booleans; partial
-updates preserve each source independently. Poll answers and sticker data are not retained. Schema 20 additionally retains
+updates preserve each source independently. Sticker data is not retained; schema 27
+instead retains the bounded poll card described below. Schema 20 additionally retains
 typed component trees, application IDs and original message flags, within the existing history budgets. Existing cached rows default to no known markers until normal
 service revalidation because older builds discarded that metadata. Account isolation, existing
 database/cache limits and logout deletion remain unchanged; unsupported content is not rendered
@@ -1405,3 +1407,22 @@ candidate revision plus a fixed static diagnostic through the existing bounded
 event queue. They retain no credentials, allocate no payload buffers and add no
 pending/retry slot. The desktop consumes only the matching current unconfirmed
 candidate; existing bounded local abandonment handles release after failure.
+
+## Discord poll cards (October 4, 2026)
+
+Poll cards now persist with their message in the existing `messages` row. Schema 27 adds one
+nullable `poll` TEXT column capped at 32 KiB that holds the validated `model::Poll` JSON
+(question, up to ten answers with optional emoji, live tallies with an explicit unknown-results
+flag, and flags); a null column reads as
+no card, and a value that fails the shared model bounds (`valid_poll`) rejects the page as
+incompatible or over capacity instead of being retained. The column is added transactionally on
+upgrade; existing rows keep a null poll until normal history revalidation, and the native schema
+ceiling moves from 26 to 27. No new table, index, queue or background work is introduced, and
+logout deletion and account isolation are unchanged.
+
+The session timeline charges the card against the existing history byte budget through
+`model::poll_bytes` (bounded by `MAX_POLL_BYTES` before `set_poll` accepts it); a plan that would
+exceed `MAX_BYTES` is refused with no partial write. The in-flight optimistic vote holds at most
+one pre/post poll pair per session, cleared on reset. Extension snapshots still expose only the
+`absent`/`unsupported` poll marker; questions, answers and results are not copied into app
+snapshots.

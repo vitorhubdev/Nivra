@@ -3497,6 +3497,34 @@ impl Desktop {
 						}
 					})
 				}
+				Command::Polls(command) => {
+					use client_core::polls::{Command as P, Event as E};
+					Event::Polls(match command {
+						P::Vote {
+							channel,
+							message,
+							answer_ids,
+							request,
+						} => {
+							// The fixture has no service; move the synthetic tally in RAM only.
+							if let Some(mut poll) = self
+								.state
+								.timeline
+								.get(message)
+								.and_then(|m| m.poll.clone())
+							{
+								let _ = client_core::polls::apply_selection(&mut poll, &answer_ids);
+								let _ = self.state.timeline.set_poll(message, Some(poll));
+							}
+							E::Written {
+								channel,
+								message,
+								request,
+								result: Ok(()),
+							}
+						}
+					})
+				}
 				Command::Voice(_) | Command::CancelProfile | Command::CancelSearch => return,
 				Command::ThreadStarter {
 					thread,

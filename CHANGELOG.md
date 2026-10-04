@@ -1,5 +1,57 @@
 # Changelog
 
+## Nivra 1.0.11
+
+Esta versão corrige o vídeo que travava o aplicativo, publica a suíte dos 3 pilares de voz com números medidos, fecha os itens da auditoria da 1.0.10 e entrega as cinco funções aprovadas pelo dono: Push to Mute, ícone de voz na bandeja, layout compacto, prévia HEIC e enquetes.
+
+### Vídeo
+
+- Tocar um vídeo não trava mais o Nivra. A causa era um re-lock do contexto do egui dentro do `widget_info` (deadlock): o texto agora é calculado antes, e um watchdog registra em `nivra-freeze.log` qualquer intervalo de quadros acima de 2 s, sem nunca bloquear a UI.
+- Clipes sem áudio (ou com áudio mais curto que o vídeo) tocam até o fim: o relógio de mídia passou a ancorar no relógio monotônico e não joga mais tempo fora em leituras lentas.
+- O cartão abre mostrando o primeiro quadro (poster) e o Play inicia a reprodução; falha de decodificação mostra o motivo com "Tentar de novo", "Baixar vídeo" e "Abrir no original".
+- Workers e logs de mídia limitados por prazo, primeiro quadro com deadline e primeiro byte real medido (#73); vídeo preso em "Carregando" agora termina em erro com retry, e arrastar a barra confirma o salto ao soltar.
+
+### Os 3 pilares de voz
+
+Pilar 1 — supressão de ruído (orçamento de 10 ms por quadro; aprovado com p99 < 5000 µs e zero estouros):
+
+| Modo | p50 (µs) | p99 (µs) | Estouros | Maior salto |
+| --- | --- | --- | --- | --- |
+| Desligado | 0 | 0 | 0 | 0.1382 |
+| Padrão (WebRtc) | 50 | 58 | 0 | 0.0475 |
+| Médio (RNNoise) | 55 | 90 | 0 | 0.0619 |
+| Máximo (DeepFilterNet) | 97 | 138 | 0 | 0.1105 |
+| Troca de modo no meio | — | — | — | 0.0836 (sem estalo) |
+
+- Pilar 2 — falar e ouvir: dois clientes sintéticos trocam áudio decodificado com DAVE/MLS ligado (tons de 450/650 Hz, pelo menos 60 quadros por sentido, tom alvo > 10× o outro); um blackout de UDP de 10 s volta sozinho sem rejoin; troca de dispositivo com a chamada aberta; estresse de 50 ciclos de entrar/sair e 20 trocas de canal.
+- Pilar 3 — avisar tudo: cada `VOICE_STATE_UPDATE` pinta o ícone certo em um frame (teste com egui_kittest); sons de entrar/sair, mutar/desmutar e ensurdecer passam por filas ordenadas, com deduplicação por identidade e sem som perdido quando a fila enche.
+
+### Correções da auditoria
+
+- UDP de voz não suspende mais o loop da chamada (`try_send` com falha injetável); perda em rajada salta para o próximo pacote do jitter em vez de limpar a fila inteira; tick atrasado descarta o backlog do mixer; o rekey do DAVE ganhou prazo de 30 s e o prazo é desarmado após sucesso; a fila de sons mantém o aviso mais novo.
+- Exportação HTML: a inicial do avatar é escapada e `href`/`src` só aceitam http(s); `javascript:` vira texto inerte.
+- READY: guildas descartadas contam para o teto de entradas; uma guilda malformada derruba só a própria entrada e o login continua com o aviso.
+- Anexos com link de cinco segmentos (`/attachments/{canal}/{mensagem}/{anexo}/{arquivo}`) voltam a resolver; mute de DM observado limpa o timer velho sem ressuscitar no desmutar; textos de atualização traduzidos nos 3 idiomas.
+- Instância única: teste de corrida prova que duas aberturas simultâneas têm um único vencedor.
+
+### Funções aprovadas
+
+- Push to Mute nos botões laterais do mouse (4/5): ação desatribuída por padrão, funciona com a janela focada e, no Windows, global via poller; mudar o estado acorda a UI na hora.
+- Ícone de voz na bandeja: mutado, ensurdecido, ativo e fora de chamada, com os quatro estados cobertos por teste e prévias em PNG.
+- Layout compacto da timeline (hora | autor | texto) em Configurações > Aparência, cobrindo linhas normais, starter de thread e mensagens pendentes.
+- Prévia de HEIC do iPhone via decodificador do Windows (WIC), com o orçamento de pixels respeitado, orientação EXIF aplicada e fallback "Baixar" onde não houver codec.
+- Enquetes do Discord: ver, votar, remover o voto, resultado ao vivo e enquete encerrada, no lugar do marcador antigo. Limitação honesta: o voto usa a rota de usuário `PUT /channels/{canal}/polls/{mensagem}/answers/@me`, que é não oficial e não foi validada em conta real.
+
+### English
+
+1.0.11 fixes the video freeze, ships the measured voice-pillar suite, closes the 1.0.10 audit items and delivers the five approved features. Playing a video no longer deadlocks the app (egui context re-lock inside `widget_info`); audio-less clips play to the end with a monotonic media clock; the card shows the first frame before Play; decode failures offer retry/download/open-original; and a render-stall watchdog writes a bounded `nivra-freeze.log` after 2 s without blocking the UI.
+
+Voice pillars, measured: noise suppression stays under a 5000 µs p99 per 10 ms frame with zero budget blowouts (Off 0/0, WebRtc 50/58, RNNoise 55/90, DeepFilter 97/138 µs p50/p99; 0.0836 maximum crossfade step); two synthetic clients exchange decoded DAVE-encrypted audio (450/650 Hz, at least 60 frames per direction), survive a 10 s UDP blackout without rejoining, follow a device switch during a call, and pass a 50× join/leave and 20× channel-switch stress; every voice-state update paints the right icon in one frame with ordered, identity-deduplicated cue queues.
+
+Audit fixes: non-blocking voice UDP, burst-loss jitter recovery, stale-mix drop, a 30 s DAVE rekey deadline disarmed after success, escaped HTML export (no `javascript:` URLs), bounded READY entries with per-guild login survival, five-segment attachment links, video stall and drag-seek fixes, the observed DM mute timer, translated update strings, and a race test proving a single instance-lock winner.
+
+Approved features: Push to Mute on mouse 4/5 (unassigned by default, global on Windows), tray voice-state icon (muted, deafened, connected, idle) with PNG proofs, compact timeline layout including thread starters and pending rows, Windows WIC HEIC preview with EXIF orientation and download fallback, and Discord polls (view, vote, unvote, live results, closed state). Honest limitation: poll voting uses the unofficial normal-user route and has not been validated against a real account.
+
 ## Nivra 1.0.10
 
 Esta versão traz estabilidade aprimorada para chamadas de voz, nova experiência de download e seleção de mensagens, refinamento visual e correções importantes:

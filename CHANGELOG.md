@@ -18,9 +18,9 @@ Pilar 1 — supressão de ruído (orçamento de 10 ms por quadro; aprovado com p
 | Modo | p50 (µs) | p99 (µs) | Estouros | Maior salto |
 | --- | --- | --- | --- | --- |
 | Desligado | 0 | 0 | 0 | 0.1382 |
-| Padrão (WebRtc) | 50 | 58 | 0 | 0.0475 |
-| Médio (RNNoise) | 55 | 90 | 0 | 0.0619 |
-| Máximo (DeepFilterNet) | 97 | 138 | 0 | 0.1105 |
+| Leve (WebRtc) | 50 | 58 | 0 | 0.0475 |
+| Padrão (RNNoise) | 55 | 90 | 0 | 0.0619 |
+| Máxima (DeepFilterNet) | 97 | 138 | 0 | 0.1105 |
 | Troca de modo no meio | — | — | — | 0.0836 (sem estalo) |
 
 - Pilar 2 — falar e ouvir: dois clientes sintéticos trocam áudio decodificado com DAVE/MLS ligado (tons de 450/650 Hz, pelo menos 60 quadros por sentido, tom alvo > 10× o outro); um blackout de UDP de 10 s volta sozinho sem rejoin; troca de dispositivo com a chamada aberta; estresse de 50 ciclos de entrar/sair e 20 trocas de canal.
@@ -46,7 +46,7 @@ Pilar 1 — supressão de ruído (orçamento de 10 ms por quadro; aprovado com p
 
 1.0.11 fixes the video freeze, ships the measured voice-pillar suite, closes the 1.0.10 audit items and delivers the five approved features. Playing a video no longer deadlocks the app (egui context re-lock inside `widget_info`); audio-less clips play to the end with a monotonic media clock; the card shows the first frame before Play; decode failures offer retry/download/open-original; and a render-stall watchdog writes a bounded `nivra-freeze.log` after 2 s without blocking the UI.
 
-Voice pillars, measured: noise suppression stays under a 5000 µs p99 per 10 ms frame with zero budget blowouts (Off 0/0, WebRtc 50/58, RNNoise 55/90, DeepFilter 97/138 µs p50/p99; 0.0836 maximum crossfade step); two synthetic clients exchange decoded DAVE-encrypted audio (450/650 Hz, at least 60 frames per direction), survive a 10 s UDP blackout without rejoining, follow a device switch during a call, and pass a 50× join/leave and 20× channel-switch stress; every voice-state update paints the right icon in one frame with ordered, identity-deduplicated cue queues.
+Voice pillars, measured: noise suppression stays under a 5000 µs p99 per 10 ms frame with zero budget blowouts (Off 0/0, Light/WebRtc 50/58, Standard/RNNoise 55/90, Maximum/DeepFilter 97/138 µs p50/p99; 0.0836 maximum crossfade step); two synthetic clients exchange decoded DAVE-encrypted audio (450/650 Hz, at least 60 frames per direction), survive a 10 s UDP blackout without rejoining, follow a device switch during a call, and pass a 50× join/leave and 20× channel-switch stress; every voice-state update paints the right icon in one frame with ordered, identity-deduplicated cue queues.
 
 Audit fixes: non-blocking voice UDP, burst-loss jitter recovery, stale-mix drop, a 30 s DAVE rekey deadline disarmed after success, escaped HTML export (no `javascript:` URLs), bounded READY entries with per-guild login survival, five-segment attachment links, video stall and drag-seek fixes, the observed DM mute timer, translated update strings, and a race test proving a single instance-lock winner.
 

@@ -53,20 +53,45 @@ global-hotkey = "=0.8.0"
 unsafe_code = "forbid"
 
 [profile.release]
-# Fat LTO with one codegen unit removes the duplicated monomorphizations and unused
-# cross-crate code that `thin`/16 kept (measured on the packaged artifact: see
-# docs/performance.md). Stripping the symbol table removes the 7-8 MB
-# `__LINKEDIT`/`.symtab` from the shipped binary. Line tables still land in the split
-# debug file for symbolicating crashes. panic remains unwind: camera discovery and
-# capture catch panics so a worker crash does not abort.
-lto = "fat"
+# `thin` + one codegen unit dedupes monomorphizations without the fat-LTO link cost.
+# Fat LTO was measured on this pipeline at 97,537,536 B x64 (-5.08%) and 63,982,080 B
+# ARM64 (-9.12%), but the Windows package job grew from ~20 to ~60+ minutes, so the
+# trade was rejected (see docs/performance.md). Stripping the symbol table removes the
+# 7-8 MB `__LINKEDIT`/`.symtab` from the shipped binary. Line tables still land in the
+# split debug file for symbolicating crashes. panic remains unwind: camera discovery
+# and capture catch panics so a worker crash does not abort.
+lto = "thin"
 codegen-units = 1
 strip = "symbols"
 debug = "line-tables-only"
 
 # Cold, non-realtime packages trade a little speed for size; the voice, audio, video,
-# render and parsing crates keep opt-level 3.
+# render, media and parsing crates keep opt-level 3.
 [profile.release.package.extensions]
+opt-level = "s"
+
+[profile.release.package.wry]
+opt-level = "s"
+
+[profile.release.package.reqwest]
+opt-level = "s"
+
+[profile.release.package.keyring]
+opt-level = "s"
+
+[profile.release.package.notify-rust]
+opt-level = "s"
+
+[profile.release.package.global-hotkey]
+opt-level = "s"
+
+[profile.release.package.dirs]
+opt-level = "s"
+
+[profile.release.package.rusqlite]
+opt-level = "s"
+
+[profile.release.package.libsqlite3-sys]
 opt-level = "s"
 
 # Dependency debuginfo dominates test link time. Workspace crates keep full debuginfo.

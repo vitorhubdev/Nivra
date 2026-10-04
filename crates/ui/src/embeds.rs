@@ -43,7 +43,7 @@ fn play_embed_file(
 	url: &str,
 	media: &model::EmbedMedia,
 ) {
-	video.begin(message, &embed_video_attachment(url, media));
+	video.begin(message, &embed_video_attachment(url, media), true);
 }
 
 /// True when this attachment is one of the message's direct embed videos. Those have

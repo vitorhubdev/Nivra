@@ -18,7 +18,10 @@ pub enum VideoState {
 	Failed(&'static str),
 }
 pub enum VideoCommand {
+	/// Open and play immediately (autoplay, retry, replay).
 	Play(Attachment),
+	/// Open and show the first frame paused, so the card has a poster before play.
+	Preview(Attachment),
 	Pause(bool),
 	Seek(f64),
 	Volume(f32),
@@ -132,42 +135,27 @@ impl VideoUi {
 		}
 	}
 	/// The desktop rejects stale session/player frames before handing over decoded pixels.
-	pub fn accept_frame(
-		&mut self,
-		ctx: &egui::Context,
-		width: usize,
-		height: usize,
-		rgba: &[u8],
-	) -> bool {
+	/// Pixels arrive already converted on the media worker; the render thread only
+	/// swaps the staged buffer and uploads the texture.
+	pub fn accept_frame(&mut self, ctx: &egui::Context, frame: egui::ColorImage) -> bool {
+		let [width, height] = frame.size;
 		if self.active.is_none()
 			|| width == 0
 			|| height == 0
 			|| width > 1920
 			|| height > 1920
 			|| width * height > 1920 * 1080
-			|| rgba.len() != width * height * 4
+			|| frame.pixels.len() != width * height
 		{
 			return false;
 		}
-		let frame = self.frame.get_or_insert_with(|| {
-			std::sync::Arc::new(egui::ColorImage::filled(
-				[width, height],
-				egui::Color32::BLACK,
-			))
-		});
+		let image = self
+			.frame
+			.get_or_insert_with(|| std::sync::Arc::new(frame.clone()));
 		// Reuses the buffer once the previous upload released it; clones only if the
 		// renderer still holds the last frame.
-		let image = std::sync::Arc::make_mut(frame);
-		image.size = [width, height];
-		image.source_size = egui::vec2(width as f32, height as f32);
-		image.pixels.clear();
-		image.pixels.extend(
-			rgba.as_chunks::<4>()
-				.0
-				.iter()
-				.map(|&[r, g, b, a]| egui::Color32::from_rgba_unmultiplied(r, g, b, a)),
-		);
-		let image = std::sync::Arc::clone(frame);
+		*std::sync::Arc::make_mut(image) = frame;
+		let image = std::sync::Arc::clone(image);
 		if let Some(texture) = &mut self.texture {
 			texture.set(image, egui::TextureOptions::LINEAR);
 		} else {
@@ -184,13 +172,19 @@ impl VideoUi {
 			}
 			VideoState::Playing => VideoCommand::Pause(true),
 			VideoState::Paused => VideoCommand::Pause(false),
+			VideoState::Ended => {
+				self.begin(message, attachment, true);
+				return;
+			}
 			_ => {
-				self.begin(message, attachment);
+				self.begin(message, attachment, false);
 				return;
 			}
 		});
 	}
-	pub fn begin(&mut self, message: &Message, attachment: &Attachment) {
+	/// Opens the inline player: `autoplay` starts the clock, the default shows the
+	/// first frame as a poster and waits for the play button.
+	pub fn begin(&mut self, message: &Message, attachment: &Attachment, autoplay: bool) {
 		self.active = Some((message.channel, message.id, attachment.clone()));
 		self.texture = None;
 		self.frame = None;
@@ -199,7 +193,11 @@ impl VideoUi {
 		self.duration = 0.0;
 		self.seek_preview = None;
 		self.seen = true;
-		self.command = Some(VideoCommand::Play(attachment.clone()));
+		self.command = Some(if autoplay {
+			VideoCommand::Play(attachment.clone())
+		} else {
+			VideoCommand::Preview(attachment.clone())
+		});
 	}
 	fn shade(&mut self, ctx: &egui::Context) -> egui::TextureId {
 		self.shade
@@ -390,6 +388,19 @@ impl VideoUi {
 						{
 							download.request = Some(attachment.clone());
 						}
+						// A failed decode still has the original URL: open it in the browser
+						// so a codec this build cannot play is never a dead end.
+						if let Some(url) = attachment
+							.media
+							.url
+							.as_deref()
+							.and_then(crate::markdown::external_url)
+							&& ui
+								.small_button(crate::tr_ui!(ui, "Open original…"))
+								.clicked()
+						{
+							*opening = Some(url);
+						}
 					});
 				},
 			);
@@ -486,13 +497,8 @@ impl VideoUi {
 							.show_value(false)
 							.trailing_fill(true),
 					);
-					seek.widget_info(|| {
-						egui::WidgetInfo::slider(
-							can_seek,
-							position,
-							crate::tr_ui!(ui, "Seek video"),
-						)
-					});
+					let seek_label = crate::tr_ui!(ui, "Seek video");
+					seek.widget_info(|| egui::WidgetInfo::slider(can_seek, position, seek_label));
 					controls_focused |= seek.has_focus();
 					response |= seek.clone();
 					if can_seek && !context_click && (seek.changed() || seek.drag_stopped()) {
@@ -835,23 +841,28 @@ mod tests {
 				)
 				.drop_without_applying_deltas();
 			};
+			let frame_of = |width: usize, height: usize, pixels: usize| egui::ColorImage {
+				size: [width, height],
+				source_size: egui::vec2(width as f32, height as f32),
+				pixels: vec![egui::Color32::BLACK; pixels],
+			};
 			frame(&mut video, None);
 			assert!(video.command.is_none() && video.active.is_none());
-			assert!(!video.accept_frame(&ctx, 1, 1, &[0, 0, 0, 255]));
+			assert!(!video.accept_frame(&ctx, frame_of(1, 1, 1)));
 			for key in [egui::Key::Tab, egui::Key::Enter] {
 				frame(&mut video, Some(key));
 			}
 			assert!(
-				matches!(video.command.take(), Some(VideoCommand::Play(file)) if file == attachment)
+				matches!(video.command.take(), Some(VideoCommand::Preview(file)) if file == attachment)
 			);
 			assert!(video.seen);
-			assert!(!video.accept_frame(&ctx, 1921, 1080, &[]));
-			assert!(!video.accept_frame(&ctx, 1, 1921, &[]));
-			assert!(!video.accept_frame(&ctx, 1920, 1920, &[]));
-			assert!(!video.accept_frame(&ctx, usize::MAX, usize::MAX, &[]));
-			assert!(!video.accept_frame(&ctx, 1, 1, &[0]));
-			assert!(video.accept_frame(&ctx, 1, 1920, &vec![0; 1920 * 4]));
-			assert!(video.accept_frame(&ctx, 1, 1, &[0, 0, 0, 255]));
+			assert!(!video.accept_frame(&ctx, frame_of(1921, 1080, 0)));
+			assert!(!video.accept_frame(&ctx, frame_of(1, 1921, 0)));
+			assert!(!video.accept_frame(&ctx, frame_of(1920, 1920, 0)));
+			assert!(!video.accept_frame(&ctx, frame_of(usize::MAX, usize::MAX, 0)));
+			assert!(!video.accept_frame(&ctx, frame_of(1, 1, 0)));
+			assert!(video.accept_frame(&ctx, frame_of(1, 1920, 1920)));
+			assert!(video.accept_frame(&ctx, frame_of(1, 1, 1)));
 			video.state = VideoState::Playing;
 			video.duration = 12.0;
 			frame(&mut video, Some(egui::Key::Enter));
@@ -907,7 +918,7 @@ mod tests {
 		};
 		message.attachments.push(attachment.clone());
 		let mut video = VideoUi::default();
-		video.begin(&message, &attachment);
+		video.begin(&message, &attachment, true);
 		video.state = VideoState::Playing;
 		video.duration = 100.0;
 		video.position = 10.0;
@@ -980,6 +991,53 @@ mod tests {
 	}
 
 	#[test]
+	fn an_idle_card_opens_a_paused_poster_and_the_play_button_starts_it() {
+		let mut message = test_support::message(1, Id(2));
+		let attachment = Attachment {
+			id: Id(3),
+			filename: "oobe-intro1.mp4".into(),
+			description: None,
+			content_type: Some("video/mp4".into()),
+			size: 4096,
+			media: model::EmbedMedia {
+				width: 1080,
+				height: 1920,
+				..Default::default()
+			},
+			spoiler: false,
+			duration_ms: Some(4000),
+			waveform: Vec::new(),
+		};
+		message.attachments.push(attachment.clone());
+		let mut video = VideoUi::default();
+		// First click on the idle card opens the poster: the worker decodes the first
+		// frame and stays paused, so the card is never a mute black rectangle.
+		video.toggle(&message, &attachment, VideoState::Idle);
+		assert!(
+			matches!(video.command, Some(VideoCommand::Preview(_))),
+			"idle opens a preview, not immediate playback: {:?}",
+			video.command.is_some()
+		);
+		assert_eq!(video.state, VideoState::Loading);
+		assert!(video.active.is_some());
+		// The poster arrives; the overlay play button resumes instead of reopening.
+		video.state = VideoState::Paused;
+		video.toggle(&message, &attachment, VideoState::Paused);
+		assert!(matches!(video.command, Some(VideoCommand::Pause(false))));
+		// Replay after the end starts immediately (autoplay), not as a poster again.
+		video.state = VideoState::Ended;
+		video.toggle(&message, &attachment, VideoState::Ended);
+		assert!(
+			matches!(video.command, Some(VideoCommand::Play(_))),
+			"replay autoplays"
+		);
+		// A running clip still pauses on click.
+		video.state = VideoState::Playing;
+		video.toggle(&message, &attachment, VideoState::Playing);
+		assert!(matches!(video.command, Some(VideoCommand::Pause(true))));
+	}
+
+	#[test]
 	fn a_failure_shows_the_reason_with_retry_and_download() {
 		let mut message = test_support::message(1, Id(2));
 		let attachment = Attachment {
@@ -991,6 +1049,10 @@ mod tests {
 			media: model::EmbedMedia {
 				width: 640,
 				height: 360,
+				url: Some(
+					"https://cdn.discordapp.com/attachments/1/2/clip.mp4?ex=68dc&is=68db&hm=abc"
+						.into(),
+				),
 				..Default::default()
 			},
 			spoiler: false,
@@ -999,7 +1061,7 @@ mod tests {
 		};
 		message.attachments.push(attachment.clone());
 		let mut video = VideoUi::default();
-		video.begin(&message, &attachment);
+		video.begin(&message, &attachment, true);
 		video.state =
 			VideoState::Failed("This video format or codec is not supported on this system.");
 		let ctx = egui::Context::default();
@@ -1031,6 +1093,8 @@ mod tests {
 		assert!(shown.contains("codec"), "{shown}");
 		assert!(shown.contains("Retry"), "{shown}");
 		assert!(shown.contains("Download video"), "{shown}");
+		// A failure is never a dead end: the original URL is offered too.
+		assert!(shown.contains("Open original"), "{shown}");
 		assert!(download.request.is_none(), "no click, no request");
 	}
 }

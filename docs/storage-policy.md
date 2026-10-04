@@ -164,6 +164,10 @@ capacity). Smaller pictures borrow only their exact-size prefix. The high-water
 buffer remains until the worker exits, trading retention after a resolution decrease
 for avoiding repeated allocations between differently sized streams. No extra
 per-participant buffer or uninitialized memory is introduced.
+A render-thread stall watchdog appends `nivra-freeze.log` beside the cache when a frame gap
+exceeds two seconds: at most one bounded report per thirty seconds, capped at 64 KiB, holding the
+phase, the gap, a bounded media-session snapshot and a stack trace. It carries no message or
+account content. (October 3, 2026)
 ## Profile server identity tags (September 19, 2026)
 
 An ordinary in-memory user may retain one server identity: one guild ID, a tag of at

@@ -640,6 +640,7 @@ pub(super) fn debug_check() {
 	let request = Request {
 		duration: Duration::ZERO,
 		generation: 0,
+		output: None,
 		url: Some(url),
 		expected,
 		voice_message: false,

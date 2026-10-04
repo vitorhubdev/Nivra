@@ -53,14 +53,21 @@ global-hotkey = "=0.8.0"
 unsafe_code = "forbid"
 
 [profile.release]
-# Thin LTO still cross-crate inlines without the fat-LTO link-time cost. Stripping the
-# symbol table removes the 7-8 MB `__LINKEDIT`/`.symtab` from the shipped binary. Line
-# tables still land in the split debug file for symbolicating crashes. panic remains
-# unwind: camera discovery and capture catch panics so a worker crash does not abort.
-lto = "thin"
-codegen-units = 16
+# Fat LTO with one codegen unit removes the duplicated monomorphizations and unused
+# cross-crate code that `thin`/16 kept (measured on the packaged artifact: see
+# docs/performance.md). Stripping the symbol table removes the 7-8 MB
+# `__LINKEDIT`/`.symtab` from the shipped binary. Line tables still land in the split
+# debug file for symbolicating crashes. panic remains unwind: camera discovery and
+# capture catch panics so a worker crash does not abort.
+lto = "fat"
+codegen-units = 1
 strip = "symbols"
 debug = "line-tables-only"
+
+# Cold, non-realtime packages trade a little speed for size; the voice, audio, video,
+# render and parsing crates keep opt-level 3.
+[profile.release.package.extensions]
+opt-level = "s"
 
 # Dependency debuginfo dominates test link time. Workspace crates keep full debuginfo.
 [profile.dev.package."*"]

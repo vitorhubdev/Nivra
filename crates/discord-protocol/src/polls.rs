@@ -213,6 +213,7 @@ impl PollDto {
 			});
 		}
 		let results = self.results;
+		let counts_known = results.is_some();
 		let counts = results
 			.as_ref()
 			.map(|results| {
@@ -228,13 +229,15 @@ impl PollDto {
 					.collect::<Vec<_>>()
 			})
 			.unwrap_or_default();
+		let finalized = results.is_some_and(|results| results.is_finalized);
 		let poll = Poll {
 			question,
 			answers,
 			counts,
+			counts_known,
 			expiry: self.expiry.map(|expiry| expiry.0),
 			allow_multiselect: self.allow_multiselect,
-			finalized: results.is_some_and(|results| results.is_finalized),
+			finalized,
 			duration: u32::from(self.duration),
 		};
 		// `layout_type` is presentation-only today; 1 is the default list.
@@ -370,6 +373,7 @@ mod tests {
 			Some("🧸")
 		);
 		assert_eq!(poll.count(1), 2);
+		assert!(poll.counts_known);
 		assert!(poll.me_voted(1));
 		assert_eq!(poll.total_votes(), 7);
 		assert!(poll.expiry.is_some());
@@ -446,6 +450,33 @@ mod tests {
 		.into_model();
 		assert!(message.extra_content.poll);
 		assert!(message.poll.is_none());
+	}
+
+	#[test]
+	fn omitted_results_stay_unknown_instead_of_reading_as_zero() {
+		let message = decode::<MessageDto>(
+			poll(
+				r#"{"question":{"text":"Pick"},"answers":[{"answer_id":1,"poll_media":{"text":"a"}}]}"#,
+			)
+			.as_bytes(),
+		)
+		.unwrap()
+		.into_model();
+		let card = message.poll.expect("a readable poll");
+		assert!(
+			!card.counts_known,
+			"absent results are unknown, not an authoritative zero"
+		);
+		assert_eq!(card.count(1), 0);
+		let with_results = decode::<MessageDto>(
+			poll(r#"{"question":{"text":"Pick"},"answers":[{"answer_id":1,"poll_media":{"text":"a"}}],"results":{"is_finalized":false,"answer_counts":[{"id":1,"count":4,"me_voted":true}]}}"#)
+				.as_bytes(),
+		)
+		.unwrap()
+		.into_model();
+		let card = with_results.poll.expect("a readable poll");
+		assert!(card.counts_known);
+		assert_eq!(card.count(1), 4);
 	}
 
 	#[test]

@@ -921,20 +921,23 @@ impl DiscordApi {
 					P::Vote {
 						channel,
 						message,
-						answer_id,
-						add,
+						answer_ids,
 						request,
 					} => {
-						let result = match poll_vote_path(channel, message, answer_id) {
-							Some(path) => self
-								.request(
-									if add { Method::POST } else { Method::DELETE },
-									&path,
-									None,
-								)
-								.await
-								.map(|_| ()),
-							None => Err(Failure::Protocol),
+						// The normal-user shape is one PUT with the full selection; an empty
+						// list clears every vote. A zero or oversized selection is refused.
+						let result = if answer_ids.len() <= model::MAX_POLL_ANSWERS
+							&& answer_ids.iter().all(|answer| *answer != 0)
+						{
+							self.request(
+								Method::PUT,
+								&poll_vote_path(channel, message),
+								Some(serde_json::json!({ "answer_ids": answer_ids })),
+							)
+							.await
+							.map(|_| ())
+						} else {
+							Err(Failure::Protocol)
 						};
 						E::Written {
 							channel,
@@ -1454,8 +1457,8 @@ fn reaction_path(
 		"/channels/{channel}/messages/{message}/reactions/{encoded}/@me"
 	))
 }
-fn poll_vote_path(channel: model::Id, message: model::Id, answer_id: u64) -> Option<String> {
-	(answer_id != 0).then(|| format!("/channels/{channel}/polls/{message}/answers/{answer_id}"))
+fn poll_vote_path(channel: model::Id, message: model::Id) -> String {
+	format!("/channels/{channel}/polls/{message}/answers/@me")
 }
 fn reaction_users_path(
 	channel: model::Id,
@@ -2234,7 +2237,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn poll_vote_routes_toggle_one_answer_and_reject_zero() {
+	async fn poll_vote_puts_the_selection_and_rejects_unsafe_ids() {
 		crate::ensure_tls_provider();
 		use client_core::polls::{Command as P, Event as E};
 		use model::Id;
@@ -2245,10 +2248,7 @@ mod tests {
 		.unwrap();
 		api.base = format!("http://{}", listener.local_addr().unwrap());
 		let server = tokio::spawn(async move {
-			for expected in [
-				"POST /channels/1/polls/2/answers/7",
-				"DELETE /channels/1/polls/2/answers/7",
-			] {
+			for answer_ids in [vec![7u64], Vec::new()] {
 				let (mut socket, _) = listener.accept().await.unwrap();
 				let mut request = Vec::new();
 				loop {
@@ -2257,50 +2257,66 @@ mod tests {
 					assert!(n > 0);
 					request.extend_from_slice(&bytes[..n]);
 					assert!(request.len() < 4096);
-					if request.windows(4).any(|w| w == b"\r\n\r\n") {
-						break;
+					if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+						let headers = String::from_utf8_lossy(&request[..end]);
+						let length: usize = headers
+							.lines()
+							.find_map(|line| {
+								line.to_ascii_lowercase()
+									.strip_prefix("content-length: ")
+									.map(str::to_owned)
+							})
+							.unwrap()
+							.parse()
+							.unwrap();
+						if request.len() >= end + 4 + length {
+							assert!(
+								headers.starts_with("PUT /channels/1/polls/2/answers/@me HTTP/1.1"),
+								"{headers}"
+							);
+							assert!(headers.contains("SYNTHETIC_POLL_TOKEN"));
+							let body: serde_json::Value =
+								serde_json::from_slice(&request[end + 4..end + 4 + length])
+									.unwrap();
+							assert_eq!(body["answer_ids"], serde_json::json!(answer_ids));
+							break;
+						}
 					}
 				}
-				let request = std::str::from_utf8(&request).unwrap();
-				assert!(
-					request.starts_with(&format!("{expected} HTTP/1.1\r\n")),
-					"{request}"
-				);
-				assert!(request.contains("SYNTHETIC_POLL_TOKEN"));
 				socket
 					.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
 					.await
 					.unwrap();
 			}
 		});
-		for add in [true, false] {
+		for (answer_ids, request) in [(vec![7u64], 1), (Vec::new(), 2)] {
 			assert!(matches!(
 				api.execute(Command::Polls(P::Vote {
 					channel: Id(1),
 					message: Id(2),
-					answer_id: 7,
-					add,
-					request: 1,
+					answer_ids,
+					request,
 				}))
 				.await,
 				Event::Polls(E::Written { result: Ok(()), .. })
 			));
 		}
-		// An answer id of zero can never build a route.
-		assert!(matches!(
-			api.execute(Command::Polls(P::Vote {
-				channel: Id(1),
-				message: Id(2),
-				answer_id: 0,
-				add: true,
-				request: 2,
-			}))
-			.await,
-			Event::Polls(E::Written {
-				result: Err(Failure::Protocol),
-				..
-			})
-		));
+		// A zero answer or an oversized selection never builds a request.
+		for answer_ids in [vec![0u64], vec![1; model::MAX_POLL_ANSWERS + 1]] {
+			assert!(matches!(
+				api.execute(Command::Polls(P::Vote {
+					channel: Id(1),
+					message: Id(2),
+					answer_ids,
+					request: 3,
+				}))
+				.await,
+				Event::Polls(E::Written {
+					result: Err(Failure::Protocol),
+					..
+				})
+			));
+		}
 		server.await.unwrap();
 	}
 

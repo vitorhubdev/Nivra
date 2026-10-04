@@ -1846,19 +1846,22 @@ external fallback stay, so nothing silently disappears.
 The decoder is bounded: `discord-protocol` keeps at most ten answers, 300 question characters,
 55 answer characters, 128 emoji-name characters and 16 KiB per poll, dropping unknown fields and
 treating an oversized answer list as an unreadable card with presence retained. Storage and the
-session timeline revalidate the same limits before retaining a card. Results arrive through the
-service's `MESSAGE_UPDATE` tally and through sequenced `MESSAGE_POLL_VOTE_ADD`/`REMOVE` Gateway
-deltas, deduplicated like reaction events; a repeated dispatch never moves the resume cursor
-backwards. Remote deltas raise tallies without marking the caller's own vote.
+session timeline revalidate the same limits before retaining a card. An omitted `results` object
+is unknown, not an authoritative zero: an update without it keeps the tallies already held for
+the same poll shape. Results arrive through the service's `MESSAGE_UPDATE` tally and through
+sequenced `MESSAGE_POLL_VOTE_ADD`/`REMOVE` Gateway deltas, deduplicated like reaction events; a
+repeated dispatch never moves the resume cursor backwards. Remote deltas raise tallies without
+marking the caller's own vote.
 
-Voting is one bounded optimistic write at a time: `POST` or `DELETE`
-`/channels/{channel}/polls/{message}/answers/{answer_id}` on the existing REST connection adds or
-removes the caller's vote, single-select toggles replace the previous choice the way the service
-does, and a failed write rolls the displayed tally back to the pre-vote value. The caller's own
-Gateway echo does not double the optimistic count. The only route evidence is Discord's documented
-application endpoint shape; normal-account voting interoperability remains unofficial and has not
-been validated against a live account. Poll creation, editing, custom-emoji resolution and
-cross-channel live results are not implemented.
+Voting is one bounded optimistic write at a time: `PUT
+/channels/{channel}/polls/{message}/answers/@me` with an `answer_ids` array on the existing REST
+connection sets the caller's full selection (an empty array clears it), single-select toggles
+replace the previous choice the way the service does, and a failed write rolls the displayed
+tally back to the pre-vote value. The caller's own Gateway echoes are correlated with the
+completed write so they cannot double the optimistic count. The route shape comes from the
+normal-user endpoint documentation; normal-account voting interoperability remains unofficial and
+has not been validated against a live account. Poll creation, editing, custom-emoji resolution
+and cross-channel live results are not implemented.
 
 The offline `profile_preview` example paints `docs/pr-evidence/polls/before.png` and
 `after.png` from synthetic fixtures; they are framebuffer captures, not OS screenshots and not

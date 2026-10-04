@@ -1672,7 +1672,7 @@ impl LocalStore {
 	}
 }
 
-const MESSAGE_PAYLOAD: &str = "length(CAST(content AS BLOB))+length(CAST(name AS BLOB))+length(CAST(original_flags AS BLOB))+length(CAST(components AS BLOB))+length(CAST(sticker_items AS BLOB))+coalesce(length(CAST(application_id AS BLOB)),0)+length(CAST(embeds AS BLOB))+length(CAST(attachments AS BLOB))+length(CAST(mentions AS BLOB))+length(CAST(author_roles AS BLOB))+coalesce(length(CAST(author_nick AS BLOB)),0)+coalesce(length(CAST(interaction AS BLOB)),0)+coalesce(length(CAST(reactions AS BLOB)),0)+256";
+const MESSAGE_PAYLOAD: &str = "length(CAST(content AS BLOB))+length(CAST(name AS BLOB))+length(CAST(original_flags AS BLOB))+length(CAST(components AS BLOB))+length(CAST(sticker_items AS BLOB))+coalesce(length(CAST(application_id AS BLOB)),0)+length(CAST(embeds AS BLOB))+length(CAST(attachments AS BLOB))+length(CAST(mentions AS BLOB))+length(CAST(author_roles AS BLOB))+coalesce(length(CAST(author_nick AS BLOB)),0)+coalesce(length(CAST(interaction AS BLOB)),0)+coalesce(length(CAST(reactions AS BLOB)),0)+coalesce(length(CAST(poll AS BLOB)),0)+256";
 
 fn message_payload(
 	tx: &rusqlite::Transaction<'_>,
@@ -3806,6 +3806,7 @@ mod component_storage_tests {
 				count: 3,
 				me_voted: true,
 			}],
+			counts_known: true,
 			expiry: None,
 			allow_multiselect: false,
 			finalized: false,
@@ -3817,6 +3818,33 @@ mod component_storage_tests {
 			store.load_channel(Id(1), Id(2)).unwrap()[0].poll,
 			messages[0].poll
 		);
+		// The poll JSON is charged to the 48-MiB payload budget.
+		let with_poll: i64 = store
+			.0
+			.query_row(
+				"SELECT content_bytes FROM stats WHERE singleton=1",
+				[],
+				|row| row.get(0),
+			)
+			.unwrap();
+		let poll_json = serde_json::to_string(messages[0].poll.as_ref().unwrap())
+			.unwrap()
+			.len() as i64;
+		let stored_poll = messages[0].poll.take();
+		store.save_channel(Id(1), Id(2), &messages).unwrap();
+		let without_poll: i64 = store
+			.0
+			.query_row(
+				"SELECT content_bytes FROM stats WHERE singleton=1",
+				[],
+				|row| row.get(0),
+			)
+			.unwrap();
+		assert!(
+			with_poll - without_poll >= poll_json,
+			"poll JSON must count against the eviction budget"
+		);
+		messages[0].poll = stored_poll;
 		messages[0]
 			.poll
 			.as_mut()

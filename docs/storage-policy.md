@@ -1412,7 +1412,8 @@ candidate; existing bounded local abandonment handles release after failure.
 
 Poll cards now persist with their message in the existing `messages` row. Schema 27 adds one
 nullable `poll` TEXT column capped at 32 KiB that holds the validated `model::Poll` JSON
-(question, up to ten answers with optional emoji, live tallies and flags); a null column reads as
+(question, up to ten answers with optional emoji, live tallies with an explicit unknown-results
+flag, and flags); a null column reads as
 no card, and a value that fails the shared model bounds (`valid_poll`) rejects the page as
 incompatible or over capacity instead of being retained. The column is added transactionally on
 upgrade; existing rows keep a null poll until normal history revalidation, and the native schema

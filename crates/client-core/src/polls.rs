@@ -5,13 +5,14 @@ use crate::{
 	auth::{AuthState, Failure},
 };
 use model::{Freshness, Id, Poll};
+use std::collections::VecDeque;
 
 pub enum Command {
 	Vote {
 		channel: Id,
 		message: Id,
-		answer_id: u64,
-		add: bool,
+		/// The full selection after the click; empty clears the caller's votes.
+		answer_ids: Vec<u64>,
 		request: u64,
 	},
 }
@@ -32,18 +33,27 @@ pub enum Event {
 	},
 }
 
+/// How many own vote echoes from successful writes may await the Gateway.
+const MAX_RECENT_ECHOES: usize = 16;
+
 #[derive(Default)]
 pub struct Polls {
 	/// The single in-flight vote, so a second click cannot race the first.
 	writing: Option<(Id, u64)>,
 	/// One bounded poll before/after the in-flight vote.
 	preview: Option<(Id, Poll, Poll)>,
+	/// Own vote echoes the in-flight write is expected to produce.
+	pending_echoes: Vec<(u64, bool)>,
+	/// Bounded own echoes already committed, still waiting on the Gateway.
+	recent_echoes: VecDeque<(Id, u64, bool)>,
 	sequence: u64,
 }
 impl Polls {
 	pub fn reset(&mut self) {
 		self.writing = None;
 		self.preview = None;
+		self.pending_echoes.clear();
+		self.recent_echoes.clear();
 		self.sequence = self.sequence.wrapping_add(1);
 	}
 	pub fn busy(&self) -> bool {
@@ -86,7 +96,23 @@ impl State {
 		let add = !before.me_voted(answer_id);
 		let mut after = before.clone();
 		toggle(&mut after, answer_id, add, true).ok()?;
+		let changes: Vec<(u64, bool)> = before
+			.answers
+			.iter()
+			.filter_map(|answer| {
+				let was = before.me_voted(answer.answer_id);
+				let now = after.me_voted(answer.answer_id);
+				(was != now).then_some((answer.answer_id, now))
+			})
+			.collect();
+		let answer_ids: Vec<u64> = after
+			.counts
+			.iter()
+			.filter(|count| count.me_voted)
+			.map(|count| count.answer_id)
+			.collect();
 		self.polls.preview = Some((message, before, after));
+		self.polls.pending_echoes = changes;
 		self.revision += 1;
 		self.polls.sequence = self.polls.sequence.wrapping_add(1);
 		let request = self.polls.sequence;
@@ -94,8 +120,7 @@ impl State {
 		Some(crate::Command::Polls(Command::Vote {
 			channel,
 			message,
-			answer_id,
-			add,
+			answer_ids,
 			request,
 		}))
 	}
@@ -112,16 +137,30 @@ impl State {
 					return Err("Invalid poll vote delta");
 				}
 				let own = self.user.as_ref().is_some_and(|me| me.id == user);
-				// Our own echo would double the optimistic vote; the write result
-				// and the service tally reconcile it.
-				if own
-					&& self
+				// The REST response and the Gateway dispatch travel independently: an
+				// own echo that belongs to a known write is consumed here so it can
+				// neither double the optimistic tally nor race the write result.
+				if own {
+					let correlation = (answer_id, add);
+					if let Some(index) = self
 						.polls
-						.preview
-						.as_ref()
-						.is_some_and(|(id, _, _)| *id == message)
-				{
-					return Ok(());
+						.pending_echoes
+						.iter()
+						.position(|pending| *pending == correlation)
+					{
+						self.polls.pending_echoes.remove(index);
+						return Ok(());
+					}
+					if let Some(index) =
+						self.polls
+							.recent_echoes
+							.iter()
+							.position(|(id, answer, adding)| {
+								*id == message && *answer == answer_id && *adding == add
+							}) {
+						self.polls.recent_echoes.remove(index);
+						return Ok(());
+					}
 				}
 				self.update_poll(channel, message, |poll| toggle(poll, answer_id, add, own))?;
 			}
@@ -138,6 +177,12 @@ impl State {
 				self.polls.writing = None;
 				match result {
 					Ok(()) => {
+						for (answer, add) in self.polls.pending_echoes.drain(..) {
+							if self.polls.recent_echoes.len() == MAX_RECENT_ECHOES {
+								self.polls.recent_echoes.pop_front();
+							}
+							self.polls.recent_echoes.push_back((message, answer, add));
+						}
 						// No readback on the vote route: commit the optimistic tally; a later
 						// MESSAGE_UPDATE with authoritative results replaces it.
 						if let Some((_, _, after)) = self.polls.preview.take() {
@@ -146,6 +191,7 @@ impl State {
 						self.revision += 1;
 					}
 					Err(failure) => {
+						self.polls.pending_echoes.clear();
 						if let Some((_, before, _)) = self.polls.preview.take() {
 							self.timeline.set_poll(message, Some(before))?;
 						}
@@ -233,6 +279,34 @@ pub fn toggle(poll: &mut Poll, answer_id: u64, add: bool, own: bool) -> Result<(
 	Ok(())
 }
 
+/// Applies a service-shaped selection to a poll for the offline fixture: every
+/// listed answer ends up selected and every other answer loses the caller's vote.
+pub fn apply_selection(poll: &mut Poll, answer_ids: &[u64]) -> Result<(), &'static str> {
+	if answer_ids.len() > model::MAX_POLL_ANSWERS || answer_ids.contains(&0) {
+		return Err("Invalid poll selection");
+	}
+	if !poll.allow_multiselect && answer_ids.len() > 1 {
+		return Err("Single-select polls accept one answer");
+	}
+	for answer_id in answer_ids {
+		if poll.answer(*answer_id).is_none() {
+			return Err("Unknown poll answer");
+		}
+	}
+	let current: Vec<u64> = poll.answers.iter().map(|answer| answer.answer_id).collect();
+	for answer_id in current {
+		if !answer_ids.contains(&answer_id) && poll.me_voted(answer_id) {
+			toggle(poll, answer_id, false, true)?;
+		}
+	}
+	for answer_id in answer_ids {
+		if !poll.me_voted(*answer_id) {
+			toggle(poll, *answer_id, true, true)?;
+		}
+	}
+	Ok(())
+}
+
 fn now_nanos() -> i128 {
 	std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
@@ -272,11 +346,30 @@ mod tests {
 					me_voted: false,
 				},
 			],
+			counts_known: true,
 			expiry,
 			allow_multiselect: multiselect,
 			finalized: false,
 			duration: 24,
 		}
+	}
+
+	#[test]
+	fn service_selection_replaces_single_choice_and_validates_bounds() {
+		let mut value = poll(false, None);
+		apply_selection(&mut value, &[2]).unwrap();
+		assert!(!value.me_voted(1) && value.me_voted(2));
+		assert_eq!(value.count(1), 3);
+		assert_eq!(value.count(2), 3);
+		assert!(apply_selection(&mut value, &[1, 2]).is_err());
+		assert!(apply_selection(&mut value, &[0]).is_err());
+		assert!(apply_selection(&mut value, &[9]).is_err());
+		assert!(apply_selection(&mut value, &[1; model::MAX_POLL_ANSWERS + 1]).is_err());
+		apply_selection(&mut value, &[]).unwrap();
+		assert!(!value.voted());
+		let mut multi = poll(true, None);
+		apply_selection(&mut multi, &[1, 2]).unwrap();
+		assert!(multi.me_voted(1) && multi.me_voted(2));
 	}
 
 	#[test]
@@ -410,11 +503,14 @@ mod tests {
 			.unwrap();
 
 		let Some(crate::Command::Polls(Command::Vote {
-			add: true, request, ..
+			answer_ids,
+			request,
+			..
 		})) = state.prepare_poll_vote(Id(50), 1)
 		else {
 			panic!("an open poll accepts a vote")
 		};
+		assert_eq!(answer_ids, vec![1]);
 		let displayed = state
 			.polls
 			.display(state.timeline.get(Id(50)).unwrap())
@@ -459,15 +555,39 @@ mod tests {
 				.count(1),
 			4
 		);
+		// The own echo can arrive after the HTTP completion; it must still be
+		// consumed instead of double-counting the committed vote.
+		state
+			.apply_polls(Event::Delta {
+				channel: Id(10),
+				message: Id(50),
+				answer_id: 1,
+				user: Id(2),
+				add: true,
+			})
+			.unwrap();
+		assert_eq!(
+			state
+				.timeline
+				.get(Id(50))
+				.unwrap()
+				.poll
+				.as_ref()
+				.unwrap()
+				.count(1),
+			4,
+			"a late own echo never double-counts"
+		);
 		// A rejected write restores the pre-vote poll.
 		let Some(crate::Command::Polls(Command::Vote {
-			add: false,
+			answer_ids,
 			request,
 			..
 		})) = state.prepare_poll_vote(Id(50), 1)
 		else {
 			panic!("a voted answer can be un-voted")
 		};
+		assert!(answer_ids.is_empty(), "un-voting clears the selection");
 		assert!(
 			!state
 				.polls

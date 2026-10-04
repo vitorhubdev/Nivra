@@ -133,6 +133,7 @@ mod tests {
 					me_voted: false,
 				},
 			],
+			counts_known: true,
 			expiry: None,
 			allow_multiselect: multiselect,
 			finalized,

@@ -65,6 +65,10 @@ pub struct Poll {
 	/// Answers the service reported so far; missing answers read as zero.
 	#[serde(default)]
 	pub counts: Vec<PollCount>,
+	/// False when the service omitted `results` entirely: the stored tally is then
+	/// unknown, not an authoritative zero, and updates must not erase known counts.
+	#[serde(default)]
+	pub counts_known: bool,
 	/// Nanoseconds since the Unix epoch, same convention as `Message::edited_at`.
 	#[serde(default)]
 	pub expiry: Option<i128>,
@@ -164,6 +168,7 @@ mod tests {
 				count: 3,
 				me_voted: true,
 			}],
+			counts_known: true,
 			expiry: None,
 			allow_multiselect: false,
 			finalized: false,
@@ -203,6 +208,7 @@ mod tests {
 					me_voted: false,
 				},
 			],
+			counts_known: true,
 			expiry: Some(100),
 			allow_multiselect: false,
 			finalized: false,

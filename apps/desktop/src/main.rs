@@ -3503,8 +3503,7 @@ impl Desktop {
 						P::Vote {
 							channel,
 							message,
-							answer_id,
-							add,
+							answer_ids,
 							request,
 						} => {
 							// The fixture has no service; move the synthetic tally in RAM only.
@@ -3514,7 +3513,7 @@ impl Desktop {
 								.get(message)
 								.and_then(|m| m.poll.clone())
 							{
-								let _ = client_core::polls::toggle(&mut poll, answer_id, add, true);
+								let _ = client_core::polls::apply_selection(&mut poll, &answer_ids);
 								let _ = self.state.timeline.set_poll(message, Some(poll));
 							}
 							E::Written {

@@ -237,6 +237,11 @@ impl Timeline {
 				&previous.author_roles,
 				previous.author_nick.as_deref(),
 			);
+			if let (Some(previous_poll), Some(poll)) =
+				(previous.poll.as_ref(), message.poll.as_mut())
+			{
+				preserve_unknown_poll(previous_poll, poll);
+			}
 			message.revision = previous.revision
 				+ u64::from(
 					previous.content != message.content
@@ -248,6 +253,7 @@ impl Timeline {
 						|| previous.reply_deleted != message.reply_deleted
 						|| previous.sticker_items != message.sticker_items
 						|| previous.extra_content != message.extra_content
+						|| previous.poll != message.poll
 						|| previous.embeds != message.embeds
 						|| previous.attachments != message.attachments
 						|| previous.embeds_suppressed != message.embeds_suppressed
@@ -436,6 +442,9 @@ impl Timeline {
 			if !matches!(patch.embeds_suppressed, Patch::Absent) {
 				merged.embeds_suppressed = patch.embeds_suppressed;
 			}
+			if !matches!(patch.poll, Patch::Absent) {
+				merged.poll = patch.poll;
+			}
 			merged.extra_content.merge(&patch.extra_content);
 			let replaced = self.patches.get(&patch.id).map_or(0, patch_bytes);
 			if bytes - replaced + patch_bytes(&merged) > 1024 * 1024 {
@@ -575,7 +584,33 @@ fn patch_bytes(patch: &MessagePatch) -> usize {
 				+ value.capacity().saturating_sub(value.len()) * size_of::<model::Attachment>()
 		}
 		_ => 0,
+	} + match &patch.poll {
+		Patch::Value(Some(poll)) => poll.bytes(),
+		_ => 0,
 	}
+}
+/// An absent `results` object is unknown, not zero: keep the tallies already held
+/// for the same poll shape instead of erasing them.
+fn preserve_unknown_poll(previous: &model::Poll, poll: &mut model::Poll) {
+	if poll.counts_known
+		|| previous.question != poll.question
+		|| previous.answers.len() != poll.answers.len()
+		|| previous
+			.answers
+			.iter()
+			.zip(&poll.answers)
+			.any(|(a, b)| a.answer_id != b.answer_id)
+	{
+		return;
+	}
+	poll.counts = previous
+		.counts
+		.iter()
+		.filter(|count| poll.answer(count.answer_id).is_some())
+		.cloned()
+		.collect();
+	poll.finalized = previous.finalized;
+	poll.counts_known = true;
 }
 /// Apply a previously bounded patch (the caller must validate component and payload limits).
 pub fn apply_patch(message: &mut Message, patch: &MessagePatch) {
@@ -619,8 +654,14 @@ pub fn apply_patch(message: &mut Message, patch: &MessagePatch) {
 		Patch::Absent => {}
 	}
 	match &patch.poll {
-		Patch::Value(poll) => message.poll.clone_from(poll),
-		Patch::Null => message.poll = None,
+		Patch::Value(Some(poll)) => {
+			let mut poll = poll.clone();
+			if let Some(previous) = message.poll.as_ref() {
+				preserve_unknown_poll(previous, &mut poll);
+			}
+			message.poll = Some(poll);
+		}
+		Patch::Value(None) | Patch::Null => message.poll = None,
 		Patch::Absent => {}
 	}
 	match &patch.application_id {
@@ -942,6 +983,7 @@ mod tests {
 				count: 2,
 				me_voted: false,
 			}],
+			counts_known: true,
 			expiry: None,
 			allow_multiselect: false,
 			finalized: false,
@@ -959,6 +1001,108 @@ mod tests {
 		);
 		timeline.set_poll(Id(10), None).unwrap();
 		assert!(timeline.get(Id(10)).unwrap().poll.is_none());
+	}
+
+	#[test]
+	fn unknown_poll_results_never_erase_known_tallies_and_pending_polls_charge_bytes() {
+		let poll = |counts_known: bool| model::Poll {
+			question: "Keep it?".into(),
+			answers: vec![model::PollAnswer {
+				answer_id: 1,
+				text: "Yes".into(),
+				emoji: None,
+			}],
+			counts: vec![model::PollCount {
+				answer_id: 1,
+				count: 4,
+				me_voted: true,
+			}],
+			counts_known,
+			expiry: None,
+			allow_multiselect: false,
+			finalized: false,
+			duration: 1,
+		};
+		let patch = |id: Id, poll: model::Patch<Option<model::Poll>>| MessagePatch {
+			poll,
+			flags: Patch::Absent,
+			sticker_items: Patch::Absent,
+			components: Patch::Absent,
+			application_id: Patch::Absent,
+			id,
+			channel: Id(1),
+			content: Patch::Absent,
+			extra_content: Default::default(),
+			reactions: Patch::Absent,
+			mentions: Patch::Absent,
+			edited: Patch::Absent,
+			embeds: Patch::Absent,
+			attachments: Patch::Absent,
+			embeds_suppressed: Patch::Absent,
+		};
+		let mut timeline = Timeline::default();
+		timeline.insert(message(10), false, false).unwrap();
+		timeline.set_poll(Id(10), Some(poll(true))).unwrap();
+		// A hydrated update without `results` keeps the known tally.
+		let unknown = model::Poll {
+			counts: Vec::new(),
+			counts_known: false,
+			..poll(true)
+		};
+		timeline
+			.patch(patch(Id(10), Patch::Value(Some(unknown))))
+			.unwrap();
+		let stored = timeline.get(Id(10)).unwrap().poll.clone().unwrap();
+		assert_eq!(stored.count(1), 4);
+		assert!(stored.me_voted(1));
+		assert!(stored.counts_known);
+		// A history refetch without `results` preserves the loaded tally too.
+		let mut refetched = message(10);
+		refetched.extra_content.poll = true;
+		refetched.poll = Some(model::Poll {
+			counts: Vec::new(),
+			counts_known: false,
+			..poll(true)
+		});
+		timeline.insert(refetched, false, false).unwrap();
+		let stored = timeline.get(Id(10)).unwrap().poll.clone().unwrap();
+		assert_eq!(stored.count(1), 4);
+		assert!(stored.counts_known);
+		// A different poll shape never borrows tallies from the previous one.
+		let mut renamed = poll(true);
+		renamed.question = "Changed?".into();
+		let unknown = model::Poll {
+			counts: Vec::new(),
+			counts_known: false,
+			..renamed
+		};
+		timeline
+			.patch(patch(Id(10), Patch::Value(Some(unknown))))
+			.unwrap();
+		let stored = timeline.get(Id(10)).unwrap().poll.clone().unwrap();
+		assert_eq!(stored.count(1), 0);
+		assert!(!stored.counts_known);
+		// A pending patch for an unloaded row keeps the latest poll and charges it.
+		timeline.begin_page(false);
+		timeline
+			.patch(patch(Id(77), Patch::Value(Some(poll(true)))))
+			.unwrap();
+		let charged = timeline.retained_bytes();
+		timeline.patch(patch(Id(77), Patch::Null)).unwrap();
+		assert!(
+			charged - timeline.retained_bytes() >= poll(true).bytes(),
+			"pending poll patches are charged to the byte budget"
+		);
+		timeline
+			.patch(patch(Id(77), Patch::Value(Some(poll(true)))))
+			.unwrap();
+		timeline.finish_page(vec![message(77)], false).unwrap();
+		let stored = timeline.get(Id(77)).unwrap().poll.clone().unwrap();
+		assert_eq!(
+			stored.count(1),
+			4,
+			"the latest pending poll survives the page"
+		);
 	}
 
 	#[test]

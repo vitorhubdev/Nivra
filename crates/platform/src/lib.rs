@@ -4,6 +4,7 @@ pub mod captcha;
 pub mod compositor;
 pub mod game_activity;
 pub mod hotkeys;
+pub mod image;
 pub mod locale;
 pub mod migration;
 pub mod notifications;

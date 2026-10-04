@@ -1225,6 +1225,27 @@ fn decode(bytes: &[u8], budget: &Budget) -> Option<egui::ColorImage> {
 	if bytes.len() > budget.encoded {
 		return None;
 	}
+	// iPhone photos: the bundled decoder cannot read HEIC; try the OS codec
+	// first (Windows WIC) and keep the download fallback everywhere else.
+	if platform::image::is_heic(bytes)
+		&& let Some((rgba, width, height)) =
+			platform::image::decode_heic(bytes, budget.canvas, budget.alloc / 4)
+	{
+		let image = image::RgbaImage::from_raw(width, height, rgba).filter(|image| {
+			image.width() <= budget.canvas
+				&& image.height() <= budget.canvas
+				&& image.width() > 0
+				&& image.height() > 0
+		});
+		if let Some(image) = image {
+			let fitted = resize_to(image, budget.fit);
+			return Some(egui::ColorImage::from_rgba_unmultiplied(
+				[fitted.width() as usize, fitted.height() as usize],
+				fitted.as_raw(),
+			));
+		}
+		return None;
+	}
 	// Provider previews can be GIF/JPEG/WebP; decode only the first frame, within limits.
 	let mut reader = image::ImageReader::new(Cursor::new(bytes))
 		.with_guessed_format()
@@ -1624,6 +1645,23 @@ impl Disk {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn heic_without_os_codec_falls_back_to_download() {
+		// ftyp says HEIC but the payload is garbage: no OS codec can read it,
+		// so decode refuses and the UI keeps the download affordance.
+		let mut bytes = vec![0u8; 64];
+		bytes[4..8].copy_from_slice(b"ftyp");
+		bytes[8..12].copy_from_slice(b"heic");
+		assert!(platform::image::is_heic(&bytes));
+		let budget = Budget {
+			fit: 512,
+			encoded: 1024 * 1024,
+			canvas: 2048,
+			alloc: 64 * 1024 * 1024,
+			frames: None,
+		};
+		assert!(decode(&bytes, &budget).is_none());
+	}
 	#[tokio::test]
 	async fn decoder_slots_follow_running_closures_after_waiter_abort() {
 		let slots = Arc::new(Semaphore::new(1));

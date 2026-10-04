@@ -20,11 +20,13 @@ Pilar 1 — supressão de ruído (orçamento de 10 ms por quadro; aprovado com p
 | Desligado | 0 | 0 | 0 | 0.1382 |
 | Leve (WebRtc) | 50 | 58 | 0 | 0.0475 |
 | Padrão (RNNoise) | 55 | 90 | 0 | 0.0619 |
-| Máxima (DeepFilterNet) | 97 | 138 | 0 | 0.1105 |
+| Máxima (DeepFilterNet, worker sintético) | 97 | 138 | 0 | 0.1105 |
 | Troca de modo no meio | — | — | — | 0.0836 (sem estalo) |
 
+No nível Máxima o teste usa um worker sintético (400 µs fixos, sem carregar o modelo real); os outros três usam o processamento real. A prova é o orçamento e a continuidade do pipeline, não o tempo do modelo real.
+
 - Pilar 2 — falar e ouvir: dois clientes sintéticos trocam áudio decodificado com DAVE/MLS ligado (tons de 450/650 Hz, pelo menos 60 quadros por sentido, tom alvo > 10× o outro); um blackout de UDP de 10 s volta sozinho sem rejoin; troca de dispositivo com a chamada aberta; estresse de 50 ciclos de entrar/sair e 20 trocas de canal.
-- Pilar 3 — avisar tudo: cada `VOICE_STATE_UPDATE` pinta o ícone certo em um frame (teste com egui_kittest); sons de entrar/sair, mutar/desmutar e ensurdecer passam por filas ordenadas, com deduplicação por identidade e sem som perdido quando a fila enche.
+- Pilar 3 — avisar tudo: cada `VOICE_STATE_UPDATE` pinta o ícone certo em um frame (teste com egui_kittest); sons de entrar/sair, mutar/desmutar e ensurdecer passam por filas ordenadas, com deduplicação por identidade, que mantêm os avisos mais recentes quando a fila enche (o item mais antigo é descartado de propósito).
 
 ### Correções da auditoria
 
@@ -37,7 +39,7 @@ Pilar 1 — supressão de ruído (orçamento de 10 ms por quadro; aprovado com p
 ### Funções aprovadas
 
 - Push to Mute nos botões laterais do mouse (4/5): ação desatribuída por padrão, funciona com a janela focada e, no Windows, global via poller; mudar o estado acorda a UI na hora.
-- Ícone de voz na bandeja: mutado, ensurdecido, ativo e fora de chamada, com os quatro estados cobertos por teste e prévias em PNG.
+- Ícone de voz na bandeja (Windows): mutado, ensurdecido, ativo e fora de chamada, com os quatro estados cobertos por teste e prévias em PNG; no macOS e Linux a bandeja mantém o comportamento anterior.
 - Layout compacto da timeline (hora | autor | texto) em Configurações > Aparência, cobrindo linhas normais, starter de thread e mensagens pendentes.
 - Prévia de HEIC do iPhone via decodificador do Windows (WIC), com o orçamento de pixels respeitado, orientação EXIF aplicada e fallback "Baixar" onde não houver codec.
 - Enquetes do Discord: ver, votar, remover o voto, resultado ao vivo e enquete encerrada, no lugar do marcador antigo. Limitação honesta: o voto usa a rota de usuário `PUT /channels/{canal}/polls/{mensagem}/answers/@me`, que é não oficial e não foi validada em conta real.
@@ -46,11 +48,11 @@ Pilar 1 — supressão de ruído (orçamento de 10 ms por quadro; aprovado com p
 
 1.0.11 fixes the video freeze, ships the measured voice-pillar suite, closes the 1.0.10 audit items and delivers the five approved features. Playing a video no longer deadlocks the app (egui context re-lock inside `widget_info`); audio-less clips play to the end with a monotonic media clock; the card shows the first frame before Play; decode failures offer retry/download/open-original; and a render-stall watchdog writes a bounded `nivra-freeze.log` after 2 s without blocking the UI.
 
-Voice pillars, measured: noise suppression stays under a 5000 µs p99 per 10 ms frame with zero budget blowouts (Off 0/0, Light/WebRtc 50/58, Standard/RNNoise 55/90, Maximum/DeepFilter 97/138 µs p50/p99; 0.0836 maximum crossfade step); two synthetic clients exchange decoded DAVE-encrypted audio (450/650 Hz, at least 60 frames per direction), survive a 10 s UDP blackout without rejoining, follow a device switch during a call, and pass a 50× join/leave and 20× channel-switch stress; every voice-state update paints the right icon in one frame with ordered, identity-deduplicated cue queues.
+Voice pillars, measured: noise suppression stays under a 5000 µs p99 per 10 ms frame with zero budget blowouts (Off 0/0, Light/WebRtc 50/58, Standard/RNNoise 55/90, Maximum/DeepFilter 97/138 µs p50/p99 — the Maximum figure measures the synthetic worker path, not the real model; 0.0836 maximum crossfade step); two synthetic clients exchange decoded DAVE-encrypted audio (450/650 Hz, at least 60 frames per direction), survive a 10 s UDP blackout without rejoining, follow a device switch during a call, and pass a 50× join/leave and 20× channel-switch stress; every voice-state update paints the right icon in one frame with ordered, identity-deduplicated cue queues that keep the newest bounded set when full.
 
 Audit fixes: non-blocking voice UDP, burst-loss jitter recovery, stale-mix drop, a 30 s DAVE rekey deadline disarmed after success, escaped HTML export (no `javascript:` URLs), bounded READY entries with per-guild login survival, five-segment attachment links, video stall and drag-seek fixes, the observed DM mute timer, translated update strings, and a race test proving a single instance-lock winner.
 
-Approved features: Push to Mute on mouse 4/5 (unassigned by default, global on Windows), tray voice-state icon (muted, deafened, connected, idle) with PNG proofs, compact timeline layout including thread starters and pending rows, Windows WIC HEIC preview with EXIF orientation and download fallback, and Discord polls (view, vote, unvote, live results, closed state). Honest limitation: poll voting uses the unofficial normal-user route and has not been validated against a real account.
+Approved features: Push to Mute on mouse 4/5 (unassigned by default, global on Windows), the Windows tray voice-state icon (muted, deafened, connected, idle) with PNG proofs (macOS and Linux keep the previous tray behavior), compact timeline layout including thread starters and pending rows, Windows WIC HEIC preview with EXIF orientation and download fallback, and Discord polls (view, vote, unvote, live results, closed state). Honest limitation: poll voting uses the unofficial normal-user route and has not been validated against a real account.
 
 ## Nivra 1.0.10
 

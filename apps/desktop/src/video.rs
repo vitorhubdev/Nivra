@@ -10,6 +10,7 @@ macro_rules! vlog {
 mod fallback;
 mod output;
 mod source;
+use eframe::egui;
 use std::sync::{
 	Arc, Mutex,
 	atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
@@ -37,11 +38,32 @@ const MAX_VIDEO_WORKERS: usize = 4;
 const LOG_BUDGET: usize = 24;
 static LIVE_VIDEO_WORKERS: AtomicUsize = AtomicUsize::new(0);
 fn try_acquire_video_worker(live: &AtomicUsize) -> bool {
-	if live.fetch_add(1, Ordering::AcqRel) >= MAX_VIDEO_WORKERS {
+	try_acquire_bounded(live, worker_limit())
+}
+fn try_acquire_bounded(live: &AtomicUsize, limit: usize) -> bool {
+	if live.fetch_add(1, Ordering::AcqRel) >= limit {
 		live.fetch_sub(1, Ordering::AcqRel);
 		false
 	} else {
 		true
+	}
+}
+/// Concurrency bound; tests may lower it to exercise the refusal without
+/// taking the process-wide slots from tests running in parallel.
+#[cfg(test)]
+static TEST_WORKER_LIMIT: AtomicUsize = AtomicUsize::new(MAX_VIDEO_WORKERS);
+/// Tests that lower the worker limit or open real workers take turns, so the
+/// process-wide slot budget and the limit override stay deterministic.
+#[cfg(test)]
+static VIDEO_START_LOCK: Mutex<()> = Mutex::new(());
+fn worker_limit() -> usize {
+	#[cfg(test)]
+	{
+		TEST_WORKER_LIMIT.load(Ordering::Acquire)
+	}
+	#[cfg(not(test))]
+	{
+		MAX_VIDEO_WORKERS
 	}
 }
 /// Startup transients free slots in milliseconds while stuck native opens do
@@ -60,12 +82,38 @@ fn stall_timed_out(paused: bool, idle: Duration) -> bool {
 	!paused && idle > Duration::from_secs(10)
 }
 
+/// Largest frame the inline card uploads: 1920x1080, matching `VideoUi::accept_frame`.
+const MAX_FRAME_PIXELS: usize = 1920 * 1080;
+/// One decoded frame as the UI texture source. Built on the worker so the render
+/// thread only swaps buffers; oversized frames are refused with a clear reason
+/// instead of leaving the card black forever (owner P0, 2026-10-03).
+fn frame_image(width: u32, height: u32, rgba: &[u8]) -> Result<egui::ColorImage, &'static str> {
+	let (width, height) = (width as usize, height as usize);
+	if width == 0 || height == 0 || rgba.len() != width * height * 4 {
+		return Err("Video frame has an unsupported size");
+	}
+	if width * height > MAX_FRAME_PIXELS {
+		return Err("Video frame is larger than 1080p preview supports");
+	}
+	let pixels = rgba
+		.as_chunks::<4>()
+		.0
+		.iter()
+		.map(|&[r, g, b, a]| eframe::egui::Color32::from_rgba_unmultiplied(r, g, b, a))
+		.collect::<Vec<_>>();
+	Ok(eframe::egui::ColorImage {
+		size: [width, height],
+		source_size: eframe::egui::vec2(width as f32, height as f32),
+		pixels,
+	})
+}
+
 #[derive(Default)]
 struct Update {
 	state: VideoState,
 	position: f64,
 	duration: f64,
-	frame: Option<(u32, u32, Vec<u8>)>,
+	frame: Option<egui::ColorImage>,
 }
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -115,6 +163,35 @@ pub struct Video {
 	worker: Option<std::thread::JoinHandle<()>>,
 }
 impl Video {
+	/// Whether a media session is live (used by the stall watchdog's phase).
+	pub fn is_active(&self) -> bool {
+		self.session.is_some()
+	}
+	/// Bounded one-line snapshot for the freeze log; never player metadata or URLs.
+	pub fn snapshot(&self) -> String {
+		let Some(session) = &self.session else {
+			return "none".into();
+		};
+		let (state, position) = session
+			.update
+			.try_lock()
+			.map(|update| (Some(update.state), update.position))
+			.unwrap_or((None, 0.0));
+		format!(
+			"session={} paused={} position={position:.2} workers={} state={}",
+			session.id,
+			session.paused.load(Ordering::Relaxed),
+			LIVE_VIDEO_WORKERS.load(Ordering::Relaxed),
+			match state {
+				Some(VideoState::Playing) => "playing",
+				Some(VideoState::Paused) => "paused",
+				Some(VideoState::Loading) => "loading",
+				Some(VideoState::Ended) => "ended",
+				Some(VideoState::Failed(_)) => "failed",
+				_ => "idle",
+			}
+		)
+	}
 	pub fn stop(&mut self) {
 		if let Some(session) = self.session.take() {
 			session.cancelled.store(true, Ordering::Release);
@@ -126,7 +203,8 @@ impl Video {
 			return;
 		};
 		let fresh = output.map(str::to_owned);
-		if let Ok(mut wanted) = session.output.lock()
+		// Never block the render thread on a lock the worker also takes.
+		if let Ok(mut wanted) = session.output.try_lock()
 			&& *wanted != fresh
 		{
 			*wanted = fresh;
@@ -139,8 +217,8 @@ impl Video {
 			// never by position, or a backward drag would snap back to the old position.
 			let frame = update.frame.take();
 			drop(update);
-			if let Some((width, height, rgba)) = frame {
-				player.accept_frame(ctx, width as usize, height as usize, &rgba);
+			if let Some(frame) = frame {
+				player.accept_frame(ctx, frame);
 			}
 		}
 	}
@@ -156,7 +234,15 @@ impl Video {
 			VideoCommand::Stop => self.stop(),
 			VideoCommand::Play(attachment) => {
 				self.stop();
-				if let Err(error) = self.start(attachment, player.volume, runtime, ctx, demo) {
+				if let Err(error) = self.start(attachment, player.volume, runtime, ctx, demo, true)
+				{
+					player.state = VideoState::Failed(error);
+				}
+			}
+			VideoCommand::Preview(attachment) => {
+				self.stop();
+				if let Err(error) = self.start(attachment, player.volume, runtime, ctx, demo, false)
+				{
 					player.state = VideoState::Failed(error);
 				}
 			}
@@ -190,6 +276,7 @@ impl Video {
 		runtime: &tokio::runtime::Handle,
 		ctx: &eframe::egui::Context,
 		demo: bool,
+		autoplay: bool,
 	) -> Result<(), &'static str> {
 		if !attachment.is_video() {
 			return Err("This file is not a video");
@@ -223,6 +310,9 @@ impl Video {
 		};
 		let session_id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
 		let session = Arc::new(Session::new(volume, session_id));
+		// A poster open stays paused until the play button resumes it; the worker
+		// still decodes and publishes the first frame.
+		session.paused.store(!autoplay, Ordering::Release);
 		if !try_acquire_video_worker(&LIVE_VIDEO_WORKERS) {
 			// No waiting: start() runs on the render thread, and four healthy
 			// concurrent plays must fail fast instead of freezing input.
@@ -418,7 +508,14 @@ fn play_decoded(
 			return Ok(());
 		}
 		if seeking {
+			vlog!(&session.log_budget, "seek: starting at {target:.3}s");
+			let seek_started = Instant::now();
 			decoder.seek(target)?;
+			vlog!(
+				&session.log_budget,
+				"seek: ready in {:.0} ms",
+				seek_started.elapsed().as_secs_f64() * 1000.0
+			);
 		}
 		let position = Arc::new(AtomicU64::new(0));
 		let eof = Arc::new(AtomicBool::new(false));
@@ -448,16 +545,21 @@ fn play_decoded(
 		} else {
 			None
 		};
-		let mut frames = VecDeque::new();
-		let mut seek_preview = None;
+		let mut frames: VecDeque<(f64, u32, u32, Vec<u8>)> = VecDeque::new();
+		let mut seek_preview: Option<(f64, u32, u32, Vec<u8>)> = None;
 		let mut pending_audio: Option<(Vec<[f32; 2]>, usize)> = None;
 		let mut queued_audio = 0u64;
 		let mut video_ended = false;
 		let mut audio_ended = output.is_none();
 		let mut preview_needed = true;
-		let mut wall = target;
+		// Media clock anchored on the monotonic wall clock instead of accumulated deltas:
+		// a slow read used to drop elapsed time ("freeze the clock") and a silent or
+		// short-audio clip could never reach its end, leaving the card black forever.
+		let mut anchor = Instant::now();
+		let mut anchor_at = target;
+		// Whether the media clock is currently held (paused, or before the poster).
+		let mut holding = true;
 		let mut ticks = 0u64;
-		let mut last_tick = Instant::now();
 		let mut last_progress = Instant::now();
 		let mut previous_position = target;
 		loop {
@@ -487,7 +589,11 @@ fn play_decoded(
 			ticks += 1;
 			let wanted = wanted_output();
 			// Explicit switches migrate every frame; a moved system default is re-resolved about once a second.
-			let default_moved = wanted.is_none()
+			// A silent/audio-less clip has no output to migrate; comparing a missing
+			// handle with the system default re-seeked the player every second and
+			// left the card black forever (owner P0, 2026-10-03).
+			let default_moved = output.is_some()
+				&& wanted.is_none()
 				&& ticks.is_multiple_of(60)
 				&& opened.as_ref().map(|(_, id)| id)
 					!= discord_voice::output::default_id(&cpal::default_host()).as_ref();
@@ -503,19 +609,27 @@ fn play_decoded(
 					.store((previous_position * 1000.0) as u64, Ordering::Release);
 			}
 			let now = Instant::now();
-			let elapsed = now.duration_since(last_tick).as_secs_f64();
-			last_tick = now;
 			let paused = session.paused.load(Ordering::Acquire);
-			if !paused && !preview_needed {
-				wall += elapsed;
+			// Holding (paused, or before the first frame shows) freezes the media clock
+			// at the time it reached: on entering the hold the elapsed offset moves into
+			// `anchor_at` once, so a pause neither jumps back to the seek target
+			// (Codex #78 P1) nor accumulates paused time.
+			if paused || preview_needed {
+				if !holding {
+					anchor_at += now.saturating_duration_since(anchor).as_secs_f64();
+					holding = true;
+				}
+				anchor = now;
+			} else {
+				holding = false;
 			}
+			let wall = anchor_at + now.duration_since(anchor).as_secs_f64();
 			let audio_position = target
 				+ position.load(Ordering::Acquire) as f64 / f64::from(info.sample_rate.max(1));
 			let audio_drained = audio_ended
 				&& pending_audio.is_none()
 				&& position.load(Ordering::Acquire) >= queued_audio;
 			let current = if output.is_some() && !audio_drained {
-				wall = audio_position;
 				audio_position
 			} else {
 				wall
@@ -530,7 +644,8 @@ fn play_decoded(
 				.is_some_and(|(pts, _, _, _)| *pts <= current + 0.01 || preview_needed)
 			{
 				let (_, width, height, rgba) = frames.pop_front().expect("front exists");
-				frame = Some((width, height, rgba));
+				// Pixel conversion stays on this worker; the render thread only swaps buffers.
+				frame = Some(frame_image(width, height, rgba.as_slice())?);
 				preview_needed = false;
 			}
 			if frame.is_some() {
@@ -595,7 +710,6 @@ fn play_decoded(
 					target = current;
 					seeking = true;
 					last_progress = Instant::now();
-					last_tick = Instant::now();
 					if let Ok(mut update) =
 						session.update.try_lock().or_else(|_| session.update.lock())
 					{
@@ -659,7 +773,6 @@ fn play_decoded(
 			}
 			// Two frames (<=16 MiB) ahead, plus one bounded audio packet and one second of PCM.
 			if !video_ended && frames.len() < 2 {
-				let read_started = Instant::now();
 				let sample = decoder.poll_video()?;
 				decoded |= sample.is_ready();
 				match sample {
@@ -686,12 +799,6 @@ fn play_decoded(
 					}
 					Pending => {}
 					_ => return Err("Unexpected video track"),
-				}
-				// Freeze the silent/finished-audio clock across a blocking buffer refill.
-				if (output.is_none() || audio_drained)
-					&& read_started.elapsed() > Duration::from_millis(100)
-				{
-					last_tick = Instant::now();
 				}
 			}
 			if !decoded {
@@ -833,39 +940,34 @@ mod attachment_url_tests {
 	fn video_worker_slots_are_bounded_and_released() {
 		let live = AtomicUsize::new(0);
 		for _ in 0..MAX_VIDEO_WORKERS {
-			assert!(try_acquire_video_worker(&live));
+			assert!(try_acquire_bounded(&live, MAX_VIDEO_WORKERS));
 		}
 		assert!(
-			!try_acquire_video_worker(&live),
+			!try_acquire_bounded(&live, MAX_VIDEO_WORKERS),
 			"a fifth concurrent open is refused"
 		);
 		assert_eq!(live.load(Ordering::Acquire), MAX_VIDEO_WORKERS);
 		live.fetch_sub(1, Ordering::AcqRel);
-		assert!(try_acquire_video_worker(&live), "a freed slot is reusable");
+		assert!(
+			try_acquire_bounded(&live, MAX_VIDEO_WORKERS),
+			"a freed slot is reusable"
+		);
 		live.fetch_sub(1, Ordering::AcqRel);
 	}
 	#[test]
 	fn busy_video_open_fails_fast_without_blocking_the_render_thread() {
+		let _turn = VIDEO_START_LOCK
+			.lock()
+			.unwrap_or_else(|poison| poison.into_inner());
 		source::OFFLINE_PROBE.store(true, Ordering::Release);
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(1)
 			.enable_all()
 			.build()
 			.unwrap();
-		// Hold every global slot so start() must refuse (transient holders from
-		// other tests clear within milliseconds; bounded retries keep this tight).
-		let mut held = Vec::new();
-		for _ in 0..500 {
-			while held.len() < MAX_VIDEO_WORKERS && try_acquire_video_worker(&LIVE_VIDEO_WORKERS) {
-				held.push(WorkerSlot(&LIVE_VIDEO_WORKERS));
-			}
-			if held.len() == MAX_VIDEO_WORKERS {
-				break;
-			}
-			std::thread::sleep(Duration::from_millis(1));
-		}
-		assert_eq!(held.len(), MAX_VIDEO_WORKERS, "all worker slots stay held");
-		let _held = held;
+		// Every worker slot counts as busy (0 = at the limit) without stealing the
+		// process-wide slots from tests running in parallel.
+		TEST_WORKER_LIMIT.store(0, Ordering::Release);
 		let attachment = model::Attachment {
 			id: model::Id(9001),
 			filename: "busy.mp4".into(),
@@ -889,6 +991,7 @@ mod attachment_url_tests {
 				runtime.handle(),
 				&eframe::egui::Context::default(),
 				false,
+				true,
 			)
 			.expect_err("full slots refuse");
 		assert!(
@@ -896,6 +999,7 @@ mod attachment_url_tests {
 			"refusal must not wait"
 		);
 		assert!(error.contains("busy"));
+		TEST_WORKER_LIMIT.store(MAX_VIDEO_WORKERS, Ordering::Release);
 		source::OFFLINE_PROBE.store(false, Ordering::Release);
 	}
 	#[test]
@@ -1085,6 +1189,9 @@ mod attachment_url_tests {
 
 	#[test]
 	fn opening_subsequent_video_cancels_previous_without_blocking() {
+		let _turn = VIDEO_START_LOCK
+			.lock()
+			.unwrap_or_else(|poison| poison.into_inner());
 		source::OFFLINE_PROBE.store(true, Ordering::Release);
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(2)
@@ -1140,6 +1247,9 @@ mod attachment_url_tests {
 
 	#[test]
 	fn opening_and_closing_50_videos_releases_resources() {
+		let _turn = VIDEO_START_LOCK
+			.lock()
+			.unwrap_or_else(|poison| poison.into_inner());
 		source::OFFLINE_PROBE.store(true, Ordering::Release);
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(2)
@@ -1223,5 +1333,445 @@ mod attachment_url_tests {
 			update.state,
 			VideoState::Failed("The video could not be decoded safely.")
 		);
+	}
+}
+
+/// End-to-end media-path tests. They run in CI without a live account or audio
+/// device: a local HTTP server speaks Discord CDN shapes (signed query, 206 +
+/// `Content-Range`, `video/mp4`, an expired primary that must fall back to the
+/// proxy) and the `null-sink` output id replaces the audio device with a
+/// real-time drain that advances the same position clock.
+#[cfg(test)]
+mod player_tests {
+	use super::*;
+	use std::io::{Read, Write};
+	use std::net::{TcpListener, TcpStream};
+	use std::sync::{Arc, Mutex};
+	use std::time::Instant;
+
+	/// One local CDN: ranged media, an expired primary and a never-answering path.
+	type Seen = Arc<Mutex<Vec<(String, Option<String>)>>>;
+	struct Cdn {
+		origin: String,
+		requests: Seen,
+	}
+
+	fn start_cdn(bytes: &'static [u8]) -> Cdn {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let origin = format!("http://{}", listener.local_addr().unwrap());
+		let requests = Arc::new(Mutex::new(Vec::new()));
+		let seen = requests.clone();
+		std::thread::spawn(move || {
+			for stream in listener.incoming() {
+				let Ok(stream) = stream else { continue };
+				let seen = seen.clone();
+				std::thread::spawn(move || serve(stream, bytes, seen));
+			}
+		});
+		Cdn { origin, requests }
+	}
+
+	fn serve(mut stream: TcpStream, bytes: &'static [u8], seen: Seen) {
+		let mut header = Vec::new();
+		let mut byte = [0u8; 1];
+		while stream.read_exact(&mut byte).is_ok() {
+			header.push(byte[0]);
+			if header.ends_with(b"\r\n\r\n") {
+				break;
+			}
+			if header.len() > 8192 {
+				return;
+			}
+		}
+		let text = String::from_utf8_lossy(&header).to_string();
+		let path = text
+			.lines()
+			.next()
+			.and_then(|line| line.split_whitespace().nth(1))
+			.unwrap_or("/")
+			.to_string();
+		let range = text.lines().find_map(|line| {
+			let (name, value) = line.split_once(':')?;
+			name.eq_ignore_ascii_case("range")
+				.then(|| value.trim().to_string())
+		});
+		seen.lock().unwrap().push((path.clone(), range.clone()));
+		if path.starts_with("/expired") {
+			let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+			return;
+		}
+		if path.starts_with("/stuck") {
+			// A network that accepts and never answers: the media worker must stay
+			// blocked here while the render thread keeps drawing fast frames.
+			std::thread::sleep(Duration::from_secs(60));
+			return;
+		}
+		let total = bytes.len();
+		let (start, end) = match range.as_deref().and_then(parse_range) {
+			Some((start, end)) => (start, end.min(total.saturating_sub(1))),
+			None => (0, total.saturating_sub(1)),
+		};
+		let body = &bytes[start.min(total)..=end];
+		let response = format!(
+			"HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: {}\r\n\r\n",
+			body.len()
+		);
+		let _ = stream.write_all(response.as_bytes());
+		let _ = stream.write_all(body);
+	}
+
+	fn parse_range(value: &str) -> Option<(usize, usize)> {
+		let value = value.strip_prefix("bytes=")?;
+		let (start, end) = value.split_once('-')?;
+		Some((start.parse().ok()?, end.parse().ok()?))
+	}
+
+	/// The null sink and its frame counter are process-wide, so the media-path
+	/// tests take turns.
+	static SINK_LOCK: Mutex<()> = Mutex::new(());
+
+	#[test]
+	fn cdn_style_mp4_shows_a_poster_plays_with_audio_and_seeks() {
+		let _turn = SINK_LOCK
+			.lock()
+			.unwrap_or_else(|poison| poison.into_inner());
+		discord_api::ensure_tls_provider();
+		let bytes: &'static [u8] = include_bytes!("../tests/fixtures/video.mov");
+		let cdn = start_cdn(bytes);
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(2)
+			.enable_all()
+			.build()
+			.unwrap();
+		let session = Arc::new(Session::new(0., 41));
+		// Poster open: paused until the user presses play. Pinning the "voice output"
+		// to the null sink also keeps the default-device migration check quiet.
+		session.paused.store(true, Ordering::Release);
+		*session.output.lock().unwrap() = Some("null-sink".into());
+		let primary = url::Url::parse(&format!(
+			"{}/expired/attachments/1395223214048673894/2/oobe-intro1.mp4?ex=68dc&is=68db&hm=abc",
+			cdn.origin
+		))
+		.unwrap();
+		let proxy = url::Url::parse(&format!(
+			"{}/media/attachments/1395223214048673894/2/oobe-intro1.mp4?ex=68dc&is=68db&hm=abc",
+			cdn.origin
+		))
+		.unwrap();
+		let request = Request {
+			session: session.clone(),
+			url: Some(primary),
+			fallback: Some(proxy),
+			size: bytes.len(),
+		};
+		let handle = runtime.handle().clone();
+		let outcome: Arc<Mutex<Option<Result<(), &'static str>>>> = Arc::new(Mutex::new(None));
+		let outcome_slot = outcome.clone();
+		let worker = {
+			let session = session.clone();
+			let request = request.clone();
+			std::thread::spawn(move || {
+				let ctx = eframe::egui::Context::default();
+				let result = play(&request, &handle, &ctx);
+				// Cancellation during shutdown is a clean stop.
+				let result = if session.cancelled.load(Ordering::Acquire) {
+					Ok(())
+				} else {
+					result
+				};
+				*outcome_slot.lock().unwrap() = Some(result);
+				result
+			})
+		};
+		// A worker that stops early reports its exact error instead of a timeout.
+		let wait = |limit: Duration, label: &str, ready: &dyn Fn(&Update) -> bool| {
+			wait_for(&session, &outcome, limit, label, ready)
+		};
+		// Poster: the first frame must be decoded and staged while still paused.
+		let poster_ms = wait(Duration::from_secs(2), "poster frame", &|update| {
+			update.frame.is_some() && update.state == VideoState::Paused
+		});
+		// Play: audio is decoded into the null sink and the position advances.
+		session.paused.store(false, Ordering::Release);
+		wait(Duration::from_secs(4), "position with sound", &|update| {
+			update.position > 0.4
+		});
+		let audio_frames = output::NULL_SINK_FRAMES.load(Ordering::Acquire);
+		assert!(
+			audio_frames > 480,
+			"decoded audio reached the sink: {audio_frames}"
+		);
+		// Seek: the player jumps and keeps rendering frames after the jump.
+		session.seek.store(1500, Ordering::Release);
+		wait(Duration::from_secs(3), "seek to 1.5 s", &|update| {
+			(1.45..1.75).contains(&update.position) && update.frame.is_some()
+		});
+		// Ends on its own and releases the worker.
+		wait(Duration::from_secs(6), "clip end", &|update| {
+			update.state == VideoState::Ended
+		});
+		assert_eq!(worker.join().unwrap(), Ok(()));
+		let requests = cdn.requests.lock().unwrap().clone();
+		let status_shapes = requests
+			.iter()
+			.filter(|(path, _)| path.starts_with("/media"))
+			.count();
+		assert!(status_shapes > 1, "ranged reads: {requests:?}");
+		assert!(
+			requests
+				.iter()
+				.any(|(path, range)| path.starts_with("/expired") && range.is_some()),
+			"the expired primary is probed before the proxy fallback"
+		);
+		assert!(
+			requests
+				.iter()
+				.any(|(path, range)| path.starts_with("/media") && range.is_some()),
+			"ranged proxy reads: {requests:?}"
+		);
+		eprintln!(
+			"video-evidence host={} status=206 bytes={} codec=h264+aac first_frame_ms={} seek=1500ms ended=ok",
+			cdn.origin.trim_start_matches("http://"),
+			bytes.len(),
+			poster_ms
+		);
+	}
+
+	#[test]
+	fn a_stuck_media_path_never_blocks_the_render_thread() {
+		let _turn = SINK_LOCK
+			.lock()
+			.unwrap_or_else(|poison| poison.into_inner());
+		discord_api::ensure_tls_provider();
+		let bytes: &'static [u8] = include_bytes!("../tests/fixtures/video.mov");
+		let cdn = start_cdn(bytes);
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(2)
+			.enable_all()
+			.build()
+			.unwrap();
+		let session = Arc::new(Session::new(0., 42));
+		*session.output.lock().unwrap() = Some("null-sink".into());
+		let request = Request {
+			session: session.clone(),
+			url: Some(url::Url::parse(&format!("{}/stuck/media.mp4", cdn.origin)).unwrap()),
+			fallback: None,
+			size: bytes.len(),
+		};
+		let handle = runtime.handle().clone();
+		let worker = {
+			let request = request.clone();
+			std::thread::spawn(move || {
+				let ctx = eframe::egui::Context::default();
+				play(&request, &handle, &ctx)
+			})
+		};
+		// The worker is parked in the media read; the render thread must keep
+		// running its per-frame media entry point well under a frame budget.
+		let mut video = Video {
+			session: Some(session.clone()),
+			worker: None,
+		};
+		let mut player = VideoUi::default();
+		let ctx = eframe::egui::Context::default();
+		let mut samples = Vec::with_capacity(40);
+		// A fixed count keeps the check independent of runner load; each iteration is
+		// one render frame entry point while the media worker stays parked.
+		for _ in 0..40 {
+			let started = Instant::now();
+			video.poll(&mut player, &ctx, None);
+			samples.push(started.elapsed());
+			std::thread::sleep(Duration::from_millis(5));
+		}
+		// One descheduled sample is runner noise; the 90th percentile is the frame cost.
+		samples.sort_unstable();
+		let p90 = samples[samples.len() * 9 / 10];
+		assert!(
+			p90 < Duration::from_millis(50),
+			"media work reached the render thread: p90 frame {p90:?}"
+		);
+		assert!(
+			samples.iter().sum::<Duration>() < Duration::from_millis(500),
+			"frames stayed cheap in total: {:?}",
+			samples.iter().sum::<Duration>()
+		);
+		assert!(
+			!worker.is_finished(),
+			"the media worker is still blocked (the test must exercise a stall)"
+		);
+		// Cancel: the stuck read observes cancellation and the worker exits.
+		video.stop();
+		let _ = worker.join();
+	}
+
+	#[test]
+	fn pausing_a_silent_clip_keeps_its_media_time() {
+		let _turn = SINK_LOCK
+			.lock()
+			.unwrap_or_else(|poison| poison.into_inner());
+		discord_api::ensure_tls_provider();
+		// A clip with no audio runs on the wall-clock path; pausing must hold the
+		// position instead of jumping back to the seek anchor (Codex #78 P1).
+		let bytes: &'static [u8] = include_bytes!("../tests/fixtures/video-silent.mov");
+		let cdn = start_cdn(bytes);
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(2)
+			.enable_all()
+			.build()
+			.unwrap();
+		let session = Arc::new(Session::new(0., 43));
+		*session.output.lock().unwrap() = Some("null-sink".into());
+		session.paused.store(true, Ordering::Release);
+		let request = Request {
+			session: session.clone(),
+			url: Some(url::Url::parse(&format!("{}/media/silent.mov", cdn.origin)).unwrap()),
+			fallback: None,
+			size: bytes.len(),
+		};
+		let handle = runtime.handle().clone();
+		let outcome: Arc<Mutex<Option<Result<(), &'static str>>>> = Arc::new(Mutex::new(None));
+		let outcome_slot = outcome.clone();
+		let worker = {
+			let request = request.clone();
+			std::thread::spawn(move || {
+				let ctx = eframe::egui::Context::default();
+				let result = play(&request, &handle, &ctx);
+				*outcome_slot.lock().unwrap() = Some(result);
+				result
+			})
+		};
+		let wait = |limit: Duration, label: &str, ready: &dyn Fn(&Update) -> bool| {
+			wait_for(&session, &outcome, limit, label, ready)
+		};
+		wait(Duration::from_secs(2), "poster", &|update| {
+			update.frame.is_some() && update.state == VideoState::Paused
+		});
+		session.paused.store(false, Ordering::Release);
+		wait(Duration::from_secs(4), "progress", &|update| {
+			update.position > 0.5
+		});
+		session.paused.store(true, Ordering::Release);
+		// Wait for the worker to publish the paused state, so `held` is the frozen
+		// media time rather than the last playing sample.
+		wait(Duration::from_secs(2), "paused", &|update| {
+			update.state == VideoState::Paused
+		});
+		let held = session.update.lock().unwrap().position;
+		assert!(held > 0.4, "paused after progress: {held}");
+		std::thread::sleep(Duration::from_millis(600));
+		let after = session.update.lock().unwrap();
+		assert!(
+			(after.position - held).abs() < 0.05 && after.position > 0.4,
+			"a paused clock holds its media time: {held} -> {}",
+			after.position
+		);
+		assert_eq!(after.state, VideoState::Paused);
+		drop(after);
+		// Resuming continues from the held position, not from zero.
+		session.paused.store(false, Ordering::Release);
+		wait(Duration::from_secs(4), "resume", &|update| {
+			update.position > held + 0.2
+		});
+		session.cancelled.store(true, Ordering::Release);
+		let _ = worker.join();
+	}
+
+	#[test]
+	fn accesskit_labels_do_not_relock_the_context() {
+		// The real app enables accesskit. Any `widget_info` closure that looks up a
+		// translated string takes the Context read lock while egui holds the write
+		// lock, which froze the whole window on 1.0.10 (owner P0, 2026-10-03).
+		discord_api::ensure_tls_provider();
+		let ctx = eframe::egui::Context::default();
+		ctx.enable_accesskit();
+		let message = test_support::message(1, model::Id(2));
+		let attachment = model::Attachment {
+			id: model::Id(3),
+			filename: "oobe-intro1.mp4".into(),
+			description: None,
+			content_type: Some("video/mp4".into()),
+			size: 4096,
+			media: model::EmbedMedia {
+				width: 1080,
+				height: 1920,
+				..Default::default()
+			},
+			spoiler: false,
+			duration_ms: Some(4000),
+			waveform: Vec::new(),
+		};
+		let mut view = ui::VideoUi::default();
+		view.begin(&message, &attachment, true);
+		// Playing with a control bar: the state that drew the freezing closure.
+		view.state = ui::VideoState::Playing;
+		view.position = 1.0;
+		view.duration = 4.0;
+		let mut download = ui::DownloadUi::default();
+		let mut opening = None;
+		let screen = egui::vec2(800.0, 600.0);
+		let mut stage = egui::Rect::NOTHING;
+		let center = std::cell::Cell::new(egui::Pos2::ZERO);
+		let mut frame = |pointer: Option<egui::Pos2>| {
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
+					focused: true,
+					events: pointer.into_iter().map(egui::Event::PointerMoved).collect(),
+					..Default::default()
+				},
+				|ui| {
+					stage = view
+						.show(ui, &message, &attachment, &mut download, &mut opening, true)
+						.rect;
+					center.set(stage.center());
+				},
+			)
+		};
+		frame(None).drop_without_applying_deltas();
+		// Hovering the stage keeps the control bar (and its slider) visible, which is
+		// the state the real app froze in.
+		let output = frame(Some(center.get()));
+		assert!(
+			output.platform_output.accesskit_update.is_some(),
+			"accesskit must build a tree while the controls render"
+		);
+		output.drop_without_applying_deltas();
+	}
+
+	/// Waits for a state the player publishes through its shared update slot, with the
+	/// last observation in the panic so a CI failure is diagnosable without a rerun.
+	fn wait_for(
+		session: &Session,
+		outcome: &Arc<Mutex<Option<Result<(), &'static str>>>>,
+		limit: Duration,
+		label: &str,
+		ready: &dyn Fn(&Update) -> bool,
+	) -> u128 {
+		let started = Instant::now();
+		while started.elapsed() < limit {
+			if let Some(Err(error)) = *outcome.lock().unwrap() {
+				panic!("media worker failed while waiting for {label}: {error}");
+			}
+			if let Ok(update) = session.update.try_lock()
+				&& ready(&update)
+			{
+				return started.elapsed().as_millis();
+			}
+			std::thread::sleep(Duration::from_millis(10));
+		}
+		let last = session
+			.update
+			.try_lock()
+			.map(|update| {
+				format!(
+					"state={:?} position={:.2} frame={} audio={}",
+					update.state,
+					update.position,
+					update.frame.is_some(),
+					output::NULL_SINK_FRAMES.load(Ordering::Acquire)
+				)
+			})
+			.unwrap_or_else(|_| "update slot busy".into());
+		panic!("timed out waiting for {label}; last update: {last}");
 	}
 }

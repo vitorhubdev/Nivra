@@ -17,7 +17,32 @@ pub struct Controls {
 }
 pub struct Output {
 	pub producer: rtrb::Producer<[f32; 2]>,
-	_stream: cpal::Stream,
+	/// Absent for the test-only null sink.
+	_stream: Option<cpal::Stream>,
+	#[cfg(test)]
+	_null: Option<NullSink>,
+}
+/// A CI machine has no audio device. Selecting this output id (tests only) returns
+/// a virtual device that drains the ring in real time and advances the same
+/// position clock, so the whole audio path runs headlessly (owner P0 video test).
+#[cfg(test)]
+pub(super) const NULL_SINK_ID: &str = "null-sink";
+/// Frames the null sink played; proves the audio path decoded real PCM in CI.
+#[cfg(test)]
+pub static NULL_SINK_FRAMES: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+pub(super) struct NullSink {
+	stop: Arc<AtomicBool>,
+	thread: Option<std::thread::JoinHandle<()>>,
+}
+#[cfg(test)]
+impl Drop for NullSink {
+	fn drop(&mut self) {
+		self.stop.store(true, Ordering::Release);
+		if let Some(thread) = self.thread.take() {
+			let _ = thread.join();
+		}
+	}
 }
 struct Playback {
 	frames: rtrb::Consumer<[f32; 2]>,
@@ -114,6 +139,10 @@ pub fn open(
 	if !(8000..=96000).contains(&rate) {
 		return Err("Unsupported video audio sample rate");
 	}
+	#[cfg(test)]
+	if output_id == Some(NULL_SINK_ID) {
+		return Ok(null_sink(rate, controls));
+	}
 	let host = cpal::default_host();
 	let device = discord_voice::output::device(&host, output_id).ok_or("No audio output device")?;
 	let supported = device
@@ -146,10 +175,62 @@ pub fn open(
 	Ok((
 		Output {
 			producer,
-			_stream: stream,
+			_stream: Some(stream),
+			#[cfg(test)]
+			_null: None,
 		},
 		id,
 	))
+}
+/// Real-time drain without hardware: paces at the source rate and advances the
+/// same position clock the device callback would, so EOF, pause and seek behave
+/// exactly like playback (only silence is "heard").
+#[cfg(test)]
+fn null_sink(rate: u32, controls: Controls) -> (Output, String) {
+	let (producer, mut frames) = rtrb::RingBuffer::<[f32; 2]>::new(rate as usize);
+	controls.position.store(0, Ordering::Release);
+	let stop = Arc::new(AtomicBool::new(false));
+	let stopped = stop.clone();
+	let thread = std::thread::Builder::new()
+		.name("nivra-video-null-sink".into())
+		.spawn(move || {
+			// Pace against the monotonic clock: `sleep` granularity on Windows is
+			// ~15 ms, so a fixed 5 ms sleep would drain audio at a third of real
+			// time and the media clock would crawl.
+			let start = std::time::Instant::now();
+			let mut drained = 0u64;
+			while !stopped.load(Ordering::Acquire) {
+				if controls.cancelled.load(Ordering::Acquire)
+					|| controls.paused.load(Ordering::Acquire)
+					|| controls.seek.load(Ordering::Acquire) != u64::MAX
+				{
+					std::thread::sleep(std::time::Duration::from_millis(2));
+					continue;
+				}
+				let target = (start.elapsed().as_secs_f64() * f64::from(rate))
+					.min(60.0 * f64::from(rate)) as u64;
+				while drained < target {
+					if frames.pop().is_err() {
+						break;
+					}
+					drained += 1;
+				}
+				if drained > 0 {
+					NULL_SINK_FRAMES.store(drained, Ordering::Relaxed);
+				}
+				controls.position.store(drained, Ordering::Release);
+				std::thread::sleep(std::time::Duration::from_millis(2));
+			}
+		})
+		.ok();
+	(
+		Output {
+			producer,
+			_stream: None,
+			_null: Some(NullSink { stop, thread }),
+		},
+		"null-sink".into(),
+	)
 }
 fn output<T: cpal::SizedSample + cpal::FromSample<f32>>(
 	device: &cpal::Device,

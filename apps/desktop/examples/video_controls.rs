@@ -84,7 +84,13 @@ fn main() {
 	video.position = 6.0;
 	video.duration = 12.0;
 	video.state = ui::VideoState::Loading;
-	assert!(video.accept_frame(&ctx, 1, 1, &[10, 20, 30, 255]));
+	assert!(video.accept_frame(
+		&ctx,
+		egui::ColorImage::filled(
+			[1, 1],
+			egui::Color32::from_rgba_unmultiplied(10, 20, 30, 255)
+		)
+	));
 	for _ in 0..3 {
 		let output = frame(&ctx, &mut view, &mut state, vec![], false);
 		let seek = &output

@@ -53,6 +53,7 @@ mod uploads;
 mod video;
 mod voice;
 mod watch;
+mod watchdog;
 use client_core::{
 	Command, Envelope, Event, State,
 	auth::{AuthState, Failure, SessionSecret},
@@ -1257,6 +1258,8 @@ impl Desktop {
 		ui::fonts::install(&cc.egui_ctx);
 		ui::emoji::install(&cc.egui_ctx)?;
 		ui::icons::install(&cc.egui_ctx);
+		// A stalled render thread leaves a bounded report next to the cache.
+		watchdog::install(platform::migration::ensure_data_dir().ok());
 		#[cfg(feature = "demo")]
 		if demo {
 			// Fixture-only preset preview, e.g. `--demo --demo-theme=onyx --demo-light`.
@@ -5936,6 +5939,16 @@ impl eframe::App for Desktop {
 	}
 	/// One UI frame: pumps workers, expires challenges, renders and drains commands.
 	fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+		// Marks this frame as alive and records what it is drawing, so a stalled
+		// render thread leaves a bounded log next to the cache (never a silent freeze).
+		watchdog::beat(if self.video.is_active() {
+			watchdog::Phase::Video
+		} else if self.state.voice.active.is_some() {
+			watchdog::Phase::Voice
+		} else {
+			watchdog::Phase::Idle
+		});
+		watchdog::note_video(self.video.snapshot());
 		let search_focused = {
 			#[cfg(feature = "demo")]
 			{
@@ -7358,6 +7371,9 @@ impl eframe::App for Desktop {
 		ui::design::window_resize(&ctx);
 		self.frame_metrics.reflows = self.messaging.timeline_reflows();
 		self.frame_metrics.finish();
+		// Closes the frame opened by `logic`; an idle window never reaches here, so
+		// the watchdog only reports frames that began and did not finish.
+		watchdog::frame_end();
 	}
 }
 

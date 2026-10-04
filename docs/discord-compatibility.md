@@ -1389,7 +1389,12 @@ Synthetic tests exercise UI actions, bounds, coalescing, clearing and reconnect.
 MOV/MP4 attachments play inside the message with Discord-style overlay controls: a
 centered play button on the picture, and a translucent bar over its lower edge with seek,
 elapsed/total time, volume and fullscreen that hides while playing until the pointer or keyboard
-focus returns. Fullscreen reuses the active player and texture; Escape or its exit button restores
+focus returns. Opening a card decodes and shows the first frame as a poster while paused; the
+play button then starts playback, so a card is never a mute black rectangle. A decode failure
+shows the reason with Retry, Download video and Open original (when the signed URL is still
+available). The playback clock is anchored on the monotonic wall clock, so audio-less,
+truncated-audio and slow-read clips still reach their end instead of sitting black forever.
+Fullscreen reuses the active player and texture; Escape or its exit button restores
 the previous window mode. File actions (save, copy and open original) use the video's right-click
 menu. The seek range remains the full duration while a requested position buffers.
 Every platform decodes through the same credential-free, validated Discord CDN

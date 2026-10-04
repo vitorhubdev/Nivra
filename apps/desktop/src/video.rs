@@ -38,11 +38,32 @@ const MAX_VIDEO_WORKERS: usize = 4;
 const LOG_BUDGET: usize = 24;
 static LIVE_VIDEO_WORKERS: AtomicUsize = AtomicUsize::new(0);
 fn try_acquire_video_worker(live: &AtomicUsize) -> bool {
-	if live.fetch_add(1, Ordering::AcqRel) >= MAX_VIDEO_WORKERS {
+	try_acquire_bounded(live, worker_limit())
+}
+fn try_acquire_bounded(live: &AtomicUsize, limit: usize) -> bool {
+	if live.fetch_add(1, Ordering::AcqRel) >= limit {
 		live.fetch_sub(1, Ordering::AcqRel);
 		false
 	} else {
 		true
+	}
+}
+/// Concurrency bound; tests may lower it to exercise the refusal without
+/// taking the process-wide slots from tests running in parallel.
+#[cfg(test)]
+static TEST_WORKER_LIMIT: AtomicUsize = AtomicUsize::new(MAX_VIDEO_WORKERS);
+/// Tests that lower the worker limit or open real workers take turns, so the
+/// process-wide slot budget and the limit override stay deterministic.
+#[cfg(test)]
+static VIDEO_START_LOCK: Mutex<()> = Mutex::new(());
+fn worker_limit() -> usize {
+	#[cfg(test)]
+	{
+		TEST_WORKER_LIMIT.load(Ordering::Acquire)
+	}
+	#[cfg(not(test))]
+	{
+		MAX_VIDEO_WORKERS
 	}
 }
 /// Startup transients free slots in milliseconds while stuck native opens do
@@ -535,7 +556,9 @@ fn play_decoded(
 		// a slow read used to drop elapsed time ("freeze the clock") and a silent or
 		// short-audio clip could never reach its end, leaving the card black forever.
 		let mut anchor = Instant::now();
-		let anchor_at = target;
+		let mut anchor_at = target;
+		// Whether the media clock is currently held (paused, or before the poster).
+		let mut holding = true;
 		let mut ticks = 0u64;
 		let mut last_progress = Instant::now();
 		let mut previous_position = target;
@@ -587,11 +610,18 @@ fn play_decoded(
 			}
 			let now = Instant::now();
 			let paused = session.paused.load(Ordering::Acquire);
-			// Holding (paused, or before the first frame shows) moves the anchor forward
-			// without consuming media time, so a slow open never skips the beginning and
-			// a pause resumes exactly where it stopped.
+			// Holding (paused, or before the first frame shows) freezes the media clock
+			// at the time it reached: on entering the hold the elapsed offset moves into
+			// `anchor_at` once, so a pause neither jumps back to the seek target
+			// (Codex #78 P1) nor accumulates paused time.
 			if paused || preview_needed {
+				if !holding {
+					anchor_at += now.saturating_duration_since(anchor).as_secs_f64();
+					holding = true;
+				}
 				anchor = now;
+			} else {
+				holding = false;
 			}
 			let wall = anchor_at + now.duration_since(anchor).as_secs_f64();
 			let audio_position = target
@@ -910,39 +940,34 @@ mod attachment_url_tests {
 	fn video_worker_slots_are_bounded_and_released() {
 		let live = AtomicUsize::new(0);
 		for _ in 0..MAX_VIDEO_WORKERS {
-			assert!(try_acquire_video_worker(&live));
+			assert!(try_acquire_bounded(&live, MAX_VIDEO_WORKERS));
 		}
 		assert!(
-			!try_acquire_video_worker(&live),
+			!try_acquire_bounded(&live, MAX_VIDEO_WORKERS),
 			"a fifth concurrent open is refused"
 		);
 		assert_eq!(live.load(Ordering::Acquire), MAX_VIDEO_WORKERS);
 		live.fetch_sub(1, Ordering::AcqRel);
-		assert!(try_acquire_video_worker(&live), "a freed slot is reusable");
+		assert!(
+			try_acquire_bounded(&live, MAX_VIDEO_WORKERS),
+			"a freed slot is reusable"
+		);
 		live.fetch_sub(1, Ordering::AcqRel);
 	}
 	#[test]
 	fn busy_video_open_fails_fast_without_blocking_the_render_thread() {
+		let _turn = VIDEO_START_LOCK
+			.lock()
+			.unwrap_or_else(|poison| poison.into_inner());
 		source::OFFLINE_PROBE.store(true, Ordering::Release);
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(1)
 			.enable_all()
 			.build()
 			.unwrap();
-		// Hold every global slot so start() must refuse (transient holders from
-		// other tests clear within milliseconds; bounded retries keep this tight).
-		let mut held = Vec::new();
-		for _ in 0..500 {
-			while held.len() < MAX_VIDEO_WORKERS && try_acquire_video_worker(&LIVE_VIDEO_WORKERS) {
-				held.push(WorkerSlot(&LIVE_VIDEO_WORKERS));
-			}
-			if held.len() == MAX_VIDEO_WORKERS {
-				break;
-			}
-			std::thread::sleep(Duration::from_millis(1));
-		}
-		assert_eq!(held.len(), MAX_VIDEO_WORKERS, "all worker slots stay held");
-		let _held = held;
+		// Every worker slot counts as busy (0 = at the limit) without stealing the
+		// process-wide slots from tests running in parallel.
+		TEST_WORKER_LIMIT.store(0, Ordering::Release);
 		let attachment = model::Attachment {
 			id: model::Id(9001),
 			filename: "busy.mp4".into(),
@@ -974,6 +999,7 @@ mod attachment_url_tests {
 			"refusal must not wait"
 		);
 		assert!(error.contains("busy"));
+		TEST_WORKER_LIMIT.store(MAX_VIDEO_WORKERS, Ordering::Release);
 		source::OFFLINE_PROBE.store(false, Ordering::Release);
 	}
 	#[test]
@@ -1163,6 +1189,9 @@ mod attachment_url_tests {
 
 	#[test]
 	fn opening_subsequent_video_cancels_previous_without_blocking() {
+		let _turn = VIDEO_START_LOCK
+			.lock()
+			.unwrap_or_else(|poison| poison.into_inner());
 		source::OFFLINE_PROBE.store(true, Ordering::Release);
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(2)
@@ -1218,6 +1247,9 @@ mod attachment_url_tests {
 
 	#[test]
 	fn opening_and_closing_50_videos_releases_resources() {
+		let _turn = VIDEO_START_LOCK
+			.lock()
+			.unwrap_or_else(|poison| poison.into_inner());
 		source::OFFLINE_PROBE.store(true, Ordering::Release);
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(2)
@@ -1307,7 +1339,7 @@ mod attachment_url_tests {
 /// End-to-end media-path tests. They run in CI without a live account or audio
 /// device: a local HTTP server speaks Discord CDN shapes (signed query, 206 +
 /// `Content-Range`, `video/mp4`, an expired primary that must fall back to the
-/// proxy) and `video::output::NULL_SINK` replaces the audio device with a
+/// proxy) and the `null-sink` output id replaces the audio device with a
 /// real-time drain that advances the same position clock.
 #[cfg(test)]
 mod player_tests {
@@ -1394,7 +1426,8 @@ mod player_tests {
 		Some((start.parse().ok()?, end.parse().ok()?))
 	}
 
-	/// `NULL_SINK` is process-wide, so the two media-path tests take turns.
+	/// The null sink and its frame counter are process-wide, so the media-path
+	/// tests take turns.
 	static SINK_LOCK: Mutex<()> = Mutex::new(());
 
 	#[test]
@@ -1405,7 +1438,6 @@ mod player_tests {
 		discord_api::ensure_tls_provider();
 		let bytes: &'static [u8] = include_bytes!("../tests/fixtures/video.mov");
 		let cdn = start_cdn(bytes);
-		output::NULL_SINK.store(true, Ordering::Release);
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(2)
 			.enable_all()
@@ -1503,7 +1535,6 @@ mod player_tests {
 			bytes.len(),
 			poster_ms
 		);
-		output::NULL_SINK.store(false, Ordering::Release);
 	}
 
 	#[test]
@@ -1514,7 +1545,6 @@ mod player_tests {
 		discord_api::ensure_tls_provider();
 		let bytes: &'static [u8] = include_bytes!("../tests/fixtures/video.mov");
 		let cdn = start_cdn(bytes);
-		output::NULL_SINK.store(true, Ordering::Release);
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(2)
 			.enable_all()
@@ -1572,7 +1602,78 @@ mod player_tests {
 		// Cancel: the stuck read observes cancellation and the worker exits.
 		video.stop();
 		let _ = worker.join();
-		output::NULL_SINK.store(false, Ordering::Release);
+	}
+
+	#[test]
+	fn pausing_a_silent_clip_keeps_its_media_time() {
+		let _turn = SINK_LOCK
+			.lock()
+			.unwrap_or_else(|poison| poison.into_inner());
+		discord_api::ensure_tls_provider();
+		// A clip with no audio runs on the wall-clock path; pausing must hold the
+		// position instead of jumping back to the seek anchor (Codex #78 P1).
+		let bytes: &'static [u8] = include_bytes!("../tests/fixtures/video-silent.mov");
+		let cdn = start_cdn(bytes);
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(2)
+			.enable_all()
+			.build()
+			.unwrap();
+		let session = Arc::new(Session::new(0., 43));
+		*session.output.lock().unwrap() = Some("null-sink".into());
+		session.paused.store(true, Ordering::Release);
+		let request = Request {
+			session: session.clone(),
+			url: Some(url::Url::parse(&format!("{}/media/silent.mov", cdn.origin)).unwrap()),
+			fallback: None,
+			size: bytes.len(),
+		};
+		let handle = runtime.handle().clone();
+		let outcome: Arc<Mutex<Option<Result<(), &'static str>>>> = Arc::new(Mutex::new(None));
+		let outcome_slot = outcome.clone();
+		let worker = {
+			let request = request.clone();
+			std::thread::spawn(move || {
+				let ctx = eframe::egui::Context::default();
+				let result = play(&request, &handle, &ctx);
+				*outcome_slot.lock().unwrap() = Some(result);
+				result
+			})
+		};
+		let wait = |limit: Duration, label: &str, ready: &dyn Fn(&Update) -> bool| {
+			wait_for(&session, &outcome, limit, label, ready)
+		};
+		wait(Duration::from_secs(2), "poster", &|update| {
+			update.frame.is_some() && update.state == VideoState::Paused
+		});
+		session.paused.store(false, Ordering::Release);
+		wait(Duration::from_secs(4), "progress", &|update| {
+			update.position > 0.5
+		});
+		session.paused.store(true, Ordering::Release);
+		// Wait for the worker to publish the paused state, so `held` is the frozen
+		// media time rather than the last playing sample.
+		wait(Duration::from_secs(2), "paused", &|update| {
+			update.state == VideoState::Paused
+		});
+		let held = session.update.lock().unwrap().position;
+		assert!(held > 0.4, "paused after progress: {held}");
+		std::thread::sleep(Duration::from_millis(600));
+		let after = session.update.lock().unwrap();
+		assert!(
+			(after.position - held).abs() < 0.05 && after.position > 0.4,
+			"a paused clock holds its media time: {held} -> {}",
+			after.position
+		);
+		assert_eq!(after.state, VideoState::Paused);
+		drop(after);
+		// Resuming continues from the held position, not from zero.
+		session.paused.store(false, Ordering::Release);
+		wait(Duration::from_secs(4), "resume", &|update| {
+			update.position > held + 0.2
+		});
+		session.cancelled.store(true, Ordering::Release);
+		let _ = worker.join();
 	}
 
 	#[test]

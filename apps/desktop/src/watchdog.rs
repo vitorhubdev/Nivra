@@ -62,6 +62,9 @@ impl Phase {
 
 static BASE: OnceLock<Instant> = OnceLock::new();
 static LAST_BEAT_MS: AtomicU64 = AtomicU64::new(0);
+/// A frame is in progress between [`beat`] and [`frame_end`]. Eframe is
+/// event-driven: an idle window simply does not draw, which is not a stall.
+static IN_FRAME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static PHASE: AtomicU8 = AtomicU8::new(Phase::Startup as u8);
 static VIDEO: Mutex<String> = Mutex::new(String::new());
 static INSTALLED: OnceLock<()> = OnceLock::new();
@@ -72,10 +75,17 @@ fn now_ms() -> u64 {
 	base.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
-/// Marks one completed render frame; call once per frame with what it drew.
+/// Marks the start of one render frame with what it is drawing; [`frame_end`]
+/// closes it. Only a frame that started and never finished counts as a stall.
 pub fn beat(phase: Phase) {
 	PHASE.store(phase as u8, Ordering::Relaxed);
 	LAST_BEAT_MS.store(now_ms(), Ordering::Relaxed);
+	IN_FRAME.store(true, Ordering::Release);
+}
+
+/// Marks the end of the render frame started by [`beat`].
+pub fn frame_end() {
+	IN_FRAME.store(false, Ordering::Release);
 }
 
 /// Bounded media-session snapshot (state, position, worker count) for the report.
@@ -106,6 +116,7 @@ pub fn install(dir: Option<PathBuf>) {
 				if report_if_stalled(
 					now,
 					LAST_BEAT_MS.load(Ordering::Relaxed),
+					IN_FRAME.load(Ordering::Acquire),
 					Phase::from_u8(PHASE.load(Ordering::Relaxed)),
 					&dir.join("nivra-freeze.log"),
 					last_report,
@@ -116,16 +127,21 @@ pub fn install(dir: Option<PathBuf>) {
 		});
 }
 
-/// Writes one bounded report when the render thread missed at least one beat window.
-/// Returns whether a report was written, so the caller can rate-limit.
+/// Writes one bounded report when a frame started but did not finish inside the
+/// stall window. An idle window draws nothing and is never reported. Returns
+/// whether a report was written, so the caller can rate-limit.
 pub fn report_if_stalled(
 	now_ms: u64,
-	last_beat_ms: u64,
+	frame_start_ms: u64,
+	in_frame: bool,
 	phase: Phase,
 	log: &Path,
 	last_report_ms: u64,
 ) -> bool {
-	let gap = Duration::from_millis(now_ms.saturating_sub(last_beat_ms));
+	if !in_frame {
+		return false;
+	}
+	let gap = Duration::from_millis(now_ms.saturating_sub(frame_start_ms));
 	let since_report = now_ms.saturating_sub(last_report_ms);
 	// `last_report_ms == 0` means no report yet (`now_ms` counts from install).
 	if gap < STALL || (last_report_ms != 0 && since_report < REPORT_INTERVAL.as_millis() as u64) {
@@ -176,25 +192,56 @@ mod tests {
 		let _ = std::fs::create_dir_all(&dir);
 		let log = dir.join("nivra-freeze.log");
 		let _ = std::fs::remove_file(&log);
-		// A 1.9 s gap is a slow frame, not a stall.
-		assert!(!report_if_stalled(5_000, 3_100, Phase::Video, &log, 0));
+		// An idle window draws nothing: never a stall, however long the gap (Codex #78 P2).
+		assert!(!report_if_stalled(
+			60_000,
+			3_100,
+			false,
+			Phase::Video,
+			&log,
+			0
+		));
 		assert!(!log.exists());
-		// A 2.5 s gap writes the phase, the snapshot and a stack.
+		// A frame that began and never finished for 1.9 s is a slow frame, not a stall.
+		assert!(!report_if_stalled(
+			5_000,
+			3_100,
+			true,
+			Phase::Video,
+			&log,
+			0
+		));
+		assert!(!log.exists());
+		// A frame in progress for 2.5 s writes the phase, the snapshot and a stack.
 		*VIDEO.lock().unwrap() = String::new();
-		assert!(report_if_stalled(5_600, 3_100, Phase::Video, &log, 0));
+		assert!(report_if_stalled(5_600, 3_100, true, Phase::Video, &log, 0));
 		let report = std::fs::read_to_string(&log).unwrap();
 		assert!(report.contains("stalled 2.5s"), "{report}");
 		assert!(report.contains("phase video"), "{report}");
 		assert!(report.contains("video: none"), "{report}");
 		// Rate-limited: a second stall inside the window is not appended.
-		assert!(!report_if_stalled(6_000, 3_100, Phase::Video, &log, 5_600));
+		assert!(!report_if_stalled(
+			6_000,
+			3_100,
+			true,
+			Phase::Video,
+			&log,
+			5_600
+		));
 		assert_eq!(std::fs::read_to_string(&log).unwrap(), report);
 		// The media snapshot is trimmed and carried into the next report.
 		note_video(format!(
 			"state=Playing position=1.2 workers=1 {}",
 			"x".repeat(400)
 		));
-		assert!(report_if_stalled(40_000, 6_000, Phase::Video, &log, 5_600));
+		assert!(report_if_stalled(
+			40_000,
+			6_000,
+			true,
+			Phase::Video,
+			&log,
+			5_600
+		));
 		let report = std::fs::read_to_string(&log).unwrap();
 		assert!(report.contains("state=Playing"), "{report}");
 		// The snapshot is trimmed to 240 chars; the stack length varies by platform,

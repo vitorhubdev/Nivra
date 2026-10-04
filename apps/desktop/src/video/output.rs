@@ -22,11 +22,11 @@ pub struct Output {
 	#[cfg(test)]
 	_null: Option<NullSink>,
 }
-/// A CI machine has no audio device. With this set, `open` returns a virtual
-/// device that drains the ring in real time and advances the same position
-/// clock, so the whole audio path runs headlessly (owner P0 video test).
+/// A CI machine has no audio device. Selecting this output id (tests only) returns
+/// a virtual device that drains the ring in real time and advances the same
+/// position clock, so the whole audio path runs headlessly (owner P0 video test).
 #[cfg(test)]
-pub static NULL_SINK: AtomicBool = AtomicBool::new(false);
+pub(super) const NULL_SINK_ID: &str = "null-sink";
 /// Frames the null sink played; proves the audio path decoded real PCM in CI.
 #[cfg(test)]
 pub static NULL_SINK_FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -140,7 +140,7 @@ pub fn open(
 		return Err("Unsupported video audio sample rate");
 	}
 	#[cfg(test)]
-	if NULL_SINK.load(Ordering::Acquire) {
+	if output_id == Some(NULL_SINK_ID) {
 		return Ok(null_sink(rate, controls));
 	}
 	let host = cpal::default_host();

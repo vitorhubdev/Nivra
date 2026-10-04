@@ -7371,6 +7371,9 @@ impl eframe::App for Desktop {
 		ui::design::window_resize(&ctx);
 		self.frame_metrics.reflows = self.messaging.timeline_reflows();
 		self.frame_metrics.finish();
+		// Closes the frame opened by `logic`; an idle window never reaches here, so
+		// the watchdog only reports frames that began and did not finish.
+		watchdog::frame_end();
 	}
 }
 

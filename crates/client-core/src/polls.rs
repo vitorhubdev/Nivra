@@ -627,6 +627,15 @@ mod tests {
 		let stored = state.timeline.get(Id(50)).unwrap().poll.clone().unwrap();
 		assert_eq!(stored.count(2), 3);
 		assert!(!stored.me_voted(2));
+		// A disconnect clears the in-flight vote so a lost response cannot block
+		// every later vote for the rest of the session.
+		assert!(state.prepare_poll_vote(Id(50), 1).is_some());
+		assert!(state.polls.busy());
+		state.apply(crate::Envelope {
+			generation: state.generation,
+			event: crate::Event::Disconnected,
+		});
+		assert!(!state.polls.busy());
 		// A closed poll refuses new votes.
 		let mut closed = stored;
 		closed.finalized = true;

@@ -2363,6 +2363,9 @@ impl State {
 			self.interrupt_stickers();
 			self.posts.clear_summaries();
 			self.interactions.reset();
+			// A lifecycle transition invalidates the single in-flight vote, so a lost
+			// response can never leave every poll button disabled.
+			self.polls.reset();
 			self.application_commands.clear();
 			self.local_game_activity = Default::default();
 			self.invalidate_messaging_permissions(None);

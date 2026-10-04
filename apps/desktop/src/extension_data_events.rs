@@ -688,6 +688,7 @@ mod tests {
 		let id = state.timeline.iter().next().unwrap().id;
 		let patch = |channel| {
 			Event::Patch(model::MessagePatch {
+				poll: model::Patch::Absent,
 				id,
 				channel,
 				content: model::Patch::Absent,

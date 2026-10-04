@@ -270,6 +270,7 @@ fn content_patch(channel: Id, id: Id, content: String) -> MessagePatch {
 		components: model::Patch::Absent,
 		flags: model::Patch::Absent,
 		application_id: model::Patch::Absent,
+		poll: model::Patch::Absent,
 		extra_content: Default::default(),
 	}
 }

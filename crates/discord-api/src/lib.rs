@@ -915,6 +915,36 @@ impl DiscordApi {
 					}
 				})
 			}
+			Command::Polls(command) => {
+				use client_core::polls::{Command as P, Event as E};
+				Event::Polls(match command {
+					P::Vote {
+						channel,
+						message,
+						answer_id,
+						add,
+						request,
+					} => {
+						let result = match poll_vote_path(channel, message, answer_id) {
+							Some(path) => self
+								.request(
+									if add { Method::POST } else { Method::DELETE },
+									&path,
+									None,
+								)
+								.await
+								.map(|_| ()),
+							None => Err(Failure::Protocol),
+						};
+						E::Written {
+							channel,
+							message,
+							request,
+							result,
+						}
+					}
+				})
+			}
 			Command::Profile {
 				user,
 				guild,
@@ -1423,6 +1453,9 @@ fn reaction_path(
 	Some(format!(
 		"/channels/{channel}/messages/{message}/reactions/{encoded}/@me"
 	))
+}
+fn poll_vote_path(channel: model::Id, message: model::Id, answer_id: u64) -> Option<String> {
+	(answer_id != 0).then(|| format!("/channels/{channel}/polls/{message}/answers/{answer_id}"))
 }
 fn reaction_users_path(
 	channel: model::Id,
@@ -2198,6 +2231,77 @@ mod tests {
 			)
 			.is_none()
 		);
+	}
+
+	#[tokio::test]
+	async fn poll_vote_routes_toggle_one_answer_and_reject_zero() {
+		crate::ensure_tls_provider();
+		use client_core::polls::{Command as P, Event as E};
+		use model::Id;
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let mut api = DiscordApi::new(Arc::new(
+			SessionSecret::from_owner_input("SYNTHETIC_POLL_TOKEN".into()).unwrap(),
+		))
+		.unwrap();
+		api.base = format!("http://{}", listener.local_addr().unwrap());
+		let server = tokio::spawn(async move {
+			for expected in [
+				"POST /channels/1/polls/2/answers/7",
+				"DELETE /channels/1/polls/2/answers/7",
+			] {
+				let (mut socket, _) = listener.accept().await.unwrap();
+				let mut request = Vec::new();
+				loop {
+					let mut bytes = [0; 1024];
+					let n = socket.read(&mut bytes).await.unwrap();
+					assert!(n > 0);
+					request.extend_from_slice(&bytes[..n]);
+					assert!(request.len() < 4096);
+					if request.windows(4).any(|w| w == b"\r\n\r\n") {
+						break;
+					}
+				}
+				let request = std::str::from_utf8(&request).unwrap();
+				assert!(
+					request.starts_with(&format!("{expected} HTTP/1.1\r\n")),
+					"{request}"
+				);
+				assert!(request.contains("SYNTHETIC_POLL_TOKEN"));
+				socket
+					.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+					.await
+					.unwrap();
+			}
+		});
+		for add in [true, false] {
+			assert!(matches!(
+				api.execute(Command::Polls(P::Vote {
+					channel: Id(1),
+					message: Id(2),
+					answer_id: 7,
+					add,
+					request: 1,
+				}))
+				.await,
+				Event::Polls(E::Written { result: Ok(()), .. })
+			));
+		}
+		// An answer id of zero can never build a route.
+		assert!(matches!(
+			api.execute(Command::Polls(P::Vote {
+				channel: Id(1),
+				message: Id(2),
+				answer_id: 0,
+				add: true,
+				request: 2,
+			}))
+			.await,
+			Event::Polls(E::Written {
+				result: Err(Failure::Protocol),
+				..
+			})
+		));
+		server.await.unwrap();
 	}
 
 	#[tokio::test]

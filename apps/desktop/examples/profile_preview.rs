@@ -353,7 +353,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args: Vec<_> = std::env::args().skip(1).collect();
 	let value = |prefix: &str| args.iter().find_map(|arg| arg.strip_prefix(prefix));
 	if !args.iter().any(|arg| arg == "--demo") {
-		return Err("Usage: profile_preview --demo --output=PATH.png [--page=stickers|slash-commands|slash-command-search|slash-command-options|profile|profile-card|member-tags|dm-tags|account|appearance|general|keybinds|extensions|server|server-engagement|server-stickers] [--command=help|weather] [--themes] [--extension=ID] [--thumbnail] [--width=1120] [--height=760] [--light]".into());
+		return Err("Usage: profile_preview --demo --output=PATH.png [--page=stickers|slash-commands|slash-command-search|slash-command-options|profile|profile-card|member-tags|dm-tags|account|appearance|general|keybinds|extensions|server|server-engagement|server-stickers] [--command=help|weather] [--themes] [--extension=ID] [--thumbnail] [--width=1120] [--height=760] [--light] [--timeline-text] [--poll]".into());
 	}
 	let output = PathBuf::from(value("--output=").ok_or("Missing --output=PATH.png")?);
 	let page = value("--page=").unwrap_or("profile").to_owned();
@@ -438,6 +438,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 					);
 					m.content = format!("Synthetic timeline row {i} for density comparison.");
 					state.timeline.insert(m, false, false).unwrap();
+				}
+			}
+			if args.iter().any(|arg| arg == "--poll") {
+				// Synthetic poll card on the third row; offline and disclosed.
+				let poll_message = state.timeline.iter().nth(2).map(|m| m.id);
+				if let Some(message) = poll_message {
+					let _ = state
+						.timeline
+						.set_poll(message, Some(test_support::synthetic_poll()));
 				}
 			}
 			if page == "profile" {

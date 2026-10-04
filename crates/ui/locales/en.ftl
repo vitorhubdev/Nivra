@@ -1290,3 +1290,7 @@ Update waiting for call or upload to end = "Update waiting for call or upload to
 What's new in this version = "What's new in this version"
 Twemoji graphics are copyright Twitter, Inc. and contributors, licensed under CC-BY 4.0. = "Twemoji graphics are copyright Twitter, Inc. and contributors, licensed under CC-BY 4.0."
 
+Poll = "Poll"
+Poll closed = "Poll closed"
+vote = "vote"
+votes = "votes"

@@ -135,6 +135,8 @@ pub struct TimelineView {
 	pub(super) mark_channel_read: Option<Id>,
 	pub(super) reaction_picker: Option<(Id, egui::Rect, egui::Id)>,
 	pub(super) reaction: Option<(Id, Option<model::ReactionEmoji>)>,
+	/// Requested poll vote: message and answer id.
+	pub(super) poll_vote: Option<(Id, u64)>,
 	pub(super) reaction_users: Option<(Id, model::ReactionEmoji, bool)>,
 	/// Requested pin change: channel, message, pinned.
 	pub(super) pin_request: Option<(Id, Id, bool)>,
@@ -360,6 +362,7 @@ fn layout_key(message: &Message) -> u64 {
 	message.reply_deleted.hash(&mut key);
 	message.unsupported.hash(&mut key);
 	message.extra_content.hash(&mut key);
+	message.poll.hash(&mut key);
 	message.sticker_items.hash(&mut key);
 	message.components.hash(&mut key);
 	message.kind.hash(&mut key);
@@ -388,7 +391,8 @@ fn reserved_chrome(ui: &egui::Ui, message: &Message, width: f32) -> f32 {
 	);
 	let components = 40.0 * (message.components.len().min(5) as f32);
 	let stickers = 160.0 * (message.sticker_items.len().min(4) as f32);
-	reactions + components + stickers
+	let polls = crate::polls::estimated_height(ui, message.poll.as_ref(), (width - 88.0).max(40.0));
+	reactions + components + stickers + polls
 }
 
 pub(crate) fn fill_header_line(ui: &mut egui::Ui, compact: bool, text_line: egui::Rect) {
@@ -3299,6 +3303,23 @@ impl TimelineView {
 											}
 											let unknown_system = message.unsupported
 												&& message.system_summary().is_none();
+											if let Some(poll) = message.poll.as_ref() {
+												let can_vote = state.gateway_connected
+													&& state.freshness == model::Freshness::Fresh
+													&& state.can_read_history(message.channel);
+												if let Some(action) = crate::polls::show(
+													ui,
+													poll,
+													can_vote,
+													state.polls.busy()
+														|| state.polls.invalidated(id),
+												) && let crate::polls::Action::Vote(answer_id) =
+													action
+												{
+													self.poll_vote = Some((id, answer_id));
+												}
+												ui.add_space(4.0);
+											}
 											if unknown_system
 												|| message.extra_content.poll || ((message
 												.extra_content
@@ -3321,7 +3342,11 @@ impl TimelineView {
 													);
 												}
 												for (present, label) in [
-													(message.extra_content.poll, "Poll"),
+													(
+														message.extra_content.poll
+															&& message.poll.is_none(),
+														"Poll",
+													),
 													(
 														(message.extra_content.sticker_items
 															|| message.extra_content.stickers)
@@ -6265,6 +6290,7 @@ mod tests {
 
 	fn text_message(id: u64) -> Message {
 		Message {
+			poll: None,
 			sticker_items: vec![],
 			id: Id(id),
 			channel: Id(20),
@@ -9675,6 +9701,7 @@ mod tests {
 
 	fn check_channel_rename_heights() {
 		let message = Message {
+			poll: None,
 			sticker_items: vec![],
 			id: Id(1),
 			channel: Id(2),
@@ -9852,6 +9879,7 @@ mod tests {
 	#[test]
 	fn same_id_revision_reset_does_not_reuse_reveal_or_height() {
 		let mut message = Message {
+			poll: None,
 			sticker_items: vec![],
 			reactions: Some(vec![]),
 			id: Id(1),
@@ -9952,6 +9980,7 @@ mod tests {
 			}
 		}
 		let mut message = Message {
+			poll: None,
 			sticker_items: vec![],
 			reactions: Some(vec![]),
 			id: Id(1),

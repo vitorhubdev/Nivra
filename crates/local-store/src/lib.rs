@@ -10,8 +10,8 @@ use std::{
 
 const MAX_MEDIA_JSON: usize = 256 * 1024;
 const MAX_WINDOW_BYTES: usize = 4 * 1024 * 1024;
-const NATIVE_SCHEMA: u32 = 26;
-const READABLE_SCHEMA: u32 = 26;
+const NATIVE_SCHEMA: u32 = 27;
+const READABLE_SCHEMA: u32 = 27;
 /// Local download registry: attachment id → saved path, size and date. Only path
 /// metadata is stored, never file content.
 const MAX_DOWNLOAD_ROWS: usize = 2000;
@@ -402,6 +402,11 @@ impl LocalStore {
 			[],
 			|row| row.get(0),
 		)?;
+		let has_poll: bool = connection.query_row(
+			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='poll')",
+			[],
+			|row| row.get(0),
+		)?;
 		let has_original_flags: bool = connection.query_row(
 			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='original_flags')",
 			[],
@@ -431,6 +436,9 @@ impl LocalStore {
 		}
 		if !has_components {
 			transaction.execute_batch("ALTER TABLE messages ADD COLUMN components TEXT NOT NULL DEFAULT '[]' CHECK(length(CAST(components AS BLOB))<=262144);")?;
+		}
+		if !has_poll {
+			transaction.execute_batch("ALTER TABLE messages ADD COLUMN poll TEXT CHECK(poll IS NULL OR (typeof(poll)='text' AND length(CAST(poll AS BLOB))<=32768));")?;
 		}
 
 		if !has_forwarded {
@@ -942,7 +950,7 @@ impl LocalStore {
 			}
 		}
 		let mut insert = transaction.prepare_cached(
-            "INSERT OR REPLACE INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook,account_kind,forwarded,author_roles,author_nick,components,application_id,original_flags,sticker_items,interaction,reactions) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29)")?;
+            "INSERT OR REPLACE INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook,account_kind,forwarded,author_roles,author_nick,components,application_id,original_flags,sticker_items,interaction,reactions,poll) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30)")?;
 		for message in messages {
 			if previous
 				.get(&message.id)
@@ -1014,6 +1022,20 @@ impl LocalStore {
 			if components.len() > MAX_MEDIA_JSON {
 				return Err(StoreError::Capacity);
 			}
+			let poll = message
+				.poll
+				.as_ref()
+				.map(serde_json::to_string)
+				.transpose()
+				.map_err(|_| StoreError::Incompatible)?;
+			if message
+				.poll
+				.as_ref()
+				.is_some_and(|poll| !model::valid_poll(poll))
+				|| poll.as_ref().is_some_and(|json| json.len() > 32768)
+			{
+				return Err(StoreError::Capacity);
+			}
 			let embeds =
 				serde_json::to_string(&message.embeds).map_err(|_| StoreError::Incompatible)?;
 			let attachments = serde_json::to_string(&message.attachments)
@@ -1054,6 +1076,7 @@ impl LocalStore {
 				sticker_items,
 				interaction,
 				reactions,
+				poll,
 			])?;
 			let stored_payload = message_payload(&transaction, &account, &channel, &stored_id)?;
 			adjust_stats(&transaction, stored_payload, 1)?;
@@ -1151,7 +1174,7 @@ impl LocalStore {
 		Ok(())
 	}
 	pub fn load_channel(&self, account: Id, channel: Id) -> Result<Vec<Message>> {
-		let mut query = self.0.prepare_cached("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook,account_kind,forwarded,author_roles,author_nick,components,application_id,original_flags,sticker_items,interaction,reactions FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
+		let mut query = self.0.prepare_cached("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook,account_kind,forwarded,author_roles,author_nick,components,application_id,original_flags,sticker_items,interaction,reactions,poll FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
 		let mut rows = query.query(params![account.to_string(), channel.to_string()])?;
 		let mut messages = Vec::new();
 		let mut bytes = 0;
@@ -1299,6 +1322,22 @@ impl LocalStore {
 				}
 				_ => return Err(StoreError::Incompatible),
 			};
+			let poll = match row.get_ref(27)? {
+				rusqlite::types::ValueRef::Null => None,
+				rusqlite::types::ValueRef::Text(bytes) => {
+					let text = std::str::from_utf8(bytes).map_err(|_| StoreError::Incompatible)?;
+					if text.len() > 32768 {
+						return Err(StoreError::Capacity);
+					}
+					let poll = serde_json::from_str::<model::Poll>(text)
+						.map_err(|_| StoreError::Incompatible)?;
+					if !model::valid_poll(&poll) {
+						return Err(StoreError::Incompatible);
+					}
+					Some(poll)
+				}
+				_ => return Err(StoreError::Incompatible),
+			};
 			let message = Message {
 				sticker_items: serde_json::from_str::<
 					model::StickerList<{ model::MAX_MESSAGE_STICKERS }>,
@@ -1337,6 +1376,7 @@ impl LocalStore {
 				reply_to: row.get::<_, Option<String>>(5)?.map(parse).transpose()?,
 				unsupported: row.get(6)?,
 				extra_content,
+				poll,
 				kind: row.get(14)?,
 				reply_deleted,
 				forwarded: row.get(18)?,
@@ -3552,6 +3592,7 @@ mod tests {
 		);
 		for channel in 1..=30 {
 			let mut message = Message {
+				poll: None,
 				flags: 0,
 				sticker_items: vec![],
 				components: vec![],
@@ -3727,6 +3768,65 @@ mod component_storage_tests {
 			messages[0].sticker_items
 		);
 		messages[0].sticker_items[0].name = "x".repeat(121);
+		assert_eq!(
+			store.save_channel(Id(1), Id(2), &messages),
+			Err(StoreError::Capacity)
+		);
+	}
+	#[test]
+	fn polls_migrate_round_trip_and_reject_invalid_payloads() {
+		let mut store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+		store.0.execute("INSERT INTO messages(account,channel,id,author,name,content,edited,unsupported) VALUES('1','2','3','4','Synthetic','kept',0,0)", []).unwrap();
+		store
+			.0
+			.execute_batch("ALTER TABLE messages DROP COLUMN poll; PRAGMA user_version=26;")
+			.unwrap();
+		store = LocalStore::initialize(store.0).unwrap();
+		let mut messages = store.load_channel(Id(1), Id(2)).unwrap();
+		assert!(messages[0].poll.is_none());
+		messages[0].poll = Some(model::Poll {
+			question: "Synthetic poll?".into(),
+			answers: vec![
+				model::PollAnswer {
+					answer_id: 1,
+					text: "Yes".into(),
+					emoji: None,
+				},
+				model::PollAnswer {
+					answer_id: 2,
+					text: "No".into(),
+					emoji: Some(model::PollEmoji {
+						id: None,
+						name: Some("🧸".into()),
+					}),
+				},
+			],
+			counts: vec![model::PollCount {
+				answer_id: 1,
+				count: 3,
+				me_voted: true,
+			}],
+			expiry: None,
+			allow_multiselect: false,
+			finalized: false,
+			duration: 24,
+		});
+		store.save_channel(Id(1), Id(2), &messages).unwrap();
+		store = LocalStore::initialize(store.0).unwrap();
+		assert_eq!(
+			store.load_channel(Id(1), Id(2)).unwrap()[0].poll,
+			messages[0].poll
+		);
+		messages[0]
+			.poll
+			.as_mut()
+			.unwrap()
+			.answers
+			.push(model::PollAnswer {
+				answer_id: 3,
+				text: String::new(),
+				emoji: None,
+			});
 		assert_eq!(
 			store.save_channel(Id(1), Id(2), &messages),
 			Err(StoreError::Capacity)

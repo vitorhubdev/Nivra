@@ -108,6 +108,7 @@ mod contact_editor;
 pub mod dialog;
 mod join_server;
 mod keybinds;
+mod polls;
 mod profile_edit;
 mod reactions;
 mod reading;
@@ -5185,6 +5186,11 @@ impl MessagingUi {
 				state.refresh_reactions(message);
 			}
 		}
+		if let Some((message, answer_id)) = self.timeline.poll_vote.take()
+			&& let Some(command) = state.prepare_poll_vote(message, answer_id)
+		{
+			commands.push(command);
+		}
 		self.group_menu
 			.show(&ctx, state, &mut self.avatars, &mut commands);
 		for intent in self
@@ -6037,6 +6043,7 @@ mod composer_tests {
 			.timeline
 			.insert(
 				model::Message {
+					poll: None,
 					sticker_items: vec![],
 					id: Id(20),
 					channel: Id(10),

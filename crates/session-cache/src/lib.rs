@@ -293,6 +293,7 @@ impl Timeline {
 			&& message.application_id.is_none_or(|id| id.0 != 0)
 			&& model::valid_stickers(&message.sticker_items, model::MAX_MESSAGE_STICKERS)
 			&& model::valid_components(&message.components)
+			&& message.poll.as_ref().is_none_or(model::valid_poll)
 			&& model::valid_embeds(&message.embeds)
 			&& model::valid_attachments(&message.attachments)
 			&& message
@@ -374,6 +375,7 @@ impl Timeline {
 			|| matches!(&patch.application_id, Patch::Value(id) if id.0 == 0)
 			|| matches!(&patch.sticker_items, Patch::Value(s) if !model::valid_stickers(s,model::MAX_MESSAGE_STICKERS))
 			|| matches!(&patch.components, Patch::Value(c) if !model::valid_components(c))
+			|| matches!(&patch.poll, Patch::Value(Some(poll)) if !model::valid_poll(poll))
 			|| matches!(&patch.embeds, Patch::Value(embeds) if !model::valid_embeds(embeds))
 			|| matches!(&patch.attachments, Patch::Value(attachments) if !model::valid_attachments(attachments))
 		{
@@ -507,6 +509,29 @@ impl Timeline {
 		self.bytes = self.bytes - old + message.bytes();
 		Ok(())
 	}
+	pub fn set_poll(&mut self, id: Id, poll: Option<model::Poll>) -> Result<(), &'static str> {
+		if poll.as_ref().is_some_and(|poll| !model::valid_poll(poll)) {
+			return Err("Poll data exceeds safe capacity");
+		}
+		if self.is_deleted(id) {
+			return Ok(());
+		}
+		// Take the footprint before borrowing a live row mutably.
+		let retained = self.row_bytes();
+		let Some(message) = self.messages.get_mut(&id).and_then(Option::as_mut) else {
+			return Ok(());
+		};
+		let old = message.bytes();
+		let new = model::poll_bytes(&poll);
+		let previous = model::poll_bytes(&message.poll);
+		if retained - previous + new > MAX_BYTES {
+			return Err("Poll data exceeds timeline capacity");
+		}
+		message.poll = poll;
+		message.revision += 1;
+		self.bytes = self.bytes - old + message.bytes();
+		Ok(())
+	}
 }
 fn tree_bytes<T>(len: usize) -> usize {
 	if len == 0 {
@@ -593,6 +618,11 @@ pub fn apply_patch(message: &mut Message, patch: &MessagePatch) {
 		Patch::Null => message.components.clear(),
 		Patch::Absent => {}
 	}
+	match &patch.poll {
+		Patch::Value(poll) => message.poll.clone_from(poll),
+		Patch::Null => message.poll = None,
+		Patch::Absent => {}
+	}
 	match &patch.application_id {
 		Patch::Value(id) => message.application_id = Some(*id),
 		Patch::Null => message.application_id = None,
@@ -648,6 +678,7 @@ mod tests {
 		timeline.insert(original.clone(), false, false).unwrap();
 		timeline
 			.patch(MessagePatch {
+				poll: Patch::Absent,
 				flags: Patch::Absent,
 				sticker_items: Patch::Absent,
 				components: Patch::Absent,
@@ -780,6 +811,7 @@ mod tests {
 		content.push_str("Pending patch");
 		timeline
 			.patch(MessagePatch {
+				poll: Patch::Absent,
 				flags: Patch::Absent,
 				sticker_items: Patch::Absent,
 				components: Patch::Absent,
@@ -851,6 +883,7 @@ mod tests {
 		assert_eq!(timeline.bytes(), retained_bytes);
 		timeline
 			.patch(MessagePatch {
+				poll: Patch::Absent,
 				flags: Patch::Absent,
 				sticker_items: Patch::Absent,
 				components: Patch::Absent,
@@ -890,6 +923,42 @@ mod tests {
 		assert_eq!(timeline.row_count(), 0);
 		timeline.insert(message(10), false, false).unwrap();
 		assert_eq!(timeline.len(), 1);
+	}
+
+	#[test]
+	fn set_poll_updates_the_row_and_rejects_invalid_payloads() {
+		let mut timeline = Timeline::default();
+		timeline.insert(message(10), false, false).unwrap();
+		let before = timeline.bytes();
+		let poll = model::Poll {
+			question: "Keep it?".into(),
+			answers: vec![model::PollAnswer {
+				answer_id: 1,
+				text: "Yes".into(),
+				emoji: None,
+			}],
+			counts: vec![model::PollCount {
+				answer_id: 1,
+				count: 2,
+				me_voted: false,
+			}],
+			expiry: None,
+			allow_multiselect: false,
+			finalized: false,
+			duration: 1,
+		};
+		timeline.set_poll(Id(10), Some(poll)).unwrap();
+		let row = timeline.get(Id(10)).unwrap();
+		assert_eq!(row.poll.as_ref().map(|poll| poll.count(1)), Some(2));
+		assert!(timeline.bytes() > before);
+		let mut invalid = row.poll.clone().unwrap();
+		invalid.answers[0].text.clear();
+		assert_eq!(
+			timeline.set_poll(Id(10), Some(invalid)),
+			Err("Poll data exceeds safe capacity")
+		);
+		timeline.set_poll(Id(10), None).unwrap();
+		assert!(timeline.get(Id(10)).unwrap().poll.is_none());
 	}
 
 	#[test]
@@ -953,6 +1022,7 @@ mod tests {
 	#[test]
 	fn content_markers_reconcile_independent_updates_before_and_after_history() {
 		let update = |extra_content| MessagePatch {
+			poll: Patch::Absent,
 			flags: Patch::Absent,
 			sticker_items: Patch::Absent,
 			components: Patch::Absent,
@@ -1196,6 +1266,7 @@ mod tests {
 		timeline.insert(original.clone(), false, false).unwrap();
 		let before = timeline.bytes;
 		let patch = MessagePatch {
+			poll: Patch::Absent,
 			flags: Patch::Absent,
 			sticker_items: Patch::Absent,
 			components: Patch::Absent,
@@ -1222,6 +1293,7 @@ mod tests {
 	}
 	fn message(id: u64) -> Message {
 		Message {
+			poll: None,
 			flags: 0,
 			sticker_items: vec![],
 			components: vec![],
@@ -1315,6 +1387,7 @@ mod tests {
 			spoiler: false,
 		};
 		let update = |attachments| MessagePatch {
+			poll: Patch::Absent,
 			flags: Patch::Absent,
 			sticker_items: Patch::Absent,
 			components: Patch::Absent,
@@ -1395,6 +1468,7 @@ mod tests {
 			..Default::default()
 		};
 		let update = |embeds| MessagePatch {
+			poll: Patch::Absent,
 			flags: Patch::Absent,
 			sticker_items: Patch::Absent,
 			components: Patch::Absent,
@@ -1472,6 +1546,7 @@ mod tests {
 		t.begin_page(false);
 		t.delete(Id(1)).unwrap();
 		t.patch(MessagePatch {
+			poll: Patch::Absent,
 			flags: Patch::Absent,
 			sticker_items: Patch::Absent,
 			components: Patch::Absent,
@@ -1492,6 +1567,7 @@ mod tests {
 		assert!(t.get(Id(1)).is_none());
 		assert!(t.get_display(Id(1)).is_none());
 		t.patch(MessagePatch {
+			poll: Patch::Absent,
 			flags: Patch::Absent,
 			sticker_items: Patch::Absent,
 			components: Patch::Absent,
@@ -1550,6 +1626,7 @@ mod tests {
 		for (at, content) in [(20, "new edit"), (10, "old edit")] {
 			timeline
 				.patch(MessagePatch {
+					poll: Patch::Absent,
 					flags: Patch::Absent,
 					sticker_items: Patch::Absent,
 					components: Patch::Absent,

@@ -196,6 +196,7 @@ mod tests {
 			forwarded: false,
 			unsupported: false,
 			extra_content: Default::default(),
+			poll: None,
 			embeds: vec![],
 			embeds_suppressed: false,
 			attachments: vec![],

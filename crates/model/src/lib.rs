@@ -44,6 +44,8 @@ mod stickers;
 pub use stickers::*;
 mod reactions;
 pub use reactions::*;
+mod polls;
+pub use polls::*;
 mod search;
 pub use gifs::*;
 pub use search::*;
@@ -390,6 +392,9 @@ pub struct Message {
 	pub interaction: Option<Box<Interaction>>,
 	pub unsupported: bool,
 	pub extra_content: ExtraContent,
+	/// Parsed poll card; `None` with the presence bit set means the payload was
+	/// unreadable and the timeline keeps the placeholder chip.
+	pub poll: Option<Poll>,
 	pub embeds: Vec<Embed>,
 	pub embeds_suppressed: bool,
 	pub attachments: Vec<Attachment>,
@@ -440,6 +445,7 @@ impl Message {
 				* size_of::<Attachment>()
 			+ sticker_bytes(&self.sticker_items)
 			+ component_bytes(&self.components)
+			+ poll_bytes(&self.poll)
 			+ embed_bytes(&self.embeds)
 			+ self.embeds.capacity().saturating_sub(self.embeds.len()) * size_of::<Embed>()
 	}
@@ -473,6 +479,8 @@ pub struct MessagePatch {
 	pub components: Patch<Vec<Component>>,
 	pub application_id: Patch<Id>,
 	pub extra_content: ExtraContentPatch,
+	/// `Value(None)` is a present but unreadable poll: presence stays, the card does not.
+	pub poll: Patch<Option<Poll>>,
 	pub reactions: Patch<Vec<Reaction>>,
 	pub id: Id,
 	pub channel: Id,

@@ -1120,6 +1120,7 @@ mod tests {
 			state.apply(crate::Envelope {
 				generation: state.generation,
 				event: crate::Event::Patch(model::MessagePatch {
+					poll: model::Patch::Absent,
 					sticker_items: model::Patch::Absent,
 					id,
 					channel,
@@ -1346,6 +1347,7 @@ mod tests {
 			.timeline
 			.insert(
 				Message {
+					poll: None,
 					sticker_items: Vec::new(),
 					kind: 0,
 					id: Id(50),

@@ -1504,6 +1504,7 @@ mod tests {
 			},
 		};
 		let message = Message {
+			poll: None,
 			sticker_items: vec![],
 			id: Id(1),
 			channel: Id(2),

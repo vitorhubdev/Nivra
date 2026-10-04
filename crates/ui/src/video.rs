@@ -497,13 +497,8 @@ impl VideoUi {
 							.show_value(false)
 							.trailing_fill(true),
 					);
-					seek.widget_info(|| {
-						egui::WidgetInfo::slider(
-							can_seek,
-							position,
-							crate::tr_ui!(ui, "Seek video"),
-						)
-					});
+					let seek_label = crate::tr_ui!(ui, "Seek video");
+					seek.widget_info(|| egui::WidgetInfo::slider(can_seek, position, seek_label));
 					controls_focused |= seek.has_focus();
 					response |= seek.clone();
 					if can_seek && !context_click && (seek.changed() || seek.drag_stopped()) {

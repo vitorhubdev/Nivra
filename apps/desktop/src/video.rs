@@ -1569,6 +1569,68 @@ mod player_tests {
 		output::NULL_SINK.store(false, Ordering::Release);
 	}
 
+	#[test]
+	fn accesskit_labels_do_not_relock_the_context() {
+		// The real app enables accesskit. Any `widget_info` closure that looks up a
+		// translated string takes the Context read lock while egui holds the write
+		// lock, which froze the whole window on 1.0.10 (owner P0, 2026-10-03).
+		discord_api::ensure_tls_provider();
+		let ctx = eframe::egui::Context::default();
+		ctx.enable_accesskit();
+		let message = test_support::message(1, model::Id(2));
+		let attachment = model::Attachment {
+			id: model::Id(3),
+			filename: "oobe-intro1.mp4".into(),
+			description: None,
+			content_type: Some("video/mp4".into()),
+			size: 4096,
+			media: model::EmbedMedia {
+				width: 1080,
+				height: 1920,
+				..Default::default()
+			},
+			spoiler: false,
+			duration_ms: Some(4000),
+			waveform: Vec::new(),
+		};
+		let mut view = ui::VideoUi::default();
+		view.begin(&message, &attachment, true);
+		// Playing with a control bar: the state that drew the freezing closure.
+		view.state = ui::VideoState::Playing;
+		view.position = 1.0;
+		view.duration = 4.0;
+		let mut download = ui::DownloadUi::default();
+		let mut opening = None;
+		let screen = egui::vec2(800.0, 600.0);
+		let mut stage = egui::Rect::NOTHING;
+		let center = std::cell::Cell::new(egui::Pos2::ZERO);
+		let mut frame = |pointer: Option<egui::Pos2>| {
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
+					focused: true,
+					events: pointer.into_iter().map(egui::Event::PointerMoved).collect(),
+					..Default::default()
+				},
+				|ui| {
+					stage = view
+						.show(ui, &message, &attachment, &mut download, &mut opening, true)
+						.rect;
+					center.set(stage.center());
+				},
+			)
+		};
+		frame(None).drop_without_applying_deltas();
+		// Hovering the stage keeps the control bar (and its slider) visible, which is
+		// the state the real app froze in.
+		let output = frame(Some(center.get()));
+		assert!(
+			output.platform_output.accesskit_update.is_some(),
+			"accesskit must build a tree while the controls render"
+		);
+		output.drop_without_applying_deltas();
+	}
+
 	/// Waits for a state the player publishes through its shared update slot, with the
 	/// last observation in the panic so a CI failure is diagnosable without a rerun.
 	fn wait_for(

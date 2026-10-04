@@ -197,9 +197,13 @@ mod tests {
 		assert!(report_if_stalled(40_000, 6_000, Phase::Video, &log, 5_600));
 		let report = std::fs::read_to_string(&log).unwrap();
 		assert!(report.contains("state=Playing"), "{report}");
+		// The snapshot is trimmed to 240 chars; the stack length varies by platform,
+		// so only the file cap bounds the report.
+		assert!(report.contains("xxxx"), "snapshot present");
+		assert!(!report.contains(&"x".repeat(400)), "snapshot trimmed");
 		assert!(
-			report.len() < 8192,
-			"report must stay small: {}",
+			report.len() < MAX_LOG_BYTES as usize,
+			"report must stay under the file cap: {}",
 			report.len()
 		);
 		let _ = std::fs::remove_dir_all(&dir);

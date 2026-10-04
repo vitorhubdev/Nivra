@@ -5,6 +5,14 @@ retries = 0
 fail-fast = false
 slow-timeout = { period = "30s", terminate-after = 2 }
 
+# A shared runner can starve this heavy login test past the 60 s cap (main run
+# 37141944237: TIMEOUT at 60.013 s while the same test takes 0.6 s on a healthy
+# run and 0.9 s locally). Retrying only this test keeps the global retries = 0
+# policy: a real regression fails every attempt.
+[[profile.ci.overrides]]
+filter = 'test(optional_metadata_faults_do_not_abort_large_login)'
+retries = 2
+
 [[profile.ci.overrides]]
 filter = 'test(page_cache_covers_the_file_and_a_full_database_still_reads)'
 success-output = "immediate"

@@ -1771,8 +1771,9 @@ Rich content is bounded to 10 rows / 8 KiB, forum data to 10 threads / 6 KiB,
 and activity to eight typing IDs plus twenty pin IDs / 2 KiB. They share the
 64-KiB app snapshot cap. Discovery counts against the existing 256-KiB invocation
 cap, slightly reducing space for other input fields. Queue/rate/fuel limits
-are unchanged; no new dependency, cache, worker or timer. Poll detail and forum
-tag data remain unsupported by core state. No lifecycle tests were added.
+are unchanged; no new dependency, cache, worker or timer. Forum tag data remains
+unsupported by core state; poll cards are bounded by the shared 16-KiB model limit and the
+existing history byte budget. No lifecycle tests were added.
 Native screenshot/CPU/RSS/frame evidence remains unavailable; synthetic sandbox
 measurements do not establish live Discord compatibility.
 

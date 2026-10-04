@@ -353,7 +353,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args: Vec<_> = std::env::args().skip(1).collect();
 	let value = |prefix: &str| args.iter().find_map(|arg| arg.strip_prefix(prefix));
 	if !args.iter().any(|arg| arg == "--demo") {
-		return Err("Usage: profile_preview --demo --output=PATH.png [--page=stickers|slash-commands|slash-command-search|slash-command-options|profile|profile-card|member-tags|dm-tags|account|appearance|general|keybinds|extensions|server|server-engagement|server-stickers] [--command=help|weather] [--themes] [--extension=ID] [--thumbnail] [--width=1120] [--height=760] [--light] [--timeline-text] [--poll]".into());
+		return Err("Usage: profile_preview --demo --output=PATH.png [--page=stickers|slash-commands|slash-command-search|slash-command-options|profile|profile-card|member-tags|dm-tags|account|appearance|general|keybinds|extensions|server|server-engagement|server-stickers] [--command=help|weather] [--themes] [--extension=ID] [--thumbnail] [--width=1120] [--height=760] [--light] [--timeline-text] [--poll] [--poll-presence]".into());
 	}
 	let output = PathBuf::from(value("--output=").ok_or("Missing --output=PATH.png")?);
 	let page = value("--page=").unwrap_or("profile").to_owned();
@@ -447,6 +447,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 					let _ = state
 						.timeline
 						.set_poll(message, Some(test_support::synthetic_poll()));
+				}
+			}
+			if args.iter().any(|arg| arg == "--poll-presence") {
+				// Presence-only marker for the pre-card rendering of the same row.
+				let poll_message = state.timeline.iter().nth(2).map(|m| m.id);
+				if let Some(message) = poll_message
+					&& let Some(mut row) = state.timeline.get(message).cloned()
+				{
+					row.extra_content.poll = true;
+					let _ = state.timeline.insert(row, false, false);
 				}
 			}
 			if page == "profile" {

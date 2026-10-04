@@ -808,7 +808,7 @@ the group omitted when global space is exhausted. Nothing fetches content.
 | `stickers` | `Vec<MessageStickerSnapshot>` / array | At most 3 loaded sticker labels. | `message.stickers.len()` |
 | `stickers_truncated` | `bool` / boolean | Sticker records were unavailable in the retained payload or omitted by limits/invalid IDs. | `message.stickers_truncated` |
 | `reference` | `Option<MessageReferenceSnapshot>` / object or absent | Loaded reply/deleted-reference/forward marker, absent if none is known. No referenced body is supplied. | `message.reference.as_ref()` |
-| `poll` | `PollAvailability` / string | `absent` (`Absent`): no retained poll marker; `unsupported` (`Unsupported`): marker present, structured poll data not retained. Neither supplies votes or results. | `message.poll == PollAvailability::Unsupported` |
+| `poll` | `PollAvailability` / string | `absent` (`Absent`): no retained poll marker; `unsupported` (`Unsupported`): marker present, structured poll data not exposed to extensions. Neither supplies votes or results. | `message.poll == PollAvailability::Unsupported` |
 
 Embed strings are capped in UTF-8 and stripped of controls except newline/tab.
 Optional absent text is unknown/unsupplied; `Some("")` is known empty.

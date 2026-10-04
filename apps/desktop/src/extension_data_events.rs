@@ -239,6 +239,7 @@ impl Changes {
 			};
 			changes.0[12] |= matches!(&envelope.event, Event::Pinned { result: Ok(()), .. });
 			changes.0[14] |= match &envelope.event {
+				Event::Polls(_) => true,
 				Event::Patch(patch) => !matches!(patch.extra_content.poll, model::Patch::Absent),
 				Event::Message(m) | Event::SendResult { result: Ok(m), .. } => m.extra_content.poll,
 				Event::History { messages, .. } => {
@@ -370,6 +371,17 @@ fn message_details_changed(state: &State, event: &Event) -> bool {
 					channel, message, ..
 				} => loaded(*channel, *message),
 				Users { .. } => false,
+			}
+		}
+		Event::Polls(event) => {
+			use client_core::polls::Event::*;
+			match event {
+				Delta {
+					channel, message, ..
+				}
+				| Written {
+					channel, message, ..
+				} => loaded(*channel, *message),
 			}
 		}
 		_ => false,
@@ -771,6 +783,43 @@ mod tests {
 				.kinds(&[Capability::MessageContent])
 				.collect::<Vec<_>>(),
 			vec![AppEventKind::MessageDetails, AppEventKind::Polls]
+		);
+		for event in [
+			client_core::polls::Event::Delta {
+				channel: selected,
+				message: id,
+				answer_id: 1,
+				user: Id(3),
+				add: true,
+			},
+			client_core::polls::Event::Written {
+				channel: selected,
+				message: id,
+				request: 1,
+				result: Ok(()),
+			},
+		] {
+			let changes = capture(&state, Event::Polls(event));
+			assert_eq!(
+				changes
+					.kinds(&[Capability::MessageContent])
+					.collect::<Vec<_>>(),
+				vec![AppEventKind::MessageDetails, AppEventKind::Polls]
+			);
+		}
+		let vote_elsewhere = capture(
+			&state,
+			Event::Polls(client_core::polls::Event::Delta {
+				channel: selected,
+				message: Id(99999),
+				answer_id: 1,
+				user: Id(3),
+				add: true,
+			}),
+		);
+		assert_eq!(
+			vote_elsewhere.kinds(&[Capability::MessageContent]).count(),
+			0
 		);
 		for event in [
 			patch(Id(999)),

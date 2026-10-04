@@ -3321,7 +3321,8 @@ impl TimelineView {
 												ui.add_space(4.0);
 											}
 											if unknown_system
-												|| message.extra_content.poll || ((message
+												|| (message.extra_content.poll
+													&& message.poll.is_none()) || ((message
 												.extra_content
 												.sticker_items
 												|| message.extra_content.stickers)
@@ -7570,6 +7571,37 @@ mod tests {
 				);
 			}
 		}
+		// A readable poll card replaces both the presence marker and the external fallback.
+		message.extra_content = model::ExtraContent {
+			poll: true,
+			..Default::default()
+		};
+		message.poll = Some(test_support::synthetic_poll());
+		assert_ne!(layout_key(&message), plain_key);
+		state.timeline.clear();
+		state
+			.timeline
+			.insert(message.clone(), false, false)
+			.unwrap();
+		state.revision += 1;
+		for _ in 0..3 {
+			render(&mut view, &mut state, vec![]);
+		}
+		let texts = render(&mut view, &mut state, vec![]);
+		assert!(
+			texts
+				.iter()
+				.any(|(text, _)| text == "Which layout should Nivra keep?")
+		);
+		assert_eq!(
+			texts.iter().filter(|(text, _)| text == "Poll").count(),
+			1,
+			"only the card header carries the Poll label"
+		);
+		assert!(
+			!texts.iter().any(|(text, _)| text == "Open in Discord"),
+			"a rendered card has no external fallback"
+		);
 	}
 
 	#[test]

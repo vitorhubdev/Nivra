@@ -610,7 +610,7 @@ describes schemas; normal-account submission and modal Gateway events are unoffi
 This is not full Discord component parity: premium purchases are unavailable, and
 synthetic checks do not verify live application responses, modal uploads or purchases.
 Normal-account interoperability and Windows/Linux visual equivalence remain unverified.
-Polls and stickers still retain presence markers and an Open in Discord fallback.
+Stickers still retain presence markers and an Open in Discord fallback; polls now render as native cards (see October 4: native poll cards).
 Old cached component markers acquire controls only after normal history refresh.
 
 Run the offline native component preview with:
@@ -956,7 +956,7 @@ are synthetic; real platform input, screen readers and live navigation remain un
 
 Discord's [documented message type IDs](https://docs.discord.com/developers/resources/message#message-types) were checked on 2026-09-10. The decoder now retains the type through REST/Gateway messages and the local history cache. The timeline describes joins/welcomes, recipient changes, calls, channel name/icon changes, pins, boosts/tiers, channel follows, discovery notices, threads, invite reminders, AutoMod, subscriptions/offers, Stage events, incident alerts, purchases and poll results. Original content/embeds/attachments still render separately. Copy and loaded reply previews include the description. Unknown types keep an explicit placeholder; legacy cached unsupported rows remain unknown until history revalidation.
 
-These are native textual descriptions, not full interactive cards or proof of normal-user protocol compatibility. Call outcome/duration, subscription details, missing thread content and poll votes are not inferred. Search/pins snapshot excerpts remain their existing content-only previews; opening a hit loads the described timeline message. No live account, call or microphone validation was performed. Open PR #27 adds the external fallback and #28 adds unsupported payload markers; neither implemented these descriptions. Integration must retain their controls/markers without restoring a generic system placeholder for recognized types.
+These are native textual descriptions, not full interactive cards or proof of normal-user protocol compatibility. Call outcome/duration, subscription details and missing thread content are not inferred; poll votes arrive as native cards through their own bounded path (see October 4: native poll cards). Search/pins snapshot excerpts remain their existing content-only previews; opening a hit loads the described timeline message. No live account, call or microphone validation was performed. Open PR #27 adds the external fallback and #28 adds unsupported payload markers; neither implemented these descriptions. Integration must retain their controls/markers without restoring a generic system placeholder for recognized types.
 
 
 ### Reply targets (2026-09-10)
@@ -1834,3 +1834,32 @@ subscription. Stalled-subscription resets back off from 15 to 30, 60, then 120 s
 SakuraCord's member decoder uses the same wire shapes (optional counts and groups, presence
 beside or inside a member). Offline unit tests cover each case. This was not verified against
 a live server; the original failing payload was not captured.
+
+## Native poll cards — October 4, 2026
+
+Discord messages carrying a `poll` object render a native card in the timeline: question, up to
+ten answers with optional emoji, the caller's own vote and the live tally with percentages and
+total votes. An ended poll (service-finalized or past its expiry) paints its results but refuses
+clicks. While a message's poll payload cannot be read, the previous presence marker and its
+external fallback stay, so nothing silently disappears.
+
+The decoder is bounded: `discord-protocol` keeps at most ten answers, 300 question characters,
+55 answer characters, 128 emoji-name characters and 16 KiB per poll, dropping unknown fields and
+treating an oversized answer list as an unreadable card with presence retained. Storage and the
+session timeline revalidate the same limits before retaining a card. Results arrive through the
+service's `MESSAGE_UPDATE` tally and through sequenced `MESSAGE_POLL_VOTE_ADD`/`REMOVE` Gateway
+deltas, deduplicated like reaction events; a repeated dispatch never moves the resume cursor
+backwards. Remote deltas raise tallies without marking the caller's own vote.
+
+Voting is one bounded optimistic write at a time: `POST` or `DELETE`
+`/channels/{channel}/polls/{message}/answers/{answer_id}` on the existing REST connection adds or
+removes the caller's vote, single-select toggles replace the previous choice the way the service
+does, and a failed write rolls the displayed tally back to the pre-vote value. The caller's own
+Gateway echo does not double the optimistic count. The only route evidence is Discord's documented
+application endpoint shape; normal-account voting interoperability remains unofficial and has not
+been validated against a live account. Poll creation, editing, custom-emoji resolution and
+cross-channel live results are not implemented.
+
+The offline `profile_preview` example paints `docs/pr-evidence/polls/before.png` and
+`after.png` from synthetic fixtures; they are framebuffer captures, not OS screenshots and not
+proof of live compatibility.

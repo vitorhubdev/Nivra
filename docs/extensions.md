@@ -301,7 +301,8 @@ fetch settings, profiles or role catalogs. Unknown decisions remain distinct
 from denial, and native actions still recheck permissions.
 [Conversation Inspector](../examples/extensions/conversation-inspector/src/lib.rs)
 shows rich summaries, loaded forum flags, typing/pin state and public discovery.
-Polls have only an absent/unsupported marker; no questions/results are retained.
+Polls have only an absent/unsupported marker here; questions and results are not exposed to
+extensions (the native timeline renders them).
 Forum tags remain unavailable. All three inspector/toolbox observers stay passive.
 
 ### Existing tools and message events

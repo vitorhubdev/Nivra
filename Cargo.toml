@@ -79,9 +79,6 @@ opt-level = "s"
 [profile.release.package.hyper]
 opt-level = "s"
 
-[profile.release.package.h2]
-opt-level = "s"
-
 [profile.release.package.http]
 opt-level = "s"
 

@@ -1992,3 +1992,28 @@ fixed-metadata pending Abandon under pressure; a new Join cannot overtake cleanu
 and an unsent full-queue Join fails only its own attempt. No persistent cache or
 new background worker is introduced. Server acceptance establishes a submitted
 candidate, not a physical-client identity.
+
+## Release package size (October 4, 2026)
+
+Measured on the packaged CI artifact (`nivra-Windows-*-unsigned/Nivra.exe`), same
+pipeline and runner. Baseline is main run 37193591919 (`0e6174c5`); the after column
+is the final PR #82 run (`be6ae7b3`), both read with the artifact downloaded from
+GitHub, never estimated.
+
+| Configuration | Windows x64 | Delta | Windows ARM64 | Delta |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline: thin LTO, codegen-units 16 | 102,763,008 B | — | 70,402,560 B | — |
+| Fat LTO, codegen-units 1 (rejected) | 97,537,536 B | −5.08% | 63,982,080 B | −9.12% |
+| Thin LTO, codegen-units 1, cold opt-level s (kept) | 99,608,064 B | −3.07% | 65,595,392 B | −6.83% |
+
+CI wall time for the Windows package job: ~19m48s baseline, 60+ minutes with fat
+LTO, 31m27s with the kept configuration. Fat LTO was rejected on link cost. The
+cold `opt-level = "s"` set covers extensions, wry, reqwest, hyper, http, tower,
+keyring, notify-rust, global-hotkey, dirs, rusqlite, libsqlite3-sys, windows,
+windows-core, webview2-com and tungstenite; voice, audio, video, render, media and
+parsing crates keep `opt-level = 3`. Bundled assets are single-copy and already
+compressed (CJK font 12.03 MB `zstd -19` with lazy inflate, Twemoji atlas 5.23 MB
+`oxipng -o max`, licenses deflated to 0.43 MB). A 20% reduction would require
+removing user-visible content (the CJK font or the emoji atlas) or the x64-only
+DeepFilterNet/tract runtime (~33 MB difference versus ARM64); that remains a
+pending owner decision.

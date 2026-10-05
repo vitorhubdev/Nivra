@@ -4254,6 +4254,7 @@ dependencies = [
  "discord-protocol",
  "discord-voice",
  "eframe",
+ "egui_kittest",
  "extensions",
  "find-msvc-tools",
  "futures-util",

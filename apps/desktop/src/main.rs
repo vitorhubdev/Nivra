@@ -7870,7 +7870,7 @@ mod tests {
 		harness.run_steps(2);
 		let prefix = ui::i18n::text(language, ui::licenses::MPL_SOURCE_PREFIX);
 		assert!(
-			harness.query_by_label_contains(&prefix).is_some(),
+			harness.query_by_label_contains(prefix).is_some(),
 			"the licenses screen must draw after the notices were accepted"
 		);
 	}

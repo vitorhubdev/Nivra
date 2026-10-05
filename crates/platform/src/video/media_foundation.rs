@@ -253,22 +253,23 @@ impl Decoder {
 				}
 			}
 			let video_index = video_index.ok_or(UNSUPPORTED)?;
-			let video = MFCreateMediaType().map_err(|_| INVALID)?;
-			video
-				.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
-				.map_err(|_| INVALID)?;
-			video
-				.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)
-				.map_err(|_| INVALID)?;
-			video
-				.SetUINT64(
-					&MF_MT_FRAME_SIZE,
-					(u64::from(width) << 32) | u64::from(height),
-				)
-				.map_err(|_| INVALID)?;
-			reader
-				.SetCurrentMediaType(VIDEO, None, &video)
-				.map_err(|_| UNSUPPORTED)?;
+			// Ask the Source Reader's video processor for the preview size so a 4K or larger
+			// frame is scaled by Media Foundation instead of being refused. If the processor
+			// rejects the reduced type, fall back to the native size; the media worker still
+			// has a bounded downscale as the final safety net.
+			let (preview_w, preview_h) = super::preview_dimensions(width, height);
+			let set_output = |w: u32, h: u32| -> Result<(), windows::core::Error> {
+				let video = MFCreateMediaType()?;
+				video.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+				video.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)?;
+				video.SetUINT64(&MF_MT_FRAME_SIZE, (u64::from(w) << 32) | u64::from(h))?;
+				reader.SetCurrentMediaType(VIDEO, None, &video)
+			};
+			if (preview_w, preview_h) == (width, height) {
+				set_output(width, height).map_err(|_| UNSUPPORTED)?;
+			} else if set_output(preview_w, preview_h).is_err() {
+				set_output(width, height).map_err(|_| UNSUPPORTED)?;
+			}
 			if manager.is_some() && rotation != 0 {
 				// Apply track rotation once in rgba_frame, without the GPU processor also
 				// correcting it. If its control is unavailable, use the software reader.
@@ -302,7 +303,8 @@ impl Decoder {
 				.SetStreamSelection(video_index, true)
 				.map_err(|_| INVALID)?;
 			let video = reader.GetCurrentMediaType(VIDEO).map_err(|_| INVALID)?;
-			if dimensions(&video)? != (width, height) {
+			let (width, height) = dimensions(&video)?;
+			if width == 0 || height == 0 || width > 16384 || height > 16384 {
 				return Err(INVALID);
 			}
 			let stride = video
@@ -359,6 +361,8 @@ impl Decoder {
 			if duration <= 0.0 || duration > MAX_SECONDS {
 				return Err("Videos longer than two hours are not supported.");
 			}
+			// `width`/`height` are now the decoded output size; `Info` reports the
+			// display orientation the player should use for the card.
 			let (display_width, display_height) = if rotation == 90 || rotation == 270 {
 				(height, width)
 			} else {

@@ -56,7 +56,7 @@ pub const MAX_SECONDS: f64 = 2.0 * 60.0 * 60.0;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const UNSUPPORTED: &str = "This video format or codec is not supported on this system.";
 pub const INVALID: &str = "The video could not be decoded safely.";
-pub const TOO_LARGE: &str = "Inline playback supports videos up to 1080p.";
+pub const TOO_LARGE: &str = "This video is too large to decode safely.";
 pub const TOO_LONG: &str = "Videos longer than two hours are not supported.";
 
 pub trait ReadSeek: Read + Seek + Send {}
@@ -98,12 +98,47 @@ impl Decoder {
 	}
 }
 
-/// The shared inline-player texture bound: 1080p worth of pixels within a 1920 px square.
+/// Largest edge and pixel count any decoder accepts. This is a safety bound against
+/// absurd dimensions, not a playback limit: frames larger than the preview box are
+/// scaled down by the decoder or by the media worker.
+pub const MAX_DECODE_EDGE: u32 = 16_384;
+pub const MAX_DECODE_PIXELS: u64 = 16_384 * 16_384;
+
+/// The inline-player preview box: 1920x1080 landscape, 1080x1920 portrait.
+pub const PREVIEW_LONG_EDGE: u32 = 1920;
+pub const PREVIEW_SHORT_EDGE: u32 = 1080;
+
+/// Fit `width`x`height` inside the preview box without ever upscaling a smaller video.
+pub fn preview_dimensions(width: u32, height: u32) -> (u32, u32) {
+	if width == 0 || height == 0 {
+		return (width, height);
+	}
+	let (max_w, max_h) = if width >= height {
+		(PREVIEW_LONG_EDGE, PREVIEW_SHORT_EDGE)
+	} else {
+		(PREVIEW_SHORT_EDGE, PREVIEW_LONG_EDGE)
+	};
+	let scale = (f64::from(max_w) / f64::from(width))
+		.min(f64::from(max_h) / f64::from(height))
+		.min(1.0);
+	if scale >= 1.0 {
+		return (width, height);
+	}
+	(
+		((f64::from(width) * scale).round() as u32).max(1),
+		((f64::from(height) * scale).round() as u32).max(1),
+	)
+}
+
+/// Decoder admission check: refuse only dimensions that are not decodable safely.
 pub fn check_dimensions(width: u32, height: u32) -> Result<(), &'static str> {
 	if width == 0 || height == 0 {
 		return Err(INVALID);
 	}
-	if width > 1920 || height > 1920 || u64::from(width) * u64::from(height) > 1920 * 1080 {
+	if width > MAX_DECODE_EDGE
+		|| height > MAX_DECODE_EDGE
+		|| u64::from(width) * u64::from(height) > MAX_DECODE_PIXELS
+	{
 		return Err(TOO_LARGE);
 	}
 	Ok(())
@@ -176,7 +211,9 @@ mod capability {
 	#[test]
 	fn native_playback_keeps_file_pixels_and_names_the_decoder() {
 		assert!(check_dimensions(1920, 1080).is_ok());
-		assert_eq!(check_dimensions(3840, 2160), Err(TOO_LARGE));
+		// Large files are admitted and scaled; only absurd dimensions are refused.
+		assert!(check_dimensions(3840, 2160).is_ok());
+		assert!(check_dimensions(MAX_DECODE_EDGE + 1, 1).is_err());
 		let backend = if cfg!(windows) {
 			"Media Foundation"
 		} else if cfg!(target_os = "macos") {
@@ -188,7 +225,7 @@ mod capability {
 		};
 		println!("video backend: {backend}");
 		println!(
-			"pixels: the file's own dimensions up to 1920x1080; larger frames are refused, not scaled"
+			"pixels: decodable frames are scaled into the 1920x1080 landscape / 1080x1920 portrait preview box"
 		);
 		println!(
 			"macOS demuxer: MP4/MOV avc1, hvc1, AAC. WebM, Matroska, VP8, VP9 and AV1 have no in-tree demuxer"
@@ -196,5 +233,15 @@ mod capability {
 		println!("linux: decodebin uses codecs installed on the machine");
 		println!("windows: Media Foundation uses codecs installed on the machine");
 		println!("bundled ffmpeg: not added. VLC: absent");
+	}
+
+	#[test]
+	fn preview_box_scales_large_frames_and_never_upscales_small_ones() {
+		assert_eq!(preview_dimensions(4500, 3000), (1620, 1080));
+		assert_eq!(preview_dimensions(3840, 2160), (1920, 1080));
+		assert_eq!(preview_dimensions(2160, 3840), (1080, 1920));
+		assert_eq!(preview_dimensions(640, 360), (640, 360));
+		assert_eq!(preview_dimensions(1080, 1920), (1080, 1920));
+		assert_eq!(preview_dimensions(1920, 1080), (1920, 1080));
 	}
 }

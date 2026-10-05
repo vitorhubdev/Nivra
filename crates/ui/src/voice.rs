@@ -182,6 +182,8 @@ impl MessagingUi {
 		crate::user_menu::popup(response, egui::Popup::default_response_id(response))
 			.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
 			.show(|ui| {
+				let motion = crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+				ui.set_opacity(motion);
 				ui.set_width(260.0);
 				let id = entry.participant.user.0;
 				let language = self.language;
@@ -864,7 +866,10 @@ impl MessagingUi {
 				self.stream_tile(ui, state, rect, channel, *streamer, compact);
 				egui::Popup::context_menu(&response)
 					.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-					.show(|ui| self.stream_audio_controls(ui));
+					.show(|ui| {
+						crate::anim::popup_motion(ui);
+						self.stream_audio_controls(ui)
+					});
 				"Screen share you are watching"
 			}
 			Tile::Participant(entry) => {
@@ -993,7 +998,10 @@ impl MessagingUi {
 				);
 				egui::Popup::menu(&response)
 					.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-					.show(|ui| self.stream_audio_controls(ui));
+					.show(|ui| {
+						crate::anim::popup_motion(ui);
+						self.stream_audio_controls(ui)
+					});
 			});
 		if modal.should_close() {
 			self.exit_voice_stream_fullscreen(ctx);
@@ -1066,7 +1074,10 @@ impl MessagingUi {
 		);
 		egui::Popup::menu(&audio)
 			.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-			.show(|ui| self.stream_audio_controls(ui));
+			.show(|ui| {
+				crate::anim::popup_motion(ui);
+				self.stream_audio_controls(ui)
+			});
 		if compact {
 			return;
 		}
@@ -1718,6 +1729,8 @@ impl MessagingUi {
 					.corner_radius(12),
 			)
 			.show(|ui| {
+				let motion = crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+				ui.set_opacity(motion);
 				ui.set_width(308.0);
 				ui.spacing_mut().item_spacing.y = 10.0;
 				ui.label(design::semibold(
@@ -2999,6 +3012,12 @@ impl MessagingUi {
 		let retry = std::time::Duration::from_millis(reconnect.retry_in_ms.max(1));
 		let progress =
 			(reconnect.since.elapsed().as_secs_f32() / retry.as_secs_f32()).clamp(0.0, 1.0);
+		let appear = crate::anim::bool_alpha(
+			ui.ctx(),
+			egui::Id::unique("gateway-reconnect-appear"),
+			true,
+			crate::anim::MEDIUM_SECS,
+		);
 		egui::Panel::top("gateway-reconnect")
 			.show_separator_line(false)
 			.frame(
@@ -3007,6 +3026,7 @@ impl MessagingUi {
 					.inner_margin(egui::Margin::symmetric(16, 10)),
 			)
 			.show(ui, |ui| {
+				ui.set_opacity(appear);
 				ui.vertical(|ui| {
 					ui.spacing_mut().item_spacing.y = 8.0;
 					ui.label(design::semibold(ui, &label, 14.0).color(colors.text_strong));
@@ -3094,6 +3114,12 @@ impl MessagingUi {
 			.unwrap_or(crate::i18n::text(self.language, "Recent call"))
 			.to_owned();
 		let unavailable = self.call_unavailable(state, channel);
+		let appear = crate::anim::bool_alpha(
+			ui.ctx(),
+			egui::Id::unique("reconnect-call-appear"),
+			true,
+			crate::anim::MEDIUM_SECS,
+		);
 		egui::Panel::top("reconnect-call")
 			.show_separator_line(false)
 			.frame(
@@ -3102,6 +3128,7 @@ impl MessagingUi {
 					.inner_margin(egui::Margin::symmetric(16, 10)),
 			)
 			.show(ui, |ui| {
+				ui.set_opacity(appear);
 				ui.horizontal(|ui| {
 					ui.spacing_mut().item_spacing.x = 12.0;
 					crate::icons::inline(ui, crate::icons::Icon::Phone, 22.0, colors.positive);

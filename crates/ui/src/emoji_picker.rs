@@ -363,6 +363,8 @@ impl Picker {
 		egui::Popup::menu(&button)
 			.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
 			.show(|ui| {
+				let motion = crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+				ui.set_opacity(motion);
 				ui.set_width(280.0);
 				let colors = crate::design::palette(ui);
 				if ui

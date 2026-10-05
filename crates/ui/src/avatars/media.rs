@@ -28,7 +28,7 @@ const SLOTS: usize = 2048;
 const CANONICAL: usize = 4096;
 const HELD: usize = 4;
 const ATTEMPTS: usize = 8;
-const FADE: Duration = Duration::from_millis(150);
+const FADE: Duration = crate::anim::SHORT;
 const DIM: f32 = 48.0;
 
 /// Scale `width`×`height` so the longer side is at most `edge`, never upscaling.

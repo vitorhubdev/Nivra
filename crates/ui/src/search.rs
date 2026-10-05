@@ -769,10 +769,16 @@ impl SearchUi {
 					ui.spacing_mut().item_spacing.x = 8.0;
 					let settings = chip(ui, Chip::icon(icons::Icon::Gear, "Search settings"));
 					egui::Popup::menu(&settings).show(|ui| {
+						let motion =
+							crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+						ui.set_opacity(motion);
 						ui.checkbox(&mut self.hide_highlight, "Hide matching-text highlight");
 					});
 					let sort = chip(ui, Chip::new(icons::Icon::SortArrows, "Sort"));
 					egui::Popup::menu(&sort).show(|ui| {
+						let motion =
+							crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+						ui.set_opacity(motion);
 						ui.label(
 							RichText::new(crate::tr_ui!(ui, "Order on this page"))
 								.color(colors.muted),

@@ -428,15 +428,20 @@ pub fn paint(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
 pub fn button(ui: &mut egui::Ui, icon: Icon, size: f32, label: &str) -> Response {
 	let colors = design::palette(ui);
 	let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-	if response.hovered() || response.has_focus() {
-		ui.painter().rect_filled(rect, 6, colors.hover);
+	let enabled = ui.is_enabled();
+	let t = crate::anim::hover(
+		ui.ctx(),
+		response.id.with("hover"),
+		enabled && (response.hovered() || response.has_focus()),
+	);
+	if t > 0.0 {
+		ui.painter()
+			.rect_filled(rect, 6, colors.hover.gamma_multiply(t));
 	}
-	let color = if !ui.is_enabled() {
-		colors.muted.gamma_multiply(0.5)
-	} else if response.hovered() || response.has_focus() {
-		colors.text_strong
+	let color = if enabled {
+		design::mix(colors.muted, colors.text_strong, t)
 	} else {
-		colors.muted
+		colors.muted.gamma_multiply(0.5)
 	};
 	paint(ui.painter(), icon, rect.shrink(size * 0.2), color);
 	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
@@ -447,13 +452,19 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, size: f32, label: &str) -> Response
 pub fn toggle(ui: &mut egui::Ui, icon: Icon, size: f32, active: bool, label: &str) -> Response {
 	let colors = design::palette(ui);
 	let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-	if response.hovered() || response.has_focus() {
-		ui.painter().rect_filled(rect, 6, colors.hover);
+	let t = crate::anim::hover(
+		ui.ctx(),
+		response.id.with("hover"),
+		response.hovered() || response.has_focus(),
+	);
+	if t > 0.0 {
+		ui.painter()
+			.rect_filled(rect, 6, colors.hover.gamma_multiply(t));
 	}
-	let color = if active || response.hovered() || response.has_focus() {
+	let color = if active {
 		colors.text_strong
 	} else {
-		colors.muted
+		design::mix(colors.muted, colors.text_strong, t)
 	};
 	paint(ui.painter(), icon, rect.shrink(size * 0.2), color);
 	response.widget_info(|| {

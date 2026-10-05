@@ -87,11 +87,12 @@ impl Toasts {
 				design::Level::Error => (colors.danger, icons::Icon::ShieldWarning),
 			};
 			let mut dismissed = false;
+			let enter = crate::anim::popup_alpha(ctx, egui::Id::unique(("toast-in", toast.id)));
 			let response = egui::Area::new(egui::Id::unique(("toast", toast.id)))
 				.anchor(Align2::CENTER_TOP, egui::vec2(0.0, offset))
 				.order(egui::Order::Foreground)
 				.show(ctx, |ui| {
-					ui.set_opacity((remaining / FADE).clamp(0.0, 1.0) as f32);
+					ui.set_opacity(enter * (remaining / FADE).clamp(0.0, 1.0) as f32);
 					egui::Frame::new()
 						.fill(colors.raised.to_opaque())
 						.stroke(Stroke::new(1.0, tint.gamma_multiply(0.55)))

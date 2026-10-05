@@ -641,6 +641,11 @@ impl MessagingUi {
 								}
 								let more = icons::button(&mut actions, Icon::More, 36.0, "More");
 								egui::Popup::menu(&more).show(|ui| {
+									let motion = crate::anim::popup_alpha(
+										ui.ctx(),
+										ui.scope_id().with("menu-motion"),
+									);
+									ui.set_opacity(motion);
 									user_menu::contents(
 										ui,
 										state,

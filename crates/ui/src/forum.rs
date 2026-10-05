@@ -318,6 +318,8 @@ impl ForumUi {
 			.min_size(egui::vec2(0.0, 30.0)),
 		);
 		egui::Popup::menu(&button).show(|ui| {
+			let motion = crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+			ui.set_opacity(motion);
 			ui.set_min_width(180.0);
 			ui.label(design::eyebrow(ui, "Sort by", colors.muted));
 			for sort in [Sort::Activity, Sort::Created] {

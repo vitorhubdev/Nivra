@@ -296,6 +296,11 @@ impl StickersUi {
 												"Sticker actions",
 											);
 											egui::Popup::menu(&button).show(|ui| {
+												let motion = crate::anim::popup_alpha(
+													ui.ctx(),
+													ui.scope_id().with("menu-motion"),
+												);
+												ui.set_opacity(motion);
 												if ui.button(crate::tr_ui!(ui, "Edit")).clicked() {
 													self.dialog = Some(Dialog::Edit {
 														id: row.sticker.id,

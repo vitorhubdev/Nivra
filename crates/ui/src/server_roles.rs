@@ -523,6 +523,11 @@ impl RolesUi {
 						}
 						let menu = boxed_icon(ui, icons::Icon::More, "Role actions");
 						egui::Popup::menu(&menu).show(|ui| {
+							let motion = crate::anim::popup_alpha(
+								ui.ctx(),
+								ui.scope_id().with("menu-motion"),
+							);
+							ui.set_opacity(motion);
 							if ui.button(crate::tr_ui!(ui, "Edit Role")).clicked() {
 								self.switch(Some(role.id), guild);
 								ui.close();
@@ -638,6 +643,9 @@ impl RolesUi {
 			if state.can_delete_guild_role(guild, role) {
 				let button = icons::button(ui, icons::Icon::More, 28.0, "Role actions");
 				egui::Popup::menu(&button).show(|ui| {
+					let motion =
+						crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+					ui.set_opacity(motion);
 					if ui
 						.button(
 							RichText::new(crate::tr_ui!(ui, "Delete Role")).color(colors.danger),

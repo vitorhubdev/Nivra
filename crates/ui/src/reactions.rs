@@ -153,6 +153,9 @@ pub fn show(
 						.corner_radius(6),
 				)
 				.show(|ui| {
+					let motion =
+						crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+					ui.set_opacity(motion);
 					ui.set_width(width - 24.0);
 					ui.horizontal_centered(|ui| {
 						if let Some(image) = match reaction.emoji.id {

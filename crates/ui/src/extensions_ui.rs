@@ -1056,6 +1056,9 @@ impl ExtensionUi {
 				let more =
 					toolbar_button(ui, t("More"), false, true, egui::vec2(84.0, height), colors);
 				egui::Popup::menu(&more).show(|ui| {
+					let motion =
+						crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+					ui.set_opacity(motion);
 					ui.set_min_width(176.0);
 					if ui
 						.add_enabled(!self.busy, egui::Button::new(t("Import theme…")))

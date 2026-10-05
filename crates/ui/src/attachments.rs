@@ -129,8 +129,12 @@ pub fn pending_upload_meter(
 	} else {
 		(largest_bytes as f32 / limit.bytes as f32).clamp(0.0, 1.0)
 	};
-	let fill =
-		anim::bool_alpha(ui.ctx(), ui.make_persistent_id("upload-meter"), true, 0.18) * target;
+	let fill = anim::bool_alpha(
+		ui.ctx(),
+		ui.make_persistent_id("upload-meter"),
+		true,
+		crate::anim::MEDIUM_SECS,
+	) * target;
 	let height = if over_limit { 40.0 } else { 28.0 };
 	let (rect, _) =
 		ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
@@ -753,7 +757,7 @@ fn quality_pill(ui: &egui::Ui, stage: Rect, quality: Quality) {
 			Some(("Full quality unavailable", false))
 		}
 	};
-	let opacity = ui.ctx().animate_bool_with_time(id, state.is_some(), 0.15);
+	let opacity = crate::anim::bool_alpha(ui.ctx(), id, state.is_some(), crate::anim::SHORT_SECS);
 	match state {
 		Some(state) => ui.data_mut(|data| {
 			data.insert_temp(id, state);

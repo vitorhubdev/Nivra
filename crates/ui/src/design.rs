@@ -1295,14 +1295,17 @@ fn wide_button(
 		ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
 	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
 	let enabled = ui.is_enabled();
+	let hover_t = crate::anim::hover(
+		ui.ctx(),
+		response.id.with("hover"),
+		enabled && response.hovered(),
+	);
 	let fill = if !enabled {
 		fill.gamma_multiply(0.5)
 	} else if response.is_pointer_button_down_on() {
 		fill.gamma_multiply(0.85)
-	} else if response.hovered() {
-		fill.linear_multiply(1.12)
 	} else {
-		fill
+		mix(fill, fill.linear_multiply(1.12), hover_t)
 	};
 	let text = if enabled {
 		text
@@ -2118,17 +2121,17 @@ pub fn button(ui: &mut egui::Ui, label: &str, kind: ButtonKind) -> egui::Respons
 	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
 	let enabled = ui.is_enabled();
 	let hot = response.hovered() || response.has_focus();
+	let hover_t = crate::anim::hover(ui.ctx(), response.id.with("hover"), enabled && hot);
+	let hover_fill = match kind {
+		ButtonKind::Neutral | ButtonKind::Outline => p.hover,
+		_ => fill.linear_multiply(1.1),
+	};
 	let fill = if !enabled {
 		fill.gamma_multiply(0.4)
 	} else if response.is_pointer_button_down_on() {
 		fill.gamma_multiply(0.82)
-	} else if hot {
-		match kind {
-			ButtonKind::Neutral | ButtonKind::Outline => p.hover,
-			_ => fill.linear_multiply(1.1),
-		}
 	} else {
-		fill
+		mix(fill, hover_fill, hover_t)
 	};
 	let text = if enabled {
 		text

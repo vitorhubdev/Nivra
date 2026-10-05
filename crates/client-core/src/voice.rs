@@ -868,6 +868,11 @@ impl ClientState {
 				if call.watching == Some(user) && (channel != Some(call.channel) || !streaming) {
 					call.watching = None;
 				}
+				// Mute/unmute and membership arrive as VOICE_STATE_UPDATE; diff the active
+				// roster here too, not only on snapshots (Codex #87 P1).
+				let participants = call.participants.clone();
+				let (channel, request) = (call.channel, call.request);
+				self.sync_call_membership(channel, request, participants.into_iter());
 			}
 			Event::Progress {
 				channel,

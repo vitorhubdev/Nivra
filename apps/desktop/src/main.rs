@@ -824,9 +824,8 @@ struct Desktop {
 	avatar_clear_account: Option<model::Id>,
 	avatar_cleanup: Option<std::sync::mpsc::Receiver<Result<(), &'static str>>>,
 	voice: voice::Voice,
-	/// Last active-call phase seen by `pump_call_cues`, so a hidden-window call failure
-	/// still plays one leave sound without doubling the visible path's cue.
-	last_call_phase: Option<client_core::voice::Phase>,
+	/// Display names of the current call members, for join/leave notifications. Bounded.
+	call_member_names: std::collections::HashMap<model::Id, String>,
 	runtime: tokio::runtime::Runtime,
 	store: Option<credentials::Store>,
 	cache: Option<cache::Cache>,
@@ -2096,7 +2095,7 @@ impl Desktop {
 			avatar_start_failed: false,
 			avatar_clear_account: None,
 			voice: voice::Voice::default(),
-			last_call_phase: None,
+			call_member_names: std::collections::HashMap::new(),
 			runtime,
 			store,
 			cache,
@@ -5087,22 +5086,6 @@ impl Desktop {
 	/// window still hears every arrival, departure and member mute toggle. eframe calls
 	/// `logic` (never `ui`) on a repaint, and the connection requests one per voice event.
 	fn pump_call_cues(&mut self, ctx: &egui::Context) {
-		let phase = self.state.voice.active.as_ref().map(|call| call.phase);
-		let hidden = self.window.is_minimized().unwrap_or(false)
-			|| !self.window.is_visible().unwrap_or(true);
-		// A call that fails while the window is hidden gets its leave sound here; the
-		// visible path already pushes it from the failure branch in `Voice::poll`.
-		if hidden
-			&& self.last_call_phase != phase
-			&& phase == Some(client_core::voice::Phase::Failed)
-		{
-			voice::push_membership_cue(
-				&mut self.messaging.notification_cues,
-				model::notification_preferences::Sound::UserLeave,
-			);
-			ctx.request_repaint();
-		}
-		self.last_call_phase = phase;
 		let Some(call) = self.state.voice.active.as_ref() else {
 			return;
 		};
@@ -5113,6 +5096,15 @@ impl Desktop {
 			return;
 		}
 		let channel = call.channel;
+		let participants: Vec<model::Id> = call.participants.iter().map(|p| p.user).collect();
+		// Keep display names for departures: the roster entry is gone by the time a Left
+		// event is drained, and DM participants never enter the guild roster (Codex #87 P2).
+		for user in participants {
+			if !self.call_member_names.contains_key(&user) {
+				let name = self.call_member_name(channel, user);
+				self.remember_call_name(user, name);
+			}
+		}
 		if self.state.voice.membership_events.is_empty() {
 			return;
 		}
@@ -5163,7 +5155,10 @@ impl Desktop {
 			if let Some((user, joined)) = alert
 				&& unfocused && self.messaging.notifications_enabled
 			{
-				let name = self.call_member_name(user);
+				let name = self
+					.call_member_names
+					.remove(&user)
+					.unwrap_or_else(|| self.call_member_name(channel, user));
 				let text = if joined {
 					ui::i18n::text(language, "joined the call")
 				} else {
@@ -5176,19 +5171,41 @@ impl Desktop {
 		ctx.request_repaint();
 	}
 
-	fn call_member_name(&self, user: model::Id) -> String {
-		self.state
-			.voice
-			.roster
-			.iter()
-			.find(|entry| entry.participant.user == user)
-			.and_then(|entry| entry.member.as_ref())
-			.map(|member| {
-				member
-					.nick
-					.clone()
-					.filter(|nick| !nick.is_empty())
-					.unwrap_or_else(|| member.user.name.clone())
+	/// Bounded display-name cache for call membership notifications.
+	fn remember_call_name(&mut self, user: model::Id, name: String) {
+		if self.call_member_names.len() >= 128 {
+			self.call_member_names.clear();
+		}
+		self.call_member_names.insert(user, name);
+	}
+
+	fn call_member_name(&self, channel: model::Id, user: model::Id) -> String {
+		self.call_member_names
+			.get(&user)
+			.cloned()
+			.or_else(|| {
+				self.state
+					.voice
+					.roster
+					.iter()
+					.find(|entry| entry.participant.user == user)
+					.and_then(|entry| entry.member.as_ref())
+					.map(|member| {
+						member
+							.nick
+							.clone()
+							.filter(|nick| !nick.is_empty())
+							.unwrap_or_else(|| member.user.name.clone())
+					})
+			})
+			.or_else(|| {
+				self.state.channel(channel).and_then(|channel| {
+					channel
+						.recipients
+						.iter()
+						.find(|recipient| recipient.id == user)
+						.map(|recipient| recipient.name.clone())
+				})
 			})
 			.or_else(|| {
 				self.state
@@ -6354,6 +6371,12 @@ impl eframe::App for Desktop {
 			if let Some(command) = self.state.select(channel) {
 				self.command(command);
 			}
+		}
+		// Hidden windows run `logic` only: poll the voice workers so a dead audio or
+		// transport task still surfaces as Phase::Failed and queues its leave cue (Codex #87 P1).
+		if self.window.is_minimized().unwrap_or(false) || !self.window.is_visible().unwrap_or(true)
+		{
+			self.poll_voice(ctx);
 		}
 		self.pump_call_cues(ctx);
 		if let Some(alert) = self.notification_runtime.poll(

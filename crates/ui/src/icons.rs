@@ -445,7 +445,7 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, size: f32, label: &str) -> Response
 	};
 	paint(ui.painter(), icon, rect.shrink(size * 0.2), color);
 	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
-	response.on_hover_text(label)
+	response.on_hover_text(label).on_disabled_hover_text(label)
 }
 
 /// Toggleable variant: `active` keeps the icon in the strong text colour.
@@ -470,7 +470,7 @@ pub fn toggle(ui: &mut egui::Ui, icon: Icon, size: f32, active: bool, label: &st
 	response.widget_info(|| {
 		egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), active, label)
 	});
-	response.on_hover_text(label)
+	response.on_hover_text(label).on_disabled_hover_text(label)
 }
 
 /// Inline glyph used beside labels (channel kinds, section headers).

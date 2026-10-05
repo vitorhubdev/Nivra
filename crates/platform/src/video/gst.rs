@@ -3,8 +3,7 @@
 //! unsynchronised `appsink`s hand back RGBA pictures and 48 kHz stereo float PCM on demand.
 //! The same distributions that ship WebKitGTK for the login page also ship these plugins.
 use super::{
-	INVALID, Info, MAX_BYTES, MAX_DECODED_BYTES, MAX_SECONDS, ReadSeek, Sample, TOO_LONG,
-	UNSUPPORTED,
+	INVALID, Info, MAX_DECODED_BYTES, MAX_SECONDS, ReadSeek, Sample, TOO_LONG, UNSUPPORTED,
 };
 use gstreamer as gst;
 use gstreamer::prelude::*;

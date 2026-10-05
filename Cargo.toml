@@ -53,14 +53,67 @@ global-hotkey = "=0.8.0"
 unsafe_code = "forbid"
 
 [profile.release]
-# Thin LTO still cross-crate inlines without the fat-LTO link-time cost. Stripping the
+# Fat LTO was measured on this pipeline at 97,537,536 B x64 (-5.08%) and 63,982,080 B
+# ARM64 (-9.12%), but the Windows package job grew from ~20 to ~60+ minutes, so it is
+# rejected in favour of thin LTO with one codegen unit plus the cold package
+# opt-levels below (see docs/performance.md for the measured table). Stripping the
 # symbol table removes the 7-8 MB `__LINKEDIT`/`.symtab` from the shipped binary. Line
 # tables still land in the split debug file for symbolicating crashes. panic remains
 # unwind: camera discovery and capture catch panics so a worker crash does not abort.
 lto = "thin"
-codegen-units = 16
+codegen-units = 1
 strip = "symbols"
 debug = "line-tables-only"
+
+# Cold, non-realtime packages trade a little speed for size; the voice, audio, video,
+# render, media and parsing crates keep opt-level 3.
+[profile.release.package.extensions]
+opt-level = "s"
+
+[profile.release.package.wry]
+opt-level = "s"
+
+[profile.release.package.reqwest]
+opt-level = "s"
+
+[profile.release.package.hyper]
+opt-level = "s"
+
+[profile.release.package.http]
+opt-level = "s"
+
+[profile.release.package.tower]
+opt-level = "s"
+
+[profile.release.package.windows]
+opt-level = "s"
+
+[profile.release.package.windows-core]
+opt-level = "s"
+
+[profile.release.package.webview2-com]
+opt-level = "s"
+
+[profile.release.package.tungstenite]
+opt-level = "s"
+
+[profile.release.package.keyring]
+opt-level = "s"
+
+[profile.release.package.notify-rust]
+opt-level = "s"
+
+[profile.release.package.global-hotkey]
+opt-level = "s"
+
+[profile.release.package.dirs]
+opt-level = "s"
+
+[profile.release.package.rusqlite]
+opt-level = "s"
+
+[profile.release.package.libsqlite3-sys]
+opt-level = "s"
 
 # Dependency debuginfo dominates test link time. Workspace crates keep full debuginfo.
 [profile.dev.package."*"]

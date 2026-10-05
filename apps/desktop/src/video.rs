@@ -82,18 +82,42 @@ fn stall_timed_out(paused: bool, idle: Duration) -> bool {
 	!paused && idle > Duration::from_secs(10)
 }
 
-/// Largest frame the inline card uploads: 1920x1080, matching `VideoUi::accept_frame`.
-const MAX_FRAME_PIXELS: usize = 1920 * 1080;
 /// One decoded frame as the UI texture source. Built on the worker so the render
-/// thread only swaps buffers; oversized frames are refused with a clear reason
-/// instead of leaving the card black forever (owner P0, 2026-10-03).
+/// thread only swaps buffers. A frame larger than the preview box is scaled down here
+/// as the final safety net for decoders that ignore the requested output size; the
+/// render pass never sees an oversized frame (owner request, 2026-10-04).
 fn frame_image(width: u32, height: u32, rgba: &[u8]) -> Result<egui::ColorImage, &'static str> {
 	let (width, height) = (width as usize, height as usize);
 	if width == 0 || height == 0 || rgba.len() != width * height * 4 {
 		return Err("Video frame has an unsupported size");
 	}
-	if width * height > MAX_FRAME_PIXELS {
-		return Err("Video frame is larger than 1080p preview supports");
+	let (fit_w, fit_h) = platform::video::preview_dimensions(width as u32, height as u32);
+	if (fit_w as usize, fit_h as usize) != (width, height) {
+		let scaled = downscale_rgba(width, height, rgba, fit_w as usize, fit_h as usize);
+		return color_image(fit_w as usize, fit_h as usize, &scaled);
+	}
+	color_image(width, height, rgba)
+}
+
+/// Fast nearest-neighbour downscale for a decoder that ignored the requested output
+/// size. The source is a validated RGBA buffer, so every index is in range.
+fn downscale_rgba(width: usize, height: usize, rgba: &[u8], out_w: usize, out_h: usize) -> Vec<u8> {
+	let mut out = vec![0u8; out_w * out_h * 4];
+	for y in 0..out_h {
+		let source_row = (y * height / out_h) * width * 4;
+		let target_row = y * out_w * 4;
+		for x in 0..out_w {
+			let source = source_row + (x * width / out_w) * 4;
+			let target = target_row + x * 4;
+			out[target..target + 4].copy_from_slice(&rgba[source..source + 4]);
+		}
+	}
+	out
+}
+
+fn color_image(width: usize, height: usize, rgba: &[u8]) -> Result<egui::ColorImage, &'static str> {
+	if rgba.len() != width * height * 4 {
+		return Err("Video frame has an unsupported size");
 	}
 	let pixels = rgba
 		.as_chunks::<4>()
@@ -808,10 +832,47 @@ fn play_decoded(
 	}
 }
 
+#[cfg(test)]
+mod frame_image_tests {
+	use super::*;
+	use std::time::{Duration, Instant};
+
+	#[test]
+	fn oversized_frames_are_scaled_into_the_preview_box() {
+		let (w, h) = (4500u32, 3000u32);
+		let rgba = vec![120u8; w as usize * h as usize * 4];
+		let started = Instant::now();
+		let image = frame_image(w, h, &rgba).expect("a large frame is scaled, not refused");
+		let elapsed = started.elapsed();
+		assert_eq!(image.size, [1620, 1080]);
+		assert_eq!(image.pixels.len(), 1620 * 1080);
+		// Debug build bound; the release build is several times faster and the Windows
+		// normal path never reaches this safety net.
+		assert!(
+			elapsed < Duration::from_secs(1),
+			"downscale took {elapsed:?}"
+		);
+		println!("4500x3000 worker downscale: {elapsed:?}");
+	}
+
+	#[test]
+	fn small_frames_keep_their_size_and_portrait_scales_to_its_own_box() {
+		let (w, h) = (640u32, 360u32);
+		let image =
+			frame_image(w, h, &vec![200u8; w as usize * h as usize * 4]).expect("small frame");
+		assert_eq!(image.size, [640, 360]);
+		let (w, h) = (2160u32, 3840u32);
+		let image =
+			frame_image(w, h, &vec![80u8; w as usize * h as usize * 4]).expect("portrait frame");
+		assert_eq!(image.size, [1080, 1920]);
+	}
+}
+
 #[cfg(all(test, feature = "demo"))]
 mod tests {
 	use super::*;
 	use std::time::{Duration, Instant};
+
 	/// Synthetic local clip only; zero-volume output, no account or microphone access.
 	#[test]
 	#[ignore = "NIVRA_VIDEO_SAMPLE supplies an offline clip; opens muted local output"]

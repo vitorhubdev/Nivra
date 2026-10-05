@@ -30,6 +30,8 @@ use windows::{
 };
 
 const MAX_BYTES: usize = 16 * 1024 * 1024;
+/// Decoded RGB32 frames may be larger than a compressed sample; see `MAX_DECODED_BYTES`.
+const MAX_DECODED_BYTES: usize = super::MAX_DECODED_BYTES;
 const MAX_SECONDS: f64 = 2.0 * 60.0 * 60.0;
 const VIDEO: u32 = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
 const ALL: u32 = MF_SOURCE_READER_ALL_STREAMS.0 as u32;
@@ -253,22 +255,23 @@ impl Decoder {
 				}
 			}
 			let video_index = video_index.ok_or(UNSUPPORTED)?;
-			let video = MFCreateMediaType().map_err(|_| INVALID)?;
-			video
-				.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
-				.map_err(|_| INVALID)?;
-			video
-				.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)
-				.map_err(|_| INVALID)?;
-			video
-				.SetUINT64(
-					&MF_MT_FRAME_SIZE,
-					(u64::from(width) << 32) | u64::from(height),
-				)
-				.map_err(|_| INVALID)?;
-			reader
-				.SetCurrentMediaType(VIDEO, None, &video)
-				.map_err(|_| UNSUPPORTED)?;
+			// Ask the Source Reader's video processor for the preview size so a 4K or larger
+			// frame is scaled by Media Foundation instead of being refused. If the processor
+			// rejects the reduced type, fall back to the native size; the media worker still
+			// has a bounded downscale as the final safety net.
+			let (preview_w, preview_h) = super::preview_dimensions(width, height);
+			let set_output = |w: u32, h: u32| -> Result<(), windows::core::Error> {
+				let video = MFCreateMediaType()?;
+				video.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+				video.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)?;
+				video.SetUINT64(&MF_MT_FRAME_SIZE, (u64::from(w) << 32) | u64::from(h))?;
+				reader.SetCurrentMediaType(VIDEO, None, &video)
+			};
+			if (preview_w, preview_h) == (width, height) {
+				set_output(width, height).map_err(|_| UNSUPPORTED)?;
+			} else if set_output(preview_w, preview_h).is_err() {
+				set_output(width, height).map_err(|_| UNSUPPORTED)?;
+			}
 			if manager.is_some() && rotation != 0 {
 				// Apply track rotation once in rgba_frame, without the GPU processor also
 				// correcting it. If its control is unavailable, use the software reader.
@@ -302,7 +305,8 @@ impl Decoder {
 				.SetStreamSelection(video_index, true)
 				.map_err(|_| INVALID)?;
 			let video = reader.GetCurrentMediaType(VIDEO).map_err(|_| INVALID)?;
-			if dimensions(&video)? != (width, height) {
+			let (width, height) = dimensions(&video)?;
+			if width == 0 || height == 0 || width > 16384 || height > 16384 {
 				return Err(INVALID);
 			}
 			let stride = video
@@ -359,6 +363,8 @@ impl Decoder {
 			if duration <= 0.0 || duration > MAX_SECONDS {
 				return Err("Videos longer than two hours are not supported.");
 			}
+			// `width`/`height` are now the decoded output size; `Info` reports the
+			// display orientation the player should use for the card.
 			let (display_width, display_height) = if rotation == 90 || rotation == 270 {
 				(height, width)
 			} else {
@@ -567,7 +573,7 @@ impl Decoder {
 		// SAFETY: Lock2DSize supplies the accessible allocation; validate every offset and
 		// length before borrowing it, then release the read-only lock after conversion.
 		unsafe {
-			if sample.GetTotalLength().map_err(|_| INVALID)? as usize > MAX_BYTES {
+			if sample.GetTotalLength().map_err(|_| INVALID)? as usize > MAX_DECODED_BYTES {
 				return Err(INVALID);
 			}
 			let buffer = sample.ConvertToContiguousBuffer().map_err(|_| INVALID)?;
@@ -586,7 +592,7 @@ impl Decoder {
 					)
 					.map_err(|_| INVALID)?;
 				let result = (|| {
-					if start.is_null() || top.is_null() || length as usize > MAX_BYTES {
+					if start.is_null() || top.is_null() || length as usize > MAX_DECODED_BYTES {
 						return Err(INVALID);
 					}
 					let pitch =
@@ -619,20 +625,15 @@ fn dimensions(media: &IMFMediaType) -> Result<(u32, u32), &'static str> {
 	// SAFETY: Reading an integer attribute from a live media type.
 	let size = unsafe { media.GetUINT64(&MF_MT_FRAME_SIZE) }.map_err(|_| INVALID)?;
 	let (width, height) = ((size >> 32) as u32, size as u32);
-	if width == 0
-		|| height == 0
-		|| width > 1920
-		|| height > 1920
-		|| u64::from(width) * u64::from(height) > 1920 * 1080
-	{
-		return Err("Inline playback supports videos up to 1080p.");
-	}
+	// Native dimensions are only validated against the decode safety bound; the preview
+	// box is applied to the output type so larger sources are scaled, not refused.
+	super::check_dimensions(width, height)?;
 	Ok((width, height))
 }
 
 fn validate_stride(width: u32, height: u32, stride: i32) -> Result<usize, &'static str> {
 	let pitch = stride.unsigned_abs() as usize;
-	if pitch < width as usize * 4 || pitch > MAX_BYTES / height as usize {
+	if pitch < width as usize * 4 || pitch > MAX_DECODED_BYTES / height as usize {
 		return Err(INVALID);
 	}
 	Ok(pitch)

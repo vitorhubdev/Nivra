@@ -605,6 +605,10 @@ pub struct MessagingUi {
 	pub account_footer_rect: Option<egui::Rect>,
 	/// egui id of the account footer panel, so a stale stored size can be discarded.
 	pub account_footer_panel_id: Option<egui::Id>,
+	/// One-time startup warning when system-named DLLs sit next to the executable.
+	pub dll_warning: Option<String>,
+	/// Copyable details for the warning (paths only, never contents).
+	pub dll_warning_details: String,
 	pub transparency: u8,
 	pub blur: u8,
 	pub transparent_all: bool,
@@ -4683,6 +4687,32 @@ impl MessagingUi {
 								),
 							);
 						});
+				}
+				let dll_warning = self.dll_warning.clone();
+				let mut dismiss_dll_warning = false;
+				if let Some(warning) = &dll_warning {
+					egui::Frame::new()
+						.inner_margin(egui::Margin::symmetric(16, 6))
+						.show(ui, |ui| {
+							ui.horizontal_wrapped(|ui| {
+								ui.colored_label(colors.warning, warning);
+								if ui
+									.small_button(crate::i18n::text(self.language, "Copy details"))
+									.clicked()
+								{
+									ui.ctx().copy_text(self.dll_warning_details.clone());
+								}
+								if ui
+									.small_button(crate::i18n::text(self.language, "Dismiss"))
+									.clicked()
+								{
+									dismiss_dll_warning = true;
+								}
+							});
+						});
+				}
+				if dismiss_dll_warning {
+					self.dll_warning = None;
 				}
 				self.gateway_reconnect_banner(ui, state);
 				self.reconnect_call_banner(ui, state, &mut commands);

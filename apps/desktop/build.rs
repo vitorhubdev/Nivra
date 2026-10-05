@@ -1,6 +1,11 @@
 fn main() {
 	if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
 		windows_icon();
+		if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+			// Import-time dependencies resolve from System32 only, so a system-named DLL
+			// planted next to Nivra.exe (Online-Fix and friends) is never loaded.
+			println!("cargo:rustc-link-arg-bin=nivra=/DEPENDENTLOADFLAG:0x800");
+		}
 	}
 	println!("cargo:rerun-if-changed=../../packaging/macos/Info.plist");
 	if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {

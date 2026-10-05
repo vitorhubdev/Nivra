@@ -71,6 +71,9 @@ const SIGN_IN_HEADER_HEIGHT: f32 = if cfg!(target_os = "windows") {
 };
 
 fn main() -> eframe::Result {
+	// Before any runtime LoadLibrary: imports and runtime loads resolve from System32 only.
+	#[cfg(windows)]
+	platform::dll::harden_search_path();
 	discord_api::ensure_tls_provider();
 	// Parse locale tables before the first frame so a translated language
 	// never pays table parsing inside the render path.
@@ -406,8 +409,9 @@ fn main() -> eframe::Result {
 		"Nivra",
 		options,
 		Box::new(move |cc| {
-			let desktop =
+			let mut desktop =
 				Desktop::new(cc, demo, frame_sample, transparency_available, preferences)?;
+			desktop.install_dll_report();
 			if start_minimized {
 				cc.egui_ctx
 					.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -2160,6 +2164,41 @@ impl Desktop {
 			token_input: Zeroizing::new(String::new()),
 		})
 	}
+	/// Startup DLL diagnostics: log loaded modules outside the system and app folders,
+	/// and raise one non-blocking banner when a system-named DLL sits next to the exe.
+	fn install_dll_report(&mut self) {
+		#[cfg(windows)]
+		{
+			let (planted, foreign) = platform::dll::startup_report();
+			for module in &foreign {
+				eprintln!("Nivra: module outside System32/WinSxS/app: {module}");
+			}
+			if planted.is_empty() {
+				return;
+			}
+			let language = self.messaging.language;
+			self.messaging.dll_warning = Some(format!(
+				"{} {} {}",
+				ui::i18n::text(language, "Unexpected files in the Nivra folder:"),
+				planted.join(", "),
+				ui::i18n::text(
+					language,
+					"They can belong to another program and cause errors. Move Nivra to another folder."
+				)
+			));
+			self.messaging.dll_warning_details = format!(
+				"Nivra {}\nUnexpected files: {}\nModules outside System32/WinSxS/app:\n{}",
+				env!("CARGO_PKG_VERSION"),
+				planted.join(", "),
+				if foreign.is_empty() {
+					"(none)".to_string()
+				} else {
+					foreign.join("\n")
+				}
+			);
+		}
+	}
+
 	fn connect(&mut self, secret: SessionSecret, save: bool, ctx: &egui::Context) {
 		if self.presence_load_pending {
 			self.deferred_connect = Some((secret, save));
@@ -4091,7 +4130,42 @@ impl Desktop {
 	}
 	/// Restore screen for returning accounts: no sign-in controls, just the stage,
 	/// an indeterminate bar and a way out to the welcome screen.
+	/// Startup diagnostics banner for the signed-out screens, which do not render
+	/// `MessagingUi::show` (Codex #89 P2).
+	fn diagnostic_notice(&mut self, ui: &mut egui::Ui) {
+		let colors = ui::design::palette(ui);
+		let language = self.messaging.language;
+		let warning = self.messaging.dll_warning.clone();
+		let mut dismiss_dll = false;
+		if let Some(text) = &warning {
+			egui::Frame::new()
+				.inner_margin(egui::Margin::symmetric(16, 6))
+				.show(ui, |ui| {
+					ui.horizontal_wrapped(|ui| {
+						ui.colored_label(colors.warning, text);
+						if ui
+							.small_button(ui::i18n::text(language, "Copy details"))
+							.clicked()
+						{
+							ui.ctx()
+								.copy_text(self.messaging.dll_warning_details.clone());
+						}
+						if ui
+							.small_button(ui::i18n::text(language, "Dismiss"))
+							.clicked()
+						{
+							dismiss_dll = true;
+						}
+					});
+				});
+		}
+		if dismiss_dll {
+			self.messaging.dll_warning = None;
+		}
+	}
+
 	fn restoring_screen(&mut self, ui: &mut egui::Ui, stage: &'static str) {
+		self.diagnostic_notice(ui);
 		let p = ui::design::palette(ui);
 		egui::CentralPanel::default()
 			.frame(egui::Frame::NONE.fill(ui::design::window_palette(ui).canvas))
@@ -4237,6 +4311,7 @@ impl Desktop {
 		}
 	}
 	fn sign_in_screen(&mut self, ui: &mut egui::Ui) {
+		self.diagnostic_notice(ui);
 		let p = ui::design::palette(ui);
 		egui::CentralPanel::default()
 			.frame(egui::Frame::NONE.fill(ui::design::window_palette(ui).canvas))

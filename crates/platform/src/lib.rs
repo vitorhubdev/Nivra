@@ -2,6 +2,7 @@
 pub mod badge;
 pub mod captcha;
 pub mod compositor;
+pub mod dll;
 pub mod game_activity;
 pub mod hotkeys;
 pub mod image;

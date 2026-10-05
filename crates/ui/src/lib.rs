@@ -9266,8 +9266,10 @@ mod account_card_tests {
 		let ctx = egui::Context::default();
 		ctx.set_theme(egui::ThemePreference::Dark);
 		let mut state = test_support::demo_state();
-		let mut view = MessagingUi::default();
-		view.hide_title_bar = true;
+		let mut view = MessagingUi {
+			hide_title_bar: true,
+			..MessagingUi::default()
+		};
 		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
 		let base = view.account_footer_rect.expect("card").height();
 		view.updates.available = true;

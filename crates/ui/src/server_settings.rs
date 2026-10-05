@@ -629,11 +629,13 @@ impl Editor {
 						}
 						if self.dirty() || state.server_settings.saving {
 							egui::Panel::bottom("server-settings-save")
+								.resizable(false)
 								.frame(save_bar_frame(ctx, colors))
 								.show(ui, |ui| self.save_bar(ui, state, commands, language));
 						}
 						if self.page == Page::Roles && self.roles.has_changes() {
 							egui::Panel::bottom("role-settings-save")
+								.resizable(false)
 								.frame(save_bar_frame(ctx, colors))
 								.show(ui, |ui| self.roles.save_bar(ui, state, guild, commands));
 						}

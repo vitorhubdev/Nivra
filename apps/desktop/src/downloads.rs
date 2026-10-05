@@ -1630,6 +1630,17 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn preview_refuses_files_above_the_cap_before_any_request() {
+		let limit = ui::text_preview::MAX_PREVIEW_BYTES;
+		let (url, task) = preview_responses(vec![(200, None, b"unused".to_vec())]).await;
+		assert_eq!(
+			fetch_preview(url, None, limit + 1).await.unwrap_err(),
+			"File is too large to preview"
+		);
+		task.abort();
+	}
+
+	#[tokio::test]
 	async fn preview_reports_expiry_without_a_proxy() {
 		discord_api::ensure_tls_provider();
 		let (url, task) = preview_responses(vec![(404, None, Vec::new())]).await;

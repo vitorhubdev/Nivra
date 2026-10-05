@@ -1017,6 +1017,78 @@ fn accept_notices(settings: &mut app_settings::Settings) {
 	settings.state.dirty = true;
 	settings.state.touched = true;
 }
+/// Dialogs that overlay the signed-in page: the first-run notices, the licenses screen and
+/// the text preview. Called exactly once per frame from `logic`; every dialog returns early
+/// while it has nothing to show. Licenses and preview must not live behind the notices
+/// prompt: users who already accepted it still open both (v1.0.11 regression).
+fn frame_dialogs(
+	messaging: &mut ui::MessagingUi,
+	demo: bool,
+	settings: &mut app_settings::Settings,
+	preferences_unread: bool,
+	ctx: &egui::Context,
+) {
+	if let NoticesPrompt::Show { preferences_unread } =
+		notices_prompt(demo, settings, preferences_unread)
+	{
+		let language = messaging.language;
+		let mut accept = false;
+		let mut view_licenses = false;
+		// Closing must not count as accepting, and there is nothing to go back to: only the
+		// footer action ends this dialog, so `close` from Escape/backdrop is ignored.
+		ui::dialog::Dialog::new(
+			"notices-first-run",
+			ui::i18n::text(language, "Before you use Nivra"),
+		)
+		.persistent()
+		.width(500.0)
+		.show(ctx, |d| {
+			d.content(|ui| {
+				let colors = ui::design::palette(ui);
+				ui.add(
+					egui::Label::new(
+						egui::RichText::new(ui::i18n::text(language, NOTICES_SUMMARY))
+							.size(14.0)
+							.color(colors.text),
+					)
+					.wrap(),
+				);
+				if preferences_unread {
+					ui.add_space(4.0);
+					ui::dialog::notice(
+						ui,
+						ui::dialog::Level::Warning,
+						ui::i18n::text(language, NOTICES_PREFERENCES_UNREAD),
+					);
+				}
+				ui.add_space(4.0);
+				view_licenses = ui
+					.link(
+						egui::RichText::new(ui::i18n::text(language, "View full licenses"))
+							.size(13.0)
+							.color(colors.link),
+					)
+					.clicked();
+			});
+			d.footer(|ui| {
+				accept = ui::dialog::action(
+					ui,
+					ui::i18n::text(language, "I understand — continue"),
+					ui::dialog::Action::Primary,
+				)
+				.clicked();
+			});
+		});
+		if view_licenses {
+			messaging.open_licenses();
+		}
+		if accept {
+			accept_notices(settings);
+		}
+	}
+	messaging.show_licenses(ctx);
+	messaging.show_preview(ctx);
+}
 fn queue_channel_preferences(
 	cache: Option<&cache::Cache>,
 	messaging: &mut ui::MessagingUi,
@@ -4143,71 +4215,6 @@ impl Desktop {
 			ui::design::TRAFFIC_LIGHT_INSET
 		}
 	}
-	fn notices_dialog(&mut self, ctx: &egui::Context) {
-		let NoticesPrompt::Show { preferences_unread } = notices_prompt(
-			self.state.demo,
-			&self.app_settings,
-			self.app_preferences_unread,
-		) else {
-			return;
-		};
-		let language = self.messaging.language;
-		let mut accept = false;
-		let mut view_licenses = false;
-		// Closing must not count as accepting, and there is nothing to go back to: only the
-		// footer action ends this dialog, so `close` from Escape/backdrop is ignored.
-		ui::dialog::Dialog::new(
-			"notices-first-run",
-			ui::i18n::text(language, "Before you use Nivra"),
-		)
-		.persistent()
-		.width(500.0)
-		.show(ctx, |d| {
-			d.content(|ui| {
-				let colors = ui::design::palette(ui);
-				ui.add(
-					egui::Label::new(
-						egui::RichText::new(ui::i18n::text(language, NOTICES_SUMMARY))
-							.size(14.0)
-							.color(colors.text),
-					)
-					.wrap(),
-				);
-				if preferences_unread {
-					ui.add_space(4.0);
-					ui::dialog::notice(
-						ui,
-						ui::dialog::Level::Warning,
-						ui::i18n::text(language, NOTICES_PREFERENCES_UNREAD),
-					);
-				}
-				ui.add_space(4.0);
-				view_licenses = ui
-					.link(
-						egui::RichText::new(ui::i18n::text(language, "View full licenses"))
-							.size(13.0)
-							.color(colors.link),
-					)
-					.clicked();
-			});
-			d.footer(|ui| {
-				accept = ui::dialog::action(
-					ui,
-					ui::i18n::text(language, "I understand — continue"),
-					ui::dialog::Action::Primary,
-				)
-				.clicked();
-			});
-		});
-		if view_licenses {
-			self.messaging.open_licenses();
-		}
-		self.messaging.show_licenses(ctx);
-		self.messaging.show_preview(ctx);
-		if accept {
-			accept_notices(&mut self.app_settings);
-		}
-	}
 	fn ensure_notification_shortcut(&self) {
 		#[cfg(windows)]
 		{
@@ -7208,7 +7215,13 @@ impl eframe::App for Desktop {
 				self.command(command);
 			}
 			self.poll_voice(&ctx);
-			self.notices_dialog(&ctx);
+			frame_dialogs(
+				&mut self.messaging,
+				self.state.demo,
+				&mut self.app_settings,
+				self.app_preferences_unread,
+				&ctx,
+			);
 			self.ensure_notification_shortcut();
 			if self.messaging.logout_requested {
 				self.messaging.logout_requested = false;
@@ -7812,5 +7825,53 @@ mod tests {
 				ids: vec![model::Id(1000)]
 			}
 		));
+	}
+
+	#[test]
+	fn accepted_notices_still_draw_the_text_preview() {
+		use egui_kittest::kittest::Queryable as _;
+		let mut messaging = ui::MessagingUi::default();
+		messaging.set_preview(ui::text_preview::TextPreview {
+			filename: "trae_exposed.md".into(),
+			format: ui::text_preview::PreviewFormat::Plain,
+			text: "PREVIEW_BODY_SENTINEL".into(),
+			truncated: false,
+			shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
+		});
+		let mut settings = loaded_settings();
+		settings.current.notices_accepted = true;
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui(|ui| {
+				frame_dialogs(&mut messaging, false, &mut settings, false, ui.ctx());
+			});
+		harness.run_steps(2);
+		assert!(
+			harness
+				.query_by_role_and_label(egui::Role::Label, "PREVIEW_BODY_SENTINEL")
+				.is_some(),
+			"a signed-in user with accepted notices must still see the text preview"
+		);
+	}
+
+	#[test]
+	fn accepted_notices_still_draw_the_licenses_screen() {
+		use egui_kittest::kittest::Queryable as _;
+		let mut messaging = ui::MessagingUi::default();
+		messaging.open_licenses();
+		let language = messaging.language;
+		let mut settings = loaded_settings();
+		settings.current.notices_accepted = true;
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui(|ui| {
+				frame_dialogs(&mut messaging, false, &mut settings, false, ui.ctx());
+			});
+		harness.run_steps(2);
+		let prefix = ui::i18n::text(language, ui::licenses::MPL_SOURCE_PREFIX);
+		assert!(
+			harness.query_by_label_contains(&prefix).is_some(),
+			"the licenses screen must draw after the notices were accepted"
+		);
 	}
 }

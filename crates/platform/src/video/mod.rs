@@ -102,7 +102,10 @@ impl Decoder {
 /// absurd dimensions, not a playback limit: frames larger than the preview box are
 /// scaled down by the decoder or by the media worker.
 pub const MAX_DECODE_EDGE: u32 = 16_384;
-pub const MAX_DECODE_PIXELS: u64 = 16_384 * 16_384;
+/// Largest decoded RGBA frame any backend hands to the worker: 64 MiB (16.7 MP).
+/// Above the preview box, but the worker downscales it before the render pass.
+pub const MAX_DECODED_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_DECODE_PIXELS: u64 = (MAX_DECODED_BYTES / 4) as u64;
 
 /// The inline-player preview box: 1920x1080 landscape, 1080x1920 portrait.
 pub const PREVIEW_LONG_EDGE: u32 = 1920;
@@ -215,6 +218,8 @@ mod capability {
 		assert!(check_dimensions(1920, 1080).is_ok());
 		// Large files are admitted and scaled; only absurd dimensions are refused.
 		assert!(check_dimensions(3840, 2160).is_ok());
+		assert!(check_dimensions(4500, 3000).is_ok());
+		assert!(check_dimensions(8192, 8192).is_err());
 		assert!(check_dimensions(MAX_DECODE_EDGE + 1, 1).is_err());
 		let backend = if cfg!(windows) {
 			"Media Foundation"

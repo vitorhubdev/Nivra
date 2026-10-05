@@ -4,7 +4,7 @@
 #![allow(unsafe_code)]
 
 use super::{
-	INVALID, Info, MAX_BYTES, ReadSeek, Sample, UNSUPPORTED,
+	INVALID, Info, MAX_BYTES, MAX_DECODED_BYTES, ReadSeek, Sample, UNSUPPORTED,
 	mp4::{self, AudioCodec, Movie, SampleEntry, VideoCodec},
 };
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained};
@@ -538,7 +538,7 @@ pub(super) unsafe fn copy_rgba(
 	let total = stride.checked_mul(height).ok_or(INVALID)?;
 	if CVPixelBufferGetPixelFormatType(pixels) != kCVPixelFormatType_32BGRA
 		|| stride < row_bytes
-		|| total > MAX_BYTES
+		|| total > MAX_DECODED_BYTES
 		|| total > CVPixelBufferGetDataSize(pixels)
 	{
 		return Err(INVALID);

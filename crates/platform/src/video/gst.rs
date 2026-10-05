@@ -2,7 +2,10 @@
 //! caller's anonymous stream (never a URL), `decodebin` picks the installed codecs, and two
 //! unsynchronised `appsink`s hand back RGBA pictures and 48 kHz stereo float PCM on demand.
 //! The same distributions that ship WebKitGTK for the login page also ship these plugins.
-use super::{INVALID, Info, MAX_BYTES, MAX_SECONDS, ReadSeek, Sample, TOO_LONG, UNSUPPORTED};
+use super::{
+	INVALID, Info, MAX_BYTES, MAX_DECODED_BYTES, MAX_SECONDS, ReadSeek, Sample, TOO_LONG,
+	UNSUPPORTED,
+};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
@@ -264,7 +267,7 @@ impl Decoder {
 		let data = frame.plane_data(0).map_err(|_| INVALID)?;
 		let (w, h) = (width as usize, height as usize);
 		let row = w * 4;
-		if stride < row || data.len() < stride * (h - 1) + row || row * h > MAX_BYTES {
+		if stride < row || data.len() < stride * (h - 1) + row || row * h > MAX_DECODED_BYTES {
 			return Err(INVALID);
 		}
 		let mut rgba = vec![0; row * h];

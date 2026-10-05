@@ -212,13 +212,25 @@ impl CallCues {
 				{
 					Some(Sound::UserLeave)
 				}
+				client_core::voice::MembershipEvent::Muted { channel: known, .. }
+					if known == channel =>
+				{
+					Some(Sound::MemberMute)
+				}
+				client_core::voice::MembershipEvent::Unmuted { channel: known, .. }
+					if known == channel =>
+				{
+					Some(Sound::MemberUnmute)
+				}
 				_ => None,
 			})
 			.collect()
 	}
 }
-fn push_membership_cue(cues: &mut Vec<Sound>, cue: Sound) {
-	if cues.len() >= 4 {
+pub(crate) fn push_membership_cue(cues: &mut Vec<Sound>, cue: Sound) {
+	// A burst of arrivals keeps every sound; only a pathological storm is bounded.
+	const MAX: usize = 64;
+	if cues.len() >= MAX {
 		cues.remove(0);
 	}
 	cues.push(cue);
@@ -1856,13 +1868,53 @@ mod tests {
 		assert_eq!(cues.self_leave(), Some(Sound::UserLeave));
 		let mut full = vec![Sound::UserJoin; 4];
 		push_membership_cue(&mut full, Sound::UserLeave);
-		assert_eq!(full.len(), 4);
+		assert_eq!(full.len(), 5);
 		assert_eq!(full.last(), Some(&Sound::UserLeave));
 		let voice = Voice::default();
 		assert!(!voice.joined());
 		let mut empty: Vec<Sound> = Vec::new();
 		assert!(!voice.push_self_leave_cue(&mut empty));
 		assert!(empty.is_empty());
+	}
+
+	#[test]
+	fn member_mute_events_map_to_cues_and_a_burst_keeps_every_sound() {
+		let channel = Id(20);
+		let mut cues = CallCues::default();
+		let mut events = VecDeque::from([
+			client_core::voice::MembershipEvent::Muted {
+				channel,
+				user: Id(2),
+			},
+			client_core::voice::MembershipEvent::Unmuted {
+				channel,
+				user: Id(2),
+			},
+			client_core::voice::MembershipEvent::Joined {
+				channel,
+				user: Id(3),
+			},
+			client_core::voice::MembershipEvent::Left {
+				channel,
+				user: Id(3),
+			},
+		]);
+		assert_eq!(
+			cues.drain(true, channel, &mut events),
+			vec![
+				Sound::MemberMute,
+				Sound::MemberUnmute,
+				Sound::UserJoin,
+				Sound::UserLeave
+			]
+		);
+		// Ten people joining together keep ten sounds: no screenful cap drops arrivals.
+		let mut queue: Vec<Sound> = Vec::new();
+		for _ in 0..10 {
+			push_membership_cue(&mut queue, Sound::UserJoin);
+		}
+		assert_eq!(queue.len(), 10);
+		assert!(queue.iter().all(|cue| *cue == Sound::UserJoin));
 	}
 
 	#[test]

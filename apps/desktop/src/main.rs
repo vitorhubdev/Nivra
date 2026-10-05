@@ -824,6 +824,9 @@ struct Desktop {
 	avatar_clear_account: Option<model::Id>,
 	avatar_cleanup: Option<std::sync::mpsc::Receiver<Result<(), &'static str>>>,
 	voice: voice::Voice,
+	/// Last active-call phase seen by `pump_call_cues`, so a hidden-window call failure
+	/// still plays one leave sound without doubling the visible path's cue.
+	last_call_phase: Option<client_core::voice::Phase>,
 	runtime: tokio::runtime::Runtime,
 	store: Option<credentials::Store>,
 	cache: Option<cache::Cache>,
@@ -2093,6 +2096,7 @@ impl Desktop {
 			avatar_start_failed: false,
 			avatar_clear_account: None,
 			voice: voice::Voice::default(),
+			last_call_phase: None,
 			runtime,
 			store,
 			cache,
@@ -5079,6 +5083,123 @@ impl Desktop {
 			}
 		}
 	}
+	/// Membership cues for the active call, produced from `logic` so a minimized or hidden
+	/// window still hears every arrival, departure and member mute toggle. eframe calls
+	/// `logic` (never `ui`) on a repaint, and the connection requests one per voice event.
+	fn pump_call_cues(&mut self, ctx: &egui::Context) {
+		let phase = self.state.voice.active.as_ref().map(|call| call.phase);
+		let hidden = self.window.is_minimized().unwrap_or(false)
+			|| !self.window.is_visible().unwrap_or(true);
+		// A call that fails while the window is hidden gets its leave sound here; the
+		// visible path already pushes it from the failure branch in `Voice::poll`.
+		if hidden
+			&& self.last_call_phase != phase
+			&& phase == Some(client_core::voice::Phase::Failed)
+		{
+			voice::push_membership_cue(
+				&mut self.messaging.notification_cues,
+				model::notification_preferences::Sound::UserLeave,
+			);
+			ctx.request_repaint();
+		}
+		self.last_call_phase = phase;
+		let Some(call) = self.state.voice.active.as_ref() else {
+			return;
+		};
+		if !matches!(
+			call.phase,
+			client_core::voice::Phase::Connected | client_core::voice::Phase::Waiting
+		) {
+			return;
+		}
+		let channel = call.channel;
+		if self.state.voice.membership_events.is_empty() {
+			return;
+		}
+		let unfocused = !ctx.input(|input| input.focused)
+			|| self.window.is_minimized().unwrap_or(false)
+			|| !self.window.is_visible().unwrap_or(true);
+		let language = self.messaging.language;
+		let events: Vec<_> = self.state.voice.membership_events.drain(..).collect();
+		for event in events {
+			let (cue, alert) = match event {
+				client_core::voice::MembershipEvent::Joined {
+					channel: known,
+					user,
+					..
+				} if known == channel => (
+					Some(model::notification_preferences::Sound::UserJoin),
+					Some((user, true)),
+				),
+				client_core::voice::MembershipEvent::Left {
+					channel: known,
+					user,
+					..
+				} if known == channel => (
+					Some(model::notification_preferences::Sound::UserLeave),
+					Some((user, false)),
+				),
+				client_core::voice::MembershipEvent::Muted { channel: known, .. }
+					if known == channel =>
+				{
+					(
+						Some(model::notification_preferences::Sound::MemberMute),
+						None,
+					)
+				}
+				client_core::voice::MembershipEvent::Unmuted { channel: known, .. }
+					if known == channel =>
+				{
+					(
+						Some(model::notification_preferences::Sound::MemberUnmute),
+						None,
+					)
+				}
+				_ => (None, None),
+			};
+			if let Some(cue) = cue {
+				voice::push_membership_cue(&mut self.messaging.notification_cues, cue);
+			}
+			if let Some((user, joined)) = alert
+				&& unfocused && self.messaging.notifications_enabled
+			{
+				let name = self.call_member_name(user);
+				let text = if joined {
+					ui::i18n::text(language, "joined the call")
+				} else {
+					ui::i18n::text(language, "left the call")
+				};
+				self.notifications
+					.notify_channel(channel, name, text.to_owned(), None);
+			}
+		}
+		ctx.request_repaint();
+	}
+
+	fn call_member_name(&self, user: model::Id) -> String {
+		self.state
+			.voice
+			.roster
+			.iter()
+			.find(|entry| entry.participant.user == user)
+			.and_then(|entry| entry.member.as_ref())
+			.map(|member| {
+				member
+					.nick
+					.clone()
+					.filter(|nick| !nick.is_empty())
+					.unwrap_or_else(|| member.user.name.clone())
+			})
+			.or_else(|| {
+				self.state
+					.user
+					.as_ref()
+					.filter(|own| own.id == user)
+					.map(|own| own.name.clone())
+			})
+			.unwrap_or_else(|| "Someone".into())
+	}
+
 	fn poll_voice(&mut self, ctx: &egui::Context) {
 		if let Some(command) =
 			self.voice
@@ -6234,6 +6355,7 @@ impl eframe::App for Desktop {
 				self.command(command);
 			}
 		}
+		self.pump_call_cues(ctx);
 		if let Some(alert) = self.notification_runtime.poll(
 			&mut self.state,
 			&mut self.messaging,

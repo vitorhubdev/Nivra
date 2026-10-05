@@ -10,6 +10,9 @@ pub struct Device {
 	pub unread_badge: bool,
 	pub mute: bool,
 	pub unmute: bool,
+	/// Another call participant toggling their microphone; on by default.
+	pub member_mute: bool,
+	pub member_unmute: bool,
 	pub deafen: bool,
 	pub undeafen: bool,
 	pub camera_on: bool,
@@ -29,6 +32,8 @@ impl Default for Device {
 			unread_badge: true,
 			mute: true,
 			unmute: true,
+			member_mute: true,
+			member_unmute: true,
 			deafen: true,
 			undeafen: true,
 			camera_on: true,
@@ -47,6 +52,9 @@ pub enum Sound {
 	OutgoingRing,
 	Mute,
 	Unmute,
+	/// Another participant muted/unmuted in the call we are in.
+	MemberMute,
+	MemberUnmute,
 	Deafen,
 	Undeafen,
 	CameraOn,
@@ -65,6 +73,8 @@ impl Device {
 				Sound::OutgoingRing => self.outgoing_ring,
 				Sound::Mute => self.mute,
 				Sound::Unmute => self.unmute,
+				Sound::MemberMute => self.member_mute,
+				Sound::MemberUnmute => self.member_unmute,
 				Sound::Deafen => self.deafen,
 				Sound::Undeafen => self.undeafen,
 				Sound::CameraOn => self.camera_on,
@@ -89,6 +99,8 @@ mod tests {
 		settings.outgoing_ring = true;
 		assert!(settings.allows(Sound::Mute));
 		assert!(settings.allows(Sound::Unmute));
+		assert!(settings.allows(Sound::MemberMute));
+		assert!(settings.allows(Sound::MemberUnmute));
 		assert!(settings.allows(Sound::Deafen));
 		assert!(settings.allows(Sound::Undeafen));
 		assert!(settings.allows(Sound::CameraOn));
@@ -128,6 +140,8 @@ mod tests {
 			Sound::OutgoingRing,
 			Sound::Mute,
 			Sound::Unmute,
+			Sound::MemberMute,
+			Sound::MemberUnmute,
 			Sound::Deafen,
 			Sound::Undeafen,
 			Sound::CameraOn,

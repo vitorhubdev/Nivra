@@ -126,6 +126,9 @@ pub struct State {
 	/// silent, while someone who left or joined during the gap still announces.
 	membership_basis: Option<(Id, u64)>,
 	membership_seen: BTreeSet<u64>,
+	/// Mute state per user id of the baselined active call, so a later toggle
+	/// announces exactly once and a reconnect refill stays silent.
+	membership_mutes: std::collections::BTreeMap<u64, bool>,
 	/// Last service-confirmed departure, scoped to its local request.
 	pub departed: Option<(Id, u64)>,
 	pub incoming: Option<Id>,
@@ -145,8 +148,23 @@ pub struct State {
 /// call sounds; both sides of a quick leave+rejoin are always present, in order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MembershipEvent {
-	Joined { channel: Id, user: Id },
-	Left { channel: Id, user: Id },
+	Joined {
+		channel: Id,
+		user: Id,
+	},
+	Left {
+		channel: Id,
+		user: Id,
+	},
+	/// Another participant toggled their microphone mute while we are in the call.
+	Muted {
+		channel: Id,
+		user: Id,
+	},
+	Unmuted {
+		channel: Id,
+		user: Id,
+	},
 }
 /// Drained membership transitions never exceed one screen of rapid rejoins.
 const MAX_MEMBERSHIP_EVENTS: usize = 32;
@@ -696,11 +714,7 @@ impl ClientState {
 						None
 					};
 					if let Some(request) = synced {
-						self.sync_call_membership(
-							channel,
-							request,
-							participants.iter().map(|p| p.user),
-						);
+						self.sync_call_membership(channel, request, participants.iter().cloned());
 					}
 					self.remember_dm_participants(channel, participants);
 				}
@@ -961,9 +975,9 @@ impl ClientState {
 				self.disconnect_voice("Voice channel exceeds the 64 participant limit");
 				return;
 			}
-			let users: Vec<Id> = call.participants.iter().map(|p| p.user).collect();
+			let participants = call.participants.clone();
 			let (channel, request) = (call.channel, call.request);
-			self.sync_call_membership(channel, request, users.into_iter());
+			self.sync_call_membership(channel, request, participants.into_iter());
 		}
 	}
 	/// Record one active-call roster sync as join/leave events, in order.
@@ -971,8 +985,16 @@ impl ClientState {
 	/// which keeps its single cue; everyone already present is baseline.
 	/// Reconnect refills diff against the kept roster, so unchanged people stay
 	/// silent while someone who left or joined during the gap still announces.
-	fn sync_call_membership(&mut self, channel: Id, request: u64, users: impl Iterator<Item = Id>) {
-		let fresh: BTreeSet<u64> = users.map(|user| user.0).collect();
+	fn sync_call_membership(
+		&mut self,
+		channel: Id,
+		request: u64,
+		participants: impl Iterator<Item = Participant>,
+	) {
+		let participants: Vec<Participant> = participants.collect();
+		let fresh: BTreeSet<u64> = participants.iter().map(|p| p.user.0).collect();
+		let fresh_mutes: std::collections::BTreeMap<u64, bool> =
+			participants.iter().map(|p| (p.user.0, p.muted)).collect();
 		let basis = Some((channel, request));
 		if self.voice.membership_basis != basis {
 			self.voice.membership_basis = basis;
@@ -987,9 +1009,13 @@ impl ClientState {
 				});
 			}
 			self.voice.membership_seen = fresh;
+			self.voice.membership_mutes = fresh_mutes;
 			return;
 		}
 		let seen = std::mem::replace(&mut self.voice.membership_seen, fresh.clone());
+		let previous_mutes =
+			std::mem::replace(&mut self.voice.membership_mutes, fresh_mutes.clone());
+		let own = self.user.as_ref().map(|user| user.id.0);
 		// Leaves sort before joins: a quick leave+rejoin always plays both, in order.
 		for gone in seen.difference(&fresh) {
 			self.push_membership_event(MembershipEvent::Left {
@@ -1001,6 +1027,33 @@ impl ClientState {
 			self.push_membership_event(MembershipEvent::Joined {
 				channel,
 				user: Id(*new),
+			});
+		}
+		// Mute toggles of people who stayed: announce each change once. The person who
+		// left or joined is handled above, so a leave never doubles as a mute.
+		for user in seen.intersection(&fresh) {
+			if Some(*user) == own {
+				continue;
+			}
+			let Some(was) = previous_mutes.get(user) else {
+				continue;
+			};
+			let Some(&now) = fresh_mutes.get(user) else {
+				continue;
+			};
+			if was == &now {
+				continue;
+			}
+			self.push_membership_event(if now {
+				MembershipEvent::Muted {
+					channel,
+					user: Id(*user),
+				}
+			} else {
+				MembershipEvent::Unmuted {
+					channel,
+					user: Id(*user),
+				}
 			});
 		}
 	}
@@ -1023,10 +1076,13 @@ impl ClientState {
 		{
 			self.voice.membership_basis = None;
 			self.voice.membership_seen.clear();
+			self.voice.membership_mutes.clear();
 		}
 		self.voice.membership_events.retain(|event| match event {
 			MembershipEvent::Joined { channel: known, .. }
-			| MembershipEvent::Left { channel: known, .. } => *known != channel,
+			| MembershipEvent::Left { channel: known, .. }
+			| MembershipEvent::Muted { channel: known, .. }
+			| MembershipEvent::Unmuted { channel: known, .. } => *known != channel,
 		});
 	}
 	fn remember_dm_participants(&mut self, channel: Id, participants: Vec<Participant>) {
@@ -1089,6 +1145,21 @@ impl ClientState {
 
 #[cfg(test)]
 mod tests {
+
+	/// Participants for membership tests; mute state stays off unless a test sets it.
+	fn people(ids: impl IntoIterator<Item = Id>) -> Vec<Participant> {
+		ids.into_iter()
+			.map(|user| Participant {
+				user,
+				muted: false,
+				deafened: false,
+				server_muted: false,
+				server_deafened: false,
+				video: false,
+				streaming: false,
+			})
+			.collect()
+	}
 	use super::*;
 	use crate::{Envelope, Event as CoreEvent};
 	use model::{Channel, User};
@@ -1786,7 +1857,11 @@ mod tests {
 		let mut state = dm_state();
 		let (channel, request) = (Id(2), 7);
 		let sync = |state: &mut ClientState, users: &[u64]| {
-			state.sync_call_membership(channel, request, users.iter().map(|id| Id(*id)));
+			state.sync_call_membership(
+				channel,
+				request,
+				people(users.iter().map(|id| Id(*id))).into_iter(),
+			);
 		};
 		// Baseline seeds silently: people already here are not announced.
 		sync(&mut state, &[2, 3]);
@@ -1864,9 +1939,9 @@ mod tests {
 		);
 		// Our own join gets its single cue even on the baseline sync.
 		let mut fresh = dm_state();
-		fresh.sync_call_membership(channel, request, [Id(2), Id(3)].into_iter());
+		fresh.sync_call_membership(channel, request, people([Id(2), Id(3)]).into_iter());
 		assert!(fresh.voice.membership_events.is_empty());
-		fresh.sync_call_membership(channel, request, [Id(1), Id(2), Id(3)].into_iter());
+		fresh.sync_call_membership(channel, request, people([Id(1), Id(2), Id(3)]).into_iter());
 		assert_eq!(
 			fresh.voice.membership_events.drain(..).collect::<Vec<_>>(),
 			vec![MembershipEvent::Joined {
@@ -1875,7 +1950,11 @@ mod tests {
 			}]
 		);
 		// A new request rebaselines: the same roster seeds silently again.
-		fresh.sync_call_membership(channel, request + 1, [Id(1), Id(2), Id(3)].into_iter());
+		fresh.sync_call_membership(
+			channel,
+			request + 1,
+			people([Id(1), Id(2), Id(3)]).into_iter(),
+		);
 		assert_eq!(
 			fresh.voice.membership_events.drain(..).collect::<Vec<_>>(),
 			vec![MembershipEvent::Joined {
@@ -1885,10 +1964,96 @@ mod tests {
 		);
 		// The queue stays bounded under a storm of rejoins.
 		for id in 100..200 {
-			fresh.sync_call_membership(channel, request + 1, [Id(1), Id(id)].into_iter());
-			fresh.sync_call_membership(channel, request + 1, [Id(1)].into_iter());
+			fresh.sync_call_membership(channel, request + 1, people([Id(1), Id(id)]).into_iter());
+			fresh.sync_call_membership(channel, request + 1, people([Id(1)]).into_iter());
 		}
 		assert!(fresh.voice.membership_events.len() <= MAX_MEMBERSHIP_EVENTS);
+	}
+
+	#[test]
+	fn member_mute_toggles_announce_once_and_skip_our_own() {
+		let channel = Id(20);
+		let request = 7;
+		let mut state = dm_state();
+		let with_mutes = |mutes: &[(u64, bool)]| -> Vec<Participant> {
+			mutes
+				.iter()
+				.map(|(id, muted)| Participant {
+					user: Id(*id),
+					muted: *muted,
+					deafened: false,
+					server_muted: false,
+					server_deafened: false,
+					video: false,
+					streaming: false,
+				})
+				.collect()
+		};
+		// Baseline seeds silently, own user included.
+		state.sync_call_membership(
+			channel,
+			request,
+			with_mutes(&[(1, false), (2, false), (3, false)]).into_iter(),
+		);
+		// The baseline keeps our own single join cue; the mute diff itself is silent.
+		assert_eq!(
+			state.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![MembershipEvent::Joined {
+				channel,
+				user: Id(1)
+			}]
+		);
+		// Another participant mutes: one event, and a refill with the same state stays silent.
+		state.sync_call_membership(
+			channel,
+			request,
+			with_mutes(&[(1, false), (2, true), (3, false)]).into_iter(),
+		);
+		assert_eq!(
+			state.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![MembershipEvent::Muted {
+				channel,
+				user: Id(2)
+			}]
+		);
+		state.sync_call_membership(
+			channel,
+			request,
+			with_mutes(&[(1, false), (2, true), (3, false)]).into_iter(),
+		);
+		assert!(state.voice.membership_events.is_empty());
+		// Our own toggle is silent; another participant's unmute announces the opposite.
+		state.sync_call_membership(
+			channel,
+			request,
+			with_mutes(&[(1, true), (2, false), (3, false)]).into_iter(),
+		);
+		assert_eq!(
+			state.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![MembershipEvent::Unmuted {
+				channel,
+				user: Id(2)
+			}]
+		);
+		// A leave never doubles as a mute; the staying participant's toggle still announces.
+		state.sync_call_membership(
+			channel,
+			request,
+			with_mutes(&[(1, false), (3, true)]).into_iter(),
+		);
+		assert_eq!(
+			state.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![
+				MembershipEvent::Left {
+					channel,
+					user: Id(2)
+				},
+				MembershipEvent::Muted {
+					channel,
+					user: Id(3)
+				}
+			]
+		);
 	}
 
 	#[test]

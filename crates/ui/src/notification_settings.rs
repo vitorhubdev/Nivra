@@ -267,6 +267,16 @@ impl MessagingUi {
 					Sound::Unmute,
 				),
 				(
+					crate::i18n::text(language, "Someone Muted"),
+					&mut self.notification_options.member_mute,
+					Sound::MemberMute,
+				),
+				(
+					crate::i18n::text(language, "Someone Unmuted"),
+					&mut self.notification_options.member_unmute,
+					Sound::MemberUnmute,
+				),
+				(
 					crate::i18n::text(language, "Deafen"),
 					&mut self.notification_options.deafen,
 					Sound::Deafen,

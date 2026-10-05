@@ -2,6 +2,7 @@
 pub mod badge;
 pub mod captcha;
 pub mod compositor;
+pub mod diagnostics;
 pub mod dll;
 pub mod game_activity;
 pub mod hotkeys;
@@ -62,7 +63,9 @@ pub(crate) fn ensure_gtk_application_id() {
 		use gtk4::gio::prelude::ApplicationExt;
 		let app = gtk4::gio::Application::new(Some(SERVICE), gtk4::gio::ApplicationFlags::empty());
 		if let Err(error) = app.register(gtk4::gio::Cancellable::NONE) {
-			eprintln!("Linux login/verification: GApplication registration failed: {error}");
+			crate::diagnostics::warn(&format!(
+				"Linux login/verification: GApplication registration failed: {error}"
+			));
 		}
 		std::mem::forget(app);
 	});

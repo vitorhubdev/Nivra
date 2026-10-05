@@ -33,10 +33,11 @@ enum Page {
 	Updates,
 	Extensions,
 	Themes,
+	Help,
 }
 impl Page {
 	/// Every page in sidebar order; the narrow-window page picker lists them the same way.
-	const ALL: [Self; 14] = [
+	const ALL: [Self; 15] = [
 		Self::Account,
 		Self::Profile,
 		Self::MessagingPermissions,
@@ -51,6 +52,7 @@ impl Page {
 		Self::Updates,
 		Self::Themes,
 		Self::Extensions,
+		Self::Help,
 	];
 	/// Sidebar sections: account-level choices first, then how this app looks and behaves,
 	/// then community add-ons.
@@ -77,7 +79,10 @@ impl Page {
 				Self::Updates,
 			],
 		),
-		("Customization", &[Self::Themes, Self::Extensions]),
+		(
+			"Customization",
+			&[Self::Themes, Self::Extensions, Self::Help],
+		),
 	];
 	fn label(self, language: model::Language) -> &'static str {
 		let english = match self {
@@ -95,6 +100,7 @@ impl Page {
 			Self::Updates => "Updates",
 			Self::Extensions => "Extensions",
 			Self::Themes => "Themes",
+			Self::Help => "Help",
 		};
 		crate::i18n::text(language, english)
 	}
@@ -116,6 +122,7 @@ impl Page {
 			Self::Updates => "Keep Nivra up to date on this device.",
 			Self::Extensions => "Manage community plugins.",
 			Self::Themes => "Choose a community theme.",
+			Self::Help => "Diagnostics, logs and support information.",
 		};
 		crate::i18n::text(language, english)
 	}
@@ -151,6 +158,7 @@ impl Page {
 			}
 			Self::Extensions => "extensions plugins shop store catalog import community tools",
 			Self::Themes => "themes shop store catalog import community appearance colors",
+			Self::Help => "help diagnostics logs support crash report error copy folder",
 		};
 		keywords.contains(query)
 	}
@@ -450,6 +458,7 @@ impl MessagingUi {
 										self.global_keybind_status,
 										self.language,
 									),
+									Page::Help => self.help_settings(ui),
 									Page::Extensions | Page::Themes => {
 										self.extensions
 											.select_themes(self.settings.page == Page::Themes);
@@ -1144,6 +1153,30 @@ impl MessagingUi {
 				)),
 				&mut self.reduce_motion,
 			);
+		});
+	}
+
+	/// Diagnostics: copy the redacted log or open its folder.
+	fn help_settings(&mut self, ui: &mut egui::Ui) {
+		design::group(ui, crate::i18n::text(self.language, "Diagnostics"), |ui| {
+			if design::button(
+				ui,
+				crate::i18n::text(self.language, "Copy error log"),
+				design::ButtonKind::Outline,
+			)
+			.clicked()
+			{
+				self.copy_log_requested = true;
+			}
+			if design::button(
+				ui,
+				crate::i18n::text(self.language, "Open logs folder"),
+				design::ButtonKind::Outline,
+			)
+			.clicked()
+			{
+				self.open_logs_requested = true;
+			}
 		});
 	}
 
@@ -1853,5 +1886,44 @@ mod keybind_tests {
 				assert!(view.settings.query.is_empty());
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod help_tests {
+	use super::*;
+
+	#[test]
+	fn help_page_requests_a_log_copy_and_the_folder() {
+		use egui_kittest::kittest::Queryable as _;
+		struct Fixture {
+			view: MessagingUi,
+		}
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				|ui, fixture: &mut Fixture| fixture.view.help_settings(ui),
+				Fixture {
+					view: MessagingUi::default(),
+				},
+			);
+		harness.run();
+		let language = harness.state().view.language;
+		harness
+			.get_by_role_and_label(
+				egui::Role::Button,
+				crate::i18n::text(language, "Copy error log"),
+			)
+			.click();
+		harness.run();
+		assert!(harness.state().view.copy_log_requested);
+		harness
+			.get_by_role_and_label(
+				egui::Role::Button,
+				crate::i18n::text(language, "Open logs folder"),
+			)
+			.click();
+		harness.run();
+		assert!(harness.state().view.open_logs_requested);
 	}
 }

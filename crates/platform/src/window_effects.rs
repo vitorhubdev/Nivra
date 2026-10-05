@@ -56,7 +56,7 @@ impl Blur {
 				Ok(RawWindowHandle::Xlib(_))
 			) {
 				if let Err(error) = x11::set_blur(&self.window, enabled) {
-					eprintln!("Window blur: {error}");
+					crate::diagnostics::warn(&format!("Window blur: {error}"));
 				}
 			} else {
 				self.window.set_blur(enabled);

@@ -143,13 +143,15 @@ impl Drop for Sounds {
 
 /// Every notification cue, in the order the settings screen lists them.
 #[allow(dead_code)] // Exercised by the decode-budget test.
-const ALL_SOUNDS: [Sound; 12] = [
+const ALL_SOUNDS: [Sound; 14] = [
 	Sound::Message,
 	Sound::CurrentChannel,
 	Sound::IncomingRing,
 	Sound::OutgoingRing,
 	Sound::Mute,
 	Sound::Unmute,
+	Sound::MemberMute,
+	Sound::MemberUnmute,
 	Sound::Deafen,
 	Sound::Undeafen,
 	Sound::CameraOn,
@@ -168,6 +170,9 @@ fn samples(sound: Sound, rate: u32, current: &impl Fn() -> bool) -> Result<Vec<[
 		Sound::OutgoingRing => include_bytes!("../../../assets/sounds/nivra/outgoing-ring.ogg"),
 		Sound::Mute => include_bytes!("../../../assets/sounds/nivra/mute.ogg"),
 		Sound::Unmute => include_bytes!("../../../assets/sounds/nivra/unmute.ogg"),
+		// Member toggles reuse the local mute/unmute cues, played at a lower volume.
+		Sound::MemberMute => include_bytes!("../../../assets/sounds/nivra/mute.ogg"),
+		Sound::MemberUnmute => include_bytes!("../../../assets/sounds/nivra/unmute.ogg"),
 		Sound::Deafen => include_bytes!("../../../assets/sounds/nivra/deafen.ogg"),
 		Sound::Undeafen => include_bytes!("../../../assets/sounds/nivra/undeafen.ogg"),
 		Sound::CameraOn => include_bytes!("../../../assets/sounds/nivra/camera-on.ogg"),

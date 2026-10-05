@@ -40,8 +40,8 @@ pub struct Runtime {
 /// Minimum gap between two membership sounds so a rapid sequence stays
 /// intelligible instead of chopping one cue with the next.
 const MEMBERSHIP_GAP: Duration = Duration::from_millis(120);
-/// Membership queue bound: a storm of rejoins keeps the latest screenful.
-const MAX_MEMBERSHIP_CUES: usize = 8;
+/// Membership queue bound: a burst of ten arrivals must keep all ten sounds.
+const MAX_MEMBERSHIP_CUES: usize = 64;
 /// Local toggle queue bound: presses stay responsive without growing.
 const MAX_LOCAL_CUES: usize = 4;
 
@@ -53,8 +53,29 @@ fn membership_volume(options: Device, membership: bool) -> u8 {
 	}
 }
 
+/// Member mute toggles reuse the local cues at a quieter level so they sit under speech.
+fn member_toggle_volume(options: Device) -> u8 {
+	(options.volume.saturating_mul(2) / 3).max(1)
+}
+
 fn membership_due(due: Option<Instant>, now: Instant) -> bool {
 	due.is_none_or(|at| now.saturating_duration_since(at) >= MEMBERSHIP_GAP)
+}
+
+/// Where one cue belongs: call membership (always), member mute toggles (opt-in) or local.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CueRoute {
+	Membership,
+	MemberToggle,
+	Local,
+}
+
+fn cue_route(cue: Sound) -> CueRoute {
+	match cue {
+		Sound::UserJoin | Sound::UserLeave => CueRoute::Membership,
+		Sound::MemberMute | Sound::MemberUnmute => CueRoute::MemberToggle,
+		_ => CueRoute::Local,
+	}
 }
 
 fn push_membership_cue(queue: &mut VecDeque<(Sound, u8)>, cue: Sound, volume: u8) {
@@ -190,11 +211,25 @@ impl Runtime {
 		// membership cues keep their own paced queue so a burst never collapses.
 		while let Some(cue) = ui.notification_cues.first().copied() {
 			ui.notification_cues.remove(0);
-			let membership = matches!(cue, Sound::UserJoin | Sound::UserLeave);
-			if membership {
-				push_membership_cue(&mut self.membership, cue, membership_volume(options, true));
-			} else if audible && options.allows(cue) {
-				push_local_cue(&mut self.local, cue, membership_volume(options, false));
+			match cue_route(cue) {
+				CueRoute::Membership => {
+					push_membership_cue(&mut self.membership, cue, membership_volume(options, true))
+				}
+				// Member mute sounds are a new opt-in default; join/leave always play.
+				CueRoute::MemberToggle => {
+					if options.allows(cue) {
+						push_membership_cue(
+							&mut self.membership,
+							cue,
+							member_toggle_volume(options),
+						);
+					}
+				}
+				CueRoute::Local => {
+					if audible && options.allows(cue) {
+						push_local_cue(&mut self.local, cue, membership_volume(options, false));
+					}
+				}
 			}
 		}
 		if !ui.notification_cues.is_empty() {
@@ -316,6 +351,46 @@ mod tests {
 		}
 		assert_eq!(local.len(), MAX_LOCAL_CUES);
 		assert_eq!(local.back().map(|(cue, _)| *cue), Some(Sound::Undeafen));
+	}
+
+	#[test]
+	fn membership_queue_keeps_a_ten_arrival_burst_in_order() {
+		let mut membership = VecDeque::new();
+		for _ in 0..10 {
+			push_membership_cue(&mut membership, Sound::UserJoin, 100);
+		}
+		assert_eq!(
+			membership.len(),
+			10,
+			"a ten-person arrival keeps ten sounds"
+		);
+		let mut played = Vec::new();
+		let mut due = None;
+		let mut now = Instant::now();
+		while let Some((cue, _)) = membership.front().copied() {
+			if !membership_due(due, now) {
+				now += MEMBERSHIP_GAP;
+				continue;
+			}
+			membership.pop_front();
+			played.push(cue);
+			due = Some(now);
+		}
+		assert_eq!(played, vec![Sound::UserJoin; 10]);
+	}
+
+	#[test]
+	fn cue_routes_keep_membership_always_and_member_toggles_opt_in() {
+		assert_eq!(cue_route(Sound::UserJoin), CueRoute::Membership);
+		assert_eq!(cue_route(Sound::UserLeave), CueRoute::Membership);
+		assert_eq!(cue_route(Sound::MemberMute), CueRoute::MemberToggle);
+		assert_eq!(cue_route(Sound::MemberUnmute), CueRoute::MemberToggle);
+		assert_eq!(cue_route(Sound::Mute), CueRoute::Local);
+		let mut options = Device::default();
+		assert!(options.allows(Sound::MemberMute));
+		options.member_mute = false;
+		assert!(!options.allows(Sound::MemberMute));
+		assert!(options.allows(Sound::MemberUnmute));
 	}
 
 	#[test]

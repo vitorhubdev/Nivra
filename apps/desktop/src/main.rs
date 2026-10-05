@@ -824,6 +824,8 @@ struct Desktop {
 	avatar_clear_account: Option<model::Id>,
 	avatar_cleanup: Option<std::sync::mpsc::Receiver<Result<(), &'static str>>>,
 	voice: voice::Voice,
+	/// Display names of the current call members, for join/leave notifications. Bounded.
+	call_member_names: std::collections::HashMap<model::Id, String>,
 	runtime: tokio::runtime::Runtime,
 	store: Option<credentials::Store>,
 	cache: Option<cache::Cache>,
@@ -2093,6 +2095,7 @@ impl Desktop {
 			avatar_start_failed: false,
 			avatar_clear_account: None,
 			voice: voice::Voice::default(),
+			call_member_names: std::collections::HashMap::new(),
 			runtime,
 			store,
 			cache,
@@ -5079,6 +5082,141 @@ impl Desktop {
 			}
 		}
 	}
+	/// Membership cues for the active call, produced from `logic` so a minimized or hidden
+	/// window still hears every arrival, departure and member mute toggle. eframe calls
+	/// `logic` (never `ui`) on a repaint, and the connection requests one per voice event.
+	fn pump_call_cues(&mut self, ctx: &egui::Context) {
+		let Some(call) = self.state.voice.active.as_ref() else {
+			return;
+		};
+		if !matches!(
+			call.phase,
+			client_core::voice::Phase::Connected | client_core::voice::Phase::Waiting
+		) {
+			return;
+		}
+		let channel = call.channel;
+		let participants: Vec<model::Id> = call.participants.iter().map(|p| p.user).collect();
+		// Keep display names for departures: the roster entry is gone by the time a Left
+		// event is drained, and DM participants never enter the guild roster (Codex #87 P2).
+		for user in participants {
+			if !self.call_member_names.contains_key(&user) {
+				let name = self.call_member_name(channel, user);
+				self.remember_call_name(user, name);
+			}
+		}
+		if self.state.voice.membership_events.is_empty() {
+			return;
+		}
+		let unfocused = !ctx.input(|input| input.focused)
+			|| self.window.is_minimized().unwrap_or(false)
+			|| !self.window.is_visible().unwrap_or(true);
+		let language = self.messaging.language;
+		let events: Vec<_> = self.state.voice.membership_events.drain(..).collect();
+		for event in events {
+			let (cue, alert) = match event {
+				client_core::voice::MembershipEvent::Joined {
+					channel: known,
+					user,
+					..
+				} if known == channel => (
+					Some(model::notification_preferences::Sound::UserJoin),
+					Some((user, true)),
+				),
+				client_core::voice::MembershipEvent::Left {
+					channel: known,
+					user,
+					..
+				} if known == channel => (
+					Some(model::notification_preferences::Sound::UserLeave),
+					Some((user, false)),
+				),
+				client_core::voice::MembershipEvent::Muted { channel: known, .. }
+					if known == channel =>
+				{
+					(
+						Some(model::notification_preferences::Sound::MemberMute),
+						None,
+					)
+				}
+				client_core::voice::MembershipEvent::Unmuted { channel: known, .. }
+					if known == channel =>
+				{
+					(
+						Some(model::notification_preferences::Sound::MemberUnmute),
+						None,
+					)
+				}
+				_ => (None, None),
+			};
+			if let Some(cue) = cue {
+				voice::push_membership_cue(&mut self.messaging.notification_cues, cue);
+			}
+			if let Some((user, joined)) = alert
+				&& unfocused && self.messaging.notifications_enabled
+			{
+				let name = self
+					.call_member_names
+					.remove(&user)
+					.unwrap_or_else(|| self.call_member_name(channel, user));
+				let text = if joined {
+					ui::i18n::text(language, "joined the call")
+				} else {
+					ui::i18n::text(language, "left the call")
+				};
+				self.notifications
+					.notify_channel(channel, name, text.to_owned(), None);
+			}
+		}
+		ctx.request_repaint();
+	}
+
+	/// Bounded display-name cache for call membership notifications.
+	fn remember_call_name(&mut self, user: model::Id, name: String) {
+		if self.call_member_names.len() >= 128 {
+			self.call_member_names.clear();
+		}
+		self.call_member_names.insert(user, name);
+	}
+
+	fn call_member_name(&self, channel: model::Id, user: model::Id) -> String {
+		self.call_member_names
+			.get(&user)
+			.cloned()
+			.or_else(|| {
+				self.state
+					.voice
+					.roster
+					.iter()
+					.find(|entry| entry.participant.user == user)
+					.and_then(|entry| entry.member.as_ref())
+					.map(|member| {
+						member
+							.nick
+							.clone()
+							.filter(|nick| !nick.is_empty())
+							.unwrap_or_else(|| member.user.name.clone())
+					})
+			})
+			.or_else(|| {
+				self.state.channel(channel).and_then(|channel| {
+					channel
+						.recipients
+						.iter()
+						.find(|recipient| recipient.id == user)
+						.map(|recipient| recipient.name.clone())
+				})
+			})
+			.or_else(|| {
+				self.state
+					.user
+					.as_ref()
+					.filter(|own| own.id == user)
+					.map(|own| own.name.clone())
+			})
+			.unwrap_or_else(|| "Someone".into())
+	}
+
 	fn poll_voice(&mut self, ctx: &egui::Context) {
 		if let Some(command) =
 			self.voice
@@ -6234,6 +6372,13 @@ impl eframe::App for Desktop {
 				self.command(command);
 			}
 		}
+		// Hidden windows run `logic` only: poll the voice workers so a dead audio or
+		// transport task still surfaces as Phase::Failed and queues its leave cue (Codex #87 P1).
+		if self.window.is_minimized().unwrap_or(false) || !self.window.is_visible().unwrap_or(true)
+		{
+			self.poll_voice(ctx);
+		}
+		self.pump_call_cues(ctx);
 		if let Some(alert) = self.notification_runtime.poll(
 			&mut self.state,
 			&mut self.messaging,

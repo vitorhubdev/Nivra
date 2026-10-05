@@ -326,6 +326,7 @@ impl ExtensionUi {
 		let mut back = false;
 		let mut customize = false;
 		egui::Panel::top("theme-preview-return")
+			.resizable(false)
 			.exact_size(52.0)
 			.show_separator_line(false)
 			.frame(egui::Frame::new().fill(surface).inner_margin(egui::Margin {

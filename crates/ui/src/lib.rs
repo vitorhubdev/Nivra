@@ -601,6 +601,10 @@ pub struct MessagingUi {
 	pub reduce_motion: bool,
 	/// Last channel drawn, so a real switch can cross-fade instead of the first open.
 	last_channel: Option<model::Id>,
+	/// Outer rect of the account footer panel in the last frame (diagnostics and tests).
+	pub account_footer_rect: Option<egui::Rect>,
+	/// egui id of the account footer panel, so a stale stored size can be discarded.
+	pub account_footer_panel_id: Option<egui::Id>,
 	pub transparency: u8,
 	pub blur: u8,
 	pub transparent_all: bool,
@@ -1347,6 +1351,7 @@ impl MessagingUi {
 	fn title_bar(&mut self, ui: &mut egui::Ui, state: &State, title: &str) {
 		let colors = design::palette(ui);
 		egui::Panel::top("title-bar")
+			.resizable(false)
 			.exact_size(36.0)
 			.show_separator_line(false)
 			.frame(egui::Frame::new().fill(design::section_surface(
@@ -1900,6 +1905,7 @@ impl MessagingUi {
 	) {
 		let colors = design::palette(ui);
 		egui::Panel::top("sidebar-header")
+			.resizable(false)
 			.exact_size(48.0)
 			.show_separator_line(false)
 			.frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 0)))
@@ -2106,7 +2112,9 @@ impl MessagingUi {
 					.show(ui, |ui| {
 						ui.set_width(ui.available_width());
 						ui.set_min_height(44.0);
-						ui.horizontal_centered(|ui| {
+						// `horizontal`, not `horizontal_centered`: the latter allocates the full
+						// panel height, which stretched the card and misaligned its row.
+						ui.horizontal(|ui| {
 							ui.set_min_height(44.0);
 							ui.spacing_mut().item_spacing.x = 8.0;
 							if let Some(user) = &state.user {
@@ -2281,6 +2289,7 @@ impl MessagingUi {
 	) {
 		let colors = design::palette(ui);
 		egui::Panel::top("channel-header")
+			.resizable(false)
 			.exact_size(48.0)
 			.show_separator_line(false)
 			.frame(
@@ -4415,7 +4424,11 @@ impl MessagingUi {
 					.inner_margin(0),
 			)
 			.show(ui, |ui| {
-				egui::Panel::bottom("account-footer")
+				let footer_panel_id = ui.scope_id().with_salt(egui::IdSalt::new("account-footer"));
+				let footer = egui::Panel::bottom("account-footer")
+					// The card is content-sized; an invisible resize handle used to let a drag
+					// stretch it for the rest of the session (owner screenshot, v1.0.11).
+					.resizable(false)
 					.show_separator_line(false)
 					.frame(
 						egui::Frame::new()
@@ -4438,6 +4451,8 @@ impl MessagingUi {
 							}),
 					)
 					.show(ui, |ui| self.account_card(ui, state, &mut commands));
+				self.account_footer_rect = Some(footer.response.rect);
+				self.account_footer_panel_id = Some(footer_panel_id);
 				self.notification_rail(ui, state, &mut commands);
 				// The lists sit on their own rounded surface beside the rail, above the card.
 				ui.painter().rect_filled(
@@ -4767,6 +4782,7 @@ impl MessagingUi {
 					return;
 				}
 				egui::Panel::bottom("composer")
+					.resizable(false)
 					.show_separator_line(false)
 					.frame(
 						egui::Frame::new()
@@ -9150,4 +9166,201 @@ pub fn debug_forward_check(state: &mut State) {
 			.iter()
 			.all(|p| p.delivery != model::Delivery::Sending)
 	);
+}
+#[cfg(test)]
+mod account_card_tests {
+	use super::*;
+
+	fn frame(ctx: &egui::Context, view: &mut MessagingUi, state: &mut State, size: egui::Vec2) {
+		frame_with_events(ctx, view, state, size, Vec::new());
+	}
+
+	fn frame_with_events(
+		ctx: &egui::Context,
+		view: &mut MessagingUi,
+		state: &mut State,
+		size: egui::Vec2,
+		events: Vec<egui::Event>,
+	) {
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+				events,
+				..Default::default()
+			},
+			|ui| {
+				view.show(ui, state);
+			},
+		);
+		output.textures_delta.clear();
+	}
+
+	fn demo_call() -> client_core::voice::Call {
+		client_core::voice::Call {
+			channel: model::Id(20),
+			guild: None,
+			connected_at: Some(std::time::Instant::now()),
+			server_muted: false,
+			server_deafened: false,
+			request: 1,
+			phase: client_core::voice::Phase::Connected,
+			muted: false,
+			deafened: false,
+			participants: Vec::new(),
+			camera: false,
+			watching: None,
+			error: None,
+		}
+	}
+
+	#[test]
+	fn account_card_is_content_height_at_both_sidebar_widths() {
+		for sidebar in [190, 400] {
+			let ctx = egui::Context::default();
+			ctx.set_theme(egui::ThemePreference::Dark);
+			let mut state = test_support::demo_state();
+			state.user.as_mut().expect("demo user").name =
+				"A very long account display name that has to truncate".into();
+			let mut view = MessagingUi::default();
+			view.reading_preferences.sidebar_width = sidebar;
+			frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+			let rect = view.account_footer_rect.expect("account footer drawn");
+			assert!(
+				(rect.height() - 72.0).abs() <= 8.0,
+				"sidebar {sidebar}: card height {} must stay at the content height",
+				rect.height()
+			);
+			assert!(
+				(800.0 - rect.bottom()).abs() <= 2.0,
+				"sidebar {sidebar}: card must stay anchored to the bottom"
+			);
+		}
+	}
+
+	#[test]
+	fn call_section_leaves_the_account_card_at_its_content_height() {
+		let ctx = egui::Context::default();
+		ctx.set_theme(egui::ThemePreference::Dark);
+		let mut state = test_support::demo_state();
+		let mut view = MessagingUi::default();
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let base = view.account_footer_rect.expect("card").height();
+		state.voice.active = Some(demo_call());
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let in_call = view.account_footer_rect.expect("card").height();
+		assert!(
+			in_call > base + 20.0,
+			"the call section must grow the card: {base} -> {in_call}"
+		);
+		state.voice.active = None;
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let after = view.account_footer_rect.expect("card").height();
+		assert!(
+			(after - base).abs() <= 1.0,
+			"leaving the call must restore the height: {base} -> {after}"
+		);
+	}
+
+	#[test]
+	fn update_banner_leaves_the_account_card_at_its_content_height() {
+		let ctx = egui::Context::default();
+		ctx.set_theme(egui::ThemePreference::Dark);
+		let mut state = test_support::demo_state();
+		let mut view = MessagingUi::default();
+		view.hide_title_bar = true;
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let base = view.account_footer_rect.expect("card").height();
+		view.updates.available = true;
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let with_banner = view.account_footer_rect.expect("card").height();
+		assert!(with_banner > base + 10.0, "the banner must grow the card");
+		view.updates.available = false;
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let after = view.account_footer_rect.expect("card").height();
+		assert!(
+			(after - base).abs() <= 1.0,
+			"hiding the banner must restore the height: {base} -> {after}"
+		);
+	}
+
+	#[test]
+	fn dragging_the_account_card_edge_does_not_resize_it() {
+		let ctx = egui::Context::default();
+		ctx.set_theme(egui::ThemePreference::Dark);
+		let mut state = test_support::demo_state();
+		let mut view = MessagingUi::default();
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let base = view.account_footer_rect.expect("card").height();
+		let top = view.account_footer_rect.expect("card").top();
+		let x = 200.0;
+		let pos = egui::pos2(x, top);
+		frame_with_events(
+			&ctx,
+			&mut view,
+			&mut state,
+			egui::vec2(1100.0, 800.0),
+			vec![
+				egui::Event::PointerMoved(pos),
+				egui::Event::PointerButton {
+					pos,
+					button: egui::PointerButton::Primary,
+					pressed: true,
+					modifiers: egui::Modifiers::default(),
+				},
+			],
+		);
+		frame_with_events(
+			&ctx,
+			&mut view,
+			&mut state,
+			egui::vec2(1100.0, 800.0),
+			vec![egui::Event::PointerMoved(egui::pos2(x, top - 60.0))],
+		);
+		let dragged = egui::pos2(x, top - 60.0);
+		frame_with_events(
+			&ctx,
+			&mut view,
+			&mut state,
+			egui::vec2(1100.0, 800.0),
+			vec![egui::Event::PointerButton {
+				pos: dragged,
+				button: egui::PointerButton::Primary,
+				pressed: false,
+				modifiers: egui::Modifiers::default(),
+			}],
+		);
+		let after = view.account_footer_rect.expect("card").height();
+		assert!(
+			(after - base).abs() <= 1.0,
+			"the card is not resizable: {base} -> {after}"
+		);
+	}
+
+	#[test]
+	fn a_stale_stored_panel_height_does_not_survive_a_frame() {
+		let ctx = egui::Context::default();
+		ctx.set_theme(egui::ThemePreference::Dark);
+		let mut state = test_support::demo_state();
+		let mut view = MessagingUi::default();
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let base = view.account_footer_rect.expect("card").height();
+		let id = view.account_footer_panel_id.expect("panel id");
+		ctx.data_mut(|data| {
+			data.insert_persisted(
+				id,
+				egui::PanelState {
+					outer_rect: egui::Rect::from_min_size(
+						egui::pos2(0.0, 800.0 - 190.0),
+						egui::vec2(240.0, 190.0),
+					),
+				},
+			);
+		});
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let after = view.account_footer_rect.expect("card").height();
+		assert!(
+			(after - base).abs() <= 1.0,
+			"a stale stored height must be discarded: {base} -> {after}"
+		);
+	}
 }

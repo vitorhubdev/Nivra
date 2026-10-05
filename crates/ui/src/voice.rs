@@ -3019,6 +3019,7 @@ impl MessagingUi {
 			crate::anim::MEDIUM_SECS,
 		);
 		egui::Panel::top("gateway-reconnect")
+			.resizable(false)
 			.show_separator_line(false)
 			.frame(
 				egui::Frame::new()
@@ -3121,6 +3122,7 @@ impl MessagingUi {
 			crate::anim::MEDIUM_SECS,
 		);
 		egui::Panel::top("reconnect-call")
+			.resizable(false)
 			.show_separator_line(false)
 			.frame(
 				egui::Frame::new()
@@ -3212,6 +3214,7 @@ impl MessagingUi {
 				(ui.available_height() * 0.42).clamp(240.0, 340.0)
 			};
 			egui::Panel::top("dm-call")
+				.resizable(false)
 				.exact_size(height)
 				.show_separator_line(false)
 				.frame(egui::Frame::new().fill(STAGE_FILL))
@@ -3281,6 +3284,7 @@ impl MessagingUi {
 				.to_owned();
 			let unavailable = self.call_unavailable(state, channel);
 			egui::Panel::top("dm-incoming")
+				.resizable(false)
 				.show_separator_line(false)
 				.frame(
 					egui::Frame::new()

@@ -4240,6 +4240,7 @@ impl Desktop {
 			.show(ui, |ui| {
 				accent_glow(ui);
 				egui::Panel::top("sign-in-header")
+					.resizable(false)
 					.exact_size(SIGN_IN_HEADER_HEIGHT)
 					.show_separator_line(false)
 					.frame(egui::Frame::NONE)
@@ -6657,6 +6658,7 @@ impl eframe::App for Desktop {
 		if self.login.is_some() {
 			let p = ui::design::palette(ui);
 			egui::Panel::top("login-header")
+				.resizable(false)
 				.exact_size(platform::LOGIN_HEADER_HEIGHT)
 				.show_separator_line(false)
 				.frame(

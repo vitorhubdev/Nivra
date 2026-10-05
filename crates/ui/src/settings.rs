@@ -1135,6 +1135,15 @@ impl MessagingUi {
 				)),
 				&mut self.compact_timeline,
 			);
+			design::switch(
+				ui,
+				crate::i18n::text(self.language, "Reduce motion"),
+				Some(crate::i18n::text(
+					self.language,
+					"Disable hover, menu, dialog and toast animations.",
+				)),
+				&mut self.reduce_motion,
+			);
 		});
 	}
 

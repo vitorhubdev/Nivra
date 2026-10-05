@@ -89,6 +89,9 @@ pub(crate) fn activity_card(
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					let more = icons::button(ui, Icon::More, 20.0, "Activity options");
 					egui::Popup::menu(&more).show(|ui| {
+						let motion =
+							crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+						ui.set_opacity(motion);
 						if ui.button(crate::tr_ui!(ui, "Copy activity")).clicked() {
 							let mut text = activity.summary();
 							for line in [&activity.details, &activity.state].into_iter().flatten() {
@@ -1300,6 +1303,9 @@ pub fn show(
 					ui.spacing_mut().item_spacing.x = 8.0;
 					let more = header_circle(ui, Icon::More, "More", true);
 					egui::Popup::menu(&more).id(menu_id).show(|ui| {
+						let motion =
+							crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+						ui.set_opacity(motion);
 						if let Some(picked) = more_menu(ui, state, user, dm_channel) {
 							action = Some(picked);
 						}

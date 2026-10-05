@@ -2061,6 +2061,8 @@ impl Formatted {
 		}
 		if let Some(text) = ui.data(|data| data.get_temp::<Option<String>>(menu).flatten()) {
 			egui::Popup::context_menu(&response).id(menu).show(|ui| {
+				let motion = crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+				ui.set_opacity(motion);
 				if ui.button(crate::tr_ui!(ui, "Copy emoji")).clicked() {
 					ui.ctx().copy_text(text);
 					ui.close();

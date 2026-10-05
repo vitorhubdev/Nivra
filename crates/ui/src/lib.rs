@@ -597,6 +597,10 @@ pub struct MessagingUi {
 	pub transparency_blur: bool,
 	/// IRC-style single-line headers: time gutter instead of avatars, tight rows.
 	pub compact_timeline: bool,
+	/// The owner asked for reduced motion: every animation settles in one frame.
+	pub reduce_motion: bool,
+	/// Last channel drawn, so a real switch can cross-fade instead of the first open.
+	last_channel: Option<model::Id>,
 	pub transparency: u8,
 	pub blur: u8,
 	pub transparent_all: bool,
@@ -4099,6 +4103,7 @@ impl MessagingUi {
 	}
 
 	pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
+		crate::anim::set_reduce_motion(ui.ctx(), self.reduce_motion);
 		crate::i18n::store_interface_language(ui.ctx(), self.language);
 		crate::scroll::apply_preferences(ui.ctx(), self.reading_preferences);
 		if let Some(status) = state.take_user_action_status() {
@@ -4508,6 +4513,14 @@ impl MessagingUi {
 			} else {
 				self.members_narrow_open
 			};
+		// The wide members pane glides instead of popping; reduce motion settles it at once.
+		let members_open = show_members && wide_members;
+		let members_width = crate::anim::animated_height(
+			ui.ctx(),
+			egui::Id::unique("people-pane-width"),
+			if members_open { 240.0 } else { 0.0 },
+			crate::anim::LONG_SECS,
+		);
 		if search_open {
 			self.channel_header(
 				ui,
@@ -4550,53 +4563,53 @@ impl MessagingUi {
 					);
 				});
 		}
-		if show_members {
-			if state
+		if show_members
+			&& state
 				.members
 				.as_ref()
 				.is_none_or(|list| Some(list.channel) != state.selected)
-				&& let Some(command) = state.request_members()
-			{
-				commands.push(command);
-			}
-			if wide_members {
-				egui::Panel::right("people-pane")
-					.resizable(false)
-					.show_separator_line(!design::has_window_background(ui))
-					.exact_size(240.0)
-					.frame(
-						egui::Frame::new()
-							.fill(design::section_surface(
-								ui,
-								background.sidebar,
-								design::ImageSection::MemberList,
-							))
-							.inner_margin(egui::Margin {
-								left: 8,
-								right: 8,
-								top: 8,
-								bottom: 8,
-							}),
-					)
-					.show(ui, |ui| {
+			&& let Some(command) = state.request_members()
+		{
+			commands.push(command);
+		}
+		if wide_members && members_width > 0.5 {
+			egui::Panel::right("people-pane")
+				.resizable(false)
+				.show_separator_line(!design::has_window_background(ui))
+				.exact_size(members_width)
+				.frame(
+					egui::Frame::new()
+						.fill(design::section_surface(
+							ui,
+							background.sidebar,
+							design::ImageSection::MemberList,
+						))
+						.inner_margin(egui::Margin {
+							left: 8,
+							right: 8,
+							top: 8,
+							bottom: 8,
+						}),
+				)
+				.show(ui, |ui| {
+					ui.set_opacity((members_width / 240.0).clamp(0.0, 1.0));
+					self.member_rows(ui, state, &mut commands);
+				});
+		} else if show_members {
+			let response = dialog::Dialog::new("members-narrow", "Members")
+				.subtitle("Everyone with access to this conversation.")
+				.width(360.0)
+				.show(&ctx, |d| {
+					let max = (d.available_height() - 180.0).clamp(120.0, 620.0);
+					d.content(|ui| {
+						ui.set_max_height(max);
 						self.member_rows(ui, state, &mut commands);
 					});
-			} else {
-				let response = dialog::Dialog::new("members-narrow", "Members")
-					.subtitle("Everyone with access to this conversation.")
-					.width(360.0)
-					.show(&ctx, |d| {
-						let max = (d.available_height() - 180.0).clamp(120.0, 620.0);
-						d.content(|ui| {
-							ui.set_max_height(max);
-							self.member_rows(ui, state, &mut commands);
-						});
-					});
-				if response.close {
-					self.members_narrow_open = false;
-				}
+				});
+			if response.close {
+				self.members_narrow_open = false;
 			}
-		} else if state.members.is_some() {
+		} else if members_width <= 0.5 && state.members.is_some() {
 			commands.push(state.close_members());
 		}
 		self.reaction_picker.sync(state, state.selected);
@@ -4618,6 +4631,16 @@ impl MessagingUi {
 				{
 					ui.painter().rect_filled(ui.max_rect(), 0, message_surface);
 				}
+				// A channel switch cross-fades the conversation instead of cutting to it.
+				let switch_id =
+					egui::Id::unique(("channel-switch", state.selected.map_or(0, |id| id.0)));
+				if self.last_channel.is_some() && self.last_channel != state.selected {
+					crate::anim::bool_alpha(ui.ctx(), switch_id, false, 0.0);
+				}
+				self.last_channel = state.selected;
+				let switch_alpha =
+					crate::anim::bool_alpha(ui.ctx(), switch_id, true, crate::anim::MEDIUM_SECS);
+				ui.set_opacity(switch_alpha);
 				let warnings = state.startup_warnings;
 				if !warnings.presence {
 					self.friends.presence_warning_dismissed = None;

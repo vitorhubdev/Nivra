@@ -14,9 +14,9 @@ enum TargetReveal {
 	Center,
 }
 
-const REVEAL_SCROLL_SECS: f32 = 0.3;
+const REVEAL_SCROLL_SECS: f32 = crate::anim::LONG_SECS;
 /// Smooth return to the live edge from the jump-to-present control.
-const PRESENT_SCROLL_SECS: f32 = 0.32;
+const PRESENT_SCROLL_SECS: f32 = crate::anim::LONG_SECS;
 /// Screens of history a reader must leave behind before the control appears.
 const PRESENT_CONTROL_SCREENS: f32 = 6.0;
 
@@ -2438,30 +2438,43 @@ impl TimelineView {
 		if user_scroll != 0.0 {
 			self.present_scroll = None;
 		}
+		let reduced_motion = crate::anim::reduce_motion(ui.ctx());
 		// Jump to present glides back to the live edge instead of teleporting there.
 		if let Some((from, elapsed)) = &mut self.present_scroll {
-			*elapsed += crate::anim::clamp_dt(ui.input(|input| input.stable_dt));
-			let t = *elapsed / PRESENT_SCROLL_SECS;
-			if t >= 1.0 {
+			if reduced_motion {
 				offset = Some(live_edge_offset);
 				self.present_scroll = None;
 				self.follow_latest(state);
 				self.jump = false;
 			} else {
-				offset = Some(*from + (live_edge_offset - *from) * ease_out_cubic(t));
+				*elapsed += crate::anim::clamp_dt(ui.input(|input| input.stable_dt));
+				let t = *elapsed / PRESENT_SCROLL_SECS;
+				if t >= 1.0 {
+					offset = Some(live_edge_offset);
+					self.present_scroll = None;
+					self.follow_latest(state);
+					self.jump = false;
+				} else {
+					offset = Some(*from + (live_edge_offset - *from) * ease_out_cubic(t));
+				}
+				ui.ctx().request_repaint();
 			}
-			ui.ctx().request_repaint();
 		}
 		if let Some(motion) = &mut self.reveal_scroll {
-			motion.elapsed += crate::anim::clamp_dt(ui.input(|input| input.stable_dt));
-			let t = motion.elapsed / REVEAL_SCROLL_SECS;
 			let to = centered_offset(&self.rows, motion.target, area.height(), packed);
-			if t >= 1.0 {
+			if reduced_motion {
 				offset = Some(to);
 				self.reveal_scroll = None;
 			} else {
-				offset = Some(motion.from + (to - motion.from) * ease_out_cubic(t));
-				ui.ctx().request_repaint();
+				motion.elapsed += crate::anim::clamp_dt(ui.input(|input| input.stable_dt));
+				let t = motion.elapsed / REVEAL_SCROLL_SECS;
+				if t >= 1.0 {
+					offset = Some(to);
+					self.reveal_scroll = None;
+				} else {
+					offset = Some(motion.from + (to - motion.from) * ease_out_cubic(t));
+					ui.ctx().request_repaint();
+				}
 			}
 		}
 		if autoscroll_delta != 0.0 {
@@ -2663,7 +2676,16 @@ impl TimelineView {
 						);
 					}
 					if self.unread_boundary == Some(id) {
-						divider(ui, "New messages".into(), true);
+						let alpha = crate::anim::bool_alpha(
+							ui.ctx(),
+							ui.scope_id().with("new-messages"),
+							true,
+							crate::anim::MEDIUM_SECS,
+						);
+						ui.scope(|ui| {
+							ui.set_opacity(alpha);
+							divider(ui, "New messages".into(), true);
+						});
 					}
 					let colors = crate::design::palette(ui);
 					let background = ui.painter().add(egui::Shape::Noop);
@@ -3489,7 +3511,7 @@ impl TimelineView {
 						ui.ctx(),
 						ui.scope_id().with("batch-select-col"),
 						self.select_mode,
-						0.15,
+						crate::anim::SHORT_SECS,
 					);
 					if select_alpha > 0.01 {
 						let hit = rect;
@@ -4236,7 +4258,7 @@ impl TimelineView {
 			ui.ctx(),
 			ui.scope_id().with("select-bar-h"),
 			if show_bar { 78.0 } else { 0.0 },
-			0.18,
+			crate::anim::LONG_SECS,
 		);
 		if bar_h >= 1.0 {
 			let height = bar_h;
@@ -4249,7 +4271,7 @@ impl TimelineView {
 				ui.ctx(),
 				ui.scope_id().with("batch-bar-anim"),
 				self.select_mode,
-				0.15,
+				crate::anim::LONG_SECS,
 			);
 			let offset_y = (1.0 - bar_alpha) * 12.0;
 			let rect = egui::Rect::from_min_size(

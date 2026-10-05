@@ -52,6 +52,8 @@ pub(crate) fn show(
 				.corner_radius(10),
 		)
 		.show(|ui| {
+			let motion = crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+			ui.set_opacity(motion);
 			let custom = emoji::custom_prefix(text);
 			let source = custom.and_then(|(id, _)| {
 				guilds.iter().find_map(|guild| {

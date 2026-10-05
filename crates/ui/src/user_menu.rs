@@ -144,8 +144,10 @@ pub(super) fn show_with_pin(
 	action: &mut Option<Action>,
 	view: Option<ShortcutView<'_>>,
 ) {
-	popup(response, egui::Popup::default_response_id(response))
-		.show(|ui| contents(ui, state, user, profile, action, view));
+	popup(response, egui::Popup::default_response_id(response)).show(|ui| {
+		crate::anim::popup_motion(ui);
+		contents(ui, state, user, profile, action, view)
+	});
 }
 
 /// Guild of the channel the menu was opened from; `None` in DMs and elsewhere

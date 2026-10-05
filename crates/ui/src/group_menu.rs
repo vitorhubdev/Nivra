@@ -120,8 +120,12 @@ impl GroupMenu {
 		channel: &Channel,
 		view: ShortcutView<'_>,
 	) {
-		crate::user_menu::popup(response, response.id.with((state.generation, channel.id)))
-			.show(|ui| self.menu(ui, state, channel, view));
+		crate::user_menu::popup(response, response.id.with((state.generation, channel.id))).show(
+			|ui| {
+				crate::anim::popup_motion(ui);
+				self.menu(ui, state, channel, view)
+			},
+		);
 	}
 	pub fn dropdown(
 		&mut self,
@@ -133,7 +137,10 @@ impl GroupMenu {
 		let response = icons::button(ui, icons::Icon::More, 28.0, "Group menu");
 		egui::Popup::menu(&response)
 			.id(response.id.with((state.generation, channel.id)))
-			.show(|ui| self.menu(ui, state, channel, view));
+			.show(|ui| {
+				crate::anim::popup_motion(ui);
+				self.menu(ui, state, channel, view)
+			});
 	}
 	pub fn accept_icon(
 		&mut self,

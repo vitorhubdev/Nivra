@@ -71,6 +71,7 @@ impl Toasts {
 			return;
 		}
 		let now = ctx.input(|input| input.time);
+		let reduced = crate::anim::reduce_motion(ctx);
 		let colors = design::palette_for(ctx);
 		let shadow = ctx.style_of(ctx.theme()).visuals.window_shadow;
 		let mut offset = top;
@@ -87,11 +88,18 @@ impl Toasts {
 				design::Level::Error => (colors.danger, icons::Icon::ShieldWarning),
 			};
 			let mut dismissed = false;
+			let enter = crate::anim::popup_alpha(ctx, egui::Id::unique(("toast-in", toast.id)));
 			let response = egui::Area::new(egui::Id::unique(("toast", toast.id)))
 				.anchor(Align2::CENTER_TOP, egui::vec2(0.0, offset))
 				.order(egui::Order::Foreground)
 				.show(ctx, |ui| {
-					ui.set_opacity((remaining / FADE).clamp(0.0, 1.0) as f32);
+					// Reduced motion still removes the toast at its deadline, but without the tail.
+					let tail = if reduced {
+						1.0
+					} else {
+						(remaining / FADE).clamp(0.0, 1.0) as f32
+					};
+					ui.set_opacity(enter * tail);
 					egui::Frame::new()
 						.fill(colors.raised.to_opaque())
 						.stroke(Stroke::new(1.0, tint.gamma_multiply(0.55)))
@@ -153,11 +161,12 @@ impl Toasts {
 		// A resting toast is a still image, so sleep until the soonest fade begins and
 		// only then drive frames; repainting for the whole lifetime burns a CPU core to
 		// redraw the same pixels. Hovering pushes its deadline out and reschedules here.
+		let lead = if reduced { 0.0 } else { FADE };
 		let fade_in = self
 			.items
 			.iter()
 			.filter_map(|toast| toast.deadline)
-			.map(|deadline| deadline - FADE - now)
+			.map(|deadline| deadline - lead - now)
 			.fold(f64::INFINITY, f64::min);
 		if fade_in <= 0.0 {
 			ctx.request_repaint();

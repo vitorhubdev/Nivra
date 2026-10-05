@@ -124,10 +124,12 @@ impl Dialog {
 		let available = ctx.content_rect().size();
 		let width = width.min(available.x - 32.0).max(200.0);
 		let mut close = false;
+		let open = crate::anim::popup_alpha(ctx, id.with("dialog-motion"));
 		let modal = egui::Modal::new(id)
 			.backdrop_color(backdrop(ctx))
 			.frame(frame(ctx))
 			.show(ctx, |ui| {
+				ui.set_opacity(open);
 				ui.set_width(width);
 				ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
 				ui.spacing_mut().item_spacing.y = 8.0;

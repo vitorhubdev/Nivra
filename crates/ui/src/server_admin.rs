@@ -449,6 +449,11 @@ impl Admin {
 											"Emoji actions",
 										);
 										egui::Popup::menu(&button).show(|ui| {
+											let motion = crate::anim::popup_alpha(
+												ui.ctx(),
+												ui.scope_id().with("menu-motion"),
+											);
+											ui.set_opacity(motion);
 											if ui.button(crate::tr_ui!(ui, "Rename")).clicked() {
 												self.dialog = Some(Dialog::Rename {
 													id: row.emoji.id,
@@ -770,6 +775,11 @@ impl Admin {
 								let button =
 									icons::button(ui, icons::Icon::More, 24.0, "Member actions");
 								egui::Popup::menu(&button).show(|ui| {
+									let motion = crate::anim::popup_alpha(
+										ui.ctx(),
+										ui.scope_id().with("menu-motion"),
+									);
+									ui.set_opacity(motion);
 									self.member_menu(
 										ui,
 										state,
@@ -870,6 +880,9 @@ impl Admin {
 					});
 					let button = icons::button(ui, icons::Icon::More, 28.0, "Member actions");
 					egui::Popup::menu(&button).show(|ui| {
+						let motion =
+							crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+						ui.set_opacity(motion);
 						self.member_menu(ui, state, guild, member, roles, profile, action)
 					});
 				})

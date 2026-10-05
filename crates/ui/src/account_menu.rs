@@ -175,6 +175,8 @@ impl MessagingUi {
 					.corner_radius(10),
 			)
 			.show(|ui| {
+				let motion = crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+				ui.set_opacity(motion);
 				ui.set_width(340.0);
 				let height = (ui.ctx().content_rect().height() - 90.0).clamp(180.0, 620.0);
 				egui::ScrollArea::vertical()

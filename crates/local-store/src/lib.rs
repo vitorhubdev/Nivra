@@ -53,6 +53,9 @@ pub struct AppPreferences {
 	/// IRC-style compact timeline (time gutter, no avatars, tight rows).
 	#[serde(default)]
 	pub compact_timeline: bool,
+	/// Off for older preferences; every UI animation settles in one frame when set.
+	#[serde(default)]
+	pub reduce_motion: bool,
 	pub hide_title_bar: bool,
 	pub language: model::Language,
 	/// False until the owner picks a language or the first launch copies the system language.
@@ -153,6 +156,7 @@ impl Default for AppPreferences {
 			hide_offline_members: false,
 			hide_bot_dms: false,
 			compact_timeline: false,
+			reduce_motion: false,
 			hide_title_bar: false,
 			language: Default::default(),
 			language_chosen: false,

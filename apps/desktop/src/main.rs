@@ -4130,7 +4130,42 @@ impl Desktop {
 	}
 	/// Restore screen for returning accounts: no sign-in controls, just the stage,
 	/// an indeterminate bar and a way out to the welcome screen.
+	/// Startup diagnostics banner for the signed-out screens, which do not render
+	/// `MessagingUi::show` (Codex #89 P2).
+	fn diagnostic_notice(&mut self, ui: &mut egui::Ui) {
+		let colors = ui::design::palette(ui);
+		let language = self.messaging.language;
+		let warning = self.messaging.dll_warning.clone();
+		let mut dismiss_dll = false;
+		if let Some(text) = &warning {
+			egui::Frame::new()
+				.inner_margin(egui::Margin::symmetric(16, 6))
+				.show(ui, |ui| {
+					ui.horizontal_wrapped(|ui| {
+						ui.colored_label(colors.warning, text);
+						if ui
+							.small_button(ui::i18n::text(language, "Copy details"))
+							.clicked()
+						{
+							ui.ctx()
+								.copy_text(self.messaging.dll_warning_details.clone());
+						}
+						if ui
+							.small_button(ui::i18n::text(language, "Dismiss"))
+							.clicked()
+						{
+							dismiss_dll = true;
+						}
+					});
+				});
+		}
+		if dismiss_dll {
+			self.messaging.dll_warning = None;
+		}
+	}
+
 	fn restoring_screen(&mut self, ui: &mut egui::Ui, stage: &'static str) {
+		self.diagnostic_notice(ui);
 		let p = ui::design::palette(ui);
 		egui::CentralPanel::default()
 			.frame(egui::Frame::NONE.fill(ui::design::window_palette(ui).canvas))
@@ -4276,6 +4311,7 @@ impl Desktop {
 		}
 	}
 	fn sign_in_screen(&mut self, ui: &mut egui::Ui) {
+		self.diagnostic_notice(ui);
 		let p = ui::design::palette(ui);
 		egui::CentralPanel::default()
 			.frame(egui::Frame::NONE.fill(ui::design::window_palette(ui).canvas))

@@ -70,13 +70,19 @@ pub fn foreign_module_paths(
 		.to_string_lossy()
 		.to_ascii_lowercase();
 	let exe_dir = exe_dir.to_string_lossy().to_ascii_lowercase();
+	// Compare on component boundaries: `C:\Apps\Nivra-old` must not be trusted just
+	// because it starts with `C:\Apps\Nivra` (Codex #89 P2).
+	let trusted = |path: &str, prefix: &str| {
+		path == prefix
+			|| path
+				.strip_prefix(prefix)
+				.is_some_and(|rest| rest.starts_with(['\\', '/']))
+	};
 	let mut foreign: Vec<String> = modules
 		.into_iter()
 		.filter(|module| {
 			let path = module.to_ascii_lowercase();
-			!path.starts_with(&system32)
-				&& !path.starts_with(&winsxs)
-				&& !path.starts_with(&exe_dir)
+			!trusted(&path, &system32) && !trusted(&path, &winsxs) && !trusted(&path, &exe_dir)
 		})
 		.collect();
 	foreign.sort();
@@ -184,10 +190,17 @@ mod tests {
 			r"C:\Apps\Nivra\helper.dll".to_string(),
 			r"C:\Users\Public\planted.dll".to_string(),
 			r"C:\Users\Public\planted.dll".to_string(),
+			// Sibling directories are not the trusted directory itself.
+			r"C:\Windows\System32-old\hook.dll".to_string(),
+			r"C:\Apps\Nivra-old\hook.dll".to_string(),
 		];
 		assert_eq!(
 			foreign_module_paths(&exe_dir, modules),
-			vec![r"C:\Users\Public\planted.dll".to_string()]
+			vec![
+				r"C:\Apps\Nivra-old\hook.dll".to_string(),
+				r"C:\Users\Public\planted.dll".to_string(),
+				r"C:\Windows\System32-old\hook.dll".to_string(),
+			]
 		);
 	}
 }

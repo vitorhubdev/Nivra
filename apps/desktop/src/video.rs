@@ -1552,21 +1552,23 @@ mod player_tests {
 		let poster_ms = wait(Duration::from_secs(2), "poster frame", &|update| {
 			update.frame.is_some() && update.state == VideoState::Paused
 		});
-		// Play: audio is decoded into the null sink and the position advances.
+		// Seek while still paused: the worker consumes the flag at the top of its loop
+		// before playback can reach the end, so the jump is observed deterministically
+		// even when a starved test thread misses the early position (macOS main flake).
+		session.seek.store(1500, Ordering::Release);
+		wait(Duration::from_secs(3), "seek to 1.5 s", &|update| {
+			(1.45..1.75).contains(&update.position) && update.frame.is_some()
+		});
+		// Play: audio is decoded into the null sink and the position advances past the jump.
 		session.paused.store(false, Ordering::Release);
 		wait(Duration::from_secs(4), "position with sound", &|update| {
-			update.position > 0.4
+			update.position > 1.6
 		});
 		let audio_frames = output::NULL_SINK_FRAMES.load(Ordering::Acquire);
 		assert!(
 			audio_frames > 480,
 			"decoded audio reached the sink: {audio_frames}"
 		);
-		// Seek: the player jumps and keeps rendering frames after the jump.
-		session.seek.store(1500, Ordering::Release);
-		wait(Duration::from_secs(3), "seek to 1.5 s", &|update| {
-			(1.45..1.75).contains(&update.position) && update.frame.is_some()
-		});
 		// Ends on its own and releases the worker.
 		wait(Duration::from_secs(6), "clip end", &|update| {
 			update.state == VideoState::Ended

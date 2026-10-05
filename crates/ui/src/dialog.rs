@@ -580,4 +580,67 @@ mod tests {
 		}
 		assert!(!confirmed, "one frame must not enable without both steps");
 	}
+
+	#[test]
+	fn confirm_needs_an_explicit_choice_and_danger_labels_it() {
+		use egui_kittest::kittest::Queryable as _;
+		struct Fixture {
+			choice: Option<Choice>,
+		}
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				|ui, fixture: &mut Fixture| {
+					if fixture.choice.is_none()
+						&& let Some(choice) =
+							Confirm::new("ux-confirm", "Delete message", "This cannot be undone.")
+								.danger()
+								.confirm_label("Delete")
+								.show(ui.ctx())
+					{
+						fixture.choice = Some(choice);
+					}
+				},
+				Fixture { choice: None },
+			);
+		harness.run();
+		assert_eq!(harness.state().choice, None, "no choice before a click");
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Delete")
+			.click();
+		harness.run();
+		assert_eq!(harness.state().choice, Some(Choice::Confirmed));
+	}
+
+	#[test]
+	fn confirm_cancel_reports_cancelled() {
+		use egui_kittest::kittest::Queryable as _;
+		struct Fixture {
+			choice: Option<Choice>,
+		}
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				|ui, fixture: &mut Fixture| {
+					if fixture.choice.is_none()
+						&& let Some(choice) = Confirm::new(
+							"ux-confirm-cancel",
+							"Leave server",
+							"You will need a new invite.",
+						)
+						.confirm_label("Leave")
+						.show(ui.ctx())
+					{
+						fixture.choice = Some(choice);
+					}
+				},
+				Fixture { choice: None },
+			);
+		harness.run();
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Cancel")
+			.click();
+		harness.run();
+		assert_eq!(harness.state().choice, Some(Choice::Cancelled));
+	}
 }

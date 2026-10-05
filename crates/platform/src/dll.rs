@@ -60,28 +60,24 @@ pub fn foreign_module_paths(
 	let windows = std::env::var_os("SystemRoot")
 		.map(PathBuf::from)
 		.unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-	// Windows paths are case-insensitive; compare canonical lowercase prefixes.
-	let system32 = windows
-		.join("System32")
-		.to_string_lossy()
-		.to_ascii_lowercase();
-	let winsxs = windows
-		.join("WinSxS")
-		.to_string_lossy()
-		.to_ascii_lowercase();
-	let exe_dir = exe_dir.to_string_lossy().to_ascii_lowercase();
-	// Compare on component boundaries: `C:\Apps\Nivra-old` must not be trusted just
-	// because it starts with `C:\Apps\Nivra` (Codex #89 P2).
+	// Windows paths are case-insensitive and may use either separator; normalize both so
+	// the same classification runs in tests on Unix, where `Path::join` uses `/`.
+	let normalize = |path: &str| path.replace('\\', "/").to_ascii_lowercase();
+	let system32 = normalize(&windows.join("System32").to_string_lossy());
+	let winsxs = normalize(&windows.join("WinSxS").to_string_lossy());
+	let exe_dir = normalize(&exe_dir.to_string_lossy());
+	// Compare on component boundaries: `C:/Apps/Nivra-old` must not be trusted just
+	// because it starts with `C:/Apps/Nivra` (Codex #89 P2).
 	let trusted = |path: &str, prefix: &str| {
 		path == prefix
 			|| path
 				.strip_prefix(prefix)
-				.is_some_and(|rest| rest.starts_with(['\\', '/']))
+				.is_some_and(|rest| rest.starts_with('/'))
 	};
 	let mut foreign: Vec<String> = modules
 		.into_iter()
 		.filter(|module| {
-			let path = module.to_ascii_lowercase();
+			let path = normalize(module);
 			!trusted(&path, &system32) && !trusted(&path, &winsxs) && !trusted(&path, &exe_dir)
 		})
 		.collect();

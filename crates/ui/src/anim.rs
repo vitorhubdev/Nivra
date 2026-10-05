@@ -22,6 +22,7 @@ pub const LONG_SECS: f32 = 0.34;
 pub const SHORT: std::time::Duration = std::time::Duration::from_millis(120);
 pub const MEDIUM: std::time::Duration = std::time::Duration::from_millis(220);
 pub const LONG: std::time::Duration = std::time::Duration::from_millis(340);
+const _: () = assert!(SHORT_SECS < MEDIUM_SECS && MEDIUM_SECS < LONG_SECS);
 /// Trailing toast fade, counted inside the lifetime.
 pub const FADE_SECS: f64 = MEDIUM_SECS as f64;
 /// Speaking ring fade-in duration.
@@ -207,7 +208,6 @@ mod tests {
 	fn motion_tokens_cover_short_medium_and_long() {
 		assert_eq!(SPEAKING_RING_ENTER_SECS, SHORT_SECS);
 		assert_eq!(SPEAKING_RING_EXIT_SECS, MEDIUM_SECS);
-		assert!(SHORT_SECS < MEDIUM_SECS && MEDIUM_SECS < LONG_SECS);
 		assert_eq!(SHORT.as_secs_f32(), SHORT_SECS);
 		assert_eq!(MEDIUM.as_secs_f32(), MEDIUM_SECS);
 		assert_eq!(LONG.as_secs_f32(), LONG_SECS);

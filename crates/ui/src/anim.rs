@@ -94,6 +94,9 @@ pub fn bool_alpha(ctx: &egui::Context, id: egui::Id, value: bool, time: f32) -> 
 /// repaints once reached. With reduce motion the target is returned immediately.
 pub fn animated_height(ctx: &egui::Context, id: egui::Id, target: f32, time: f32) -> f32 {
 	if reduce_motion(ctx) {
+		// Keep egui's stored value in sync so turning reduce motion off later does
+		// not pop from a stale position (Codex #83 P2).
+		let _ = ctx.animate_value_with_time(id, target, 0.0);
 		return target;
 	}
 	ctx.animate_value_with_time(id, target, time)
@@ -211,6 +214,18 @@ mod tests {
 		assert_eq!(SHORT.as_secs_f32(), SHORT_SECS);
 		assert_eq!(MEDIUM.as_secs_f32(), MEDIUM_SECS);
 		assert_eq!(LONG.as_secs_f32(), LONG_SECS);
+	}
+
+	#[test]
+	fn reduce_motion_keeps_the_stored_height_in_sync() {
+		let ctx = egui::Context::default();
+		let id = egui::Id::unique("reduce-motion-sync");
+		set_reduce_motion(&ctx, true);
+		assert_eq!(animated_height(&ctx, id, 240.0, LONG_SECS), 240.0);
+		assert_eq!(animated_height(&ctx, id, 0.0, LONG_SECS), 0.0);
+		set_reduce_motion(&ctx, false);
+		// Without the stored-value sync this would interpolate from 240 and pop.
+		assert_eq!(animated_height(&ctx, id, 0.0, LONG_SECS), 0.0);
 	}
 
 	#[test]

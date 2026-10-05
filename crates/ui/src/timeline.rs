@@ -2438,30 +2438,43 @@ impl TimelineView {
 		if user_scroll != 0.0 {
 			self.present_scroll = None;
 		}
+		let reduced_motion = crate::anim::reduce_motion(ui.ctx());
 		// Jump to present glides back to the live edge instead of teleporting there.
 		if let Some((from, elapsed)) = &mut self.present_scroll {
-			*elapsed += crate::anim::clamp_dt(ui.input(|input| input.stable_dt));
-			let t = *elapsed / PRESENT_SCROLL_SECS;
-			if t >= 1.0 {
+			if reduced_motion {
 				offset = Some(live_edge_offset);
 				self.present_scroll = None;
 				self.follow_latest(state);
 				self.jump = false;
 			} else {
-				offset = Some(*from + (live_edge_offset - *from) * ease_out_cubic(t));
+				*elapsed += crate::anim::clamp_dt(ui.input(|input| input.stable_dt));
+				let t = *elapsed / PRESENT_SCROLL_SECS;
+				if t >= 1.0 {
+					offset = Some(live_edge_offset);
+					self.present_scroll = None;
+					self.follow_latest(state);
+					self.jump = false;
+				} else {
+					offset = Some(*from + (live_edge_offset - *from) * ease_out_cubic(t));
+				}
+				ui.ctx().request_repaint();
 			}
-			ui.ctx().request_repaint();
 		}
 		if let Some(motion) = &mut self.reveal_scroll {
-			motion.elapsed += crate::anim::clamp_dt(ui.input(|input| input.stable_dt));
-			let t = motion.elapsed / REVEAL_SCROLL_SECS;
 			let to = centered_offset(&self.rows, motion.target, area.height(), packed);
-			if t >= 1.0 {
+			if reduced_motion {
 				offset = Some(to);
 				self.reveal_scroll = None;
 			} else {
-				offset = Some(motion.from + (to - motion.from) * ease_out_cubic(t));
-				ui.ctx().request_repaint();
+				motion.elapsed += crate::anim::clamp_dt(ui.input(|input| input.stable_dt));
+				let t = motion.elapsed / REVEAL_SCROLL_SECS;
+				if t >= 1.0 {
+					offset = Some(to);
+					self.reveal_scroll = None;
+				} else {
+					offset = Some(motion.from + (to - motion.from) * ease_out_cubic(t));
+					ui.ctx().request_repaint();
+				}
 			}
 		}
 		if autoscroll_delta != 0.0 {

@@ -245,7 +245,7 @@ impl Downloads {
 						.record_download(attachment.id, path, attachment.size)
 						.is_err()
 					{
-						eprintln!("Nivra: download registry write failed");
+						platform::diagnostics::warn("download registry write failed");
 					}
 				}
 				publish(match result {
@@ -666,10 +666,10 @@ async fn fetch_preview_url(
 		.send()
 		.await
 		.map_err(|_| {
-			eprintln!(
-				"Nivra: text preview refused: host={} status=send-failed",
+			platform::diagnostics::warn(&format!(
+				"text preview refused: host={} status=send-failed",
 				url.host_str().unwrap_or("?")
-			);
+			));
 			PreviewError::Refused("Preview request failed")
 		})?;
 	let status = response.status();
@@ -679,15 +679,15 @@ async fn fetch_preview_url(
 			.get(reqwest::header::LOCATION)
 			.and_then(|value| value.to_str().ok())
 			.and_then(|raw| url.join(raw).ok());
-		eprintln!(
-			"Nivra: text preview redirect: host={} status={} location-host={}",
+		platform::diagnostics::info(&format!(
+			"text preview redirect: host={} status={} location-host={}",
 			url.host_str().unwrap_or("?"),
 			status.as_u16(),
 			location
 				.as_ref()
 				.and_then(|to| to.host_str())
 				.unwrap_or("?")
-		);
+		));
 		let Some(to) = location else {
 			return Err(PreviewError::Refused("Preview redirect is invalid"));
 		};
@@ -700,19 +700,19 @@ async fn fetch_preview_url(
 		|| status == reqwest::StatusCode::NOT_FOUND
 		|| status == reqwest::StatusCode::GONE
 	{
-		eprintln!(
-			"Nivra: text preview refused: host={} status={}",
+		platform::diagnostics::warn(&format!(
+			"text preview refused: host={} status={}",
 			url.host_str().unwrap_or("?"),
 			status.as_u16()
-		);
+		));
 		return Err(PreviewError::Expired);
 	}
 	if status != reqwest::StatusCode::OK {
-		eprintln!(
-			"Nivra: text preview refused: host={} status={}",
+		platform::diagnostics::warn(&format!(
+			"text preview refused: host={} status={}",
 			url.host_str().unwrap_or("?"),
 			status.as_u16()
-		);
+		));
 		return Err(PreviewError::Refused(
 			"Preview unavailable; reload the conversation",
 		));

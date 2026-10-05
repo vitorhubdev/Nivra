@@ -74,6 +74,8 @@ fn main() -> eframe::Result {
 	// Before any runtime LoadLibrary: imports and runtime loads resolve from System32 only.
 	#[cfg(windows)]
 	platform::dll::harden_search_path();
+	// A failure report from the previous run is shown once, after the window opens.
+	platform::diagnostics::install_panic_hook();
 	discord_api::ensure_tls_provider();
 	// Parse locale tables before the first frame so a translated language
 	// never pays table parsing inside the render path.
@@ -2167,6 +2169,12 @@ impl Desktop {
 	/// Startup DLL diagnostics: log loaded modules outside the system and app folders,
 	/// and raise one non-blocking banner when a system-named DLL sits next to the exe.
 	fn install_dll_report(&mut self) {
+		if let Some(report) = platform::diagnostics::take_crash_report() {
+			self.messaging.crash_report = Some(
+				ui::i18n::text(self.messaging.language, "Nivra closed unexpectedly").to_owned(),
+			);
+			self.messaging.crash_details = report;
+		}
 		#[cfg(windows)]
 		{
 			let (planted, foreign) = platform::dll::startup_report();
@@ -6454,6 +6462,18 @@ impl eframe::App for Desktop {
 			self.poll_voice(ctx);
 		}
 		self.pump_call_cues(ctx);
+		if self.messaging.copy_log_requested {
+			self.messaging.copy_log_requested = false;
+			ctx.copy_text(platform::diagnostics::summary());
+			self.messaging.toasts.push(
+				ui::design::Level::Success,
+				ui::i18n::text(self.messaging.language, "Log copied"),
+			);
+		}
+		if self.messaging.open_logs_requested {
+			self.messaging.open_logs_requested = false;
+			platform::diagnostics::open_log_folder();
+		}
 		if let Some(alert) = self.notification_runtime.poll(
 			&mut self.state,
 			&mut self.messaging,

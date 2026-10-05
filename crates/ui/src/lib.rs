@@ -609,6 +609,14 @@ pub struct MessagingUi {
 	pub dll_warning: Option<String>,
 	/// Copyable details for the warning (paths only, never contents).
 	pub dll_warning_details: String,
+	/// Report from the previous run that ended in a panic, shown once at startup.
+	pub crash_report: Option<String>,
+	/// Copyable crash details (version, thread, backtrace).
+	pub crash_details: String,
+	/// Set by the Help page; the host copies the redacted log and toasts.
+	pub copy_log_requested: bool,
+	/// Set by the Help page; the host opens the log folder.
+	pub open_logs_requested: bool,
 	pub transparency: u8,
 	pub blur: u8,
 	pub transparent_all: bool,
@@ -4713,6 +4721,32 @@ impl MessagingUi {
 				}
 				if dismiss_dll_warning {
 					self.dll_warning = None;
+				}
+				let crash_report = self.crash_report.clone();
+				let mut dismiss_crash_report = false;
+				if let Some(report) = &crash_report {
+					egui::Frame::new()
+						.inner_margin(egui::Margin::symmetric(16, 6))
+						.show(ui, |ui| {
+							ui.horizontal_wrapped(|ui| {
+								ui.colored_label(colors.warning, report);
+								if ui
+									.small_button(crate::i18n::text(self.language, "Copy report"))
+									.clicked()
+								{
+									ui.ctx().copy_text(self.crash_details.clone());
+								}
+								if ui
+									.small_button(crate::i18n::text(self.language, "Dismiss"))
+									.clicked()
+								{
+									dismiss_crash_report = true;
+								}
+							});
+						});
+				}
+				if dismiss_crash_report {
+					self.crash_report = None;
 				}
 				self.gateway_reconnect_banner(ui, state);
 				self.reconnect_call_banner(ui, state, &mut commands);

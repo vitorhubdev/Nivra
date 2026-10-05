@@ -80,7 +80,7 @@ impl Hider {
 		// Local socket traffic stays off the render thread; a stalled compositor must not stall the UI.
 		std::thread::spawn(move || {
 			if let Err(error) = command(&socket) {
-				eprintln!("Hyprland window hiding failed: {error}");
+				crate::diagnostics::warn(&format!("Hyprland window hiding failed: {error}"));
 			}
 		});
 	}

@@ -184,9 +184,11 @@ mod tests {
 	#[test]
 	fn rotation_and_bounds() {
 		assert!(check_dimensions(1920, 1080).is_ok());
-		assert!(check_dimensions(1921, 1).is_err());
-		assert!(check_dimensions(1920, 1920).is_err());
+		// Large frames are scaled now, so only absurd dimensions are refused.
+		assert!(check_dimensions(1921, 1).is_ok());
+		assert!(check_dimensions(1920, 1920).is_ok());
 		assert!(check_dimensions(0, 1).is_err());
+		assert!(check_dimensions(MAX_DECODE_EDGE + 1, 1).is_err());
 		// A 2x1 frame with distinct pixels rotates into a 1x2 column.
 		let frame = [1, 1, 1, 255, 2, 2, 2, 255];
 		assert_eq!(

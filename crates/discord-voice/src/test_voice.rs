@@ -344,3 +344,146 @@ fn dave_proposals_must_add_the_peer_never_self() {
 	let self_add = server.add_proposal(&group, &a2.key_package().unwrap());
 	assert!(a2.proposals(&self_add).is_err());
 }
+
+/// Drives one synthetic voice session to the connected state, closes it with `code` and
+/// reports what the transport did: `Ok(())` when it reconnected and sent resume op 7,
+/// `Err(reason)` when it ended, with the app-visible reason.
+async fn close_behaviour(code: Option<u16>) -> Result<(), &'static str> {
+	use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+	let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let url = format!("ws://{}", listener.local_addr().unwrap());
+	let delivery = crate::test_mls::Delivery::new();
+	let (_capture_tx, capture_rx) = std::sync::mpsc::sync_channel(8);
+	let (playback_tx, _playback_rx) = std::sync::mpsc::sync_channel(8);
+	let (_controls_tx, controls_rx) = tokio::sync::watch::channel(Controls::default());
+	let (status_tx, mut status_rx) = tokio::sync::mpsc::channel(64);
+	let client_url = url.clone();
+	let mut client = tokio::spawn(async move {
+		run_inner(
+			credentials(1, 2),
+			capture_rx,
+			playback_tx,
+			controls_rx,
+			None,
+			None,
+			None,
+			move |status| status_tx.try_send(status).map_err(|_| ()),
+			Identity::generate(),
+			client_url,
+			true,
+		)
+		.await
+	});
+	let (mut ws, _udp, _addr, _package) = voice_connect(&listener, &delivery, 1, 41).await;
+	// The close must arrive after SESSION_DESCRIPTION so resume is actually allowed.
+	loop {
+		match timeout(Duration::from_secs(8), status_rx.recv()).await {
+			// Wait for the last notice of op 4 handling so the close races nothing.
+			Ok(Some(Status::Securing)) => break,
+			Ok(Some(_)) => {}
+			Ok(None) | Err(_) => panic!("client never reached the secured state"),
+		}
+	}
+	if let Some(code) = code {
+		ws.send(Message::Close(Some(CloseFrame {
+			code: CloseCode::from(code),
+			reason: "".into(),
+		})))
+		.await
+		.unwrap();
+		// Keep the socket alive until the outcome; dropping it with unread data would send
+		// an RST that races the flushed close frame and looks like a network drop.
+	} else {
+		// Without a close frame this is the RFC's abnormal closure (1006): the socket ends.
+		drop(ws);
+	}
+	match close_disposition(code) {
+		CloseDisposition::Resume => {
+			// The session survives: a new socket must carry resume op 7.
+			let resumed = match timeout(Duration::from_secs(10), listener.accept()).await {
+				Ok(accepted) => accepted.unwrap(),
+				Err(_) => {
+					if let Ok(result) = client.await {
+						panic!("resume connection timed out; client ended with {result:?}");
+					}
+					panic!("resume connection timed out; client is still running");
+				}
+			};
+			let mut resumed = tokio_tungstenite::accept_async(resumed.0).await.unwrap();
+			let frame = timeout(Duration::from_secs(5), message(&mut resumed))
+				.await
+				.expect("resume frame timed out");
+			let value: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+			assert_eq!(value["op"], 7, "expected resume op 7: {value}");
+			client.abort();
+			Ok(())
+		}
+		_ => {
+			let result = match timeout(Duration::from_secs(10), &mut client).await {
+				Ok(result) => result.expect("client task panicked"),
+				Err(_) => {
+					client.abort();
+					let mut pending = Vec::new();
+					while let Ok(status) = status_rx.try_recv() {
+						pending.push(match status {
+							Status::Connecting => "connecting",
+							Status::Discovering => "discovering",
+							Status::TransportReady => "transport-ready",
+							Status::CameraAvailable(_) => "camera",
+							Status::Securing => "securing",
+							Status::WaitingForPeer => "waiting-for-peer",
+							Status::Ready { .. } => "ready",
+							Status::Ping(_) => "ping",
+							Status::RemoteAudio => "remote-audio",
+							Status::Speaking(_) => "speaking",
+							Status::TransportOnly => "transport-only",
+							Status::Resuming { .. } => "resuming",
+							Status::Closed { .. } => "closed",
+						});
+					}
+					panic!("terminal close timed out with pending {pending:?}");
+				}
+			};
+			let error = result.expect_err("a terminal close must end the transport");
+			if let Some(code) = code {
+				assert!(
+					error.contains(&code.to_string()),
+					"code {code} must be named in {error:?}"
+				);
+			}
+			Err(error)
+		}
+	}
+}
+
+#[tokio::test]
+async fn close_codes_drive_resume_or_terminal_end() {
+	// 1000/1001 preserve the session; a dropped socket is the 1006 abnormal closure.
+	// 4015 is the crashed voice server. Every terminal code names itself.
+	for code in [Some(1000), Some(1001), None, Some(4015)] {
+		close_behaviour(code).await.expect("resume path");
+	}
+	for code in [Some(4006), Some(4009), Some(4014), Some(4021), Some(4022)] {
+		close_behaviour(code).await.expect_err("terminal path");
+	}
+}
+
+#[test]
+fn close_code_table_matches_the_discord_documentation() {
+	assert_eq!(close_disposition(None), CloseDisposition::Resume);
+	for code in [1000, 1001, 1006, 4015] {
+		assert_eq!(close_disposition(Some(code)), CloseDisposition::Resume);
+	}
+	for code in [4006, 4009] {
+		assert_eq!(
+			close_disposition(Some(code)),
+			CloseDisposition::SessionExpired
+		);
+	}
+	assert_eq!(
+		close_disposition(Some(4014)),
+		CloseDisposition::Disconnected
+	);
+	assert_eq!(close_disposition(Some(4021)), CloseDisposition::RateLimited);
+	assert_eq!(close_disposition(Some(4022)), CloseDisposition::Terminated);
+}

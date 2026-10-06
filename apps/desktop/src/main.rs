@@ -809,6 +809,8 @@ struct Desktop {
 	/// Bounded text preview fetched off the render thread, drained each frame.
 	preview_done:
 		Option<std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>>>,
+	/// Diagnostics archive being written by its worker; polled once per frame.
+	export_done: Option<std::sync::mpsc::Receiver<Result<std::path::PathBuf, &'static str>>>,
 	/// Set once per open preview, so "dialog visible" is logged exactly once.
 	preview_drawn_logged: bool,
 	/// Generation of the last announced download, so the toast fires once per job.
@@ -1038,6 +1040,76 @@ fn accept_notices(settings: &mut app_settings::Settings) {
 	settings.current.notices_accepted = true;
 	settings.state.dirty = true;
 	settings.state.touched = true;
+}
+/// Starts the redacted diagnostics archive on its own worker: reading the log rotations
+/// and writing the ZIP never runs inside a render frame.
+fn start_export_diagnostics(
+	ui: &ui::MessagingUi,
+) -> Result<std::sync::mpsc::Receiver<Result<std::path::PathBuf, &'static str>>, &'static str> {
+	let desktop = platform::diagnostics::desktop_dir().ok_or("Desktop folder unavailable")?;
+	let processing = ui.voice_processing.effective();
+	let push_to_mute = format!("{:?}", ui.keybinds.push_to_mute);
+	let report = format!(
+		"Nivra {}\nOS: {} {}\nBuild: {}\n\nVoice input: {}\nVoice output: {}\nPush to talk: {}\nPush to mute key: {}\nGain in/out: {}% / {}%\nNoise suppression: {:?}\nEcho cancellation: {}\n",
+		env!("CARGO_PKG_VERSION"),
+		std::env::consts::OS,
+		std::env::consts::ARCH,
+		option_env!("NIVRA_BUILD_COMMIT").unwrap_or("unknown"),
+		ui.voice_input.as_deref().unwrap_or("system default"),
+		ui.voice_output.as_deref().unwrap_or("system default"),
+		ui.voice_push_to_talk,
+		push_to_mute,
+		ui.voice_gain.input_percent,
+		ui.voice_gain.output_percent,
+		processing.suppression,
+		processing.echo_cancellation,
+	);
+	let (send, receive) = std::sync::mpsc::sync_channel(1);
+	std::thread::Builder::new()
+		.name("nivra-diagnostics".into())
+		.spawn(move || {
+			let _ = send.send(write_diagnostics_zip(&desktop, &report));
+		})
+		.map_err(|_| "Could not start the diagnostics export")?;
+	Ok(receive)
+}
+
+/// Builds the archive on the worker thread. Bounded by the log rotation itself.
+fn write_diagnostics_zip(
+	desktop: &std::path::Path,
+	report: &str,
+) -> Result<std::path::PathBuf, &'static str> {
+	let stamp: String = platform::diagnostics::timestamp()
+		.chars()
+		.filter(char::is_ascii_digit)
+		.collect();
+	let path = desktop.join(format!("nivra-diagnostics-{stamp}.zip"));
+	let file = std::fs::File::create(&path).map_err(|_| "Could not create the diagnostics file")?;
+	let mut archive = zip::ZipWriter::new(file);
+	let options = zip::write::SimpleFileOptions::default();
+	{
+		use std::io::Write as _;
+		let mut write = |name: &str, bytes: &[u8]| -> Result<(), &'static str> {
+			archive
+				.start_file(name.to_owned(), options)
+				.map_err(|_| "Could not write the diagnostics file")?;
+			archive
+				.write_all(bytes)
+				.map_err(|_| "Could not write the diagnostics file")
+		};
+		write("diagnostics.txt", report.as_bytes())?;
+		write(
+			"nivra.log",
+			platform::diagnostics::log_last_24h().as_bytes(),
+		)?;
+		let freeze = std::fs::read(platform::diagnostics::log_dir().join("nivra-freeze.log"))
+			.unwrap_or_default();
+		write("nivra-freeze.log", &freeze)?;
+	}
+	archive
+		.finish()
+		.map_err(|_| "Could not write the diagnostics file")?;
+	Ok(path)
 }
 /// The text-preview worker: fetches a bounded body, decodes it and sends exactly one
 /// result. Runs on its own thread; the caller drains the receiver on later frames.
@@ -2121,6 +2193,7 @@ impl Desktop {
 			batch_downloads: batch_downloads::BatchDownloads::default(),
 			save_txt_done: None,
 			preview_done: None,
+			export_done: None,
 			preview_drawn_logged: false,
 			announced_generation: None,
 			audio: audio::Audio::default(),
@@ -6565,6 +6638,42 @@ impl eframe::App for Desktop {
 			self.messaging.open_logs_requested = false;
 			platform::diagnostics::open_log_folder();
 		}
+		if self.messaging.export_diagnostics_requested {
+			self.messaging.export_diagnostics_requested = false;
+			match start_export_diagnostics(&self.messaging) {
+				Ok(receive) => self.export_done = Some(receive),
+				Err(error) => self.messaging.toasts.push(ui::design::Level::Error, error),
+			}
+		}
+		if let Some(receive) = self.export_done.as_ref() {
+			match receive.try_recv() {
+				Ok(Ok(path)) => {
+					self.export_done = None;
+					self.messaging.toasts.push(
+						ui::design::Level::Success,
+						format!(
+							"{}: {}",
+							ui::i18n::text(self.messaging.language, "Diagnostics exported"),
+							path.display()
+						),
+					);
+				}
+				Ok(Err(error)) => {
+					self.export_done = None;
+					self.messaging.toasts.push(ui::design::Level::Error, error);
+				}
+				Err(std::sync::mpsc::TryRecvError::Empty) => {
+					ctx.request_repaint_after(std::time::Duration::from_millis(100));
+				}
+				Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+					self.export_done = None;
+					self.messaging.toasts.push(
+						ui::design::Level::Error,
+						"Could not write the diagnostics file",
+					);
+				}
+			}
+		}
 		if let Some(alert) = self.notification_runtime.poll(
 			&mut self.state,
 			&mut self.messaging,
@@ -7786,6 +7895,26 @@ mod tests {
 		assert_eq!(spanish.show, "Mostrar Nivra");
 		assert_eq!(spanish.quit, "Salir");
 		assert_eq!(spanish.minimize, "Minimizar Nivra");
+	}
+	#[test]
+	fn diagnostics_export_zip_carries_log_freeze_and_system_sheet() {
+		let dir = std::env::temp_dir().join(format!("nivra-export-zip-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		let path = write_diagnostics_zip(&dir, "Nivra synthetic report").unwrap();
+		assert!(path.starts_with(&dir));
+		let file = std::fs::File::open(&path).unwrap();
+		let mut archive = zip::ZipArchive::new(file).unwrap();
+		let names: Vec<String> = (0..archive.len())
+			.map(|index| archive.by_index(index).unwrap().name().to_owned())
+			.collect();
+		for expected in ["diagnostics.txt", "nivra.log", "nivra-freeze.log"] {
+			assert!(
+				names.iter().any(|name| name == expected),
+				"{expected} missing from {names:?}"
+			);
+		}
+		let _ = std::fs::remove_dir_all(&dir);
 	}
 	#[test]
 	fn tls_provider_supports_reqwest_client_build() {

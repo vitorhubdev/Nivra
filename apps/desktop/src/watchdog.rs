@@ -150,7 +150,8 @@ pub fn report_if_stalled(
 	let video = VIDEO.lock().map(|slot| slot.clone()).unwrap_or_default();
 	let stack = std::backtrace::Backtrace::force_capture();
 	let entry = format!(
-		"[Nivra] render thread stalled {:.1}s in phase {} (video: {})\n{stack}\n\n",
+		"{} [Nivra] render thread stalled {:.1}s in phase {} (video: {})\n{stack}\n\n",
+		platform::diagnostics::timestamp(),
 		gap.as_secs_f64(),
 		phase.label(),
 		if video.is_empty() { "none" } else { &video },
@@ -169,6 +170,11 @@ pub fn report_if_stalled(
 		let _ = file.write_all(entry.as_bytes());
 		let _ = file.flush();
 	}
+	platform::diagnostics::warn(&format!(
+		"render thread stalled {:.1}s in phase {}",
+		gap.as_secs_f64(),
+		phase.label()
+	));
 	true
 }
 
@@ -216,6 +222,11 @@ mod tests {
 		*VIDEO.lock().unwrap() = String::new();
 		assert!(report_if_stalled(5_600, 3_100, true, Phase::Video, &log, 0));
 		let report = std::fs::read_to_string(&log).unwrap();
+		// Every report starts with the local date/time so two stalls can be ordered.
+		assert!(
+			report.len() >= 19 && report.as_bytes()[4] == b'-' && report.as_bytes()[13] == b':',
+			"{report}"
+		);
 		assert!(report.contains("stalled 2.5s"), "{report}");
 		assert!(report.contains("phase video"), "{report}");
 		assert!(report.contains("video: none"), "{report}");

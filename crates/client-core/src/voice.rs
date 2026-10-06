@@ -421,7 +421,15 @@ impl ClientState {
 		muted: bool,
 		deafened: bool,
 	) -> Option<crate::Command> {
-		if !self.can_call(channel) || self.voice.active.is_some() {
+		// A failed call may be replaced without an explicit leave: the bounded voice
+		// reconnect and the failure card's Rejoin action both start a fresh session.
+		if !self.can_call(channel)
+			|| self
+				.voice
+				.active
+				.as_ref()
+				.is_some_and(|call| call.phase != Phase::Failed)
+		{
 			return None;
 		}
 		let guild = self.channel(channel)?.guild;

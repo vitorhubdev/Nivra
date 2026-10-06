@@ -1822,6 +1822,12 @@ impl Desktop {
 			state.status = "Offline fixture · pinned messages popout opened at startup";
 		}
 		#[cfg(feature = "demo")]
+		if demo && std::env::args().any(|arg| arg == "--demo-channel-menu") {
+			// Channel context menu for screenshots; no pointer input needed.
+			messaging.preview_channel_context(model::Id(20));
+			state.status = "Offline fixture · channel context menu opened at startup";
+		}
+		#[cfg(feature = "demo")]
 		if demo
 			&& let Some(rest) = std::env::args().find_map(|arg| {
 				arg.strip_prefix("--demo-account")

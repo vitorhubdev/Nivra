@@ -194,15 +194,15 @@ impl IntegrationsUi {
 			ui.label(design::semibold(
 				ui,
 				match self.page {
-					Page::Overview => "Integrations",
-					Page::Webhooks => "Webhooks",
-					Page::Follows => "Channels Followed",
-					Page::App(_) => "Manage Integration",
+					Page::Overview => crate::tr_ui!(ui, "Integrations"),
+					Page::Webhooks => crate::tr_ui!(ui, "Webhooks"),
+					Page::Follows => crate::tr_ui!(ui, "Channels Followed"),
+					Page::App(_) => crate::tr_ui!(ui, "Manage Integration"),
 					Page::Editor => {
 						if self.draft.as_ref().is_some_and(|d| d.id.is_some()) {
-							"Edit Webhook"
+							crate::tr_ui!(ui, "Edit Webhook")
 						} else {
-							"Create Webhook"
+							crate::tr_ui!(ui, "Create Webhook")
 						}
 					}
 				},
@@ -221,7 +221,7 @@ impl IntegrationsUi {
 		});
 		ui.add_space(12.0);
 		if let Some(error) = state.server_admin.error.or(self.error) {
-			design::notice(ui, design::Level::Error, error);
+			design::notice(ui, design::Level::Error, crate::tr_ui!(ui, error));
 		}
 		if state.server_admin.needs_refresh {
 			ui.weak(crate::tr_ui!(
@@ -233,9 +233,9 @@ impl IntegrationsUi {
 			ui.horizontal(|ui| {
 				ui.spinner();
 				ui.weak(if state.server_admin.saving {
-					"Updating integrations..."
+					crate::tr_ui!(ui, "Updating integrations...")
 				} else {
-					"Loading integrations..."
+					crate::tr_ui!(ui, "Loading integrations...")
 				});
 			});
 		}
@@ -303,21 +303,25 @@ impl IntegrationsUi {
 		avatars: &mut Avatars,
 	) {
 		ui.label(if self.channel.is_some() {
-			"Manage webhooks and followed channels posting to this channel."
+			crate::tr_ui!(ui, "Manage webhooks and followed channels posting to this channel.")
 		} else {
-			"Customize your server with integrations. Manage webhooks, followed channels, and apps connected to your server."
+			crate::tr_ui!(ui, "Customize your server with integrations. Manage webhooks, followed channels, and apps connected to your server.")
 		});
-		ui.hyperlink_to("Learn more about managing integrations.", HELP);
+		ui.hyperlink_to(
+			crate::tr_ui!(ui, "Learn more about managing integrations."),
+			HELP,
+		);
 		design::divider(ui);
 		if self.can_manage_webhooks(state, guild)
 			&& let Some(webhooks) = &snapshot.webhooks
 		{
 			let followed = webhooks.iter().filter(|w| w.kind == 2).count();
+			let webhook_count = webhooks.len() - followed;
 			if summary_card(
 				ui,
 				icons::Icon::Link,
-				"Webhooks",
-				&format!("{} webhooks", webhooks.len() - followed),
+				crate::tr_ui!(ui, "Webhooks"),
+				&format!("{} {}", webhook_count, crate::tr_ui!(ui, "webhooks")),
 			) {
 				self.page = Page::Webhooks;
 			}
@@ -325,8 +329,16 @@ impl IntegrationsUi {
 			if summary_card(
 				ui,
 				icons::Icon::Threads,
-				"Channels Followed",
-				&format!("{followed} channel{}", if followed == 1 { "" } else { "s" }),
+				crate::tr_ui!(ui, "Channels Followed"),
+				&format!(
+					"{} {}",
+					followed,
+					if followed == 1 {
+						crate::tr_ui!(ui, "channel")
+					} else {
+						crate::tr_ui!(ui, "channels")
+					}
+				),
 			) {
 				self.page = Page::Follows;
 			}
@@ -389,7 +401,8 @@ impl IntegrationsUi {
 												ui.add(
 													egui::Label::new(
 														RichText::new(format!(
-															"Added by {}",
+															"{} {}",
+															crate::tr_ui!(ui, "Added by"),
 															user.name
 														))
 														.size(12.0),
@@ -451,14 +464,21 @@ impl IntegrationsUi {
 				ui,
 				"Posts from these followed channels are delivered to your server."
 			));
-			ui.hyperlink_to("Learn more about following channels", FOLLOW_HELP);
+			ui.hyperlink_to(
+				crate::tr_ui!(ui, "Learn more about following channels"),
+				FOLLOW_HELP,
+			);
 		} else {
 			ui.label(crate::tr_ui!(
 				ui,
 				"Send updates from your apps and services to a channel in this server."
 			));
 			if let Some(channel) = self.channel.and_then(|id| state.channel(id)) {
-				ui.label(format!("Posting to #{}", channel.name));
+				ui.label(format!(
+					"{} #{}",
+					crate::tr_ui!(ui, "Posting to"),
+					channel.name
+				));
 			}
 			ui.add_space(16.0);
 			if let Some(channel) = state.channels.iter().find(|c| {
@@ -466,7 +486,7 @@ impl IntegrationsUi {
 					&& self.channel.is_none_or(|id| c.id == id)
 					&& matches!(c.kind, 0 | 5 | 15 | 16)
 					&& state.can_manage_webhook_channel(guild, c.id)
-			}) && primary(ui, "New Webhook", writable(state)).clicked()
+			}) && primary(ui, crate::tr_ui!(ui, "New Webhook"), writable(state)).clicked()
 			{
 				self.draft = Some(Draft {
 					id: None,
@@ -487,9 +507,9 @@ impl IntegrationsUi {
 			.collect();
 		if rows.is_empty() {
 			ui.weak(if follows {
-				"No channels followed."
+				crate::tr_ui!(ui, "No channels followed.")
 			} else {
-				"No webhooks yet."
+				crate::tr_ui!(ui, "No webhooks yet.")
 			});
 		}
 		let row_height = if ui.available_width() < 360.0 {
@@ -551,9 +571,9 @@ impl IntegrationsUi {
 											writable(state),
 											egui::Button::new(
 												RichText::new(if follows {
-													"Unfollow"
+													crate::tr_ui!(ui, "Unfollow")
 												} else {
-													"Delete"
+													crate::tr_ui!(ui, "Delete")
 												})
 												.color(design::palette(ui).danger),
 											),
@@ -586,9 +606,9 @@ impl IntegrationsUi {
 				.add_enabled(
 					writable(state),
 					egui::Button::new(if self.copied == Some(webhook.id) {
-						"Copied!"
+						crate::tr_ui!(ui, "Copied!")
 					} else {
-						"Copy Webhook URL"
+						crate::tr_ui!(ui, "Copy Webhook URL")
 					}),
 				)
 				.clicked()
@@ -627,16 +647,20 @@ impl IntegrationsUi {
 		{
 			ui.label(&app.description);
 		}
-		ui.label(format!("Service: {}", service_name(integration)));
+		ui.label(format!(
+			"{}: {}",
+			crate::tr_ui!(ui, "Service"),
+			service_name(integration)
+		));
 		ui.label(if integration.enabled {
-			"Enabled"
+			crate::tr_ui!(ui, "Enabled")
 		} else {
-			"Disabled"
+			crate::tr_ui!(ui, "Disabled")
 		});
 		if let Some(user) = &integration.user {
 			ui.horizontal(|ui| {
 				avatars.show(ui, user, 24.0, state.demo);
-				ui.label(format!("Added by {}", user.name));
+				ui.label(format!("{} {}", crate::tr_ui!(ui, "Added by"), user.name));
 			});
 		}
 		design::divider(ui);
@@ -651,8 +675,8 @@ impl IntegrationsUi {
 				&& summary_card(
 					ui,
 					icons::Icon::Link,
-					"Webhooks",
-					&format!("{count} linked webhooks"),
+					crate::tr_ui!(ui, "Webhooks"),
+					&format!("{} {}", count, crate::tr_ui!(ui, "linked webhooks")),
 				) {
 				self.page = Page::Webhooks;
 			}
@@ -704,7 +728,7 @@ impl IntegrationsUi {
 			return;
 		};
 		ui.add_space(12.0);
-		let label = design::label(ui, "Name");
+		let label = design::label(ui, crate::tr_ui!(ui, "Name"));
 		design::input(
 			ui,
 			egui::TextEdit::singleline(&mut draft.name).char_limit(80),
@@ -717,15 +741,18 @@ impl IntegrationsUi {
 			design::notice(
 				ui,
 				design::Level::Error,
-				"Use 1–80 characters without control characters or the reserved names Discord and Clyde.",
+				crate::tr_ui!(
+					ui,
+					"Use 1–80 characters without control characters or the reserved names Discord and Clyde."
+				),
 			);
 		}
 		ui.add_space(16.0);
-		design::label(ui, "Channel");
+		design::label(ui, crate::tr_ui!(ui, "Channel"));
 		let name = draft
 			.channel
 			.and_then(|id| state.channel(id))
-			.map_or("Choose a channel", |c| c.name.as_str());
+			.map_or(crate::tr_ui!(ui, "Choose a channel"), |c| c.name.as_str());
 		egui::ComboBox::from_id_salt("webhook-destination")
 			.selected_text(name)
 			.width(ui.available_width())
@@ -762,9 +789,9 @@ impl IntegrationsUi {
 			if primary(
 				ui,
 				if self.submitted {
-					"Saving..."
+					crate::tr_ui!(ui, "Saving...")
 				} else {
-					"Save Changes"
+					crate::tr_ui!(ui, "Save Changes")
 				},
 				valid && writable(state) && self.draft != self.baseline,
 			)
@@ -776,9 +803,9 @@ impl IntegrationsUi {
 				.add_enabled(
 					!self.submitted,
 					egui::Button::new(if self.baseline.is_some() {
-						"Reset"
+						crate::tr_ui!(ui, "Reset")
 					} else {
-						"Cancel"
+						crate::tr_ui!(ui, "Cancel")
 					})
 					.frame(false),
 				)
@@ -809,24 +836,31 @@ impl IntegrationsUi {
 		let mut confirm = dialog::Confirm::new(
 			"delete-server-integration",
 			if integration {
-				"Remove integration?"
+				crate::tr_ctx!(ctx, "Remove integration?")
 			} else {
-				"Delete webhook?"
+				crate::tr_ctx!(ctx, "Delete webhook?")
 			},
 			if integration {
 				format!(
-					"Removing {} also removes its bot and every webhook it owns from this server.",
-					deletion.name
+					"{} {} {}",
+					crate::tr_ctx!(ctx, "Removing"),
+					deletion.name,
+					crate::tr_ctx!(ctx, "also removes its bot and every webhook it owns from this server.")
 				)
 			} else {
 				format!(
-					"{} will stop delivering messages. A followed channel will also stop sending posts to this server.",
-					deletion.name
+					"{} {}",
+					deletion.name,
+					crate::tr_ctx!(ctx, "will stop delivering messages. A followed channel will also stop sending posts to this server.")
 				)
 			},
 		)
 		.danger()
-		.confirm_label(if integration { "Remove" } else { "Delete" })
+		.confirm_label(if integration {
+			crate::tr_ctx!(ctx, "Remove")
+		} else {
+			crate::tr_ctx!(ctx, "Delete")
+		})
 		.enabled(writable(state));
 		if let Some(error) = state.server_admin.error {
 			confirm = confirm.note(dialog::Level::Error, error);
@@ -864,23 +898,29 @@ fn webhook_name(webhook: &Webhook) -> &str {
 }
 fn webhook_identity(ui: &mut egui::Ui, state: &State, webhook: &Webhook, avatars: &mut Avatars) {
 	ui.horizontal(|ui| {
+		let name = webhook_name(webhook);
+		let name = if name == "Webhook" {
+			crate::tr_ui!(ui, "Webhook")
+		} else {
+			name
+		};
 		let user = model::User {
 			kind: model::AccountKind::Bot,
 			webhook: true,
 			id: webhook.id,
-			name: webhook_name(webhook).to_owned(),
+			name: name.to_owned(),
 			avatar: webhook.avatar.clone(),
 			discriminator: 0,
 			primary_guild: None,
 		};
 		avatars.show_plain(ui, &user, 40.0, state.demo);
 		ui.vertical(|ui| {
-			ui.add(egui::Label::new(design::semibold(ui, webhook_name(webhook), 15.0)).truncate())
-				.on_hover_text(webhook_name(webhook));
+			ui.add(egui::Label::new(design::semibold(ui, name, 15.0)).truncate())
+				.on_hover_text(name);
 			let destination = webhook
 				.channel
 				.and_then(|id| state.channel(id))
-				.map_or("Unknown channel", |c| c.name.as_str());
+				.map_or(crate::tr_ui!(ui, "Unknown channel"), |c| c.name.as_str());
 			ui.add(
 				egui::Label::new(
 					RichText::new(format!("#{destination}"))
@@ -1256,5 +1296,80 @@ mod tests {
 			assert!(ui.next_widget_position().y >= before + 176.0);
 		});
 		output.drop_without_applying_deltas();
+	}
+
+	/// Item 2 guard: the integration tab inside the channel settings dialog asks
+	/// the catalog for every label it draws, so a new one cannot stay English-only.
+	#[test]
+	fn integration_surfaces_render_translated_in_both_languages() {
+		for language in [model::Language::PortugueseBrazil, model::Language::Spanish] {
+			let ctx = egui::Context::default();
+			design::apply(&ctx);
+			crate::i18n::store_interface_language(&ctx, language);
+			let mut state = state();
+			let guild = state.guilds[0].id;
+			let channel = state
+				.channels
+				.iter()
+				.find(|c| c.guild == Some(guild) && c.kind == 0)
+				.unwrap()
+				.id;
+			state.server_admin.guild = Some(guild);
+			state.server_admin.integrations = Some(Snapshot {
+				guild,
+				channel: Some(channel),
+				integrations: Some(vec![]),
+				webhooks: Some(vec![Webhook {
+					id: Id(900),
+					guild,
+					channel: Some(channel),
+					kind: 1,
+					name: Some("Synthetic webhook".into()),
+					avatar: None,
+					application_id: None,
+					user: None,
+					source_guild: None,
+					source_channel: None,
+				}]),
+			});
+			let mut commands = vec![];
+			let mut avatars = Avatars::default();
+			let _ = crate::i18n::drain_untranslated_keys();
+			for (page, draft) in [
+				(Page::Overview, false),
+				(Page::Webhooks, false),
+				(Page::Follows, false),
+				(Page::Editor, true),
+			] {
+				let mut view = IntegrationsUi {
+					page,
+					channel: Some(channel),
+					draft: draft.then(|| Draft {
+						id: None,
+						name: "Updates".into(),
+						channel: Some(channel),
+					}),
+					..Default::default()
+				};
+				ctx.run_ui(
+					egui::RawInput {
+						screen_rect: Some(egui::Rect::from_min_size(
+							egui::Pos2::ZERO,
+							Vec2::new(800.0, 900.0),
+						)),
+						..Default::default()
+					},
+					|ui| {
+						view.show(ui, &mut state, guild, &mut avatars, &mut commands, language);
+					},
+				)
+				.drop_without_applying_deltas();
+			}
+			let missing = crate::i18n::drain_untranslated_keys();
+			assert!(
+				missing.is_empty(),
+				"{language:?} integrations missing {missing:?}"
+			);
+		}
 	}
 }

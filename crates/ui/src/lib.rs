@@ -1022,6 +1022,11 @@ impl MessagingUi {
 	pub fn preview_pins(&mut self) {
 		self.search.preview_pins();
 	}
+	/// Fixture-only: open the fixture channel's context menu for screenshots.
+	#[cfg(any(test, feature = "demo"))]
+	pub fn preview_channel_context(&mut self, channel: model::Id) {
+		self.channel_menu.preview_context(channel);
+	}
 	/// Fixture-only: open the account popout above the footer card at startup.
 	#[cfg(any(test, feature = "demo"))]
 	pub fn preview_account_menu(&mut self, generation: u64) {

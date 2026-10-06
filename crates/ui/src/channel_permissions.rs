@@ -20,16 +20,18 @@ impl PermissionsUi {
 	) {
 		let Some(guild) = channel.guild else { return };
 		let category = channel.kind == 4;
+		let language = crate::i18n::interface_language(ui.ctx());
+		let t = |english: &'static str| crate::i18n::text(language, english);
 		let colors = design::palette(ui);
 		let mut private = rows
 			.iter()
 			.any(|o| o.kind == 0 && o.id == guild && o.deny & p::VIEW_CHANNEL != 0);
 		egui::Frame::new().fill(colors.raised).stroke(egui::Stroke::new(1.0, colors.border)).corner_radius(12).inner_margin(16).show(ui, |ui| {
 			ui.add_enabled_ui(state.can_edit_channel_permission(channel.id, p::VIEW_CHANNEL) && (rows.len() < p::MAX_OVERWRITES || rows.iter().any(|o| o.kind == 0 && o.id == guild)), |ui| {
-				if design::switch(ui, if category { "Private Category" } else { "Private Channel" }, Some(if category {
-					"Only selected members and roles can view this category. Synced channels follow its permissions."
+				if design::switch(ui, if category { t("Private Category") } else { t("Private Channel") }, Some(if category {
+					t("Only selected members and roles can view this category. Synced channels follow its permissions.")
 				} else {
-					"Only selected members and roles can view this channel. Administrators retain access."
+					t("Only selected members and roles can view this channel. Administrators retain access.")
 				}), &mut private).changed() {
 					set_permission(rows, (0, guild), p::VIEW_CHANNEL, if private { -1 } else { 1 });
 				}
@@ -38,7 +40,7 @@ impl PermissionsUi {
 		if !state.can_manage_channel_permissions(channel.id) {
 			dialog::hint(
 				ui,
-				"You need Manage Channels and Manage Permissions to change these settings.",
+				t("You need Manage Channels and Manage Permissions to change these settings."),
 			);
 		}
 		design::divider(ui);
@@ -84,11 +86,13 @@ impl PermissionsUi {
 		rows: &mut Vec<p::Overwrite>,
 	) {
 		let guild = channel.guild.unwrap();
-		dialog::label(ui, "ROLES/MEMBERS");
+		let language = crate::i18n::interface_language(ui.ctx());
+		let t = |english: &'static str| crate::i18n::text(language, english);
+		dialog::label(ui, t("ROLES/MEMBERS"));
 		ui.add_enabled_ui(
 			state.can_manage_channel_permissions(channel.id) && rows.len() < p::MAX_OVERWRITES,
 			|ui| {
-				ui.menu_button("+ Add role or member", |ui| {
+				ui.menu_button(t("+ Add role or member"), |ui| {
 					ui.set_width(240.0);
 					ui.add(
 						egui::TextEdit::singleline(&mut self.search)
@@ -111,7 +115,10 @@ impl PermissionsUi {
 								.filter(|r| r.name.to_lowercase().contains(&query))
 							{
 								if ui
-									.selectable_label(false, format!("Role: {}", role.name))
+									.selectable_label(
+										false,
+										format!("{}: {}", t("Role"), role.name),
+									)
 									.clicked()
 								{
 									self.add(rows, (0, role.id));
@@ -134,7 +141,10 @@ impl PermissionsUi {
 							{
 								if user.name.to_lowercase().contains(&query)
 									&& ui
-										.selectable_label(false, format!("Member: {}", user.name))
+										.selectable_label(
+											false,
+											format!("{}: {}", t("Member"), user.name),
+										)
 										.clicked()
 								{
 									self.add(rows, (1, user.id));
@@ -143,7 +153,7 @@ impl PermissionsUi {
 							}
 						});
 					ui.separator();
-					let label = dialog::label(ui, "Member ID");
+					let label = dialog::label(ui, t("Member ID"));
 					ui.add(
 						egui::TextEdit::singleline(&mut self.member_id)
 							.char_limit(20)
@@ -156,7 +166,7 @@ impl PermissionsUi {
 							&& !rows.iter().any(|o| o.id == Id(*id) && o.kind != 1)
 					});
 					if ui
-						.add_enabled(id.is_some(), egui::Button::new("Add Member"))
+						.add_enabled(id.is_some(), egui::Button::new(t("Add Member")))
 						.clicked()
 					{
 						self.add(rows, (1, Id(id.unwrap())));
@@ -175,7 +185,7 @@ impl PermissionsUi {
 						.map(|o| (o.kind, o.id))
 						.filter(|key| *key != (0, guild)),
 				) {
-					let label = target_name(state, guild, key);
+					let label = target_name(state, guild, key, language);
 					let color = if key.0 == 0 {
 						state
 							.permissions
@@ -236,6 +246,8 @@ impl PermissionsUi {
 		let key = self.selected.unwrap_or((0, guild));
 		let can_add = rows.len() < p::MAX_OVERWRITES || rows.iter().any(|o| (o.kind, o.id) == key);
 		let colors = design::palette(ui);
+		let language = crate::i18n::interface_language(ui.ctx());
+		let t = |english: &'static str| crate::i18n::text(language, english);
 		for (group, values) in [
 			(
 				if channel.kind == 4 {
@@ -421,8 +433,8 @@ impl PermissionsUi {
 							egui::Layout::top_down(egui::Align::Min),
 							|ui| {
 								ui.set_width(width);
-								ui.label(design::medium(ui, label, 15.0));
-								dialog::hint(ui, help);
+								ui.label(design::medium(ui, t(label), 15.0));
+								dialog::hint(ui, t(help));
 							},
 						);
 						ui.add_enabled_ui(enabled, |ui| {
@@ -440,7 +452,7 @@ impl PermissionsUi {
 									.min_size(egui::vec2(34.0, 30.0))
 									.corner_radius(3),
 								);
-								let accessible = format!("{name} {label}");
+								let accessible = format!("{} {}", t(name), t(label));
 								response.widget_info(|| {
 									egui::WidgetInfo::selected(
 										egui::Role::RadioButton,
@@ -485,7 +497,7 @@ impl PermissionsUi {
 	}
 }
 
-fn target_name(state: &State, guild: Id, key: (u8, Id)) -> String {
+fn target_name(state: &State, guild: Id, key: (u8, Id), language: model::Language) -> String {
 	if key == (0, guild) {
 		return "@everyone".into();
 	}
@@ -496,7 +508,10 @@ fn target_name(state: &State, guild: Id, key: (u8, Id)) -> String {
 			.get(&guild)
 			.and_then(|g| g.roles.as_ref())
 			.and_then(|roles| roles.iter().find(|r| r.id == key.1))
-			.map_or_else(|| format!("Role {}", key.1), |r| r.name.clone());
+			.map_or_else(
+				|| format!("{} {}", crate::i18n::text(language, "Role"), key.1),
+				|r| r.name.clone(),
+			);
 	}
 	let user: Option<&User> = state
 		.members
@@ -511,7 +526,10 @@ fn target_name(state: &State, guild: Id, key: (u8, Id)) -> String {
 		.map(|m| &m.user)
 		.chain(state.user.iter())
 		.find(|u| u.id == key.1);
-	user.map_or_else(|| format!("Member {}", key.1), |u| u.name.clone())
+	user.map_or_else(
+		|| format!("{} {}", crate::i18n::text(language, "Member"), key.1),
+		|u| u.name.clone(),
+	)
 }
 
 fn set_permission(rows: &mut Vec<p::Overwrite>, key: (u8, Id), bit: u128, value: i8) {

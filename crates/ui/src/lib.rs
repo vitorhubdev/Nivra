@@ -1066,9 +1066,16 @@ impl MessagingUi {
 	pub fn set_preview(&mut self, preview: text_preview::TextPreview) {
 		self.preview = Some(preview);
 	}
-	/// Report a preview failure through the shared toast channel.
+	/// Report a preview failure through the shared toast channel, in the interface
+	/// language when the catalog knows the reason.
 	pub fn preview_failed(&mut self, reason: &str) {
-		self.toasts.push(design::Level::Error, reason);
+		let message = crate::i18n::text_str(self.language, reason).into_owned();
+		self.toasts.push(design::Level::Error, message);
+	}
+	/// Whether the text preview dialog is currently open; the desktop uses this to log
+	/// that the fetched body reached the screen.
+	pub fn preview_open(&self) -> bool {
+		self.preview.is_some()
 	}
 	/// Close the open preview dialog.
 	pub fn close_preview(&mut self) {
@@ -3684,9 +3691,9 @@ impl MessagingUi {
 	}
 	/// Bounded, read-only preview of a text, markdown or code attachment. The
 	/// body was fetched off the render thread; layout only happens here.
-	pub fn show_preview(&mut self, ctx: &egui::Context) {
+	pub fn show_preview(&mut self, ctx: &egui::Context) -> bool {
 		if self.preview.is_none() {
-			return;
+			return false;
 		}
 		let language = self.language;
 		let mut close = false;
@@ -3695,7 +3702,7 @@ impl MessagingUi {
 		// cannot overlap a mutable borrow of the timeline.
 		let mut opening = self.timeline.opening.take();
 		let Some(preview) = self.preview.as_ref() else {
-			return;
+			return false;
 		};
 		crate::dialog::Dialog::new("text-preview", preview.filename.clone())
 			.width(640.0)
@@ -3773,6 +3780,7 @@ impl MessagingUi {
 		if close {
 			self.preview = None;
 		}
+		true
 	}
 	/// Rename dialog for over-limit composer text. Enviar stages the text as a
 	/// `.txt` attachment and dispatches it at once; Cancel keeps the draft.
@@ -9427,6 +9435,198 @@ mod account_card_tests {
 		assert!(
 			(after - base).abs() <= 1.0,
 			"a stale stored height must be discarded: {base} -> {after}"
+		);
+	}
+}
+
+#[cfg(test)]
+mod preview_card_tests {
+	use super::*;
+
+	fn text_attachment() -> model::Attachment {
+		model::Attachment {
+			id: model::Id(700),
+			filename: "trae_exposed.md".into(),
+			description: None,
+			content_type: Some("text/markdown".into()),
+			size: 34_936,
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+			media: model::EmbedMedia {
+				url: Some(
+					"https://cdn.discordapp.com/attachments/1/700/trae_exposed.md?ex=1&is=1&hm=1"
+						.into(),
+				),
+				proxy_url: Some(
+					"https://media.discordapp.net/attachments/1/700/trae_exposed.md?ex=1&is=1&hm=1"
+						.into(),
+				),
+				..Default::default()
+			},
+		}
+	}
+
+	fn preview_state() -> (State, model::Id) {
+		let mut state = test_support::demo_state();
+		let channel = state.selected.unwrap();
+		// The demo fixture has its own previewable rows; keep only the card under test
+		// so the click is guaranteed to target this attachment.
+		state.timeline.clear();
+		let mut message = test_support::message(700, channel);
+		message.attachments = vec![text_attachment()];
+		state.apply(client_core::Envelope {
+			generation: state.generation,
+			event: client_core::Event::Message(message),
+		});
+		(state, channel)
+	}
+
+	fn labels(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+		match shape {
+			egui::Shape::Text(text) => out.push((
+				text.galley.job.text.clone(),
+				text.galley.rect.translate(text.pos.to_vec2()),
+			)),
+			egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| labels(shape, out)),
+			_ => {}
+		}
+	}
+
+	fn frame(
+		ctx: &egui::Context,
+		view: &mut MessagingUi,
+		state: &mut State,
+		events: Vec<egui::Event>,
+	) -> Vec<(String, egui::Rect)> {
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(1120.0, 900.0),
+				)),
+				events,
+				..Default::default()
+			},
+			|ui| {
+				view.show(ui, state);
+			},
+		);
+		output.textures_delta.clear();
+		let mut text = Vec::new();
+		for shape in output.shapes {
+			labels(&shape.shape, &mut text);
+		}
+		text
+	}
+
+	#[test]
+	fn preview_button_on_the_real_timeline_card_requests_the_text_body() {
+		let ctx = egui::Context::default();
+		let (mut state, _) = preview_state();
+		let mut view = MessagingUi::default();
+		let text = frame(&ctx, &mut view, &mut state, Vec::new());
+		let (_, rect) = text
+			.iter()
+			.find(|(label, _)| label == "Preview")
+			.expect("the text attachment must offer Preview");
+		let pos = rect.center();
+		for pressed in [true, false] {
+			frame(
+				&ctx,
+				&mut view,
+				&mut state,
+				vec![
+					egui::Event::PointerMoved(pos),
+					egui::Event::PointerButton {
+						pos,
+						button: egui::PointerButton::Primary,
+						pressed,
+						modifiers: egui::Modifiers::NONE,
+					},
+				],
+			);
+		}
+		assert!(
+			view.take_preview_request().is_some(),
+			"clicking Preview must queue the attachment for the desktop worker"
+		);
+	}
+
+	#[test]
+	fn preview_button_in_the_search_pane_uses_the_timeline_download_slot() {
+		use client_core::search::SearchView;
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		let channel = state.selected.unwrap();
+		state.auth = client_core::auth::AuthState::Authenticated;
+		state.gateway_connected = true;
+		let mut view = MessagingUi::default();
+		view.preview_search("synthetic");
+		// First frame opens the pane and submits the fixture query; the pane draws from
+		// `state.search`, so feed it one hit with a text attachment before the click.
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(1120.0, 900.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				view.show(ui, &mut state);
+			},
+		);
+		output.textures_delta.clear();
+		let page = model::SearchPage {
+			hits: vec![model::SearchHit {
+				id: model::Id(8_000_701),
+				channel,
+				author: test_support::message(1, channel).author,
+				excerpt: "synthetic result".into(),
+				attachments: vec![text_attachment()],
+				embeds: Vec::new(),
+			}],
+			total: 1,
+			partial: false,
+			pin_cursor: None,
+		};
+		state.search = Some(SearchView {
+			pins: false,
+			channel,
+			query: "synthetic".into(),
+			before: None,
+			pin_before: None,
+			request: 1,
+			loading: false,
+			error: None,
+			page: Some(page),
+		});
+		let text = frame(&ctx, &mut view, &mut state, Vec::new());
+		let (_, rect) = text
+			.iter()
+			.find(|(label, _)| label == "Preview")
+			.expect("the search hit must offer Preview");
+		let pos = rect.center();
+		for pressed in [true, false] {
+			frame(
+				&ctx,
+				&mut view,
+				&mut state,
+				vec![
+					egui::Event::PointerMoved(pos),
+					egui::Event::PointerButton {
+						pos,
+						button: egui::PointerButton::Primary,
+						pressed,
+						modifiers: egui::Modifiers::NONE,
+					},
+				],
+			);
+		}
+		assert!(
+			view.take_preview_request().is_some(),
+			"a Preview click inside the search pane must reach the timeline download slot"
 		);
 	}
 }

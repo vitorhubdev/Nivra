@@ -75,6 +75,7 @@ find-msvc-tools = "=0.1.12"
 [dev-dependencies]
 test-support.workspace = true
 egui_kittest.workspace = true
+flate2.workspace = true
 
 [[example]]
 name = "profile_preview"

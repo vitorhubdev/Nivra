@@ -6,8 +6,7 @@
 //! the log is safe to paste into a bug report.
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, OnceLock};
 
 /// One rotated file plus the live one; oldest is `nivra.4.log`.
 const MAX_FILES: usize = 5;
@@ -17,6 +16,9 @@ const MAX_LINE_BYTES: usize = 2 * 1024;
 const CRASH_FILE: &str = "last-crash.txt";
 
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
+/// Set exactly once by [`init_app_logging`]; anything else (tests, helper binaries)
+/// keeps the user's log untouched and writes to a scratch directory instead.
+static APP_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
@@ -35,15 +37,62 @@ impl Level {
 	}
 }
 
-/// `<data dir>/logs`; created on demand by [`append`].
+/// Marks the real log directory for the installed app. Call once from `main` before
+/// anything can log or panic. Tests never call it, so a test run can no longer append
+/// `host=127.0.0.1` probe lines to the user's own `nivra.log` (v1.0.12 bug).
+pub fn init_app_logging() {
+	let Ok(dir) = crate::migration::ensure_data_dir() else {
+		return;
+	};
+	let dir = dir.join("logs");
+	let _ = std::fs::create_dir_all(&dir);
+	if APP_LOG_DIR.set(dir.clone()).is_ok() {
+		purge_test_lines_in(&dir);
+	}
+}
+
+/// The log directory: an explicit override, else the app directory marked by
+/// [`init_app_logging`], else a per-process scratch directory so tests and helper
+/// binaries never write into the user's data.
 pub fn log_dir() -> PathBuf {
-	// Tests point the log at a scratch directory; production uses the data dir.
 	if let Some(dir) = std::env::var_os("NIVRA_LOG_DIR") {
 		return PathBuf::from(dir);
 	}
-	crate::migration::ensure_data_dir()
-		.map(|dir| dir.join("logs"))
-		.unwrap_or_else(|_| PathBuf::from("logs"))
+	if let Some(dir) = APP_LOG_DIR.get() {
+		return dir.clone();
+	}
+	std::env::temp_dir().join("nivra-scratch-logs")
+}
+
+/// Removes lines written by old test runs that probed `127.0.0.1` from the live log and
+/// its rotations, keeping every real line. A genuine off-host redirect from Discord logs
+/// its own host and must survive. Rewrites only files that match.
+fn purge_test_lines_in(dir: &Path) {
+	for name in std::iter::once("nivra.log".to_string())
+		.chain((1..MAX_FILES).map(|i| format!("nivra.{i}.log")))
+	{
+		let path = dir.join(name);
+		let Ok(text) = std::fs::read_to_string(&path) else {
+			continue;
+		};
+		if !text.contains("host=127.0.0.1") {
+			continue;
+		}
+		let kept: String = text
+			.lines()
+			.filter(|line| !line.contains("host=127.0.0.1"))
+			.collect::<Vec<_>>()
+			.join("\n");
+		let kept = if kept.is_empty() {
+			String::new()
+		} else {
+			format!("{kept}\n")
+		};
+		let temporary = path.with_extension("purge");
+		if std::fs::write(&temporary, kept).is_ok() {
+			let _ = std::fs::rename(&temporary, &path);
+		}
+	}
 }
 
 /// Convenience wrappers so call sites read as diagnostics instead of `eprintln!`.
@@ -84,11 +133,18 @@ pub fn append(level: Level, message: &str) {
 	}
 }
 
-fn timestamp() -> u64 {
-	SystemTime::now()
-		.duration_since(UNIX_EPOCH)
-		.map(|elapsed| elapsed.as_secs())
-		.unwrap_or(0)
+/// Local wall-clock time for every line: `YYYY-MM-DD HH:MM:SS`.
+pub fn timestamp() -> String {
+	let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+	format!(
+		"{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+		now.year(),
+		u8::from(now.month()),
+		now.day(),
+		now.hour(),
+		now.minute(),
+		now.second()
+	)
 }
 
 fn rotate(dir: &Path) {
@@ -466,6 +522,68 @@ mod tests {
 		// The live file was renamed away by the last rotation: four rotated files remain.
 		assert_eq!(files.len(), MAX_FILES - 1);
 		assert!(!dir.join(format!("nivra.{MAX_FILES}.log")).exists());
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn scratch_log_dir_never_touches_user_data_without_init() {
+		// Tests and helper binaries run without `init_app_logging`; their scratch dir must
+		// live under the OS temp directory, never under the user's data dir.
+		if std::env::var_os("NIVRA_LOG_DIR").is_some() {
+			return;
+		}
+		let dir = log_dir();
+		assert!(
+			dir.starts_with(std::env::temp_dir()),
+			"uninitialized processes must log under the temp dir: {dir:?}"
+		);
+		assert!(
+			dir.file_name()
+				.is_some_and(|name| name == "nivra-scratch-logs"),
+			"scratch dir must be unmistakable: {dir:?}"
+		);
+	}
+
+	#[test]
+	fn every_line_starts_with_a_local_timestamp() {
+		let stamp = timestamp();
+		assert_eq!(stamp.len(), 19, "{stamp}");
+		assert_eq!(stamp.as_bytes()[4], b'-', "{stamp}");
+		assert_eq!(stamp.as_bytes()[7], b'-', "{stamp}");
+		assert_eq!(stamp.as_bytes()[10], b' ', "{stamp}");
+		assert_eq!(stamp.as_bytes()[13], b':', "{stamp}");
+		assert_eq!(stamp.as_bytes()[16], b':', "{stamp}");
+	}
+
+	#[test]
+	fn purge_keeps_real_lines_and_drops_old_probe_lines() {
+		let dir = std::env::temp_dir().join(format!(
+			"nivra-purge-{}-{:?}",
+			std::process::id(),
+			std::thread::current().id()
+		));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		std::fs::write(
+			dir.join("nivra.log"),
+			"1 INFO real startup line\n2 INFO text preview refused: host=127.0.0.1 status=404\n3 WARN text preview redirect: host=127.0.0.1 status=302 location-host=evil.test\n4 ERROR real failure\n5 WARN text preview redirect: host=cdn.discordapp.com status=302 location-host=shady.example\n",
+		)
+		.unwrap();
+		std::fs::write(
+			dir.join("nivra.1.log"),
+			"5 INFO text preview refused: host=127.0.0.1 status=403\n",
+		)
+		.unwrap();
+		purge_test_lines_in(&dir);
+		let live = std::fs::read_to_string(dir.join("nivra.log")).unwrap();
+		assert!(live.contains("real startup line"), "{live}");
+		assert!(live.contains("real failure"), "{live}");
+		// A genuine off-host redirect logged by the real app survives the purge.
+		assert!(live.contains("location-host=shady.example"), "{live}");
+		assert!(!live.contains("127.0.0.1"), "{live}");
+		assert!(!live.contains("location-host=evil.test"), "{live}");
+		let rotated = std::fs::read_to_string(dir.join("nivra.1.log")).unwrap();
+		assert!(rotated.is_empty(), "{rotated:?}");
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 

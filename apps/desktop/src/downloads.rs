@@ -456,6 +456,36 @@ pub(crate) fn proxy_attachment_url(attachment: &Attachment) -> Option<url::Url> 
 		"media.discordapp.net",
 	)
 }
+/// Sources for an inline text preview, in fetch order: the signed CDN link first, then the
+/// media proxy. Unlike the download entry points this accepts the two fields in either order
+/// and either Discord host, because payloads that carry only a proxy URL (or that swap the
+/// fields) still show the Preview button; resolving only `media.url` on the CDN host made the
+/// click fail before any fetch started (v1.0.12 bug). Returns `None` when the attachment is
+/// unusable, the declared size is out of range, or neither field is a signed Discord link.
+pub(crate) fn preview_sources(attachment: &Attachment) -> Option<(url::Url, Option<url::Url>)> {
+	let mut found: Vec<url::Url> = Vec::new();
+	// Host order, not field order: the signed CDN link is the primary source even when an
+	// older payload swapped `url` and `proxy_url`.
+	for host in ["cdn.discordapp.com", "media.discordapp.net"] {
+		for raw in [
+			attachment.media.url.as_deref(),
+			attachment.media.proxy_url.as_deref(),
+		]
+		.into_iter()
+		.flatten()
+		{
+			if let Some(url) = attachment_cdn_url(raw, attachment, host)
+				&& !found.contains(&url)
+			{
+				found.push(url);
+			}
+		}
+	}
+	let mut sources = found.into_iter();
+	let first = sources.next()?;
+	Some((first, sources.next()))
+}
+
 fn attachment_cdn_url(raw: &str, attachment: &Attachment, host: &str) -> Option<url::Url> {
 	if !model::valid_attachments(std::slice::from_ref(attachment))
 		|| attachment.size == 0
@@ -603,6 +633,9 @@ pub(crate) async fn fetch_preview(
 ) -> Result<Vec<u8>, &'static str> {
 	let limit = ui::text_preview::MAX_PREVIEW_BYTES;
 	if expected == 0 || expected > limit {
+		platform::diagnostics::warn(&format!(
+			"text preview refused: reason=declared-size bytes={expected} limit={limit}"
+		));
 		return Err("File is too large to preview");
 	}
 	let client = reqwest::Client::builder()
@@ -612,13 +645,23 @@ pub(crate) async fn fetch_preview(
 		.read_timeout(Duration::from_secs(30))
 		.timeout(Duration::from_secs(60))
 		.build()
-		.map_err(|_| "Preview unavailable")?;
+		.map_err(|_| {
+			platform::diagnostics::warn("text preview refused: reason=client");
+			"Preview unavailable"
+		})?;
 	let mut bases = vec![original];
 	bases.extend(proxy);
 	let mut failure = "Preview unavailable; reload the conversation";
 	for base in &bases {
 		match fetch_preview_url(&client, base.clone(), expected, limit, 0).await {
-			Ok(bytes) => return Ok(bytes),
+			Ok(bytes) => {
+				platform::diagnostics::info(&format!(
+					"text preview fetched: bytes={} host={}",
+					bytes.len(),
+					base.host_str().unwrap_or("?")
+				));
+				return Ok(bytes);
+			}
 			Err(PreviewError::Expired) => {
 				failure = "Attachment link expired; reload the conversation";
 				continue;
@@ -629,6 +672,10 @@ pub(crate) async fn fetch_preview(
 			}
 		}
 	}
+	platform::diagnostics::warn(&format!(
+		"text preview failed: reason={failure} sources={}",
+		bases.len()
+	));
 	Err(failure)
 }
 
@@ -689,9 +736,17 @@ async fn fetch_preview_url(
 				.unwrap_or("?")
 		));
 		let Some(to) = location else {
+			platform::diagnostics::warn(&format!(
+				"text preview refused: host={} reason=redirect-invalid",
+				url.host_str().unwrap_or("?")
+			));
 			return Err(PreviewError::Refused("Preview redirect is invalid"));
 		};
 		if depth >= 3 || !preview_redirect_allowed(&url, &to) {
+			platform::diagnostics::warn(&format!(
+				"text preview refused: host={} reason=redirect-leaves-discord",
+				url.host_str().unwrap_or("?")
+			));
 			return Err(PreviewError::Refused("Preview redirect leaves Discord"));
 		}
 		return Box::pin(fetch_preview_url(client, to, expected, limit, depth + 1)).await;
@@ -722,18 +777,28 @@ async fn fetch_preview_url(
 		.get(reqwest::header::CONTENT_ENCODING)
 		.is_some_and(|encoding| encoding != "identity")
 	{
+		platform::diagnostics::warn(&format!(
+			"text preview refused: host={} reason=encoding",
+			url.host_str().unwrap_or("?")
+		));
 		return Err(PreviewError::Refused(
 			"Unexpected encoding; reload the conversation",
 		));
 	}
 	let mut response = response;
 	let mut bytes = Vec::new();
-	while let Some(chunk) = response
-		.chunk()
-		.await
-		.map_err(|_| PreviewError::Refused("Preview transfer interrupted"))?
-	{
+	while let Some(chunk) = response.chunk().await.map_err(|_| {
+		platform::diagnostics::warn(&format!(
+			"text preview refused: host={} reason=transfer-interrupted",
+			url.host_str().unwrap_or("?")
+		));
+		PreviewError::Refused("Preview transfer interrupted")
+	})? {
 		if bytes.len() as u64 + chunk.len() as u64 > limit {
+			platform::diagnostics::warn(&format!(
+				"text preview refused: host={} reason=stream-cap limit={limit}",
+				url.host_str().unwrap_or("?")
+			));
 			return Err(PreviewError::Refused("File is too large to preview"));
 		}
 		bytes.extend_from_slice(&chunk);
@@ -1649,5 +1714,115 @@ mod tests {
 			"Attachment link expired; reload the conversation"
 		);
 		task.await.unwrap();
+	}
+
+	/// Serves one response with custom `Content-Encoding`, for the codec tests.
+	async fn preview_encoded(
+		body: Vec<u8>,
+		encoding: &'static str,
+	) -> (url::Url, tokio::task::JoinHandle<()>) {
+		use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let url = url::Url::parse(&format!(
+			"http://{}/attachment",
+			listener.local_addr().unwrap()
+		))
+		.unwrap();
+		let task = tokio::spawn(async move {
+			let (mut socket, _) = listener.accept().await.unwrap();
+			let mut request = Vec::new();
+			let mut byte = [0u8; 1];
+			while !request.ends_with(b"\r\n\r\n") && request.len() < 8192 {
+				if socket.read_exact(&mut byte).await.is_err() {
+					return;
+				}
+				request.push(byte[0]);
+			}
+			let header = format!(
+				"HTTP/1.1 200 OK \r\nContent-Encoding: {encoding}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+				body.len()
+			);
+			if socket.write_all(header.as_bytes()).await.is_err() {
+				return;
+			}
+			let _ = socket.write_all(&body).await;
+		});
+		(url, task)
+	}
+
+	#[tokio::test]
+	async fn preview_accepts_the_cdns_gzip_response() {
+		discord_api::ensure_tls_provider();
+		let plain = b"# synthetic gzip preview\n".to_vec();
+		let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+		std::io::Write::write_all(&mut encoder, &plain).unwrap();
+		let gzipped = encoder.finish().unwrap();
+		let (url, task) = preview_encoded(gzipped, "gzip").await;
+		assert_eq!(
+			fetch_preview(url, None, plain.len() as u64).await.unwrap(),
+			plain
+		);
+		task.await.unwrap();
+	}
+
+	#[tokio::test]
+	async fn preview_refuses_an_unknown_content_encoding_with_a_clear_reason() {
+		discord_api::ensure_tls_provider();
+		let body = b"# synthetic brotli preview".to_vec();
+		let (url, task) = preview_encoded(body.clone(), "br").await;
+		assert_eq!(
+			fetch_preview(url, None, body.len() as u64)
+				.await
+				.unwrap_err(),
+			"Unexpected encoding; reload the conversation"
+		);
+		task.await.unwrap();
+	}
+
+	#[test]
+	fn preview_sources_prefer_the_cdn_and_cover_proxy_only_and_swapped_fields() {
+		let attachment = |url: Option<&str>, proxy: Option<&str>| model::Attachment {
+			id: model::Id(700),
+			filename: "notes.md".into(),
+			description: None,
+			content_type: Some("text/markdown".into()),
+			size: 64,
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+			media: model::EmbedMedia {
+				url: url.map(str::to_owned),
+				proxy_url: proxy.map(str::to_owned),
+				..Default::default()
+			},
+		};
+		let cdn = "https://cdn.discordapp.com/attachments/1/700/notes.md?ex=1&is=1&hm=1";
+		let media = "https://media.discordapp.net/attachments/1/700/notes.md?ex=1&is=1&hm=1";
+		let (primary, fallback) = preview_sources(&attachment(Some(cdn), Some(media))).unwrap();
+		assert_eq!(primary.as_str(), cdn);
+		assert_eq!(fallback.unwrap().as_str(), media);
+		// A payload that kept only the proxy URL still previews.
+		let (primary, fallback) = preview_sources(&attachment(None, Some(media))).unwrap();
+		assert_eq!(primary.as_str(), media);
+		assert!(fallback.is_none());
+		// Fields swapped by an older payload still resolve CDN-first.
+		let (primary, fallback) = preview_sources(&attachment(Some(media), Some(cdn))).unwrap();
+		assert_eq!(primary.as_str(), cdn);
+		assert_eq!(fallback.unwrap().as_str(), media);
+		// Foreign hosts and unsigned links stay refused.
+		assert!(
+			preview_sources(&attachment(
+				Some("https://evil.test/attachments/1/700/notes.md?ex=1&is=1&hm=1"),
+				None
+			))
+			.is_none()
+		);
+		assert!(
+			preview_sources(&attachment(
+				Some("https://cdn.discordapp.com/attachments/1/700/notes.md"),
+				None
+			))
+			.is_none()
+		);
 	}
 }

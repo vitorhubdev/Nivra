@@ -202,7 +202,9 @@ impl CallCues {
 		channel: Id,
 		events: &mut VecDeque<client_core::voice::MembershipEvent>,
 	) -> Vec<Sound> {
-		self.joined |= ready;
+		// Any drained call event proves the local client is in the call, so a quick
+		// leave before the audio devices open still plays its cue.
+		self.joined |= ready || !events.is_empty();
 		events
 			.drain(..)
 			.filter_map(|event| match event {
@@ -354,6 +356,8 @@ pub struct Voice {
 	camera_preview: Option<std::sync::Arc<std::sync::Mutex<CameraPicture>>>,
 	pending: Option<Pending>,
 	live: Option<Live>,
+	/// Last observed own server-mute state, so a gateway mute plays a cue.
+	server_muted: Option<(Id, bool)>,
 	/// Pending automatic rejoin; `None` when no retry is scheduled.
 	reconnect: Option<Reconnect>,
 	/// Attempts already spent on the current drop, cleared once a call connects.
@@ -793,6 +797,33 @@ impl Voice {
 		if let Some(command) = self.poll_reconnect(state, ui, ctx) {
 			return Some(command);
 		}
+		// Server-side mute/deafen of our own voice state uses the same cues as the
+		// local toggle, so a moderator muting the owner is audible.
+		if let Some(call) = state.voice.active.as_ref() {
+			let current = (call.channel, call.server_muted);
+			if self.server_muted != Some(current) {
+				let previous = self.server_muted;
+				self.server_muted = Some(current);
+				if let Some((channel, was_muted)) = previous
+					&& channel == call.channel
+					&& was_muted != call.server_muted
+					&& matches!(call.phase, Phase::Connected | Phase::Waiting)
+				{
+					let cue = if call.server_muted {
+						Sound::Mute
+					} else {
+						Sound::Unmute
+					};
+					if ui.notification_options.allows(cue) {
+						ui.notification_preview = Some(cue);
+						// `ui` runs after the notification runtime; ask for the frame that plays it.
+						ctx.request_repaint();
+					}
+				}
+			}
+		} else {
+			self.server_muted = None;
+		}
 		ui.voice_switch_ready =
 			self.pending.is_none() && self.live.is_none() && self.retiring.is_none();
 		self.poll_mic_preview(state, ui, ctx);
@@ -1121,10 +1152,8 @@ impl Voice {
 					.drain(ready, channel, &mut state.voice.membership_events);
 				let mut drained = false;
 				for cue in cues {
-					if ui.notification_cues.len() >= 4 {
-						ui.notification_cues.remove(0);
-					}
-					ui.notification_cues.push(cue);
+					// One bound for every membership burst, never the old per-frame four.
+					push_membership_cue(&mut ui.notification_cues, cue);
 					drained = true;
 				}
 				if drained {
@@ -1976,6 +2005,26 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn a_quick_leave_sounds_even_before_the_audio_devices_open() {
+		let channel = Id(20);
+		let mut cues = CallCues::default();
+		let mut events = VecDeque::new();
+		events.push_back(client_core::voice::MembershipEvent::Joined {
+			channel,
+			user: Id(1),
+		});
+		assert_eq!(
+			cues.drain(false, channel, &mut events),
+			vec![Sound::UserJoin]
+		);
+		assert_eq!(
+			cues.self_leave(),
+			Some(Sound::UserLeave),
+			"any drained call event arms the leave cue"
+		);
+	}
+
+	#[test]
 	fn reconnect_policy_follows_the_discord_close_table() {
 		use discord_voice::CloseDisposition;
 		// Socket drops and failed resumes are network trouble: bounded rejoin applies.
@@ -2041,6 +2090,37 @@ mod tests {
 		assert_eq!(
 			state.voice.active.as_ref().unwrap().phase,
 			Phase::Connecting
+		);
+	}
+
+	#[test]
+	fn server_mute_of_our_own_voice_state_plays_the_local_cue() {
+		let runtime = Runtime::new().unwrap();
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		state.gateway_connected = true;
+		state.start_call(Id(22), false).unwrap();
+		state.voice.active.as_mut().unwrap().phase = Phase::Connected;
+		let mut manager = Voice::default();
+		let mut ui = ui::MessagingUi::default();
+		let ctx = egui::Context::default();
+		// The first observation seeds the state without a cue.
+		state.voice.active.as_mut().unwrap().server_muted = false;
+		manager.poll(&runtime, &mut state, &mut ui, &ctx);
+		assert!(ui.notification_preview.is_none());
+		// A moderator mutes us: one Mute cue.
+		state.voice.active.as_mut().unwrap().server_muted = true;
+		manager.poll(&runtime, &mut state, &mut ui, &ctx);
+		assert_eq!(
+			ui.notification_preview.take(),
+			Some(model::notification_preferences::Sound::Mute)
+		);
+		// And unmuting plays Unmute.
+		state.voice.active.as_mut().unwrap().server_muted = false;
+		manager.poll(&runtime, &mut state, &mut ui, &ctx);
+		assert_eq!(
+			ui.notification_preview.take(),
+			Some(model::notification_preferences::Sound::Unmute)
 		);
 	}
 

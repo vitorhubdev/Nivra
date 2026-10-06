@@ -239,6 +239,12 @@ impl Runtime {
 		if let Some(preview) = ui.notification_preview.take() {
 			push_local_cue(&mut self.local, preview, membership_volume(options, false));
 		}
+		if !ui.notification_preview_sequence.is_empty() {
+			for cue in ui.notification_preview_sequence.drain(..) {
+				push_local_cue(&mut self.local, cue, membership_volume(options, false));
+			}
+			ctx.request_repaint();
+		}
 		let output = ui.voice_output.as_deref();
 		if membership_due(self.membership_due, Instant::now())
 			&& let Some((cue, volume)) = self.membership.pop_front()
@@ -391,6 +397,20 @@ mod tests {
 		options.member_mute = false;
 		assert!(!options.allows(Sound::MemberMute));
 		assert!(options.allows(Sound::MemberUnmute));
+	}
+
+	#[test]
+	fn membership_cues_keep_sound_with_do_not_disturb_and_zero_volume() {
+		let options = Device {
+			disable_sounds: true,
+			volume: 0,
+			..Device::default()
+		};
+		// Local cues obey the preferences; call membership keeps its level so a join,
+		// leave, mute or unmute is never silent (the runtime pushes it without allows).
+		assert!(!options.allows(Sound::UserJoin));
+		assert_eq!(membership_volume(options, true), 100);
+		assert_eq!(membership_volume(options, false), 0);
 	}
 
 	#[test]

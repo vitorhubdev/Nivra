@@ -6587,6 +6587,17 @@ impl eframe::App for Desktop {
 			self.poll_voice(ctx);
 		}
 		self.pump_call_cues(ctx);
+		if std::mem::take(&mut self.messaging.notification_call_sounds_test) {
+			// Explicit previews ignore Do Not Disturb and the per-sound switches, so
+			// this really tests the four advertised sounds on the current output.
+			self.messaging.notification_preview_sequence = vec![
+				model::notification_preferences::Sound::UserJoin,
+				model::notification_preferences::Sound::UserLeave,
+				model::notification_preferences::Sound::Mute,
+				model::notification_preferences::Sound::Unmute,
+			];
+			ctx.request_repaint();
+		}
 		if self.messaging.copy_log_requested {
 			self.messaging.copy_log_requested = false;
 			ctx.copy_text(platform::diagnostics::summary());

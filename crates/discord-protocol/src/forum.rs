@@ -322,6 +322,7 @@ impl Reply {
 			threads,
 			more: self.has_more,
 			previews,
+			fallback: None,
 		};
 		if !page.valid(parent, guild) {
 			return Err(invalid);
@@ -354,6 +355,7 @@ impl GuildActive {
 			threads,
 			more: false,
 			previews: Vec::new(),
+			fallback: None,
 		};
 		if !page.valid(parent, guild) {
 			return Err(invalid);

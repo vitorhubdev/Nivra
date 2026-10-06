@@ -1883,6 +1883,17 @@ fn posts_footer(ui: &mut egui::Ui, state: &State, forum: Id) -> bool {
 				.clicked();
 		}
 	});
+	// A fallback that took long is explained once the list is on screen, discreetly.
+	if state.posts.fallback.is_some_and(|report| report.slow()) {
+		ui.label(
+			RichText::new(crate::tr_ui!(
+				ui,
+				"This forum is large; loading another way…"
+			))
+			.size(12.0)
+			.color(colors.muted),
+		);
+	}
 	request
 }
 
@@ -2102,6 +2113,75 @@ mod tests {
 		assert!(
 			max_x <= 1024.0,
 			"gallery content reaches {max_x} in a 1024-wide window"
+		);
+	}
+
+	#[test]
+	fn a_slow_fallback_shows_a_discreet_notice() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		state.posts.parent = Some(Id(26));
+		state.posts.fallback = Some(model::forum::FallbackReport {
+			reason: model::forum::FallbackReason::Oversized,
+			bytes: 1024,
+			elapsed: std::time::Duration::from_millis(3_200),
+		});
+		let mut forum = ForumUi::default();
+		let mut commands = Vec::new();
+		let mut scratch = Scratch::default();
+		let mut rendered = |state: &mut client_core::State| {
+			let mut text = Vec::new();
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(1120.0, 900.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					let mut staged = staged(&mut scratch);
+					forum.show(
+						ui,
+						state,
+						Id(26),
+						&mut commands,
+						(
+							&mut crate::scroll::Session::default(),
+							&mut staged,
+							&mut crate::avatars::Avatars::default(),
+						),
+						(
+							&mut crate::channel_menu::ChannelMenu::default(),
+							crate::shortcuts::ShortcutView::new(&Default::default(), true),
+						),
+						model::Language::English,
+					);
+				},
+			);
+			for shape in &output.shapes {
+				labels(&shape.shape, &mut text);
+			}
+			output.drop_without_applying_deltas();
+			text
+		};
+		let text = rendered(&mut state);
+		assert!(
+			text.iter()
+				.any(|text| text == "This forum is large; loading another way…"),
+			"a slow fallback explains itself: {text:?}"
+		);
+		// A fast fallback keeps the list quiet.
+		state.posts.fallback = Some(model::forum::FallbackReport {
+			elapsed: std::time::Duration::from_millis(120),
+			..state.posts.fallback.unwrap()
+		});
+		let text = rendered(&mut state);
+		assert!(
+			!text
+				.iter()
+				.any(|text| text == "This forum is large; loading another way…"),
+			"a fast fallback stays quiet"
 		);
 	}
 
@@ -2457,6 +2537,7 @@ mod tests {
 					}],
 					more: false,
 					previews: Vec::new(),
+					fallback: None,
 				}),
 			);
 			forum.query.clear();

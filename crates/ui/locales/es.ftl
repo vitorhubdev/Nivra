@@ -1620,3 +1620,5 @@ No posts match = "Ninguna publicación coincide"
 No posts loaded = "Ninguna publicación cargada"
 Press Enter to start a post with this title. = "Pulsa Enter para iniciar una publicación con este título."
 Nothing is posted here yet; archived posts load on request. = "Aquí todavía no hay publicaciones; las archivadas se cargan a petición."
+
+This forum is large; loading another way… = "Este foro es grande; cargando de otra manera…"

@@ -1177,6 +1177,15 @@ impl MessagingUi {
 			{
 				self.open_logs_requested = true;
 			}
+			if design::button(
+				ui,
+				crate::i18n::text(self.language, "Export diagnostics"),
+				design::ButtonKind::Outline,
+			)
+			.clicked()
+			{
+				self.export_diagnostics_requested = true;
+			}
 		});
 	}
 
@@ -1925,5 +1934,13 @@ mod help_tests {
 			.click();
 		harness.run();
 		assert!(harness.state().view.open_logs_requested);
+		harness
+			.get_by_role_and_label(
+				egui::Role::Button,
+				crate::i18n::text(language, "Export diagnostics"),
+			)
+			.click();
+		harness.run();
+		assert!(harness.state().view.export_diagnostics_requested);
 	}
 }

@@ -50,6 +50,37 @@ impl Default for Controls {
 		}
 	}
 }
+/// What Discord's voice close codes mean for the session (official "Voice Close Event
+/// Codes"). `Resume` re-opens the socket and replays op 7; every other outcome ends this
+/// transport with a specific reason and leaves the rejoin decision to the call layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseDisposition {
+	/// The voice session survives: normal closure, going away, abnormal closure (nothing
+	/// received, 1006) and a crashed voice server (4015) are resumed.
+	Resume,
+	/// 4006/4009: the old session is gone; a fresh voice session must be opened.
+	SessionExpired,
+	/// 4014 and protocol-level codes: this browser session was disconnected; no resume.
+	Disconnected,
+	/// 4008/4021: rate limited; stop and let the user retry later.
+	RateLimited,
+	/// 4022: the call itself was terminated. A new VOICE_SERVER_UPDATE opens the new server.
+	Terminated,
+}
+
+/// Classifies a voice close frame code; `None` is a close without a status code (1005),
+/// which network drops surface as and which preserves the session like 1006.
+pub fn close_disposition(code: Option<u16>) -> CloseDisposition {
+	match code {
+		None | Some(1000 | 1001 | 1006 | 4015) => CloseDisposition::Resume,
+		Some(4006 | 4009) => CloseDisposition::SessionExpired,
+		Some(4008 | 4021) => CloseDisposition::RateLimited,
+		Some(4022) => CloseDisposition::Terminated,
+		// 4014 (kicked or the main gateway session ended) and any other code end this socket.
+		_ => CloseDisposition::Disconnected,
+	}
+}
+
 #[allow(clippy::large_enum_variant)] // Ready carries the full connection context.
 pub enum Status {
 	Connecting,
@@ -68,6 +99,15 @@ pub enum Status {
 	Speaking(SpeakingState),
 	/// A non-DAVE participant joined. The call stays up on transport encryption only.
 	TransportOnly,
+	/// The voice socket is being resumed after a drop that preserves the session.
+	Resuming {
+		attempt: u8,
+	},
+	/// The voice socket closed with `code`; the disposition says what follows.
+	Closed {
+		code: Option<u16>,
+		disposition: CloseDisposition,
+	},
 }
 
 /// Parallel user IDs and `0..=255` energy levels indexed by voice slot.

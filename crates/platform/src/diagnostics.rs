@@ -199,6 +199,49 @@ pub fn summary() -> String {
 	)
 }
 
+/// The user's Desktop directory; where an exported diagnostics archive lands.
+pub fn desktop_dir() -> Option<PathBuf> {
+	dirs::desktop_dir()
+}
+
+/// The live log plus rotations, limited to lines stamped in the last 24 local hours.
+/// Lines from the older epoch-only format are kept whole; rotation already bounds them.
+pub fn log_last_24h() -> String {
+	log_last_24h_in(&log_dir())
+}
+
+fn log_last_24h_in(dir: &Path) -> String {
+	let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+	let cutoff = now - time::Duration::hours(24);
+	let cutoff = format!(
+		"{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+		cutoff.year(),
+		u8::from(cutoff.month()),
+		cutoff.day(),
+		cutoff.hour(),
+		cutoff.minute(),
+		cutoff.second()
+	);
+	let mut files = vec![dir.join("nivra.log")];
+	for index in 1..MAX_FILES {
+		files.push(dir.join(format!("nivra.{index}.log")));
+	}
+	let mut out = String::new();
+	for file in files {
+		let Ok(text) = std::fs::read_to_string(&file) else {
+			continue;
+		};
+		for line in text.lines() {
+			let stamped = line.len() >= 19 && line.as_bytes().get(4) == Some(&b'-');
+			if !stamped || line >= cutoff.as_str() {
+				out.push_str(line);
+				out.push('\n');
+			}
+		}
+	}
+	out
+}
+
 /// Opens the log folder in the OS file manager.
 pub fn open_log_folder() {
 	let dir = log_dir();
@@ -553,6 +596,34 @@ mod tests {
 		assert_eq!(stamp.as_bytes()[10], b' ', "{stamp}");
 		assert_eq!(stamp.as_bytes()[13], b':', "{stamp}");
 		assert_eq!(stamp.as_bytes()[16], b':', "{stamp}");
+	}
+
+	#[test]
+	fn export_keeps_only_the_last_24_hours() {
+		let dir = std::env::temp_dir().join(format!(
+			"nivra-export-{}-{:?}",
+			std::process::id(),
+			std::thread::current().id()
+		));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		let current = format!("{} INFO probe-new-now", timestamp());
+		std::fs::write(
+			dir.join("nivra.log"),
+			format!(
+				"2000-01-01 00:00:00 WARN probe-old-2000
+{current}
+legacy-epoch-line
+"
+			),
+		)
+		.unwrap();
+		let kept = log_last_24h_in(&dir);
+		assert!(kept.contains("probe-new-now"), "{kept}");
+		assert!(!kept.contains("probe-old-2000"), "{kept}");
+		// Legacy lines without a stamped prefix are kept; rotation already bounds them.
+		assert!(kept.contains("legacy-epoch-line"), "{kept}");
+		let _ = std::fs::remove_dir_all(&dir);
 	}
 
 	#[test]

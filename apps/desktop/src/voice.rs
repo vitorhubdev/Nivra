@@ -147,6 +147,8 @@ enum Notice {
 	DeviceReady,
 	RemoteAudio,
 	TransportOnly,
+	/// The transport is resuming a session that survived a network drop.
+	Resuming(u8),
 }
 struct Live {
 	generation: u64,
@@ -168,6 +170,8 @@ struct Live {
 	events: mpsc::Receiver<Notice>,
 	// Terminal errors must survive a full progress queue; retain the first safe reason.
 	failure: Arc<OnceLock<&'static str>>,
+	/// Terminal close code and disposition, written before the worker returns.
+	closed: Arc<OnceLock<(Option<u16>, discord_voice::CloseDisposition)>>,
 	speakers: watch::Receiver<discord_voice::SpeakingState>,
 	task: JoinHandle<()>,
 	devices: Devices,
@@ -234,6 +238,27 @@ pub(crate) fn push_membership_cue(cues: &mut Vec<Sound>, cue: Sound) {
 		cues.remove(0);
 	}
 	cues.push(cue);
+}
+/// Growing backoff up to ~30 s, like the gateway's reconnect policy.
+fn reconnect_delay(attempt: u8) -> Duration {
+	match attempt {
+		1 => Duration::from_secs(5),
+		2 => Duration::from_secs(15),
+		_ => Duration::from_secs(30),
+	}
+}
+/// Whether this drop may be rejoined automatically. A close with no disposition and a
+/// resume failure are network trouble; 4014 (kick/disconnected), 4021 (rate limit) and
+/// 4022 (call terminated) are deliberate and must not fight Discord.
+fn reconnectable(
+	error: &str,
+	closed: Option<(Option<u16>, discord_voice::CloseDisposition)>,
+) -> bool {
+	if let Some((_, disposition)) = closed {
+		return disposition == discord_voice::CloseDisposition::SessionExpired;
+	}
+	let lower = error.to_ascii_lowercase();
+	lower.contains("resume") || lower.contains("socket failed")
 }
 /// Remote cameras kept as textures at once; matches the transport's source limit.
 const MAX_REMOTE_VIDEO: usize = 16;
@@ -307,6 +332,16 @@ struct CameraTest {
 	picture: Arc<std::sync::Mutex<CameraPicture>>,
 }
 
+/// A bounded automatic rejoin after a transport drop that preserves the voice session.
+struct Reconnect {
+	channel: Id,
+	muted: bool,
+	deafened: bool,
+	at: Instant,
+}
+/// How many automatic rejoin attempts one drop may spend.
+const RECONNECT_ATTEMPTS: u8 = 3;
+
 #[derive(Default)]
 pub struct Voice {
 	camera_test: Option<CameraTest>,
@@ -319,6 +354,10 @@ pub struct Voice {
 	camera_preview: Option<std::sync::Arc<std::sync::Mutex<CameraPicture>>>,
 	pending: Option<Pending>,
 	live: Option<Live>,
+	/// Pending automatic rejoin; `None` when no retry is scheduled.
+	reconnect: Option<Reconnect>,
+	/// Attempts already spent on the current drop, cleared once a call connects.
+	reconnect_attempts: u8,
 	retiring: Option<mpsc::Receiver<()>>,
 	device_scan: Option<mpsc::Receiver<Result<discord_voice::audio::DeviceList, &'static str>>>,
 	camera_scan: Option<mpsc::Receiver<Result<discord_voice::camera::DeviceList, &'static str>>>,
@@ -627,6 +666,102 @@ impl Voice {
 		});
 		Some(command)
 	}
+	/// Issues a scheduled rejoin once its backoff elapsed. Returns the join command the
+	/// caller must forward to the gateway, or `None` while still waiting.
+	fn poll_reconnect(
+		&mut self,
+		state: &mut State,
+		ui: &mut ui::MessagingUi,
+		ctx: &egui::Context,
+	) -> Option<Command> {
+		let retry = self.reconnect.as_ref()?;
+		if Instant::now() < retry.at {
+			ctx.request_repaint_after(retry.at.saturating_duration_since(Instant::now()));
+			return None;
+		}
+		let retry = self.reconnect.take()?;
+		match state.start_call_with_mute(retry.channel, false, retry.muted, retry.deafened) {
+			Some(command) => {
+				platform::diagnostics::info(&format!(
+					"voice reconnect attempt {}/{} started for channel {}",
+					self.reconnect_attempts, RECONNECT_ATTEMPTS, retry.channel
+				));
+				Some(command)
+			}
+			None => {
+				platform::diagnostics::warn("voice reconnect could not start; the call ended");
+				ui.voice_reconnecting = false;
+				self.reconnect_attempts = 0;
+				self.fail(state, "Voice reconnect failed; rejoin the call")
+			}
+		}
+	}
+	/// Failure handling with Discord's bounded rejoin: sessions lost to 4006/4009 or a failed
+	/// resume retry up to three times with growing backoff; a kick (4014), rate limit and a
+	/// terminated call (4022) end immediately with the reason that names the code.
+	fn fail_with_retry(
+		&mut self,
+		state: &mut State,
+		ui: &mut ui::MessagingUi,
+		ctx: &egui::Context,
+		error: &'static str,
+		closed: Option<(Option<u16>, discord_voice::CloseDisposition)>,
+	) -> Option<Command> {
+		let attempts = self.reconnect_attempts;
+		let retryable = attempts < RECONNECT_ATTEMPTS && reconnectable(error, closed);
+		if retryable && let Some(call) = state.voice.active.as_ref() {
+			let attempt = attempts + 1;
+			self.reconnect_attempts = attempt;
+			let delay = reconnect_delay(attempt);
+			let (channel, request, muted, deafened) =
+				(call.channel, call.request, call.muted, call.deafened);
+			self.reconnect = Some(Reconnect {
+				channel,
+				muted,
+				deafened,
+				at: Instant::now() + delay,
+			});
+			let message = match attempt {
+				1 => "Reconnecting… (attempt 1 of 3)",
+				2 => "Reconnecting… (attempt 2 of 3)",
+				_ => "Reconnecting… (attempt 3 of 3)",
+			};
+			// The scheduled rejoin may only replace a call in `Failed`; keep the visible
+			// reconnecting message after the transition.
+			state.apply_voice(client_core::voice::Event::Failed {
+				channel,
+				request,
+				message,
+			});
+			if let Some(active) = state.voice.active.as_mut() {
+				active.error = Some(message);
+			}
+			ui.voice_reconnecting = true;
+			self.stop();
+			platform::diagnostics::warn(&format!(
+				"voice call dropped: {error} (code={}); reconnect attempt {attempt}/{RECONNECT_ATTEMPTS} in {}s",
+				closed
+					.and_then(|(code, _)| code)
+					.map_or_else(|| "none".to_owned(), |code| code.to_string()),
+				delay.as_secs()
+			));
+			ctx.request_repaint_after(delay);
+			return None;
+		}
+		self.reconnect = None;
+		ui.voice_reconnecting = false;
+		let final_message: &'static str = match (attempts, closed) {
+			(0, _) => error,
+			(_, Some((Some(4009), _))) => {
+				"Call dropped (code 4009: session expired). Reconnect failed after 3 attempts; rejoin the call"
+			}
+			(_, Some((Some(4006), _))) => {
+				"Call dropped (code 4006: session no longer valid). Reconnect failed after 3 attempts; rejoin the call"
+			}
+			_ => "Call dropped and reconnect failed after 3 attempts; rejoin the call",
+		};
+		self.fail(state, final_message)
+	}
 	pub fn poll(
 		&mut self,
 		runtime: &Runtime,
@@ -635,6 +770,29 @@ impl Voice {
 		ctx: &egui::Context,
 	) -> Option<Command> {
 		self.reap();
+		if state.voice.active.is_none() {
+			self.reconnect = None;
+			self.reconnect_attempts = 0;
+			ui.voice_reconnecting = false;
+		}
+		if std::mem::take(&mut ui.voice_rejoin_requested)
+			&& let Some(call) = state
+				.voice
+				.active
+				.as_ref()
+				.filter(|call| call.phase == Phase::Failed)
+		{
+			self.reconnect_attempts = 0;
+			self.reconnect = Some(Reconnect {
+				channel: call.channel,
+				muted: call.muted,
+				deafened: call.deafened,
+				at: Instant::now(),
+			});
+		}
+		if let Some(command) = self.poll_reconnect(state, ui, ctx) {
+			return Some(command);
+		}
 		ui.voice_switch_ready =
 			self.pending.is_none() && self.live.is_none() && self.retiring.is_none();
 		self.poll_mic_preview(state, ui, ctx);
@@ -862,7 +1020,13 @@ impl Voice {
 						ui.voice_privacy_code = None;
 						ui.voice_unencrypted = true;
 					}
-					Notice::Ping(ms) => ui.voice_ping_ms = Some(ms),
+					Notice::Ping(ms) => {
+						platform::diagnostics::info(&format!("voice heartbeat ping {ms} ms"));
+						ui.voice_ping_ms = Some(ms);
+					}
+					Notice::Resuming(attempt) => {
+						platform::diagnostics::info(&format!("voice resume attempt {attempt}"));
+					}
 					// Notices wake the UI; only the current device configuration can be ready.
 					Notice::DeviceReady | Notice::RemoteAudio => {}
 				}
@@ -1053,12 +1217,29 @@ impl Voice {
 			ctx.request_repaint_after(Duration::from_millis(50));
 			return None;
 		}
+		let closed = self
+			.live
+			.as_ref()
+			.and_then(|live| live.closed.get().copied());
 		let command = if let Some(error) = failure {
 			if self.push_self_leave_cue(&mut ui.notification_cues) {
 				ctx.request_repaint();
 			}
-			self.fail(state, error)
+			self.fail_with_retry(state, ui, ctx, error, closed)
 		} else {
+			let connected = state
+				.voice
+				.active
+				.as_ref()
+				.is_some_and(|call| call.phase == Phase::Connected);
+			if connected && ui.voice_reconnecting {
+				ui.voice_reconnecting = false;
+				self.reconnect = None;
+				self.reconnect_attempts = 0;
+				push_membership_cue(&mut ui.notification_cues, Sound::UserJoin);
+				platform::diagnostics::info("voice reconnected; call restored");
+				ctx.request_repaint();
+			}
 			command.or_else(|| self.poll_camera(state, ui, ctx))
 		};
 		if command.is_some() {
@@ -1519,6 +1700,8 @@ impl Voice {
 		let identity = discord_voice::Identity::generate();
 		let media_identity = identity.clone();
 		let transport_failure = failure.clone();
+		let closed = Arc::new(OnceLock::new());
+		let transport_closed = closed.clone();
 		let wake = ctx.clone();
 		let task = runtime.spawn(async move {
 			let status = send.clone();
@@ -1556,6 +1739,18 @@ impl Voice {
 						}
 						Status::RemoteAudio => Notice::RemoteAudio,
 						Status::TransportOnly => Notice::TransportOnly,
+						Status::Resuming { attempt } => {
+							let _ = status.try_send(Notice::Resuming(attempt));
+							status_wake.request_repaint();
+							return Ok(());
+						}
+						Status::Closed { code, disposition } => {
+							// The code travels through the shared slot; the terminal error is
+							// returned by the transport even when the notice queue is full.
+							let _ = transport_closed.set((code, disposition));
+							status_wake.request_repaint();
+							return Ok(());
+						}
 						Status::Speaking(snapshot) => {
 							speaking.send_replace(snapshot);
 							status_wake.request_repaint();
@@ -1591,6 +1786,7 @@ impl Voice {
 			controls,
 			events,
 			failure,
+			closed,
 			speakers,
 			task,
 			devices,
@@ -1778,6 +1974,83 @@ pub fn takeover_notice(state: &State, event: &Event) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn reconnect_policy_follows_the_discord_close_table() {
+		use discord_voice::CloseDisposition;
+		// Socket drops and failed resumes are network trouble: bounded rejoin applies.
+		assert!(reconnectable("Voice socket failed; rejoin the call", None));
+		assert!(reconnectable(
+			"Voice resume timed out; rejoin the call",
+			None
+		));
+		// Expired sessions rejoin; deliberate kicks, rate limits and terminations never do.
+		assert!(reconnectable(
+			"Voice session timed out (code 4009); rejoin the call",
+			Some((Some(4009), CloseDisposition::SessionExpired))
+		));
+		assert!(!reconnectable(
+			"Disconnected from voice by Discord (code 4014); rejoin the call",
+			Some((Some(4014), CloseDisposition::Disconnected))
+		));
+		assert!(!reconnectable(
+			"Voice rate limited (code 4021); try again shortly",
+			Some((Some(4021), CloseDisposition::RateLimited))
+		));
+		assert!(!reconnectable(
+			"Voice call was terminated by Discord (code 4022); rejoin the call",
+			Some((Some(4022), CloseDisposition::Terminated))
+		));
+	}
+
+	#[test]
+	fn a_retryable_drop_fails_the_call_and_the_scheduled_rejoin_replaces_it() {
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		state.gateway_connected = true;
+		state.start_call(Id(22), false).unwrap();
+		let mut manager = Voice::default();
+		let mut ui = ui::MessagingUi::default();
+		let ctx = egui::Context::default();
+		let command = manager.fail_with_retry(
+			&mut state,
+			&mut ui,
+			&ctx,
+			"Voice session timed out (code 4009); rejoin the call",
+			Some((Some(4009), discord_voice::CloseDisposition::SessionExpired)),
+		);
+		assert!(command.is_none(), "the retry waits for its backoff");
+		assert_eq!(
+			state.voice.active.as_ref().unwrap().phase,
+			Phase::Failed,
+			"the scheduled rejoin may only replace a failed call"
+		);
+		assert_eq!(
+			state.voice.active.as_ref().unwrap().error,
+			Some("Reconnecting… (attempt 1 of 3)")
+		);
+		assert!(ui.voice_reconnecting);
+		assert!(manager.reconnect.is_some());
+		// Fire the backoff: the join command must go out and the call becomes connectable.
+		manager.reconnect.as_mut().unwrap().at = Instant::now();
+		let command = manager.poll_reconnect(&mut state, &mut ui, &ctx);
+		assert!(
+			matches!(command, Some(Command::Voice(voice::Command::Join { channel, .. })) if channel == Id(22)),
+			"the scheduled rejoin must return a Join command"
+		);
+		assert_eq!(
+			state.voice.active.as_ref().unwrap().phase,
+			Phase::Connecting
+		);
+	}
+
+	#[test]
+	fn reconnect_delay_grows_towards_the_cap() {
+		assert_eq!(reconnect_delay(1), Duration::from_secs(5));
+		assert_eq!(reconnect_delay(2), Duration::from_secs(15));
+		assert_eq!(reconnect_delay(3), Duration::from_secs(30));
+		assert!(reconnect_delay(4) >= Duration::from_secs(30));
+	}
 
 	#[test]
 	fn call_cues_track_remote_joins_and_departures_without_reconnect_noise() {
@@ -2456,6 +2729,7 @@ mod tests {
 			controls,
 			events,
 			failure: Arc::new(OnceLock::new()),
+			closed: Arc::new(OnceLock::new()),
 			speakers,
 			task,
 			devices: Devices::default(),

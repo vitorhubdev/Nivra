@@ -863,7 +863,8 @@ impl Dialog {
 				egui::DragValue::new(&mut self.draft.slowmode)
 					.clip_text(true)
 					.range(0..=21600)
-					.suffix(format!(" {}", crate::tr_ui!(ui, "seconds"))),
+					// The catalog value already carries its leading space.
+					.suffix(crate::tr_ui!(ui, "seconds")),
 			);
 			dialog::hint(
 				ui,

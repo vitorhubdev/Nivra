@@ -411,7 +411,7 @@ impl PermissionsUi {
 				continue;
 			}
 			ui.add_space(12.0);
-			design::section(ui, group, None);
+			design::section(ui, t(group), None);
 			for &(bit, label, help) in values {
 				ui.push_id(bit, |ui| {
 					let overwrite = rows.iter().find(|o| (o.kind, o.id) == key);

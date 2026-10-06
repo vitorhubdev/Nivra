@@ -20,6 +20,8 @@ struct Preview {
 	state: client_core::State,
 	output: PathBuf,
 	thumbnail: bool,
+	/// Opens the synthetic video player after the first frame's channel reset.
+	start_video: bool,
 	frames: u8,
 	/// Wheel distance and pointer position injected over the first frames, for pages below the fold.
 	scroll: Option<(f32, egui::Pos2)>,
@@ -88,6 +90,21 @@ impl eframe::App for Preview {
 		}
 		// The desktop bridge draws the fetched text body after the main surface.
 		self.messaging.show_preview(&ctx);
+		// The timeline resets its player when the selected channel changes on the
+		// first frame, so the fixture opens the video only after that reset.
+		if self.start_video && self.frames == 0 {
+			self.start_video = false;
+			if let Some(message) = self.state.timeline.get(model::Id(601)).cloned()
+				&& let Some(attachment) = message.attachments.first().cloned()
+			{
+				let player = self.messaging.video();
+				player.begin(&message, &attachment, false);
+				let _ = player.accept_frame(&ctx, synthetic_video_frame());
+				player.state = ui::VideoState::Paused;
+				player.position = 1.2;
+				player.duration = 3.0;
+			}
+		}
 		for request in std::mem::take(&mut self.messaging.extensions.requests) {
 			if let ui::ExtensionRequest::PreviewTheme { theme, image } = request {
 				ui::design::set_extension_theme(theme.as_deref());
@@ -646,7 +663,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			if page == "overview" {
 				// The wide People pane is part of the normal layout for this capture.
 				messaging.reading_preferences.show_members = true;
-			} else if page == "text-preview" {
+			} else if matches!(page.as_str(), "text-preview" | "image-viewer" | "video") {
+				// These captures have no synthetic member list; keep the timeline full width.
+				messaging.reading_preferences.show_members = false;
+			}
+			if page == "text-preview" {
 				messaging.set_preview(ui::text_preview::TextPreview {
 					filename: "release-notes.md".into(),
 					format: ui::text_preview::PreviewFormat::Markdown,
@@ -657,16 +678,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			} else if page == "image-viewer" {
 				messaging.preview_image_viewer(model::Id(500), model::Id(700));
 			} else if page == "video" {
-				if let Some(message) = state.timeline.get(model::Id(601)).cloned()
-					&& let Some(attachment) = message.attachments.first().cloned()
-				{
-					let player = messaging.video();
-					player.begin(&message, &attachment, false);
-					let _ = player.accept_frame(&cc.egui_ctx, synthetic_video_frame());
-					player.state = ui::VideoState::Paused;
-					player.position = 1.2;
-					player.duration = 3.0;
-				}
+				// The player is opened after the first frame; see `Preview::ui`.
 			} else if page == "voice-call" {
 				// The voice fixture already stages its synthetic call.
 			} else if matches!(page.as_str(), "member-tags" | "dm-tags") {
@@ -794,6 +806,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				state,
 				output,
 				thumbnail,
+				start_video: page == "video",
 				frames: 0,
 				scroll,
 				requested: false,

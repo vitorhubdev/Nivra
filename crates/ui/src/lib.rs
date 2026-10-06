@@ -548,6 +548,10 @@ pub struct MessagingUi {
 	pub voice_privacy_code: Option<String>,
 	/// A non-DAVE participant removed end-to-end encryption. The call itself stays up.
 	pub voice_unencrypted: bool,
+	/// An automatic voice rejoin is in progress; the call card shows "Reconnecting…".
+	pub voice_reconnecting: bool,
+	/// The failure card asked for an immediate rejoin.
+	pub voice_rejoin_requested: bool,
 	/// Latest voice-server heartbeat round trip, when a call is connected.
 	pub voice_ping_ms: Option<u32>,
 	/// English place name for the connected voice server, translated at draw time.
@@ -622,6 +626,8 @@ pub struct MessagingUi {
 	pub copy_log_requested: bool,
 	/// Set by the Help page; the host opens the log folder.
 	pub open_logs_requested: bool,
+	/// Help page asked for a `.zip` diagnostics export on the Desktop.
+	pub export_diagnostics_requested: bool,
 	pub transparency: u8,
 	pub blur: u8,
 	pub transparent_all: bool,
@@ -9420,6 +9426,46 @@ mod account_card_tests {
 		assert!(
 			(after - base).abs() <= 1.0,
 			"the card is not resizable: {base} -> {after}"
+		);
+	}
+
+	#[test]
+	fn voice_panel_with_five_speakers_stays_under_the_frame_budget() {
+		let ctx = egui::Context::default();
+		ctx.set_theme(egui::ThemePreference::Dark);
+		let mut state = test_support::demo_state();
+		let mut call = demo_call();
+		call.phase = client_core::voice::Phase::Connected;
+		call.participants = (2..=6)
+			.map(|id| client_core::voice::Participant {
+				user: model::Id(id),
+				muted: false,
+				deafened: false,
+				server_muted: false,
+				server_deafened: false,
+				video: false,
+				streaming: false,
+			})
+			.collect();
+		state.voice.active = Some(call);
+		let mut view = MessagingUi {
+			voice_speaking: (2..=6).map(model::Id).collect(),
+			..MessagingUi::default()
+		};
+		view.voice_speaking_levels.extend(
+			(2..=6u64)
+				.enumerate()
+				.map(|(index, id)| (model::Id(id), 200 + index as u8)),
+		);
+		// Warm up fonts, textures and the layout cache before measuring.
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let started = std::time::Instant::now();
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let elapsed = started.elapsed();
+		println!("voice frame with 5 speakers: {elapsed:?}");
+		assert!(
+			elapsed < std::time::Duration::from_millis(50),
+			"the voice phase must stay under 50 ms per frame: {elapsed:?}"
 		);
 	}
 

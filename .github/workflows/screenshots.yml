@@ -34,6 +34,7 @@ jobs:
             @{ Name = 'preview';                Args = '--page=overview --width=1280 --height=800' },
             @{ Name = 'voice-call';             Args = '--page=voice-call --state=voice --width=1280 --height=800' },
             @{ Name = 'text-preview';           Args = '--page=text-preview --width=1120 --height=760' },
+            @{ Name = 'forum-gallery';          Args = '--page=forum --no-settings --width=1280 --height=800' },
             @{ Name = 'video-player';           Args = '--page=video --state=video --width=1120 --height=760' },
             @{ Name = 'image-viewer';           Args = '--page=image-viewer --width=1120 --height=760' },
             @{ Name = 'settings-voice';         Args = '--page=voice --width=1120 --height=760' },

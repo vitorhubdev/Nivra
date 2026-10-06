@@ -3548,13 +3548,17 @@ impl MessagingUi {
 						voice_connection_tip(ui, ping, &place, language);
 					});
 				}
-				if call_failure(
+				let (rejoin, export) = call_failure(
 					ui,
 					error,
 					colors.text_strong,
 					phase == Phase::Failed && !self.voice_reconnecting,
-				) {
+				);
+				if rejoin {
 					self.voice_rejoin_requested = true;
+				}
+				if export {
+					self.export_diagnostics_requested = true;
 				}
 				let controls = self.controls_enabled(state);
 				let can_camera = self.voice_camera_available
@@ -4440,14 +4444,22 @@ fn speaking_avatar(
 	}
 }
 
-/// Failure line with a copy action and, while the call sits in `Failed`, a bounded
-/// rejoin action. Returns whether the reader asked to rejoin now.
-fn call_failure(ui: &mut egui::Ui, error: Option<&str>, color: egui::Color32, retry: bool) -> bool {
-	let Some(error) = error else { return false };
+/// Failure line with copy and diagnostics export actions and, while the call sits in
+/// `Failed`, a bounded rejoin action. Returns which actions the reader asked for.
+fn call_failure(
+	ui: &mut egui::Ui,
+	error: Option<&str>,
+	color: egui::Color32,
+	retry: bool,
+) -> (bool, bool) {
+	let Some(error) = error else {
+		return (false, false);
+	};
 	// Runtime reasons (voice failures, decoder errors) are catalog keys when they are
 	// known, and stay in English when they are not.
 	let reason = crate::tr_str!(ui, error);
 	let mut rejoin = false;
+	let mut export = false;
 	ui.horizontal_top(|ui| {
 		ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
 			if crate::icons::button(ui, crate::icons::Icon::Copy, 28.0, "Copy failure details")
@@ -4459,6 +4471,12 @@ fn call_failure(ui: &mut egui::Ui, error: Option<&str>, color: egui::Color32, re
 			if retry && ui.button(crate::tr_ui!(ui, "Rejoin call")).clicked() {
 				rejoin = true;
 			}
+			if ui
+				.small_button(crate::tr_ui!(ui, "Export diagnostics"))
+				.clicked()
+			{
+				export = true;
+			}
 			ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
 				ui.add(
 					egui::Label::new(RichText::new(reason.as_ref()).size(12.0).color(color))
@@ -4468,7 +4486,7 @@ fn call_failure(ui: &mut egui::Ui, error: Option<&str>, color: egui::Color32, re
 			});
 		});
 	});
-	rejoin
+	(rejoin, export)
 }
 
 fn stage_notices(ui: &mut egui::Ui, notices: &[(String, bool)]) {
@@ -4952,7 +4970,8 @@ mod tests {
 						Some("Voice session timed out (code 4009); rejoin the call"),
 						egui::Color32::RED,
 						fixture.retry,
-					);
+					)
+					.0;
 				},
 				Fixture {
 					retry: true,

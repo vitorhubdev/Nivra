@@ -47,18 +47,18 @@ Stable builds are published on the [Releases page](https://github.com/vitorhubde
 | Linux x64 | `Nivra-v1.0.12-Linux-X64.tar.gz` | Extract and run |
 | macOS Apple Silicon | `Nivra-v1.0.12-macOS-ARM64.zip` | Intel macOS is not published |
 
-Every release also attaches a `SHA256SUMS.txt` checksum file. Verify the download before running it:
+Every release also attaches a `SHA256SUMS.txt` checksum file. Verify the file you downloaded before running it:
 
 ```powershell
-# Windows (PowerShell) — compare with the line for that file in SHA256SUMS.txt
+# Windows (PowerShell) — compare the output with the matching line in SHA256SUMS.txt
 Get-FileHash .\Nivra-v1.0.12-Windows-X64.exe -Algorithm SHA256
 ```
 
 ```sh
-# Linux
+# Linux — checks the files that are present and ignores the rest of the manifest
 sha256sum --ignore-missing -c SHA256SUMS.txt
-# macOS
-shasum -a 256 -c SHA256SUMS.txt
+# macOS — compare the printed hash with the matching line in SHA256SUMS.txt
+shasum -a 256 Nivra-v1.0.12-macOS-ARM64.zip
 ```
 
 **These builds are not code-signed.** On Windows, SmartScreen may show *"Windows protected your PC"*: choose **More info** → **Run anyway**. On macOS, Gatekeeper may block the first launch of the `.app`: right-click it, choose **Open**, and confirm; macOS also allows it later under System Settings → Privacy & Security.
@@ -82,7 +82,7 @@ These pillars are synthetic, offline tests. Live Discord interoperability and ph
 - **File previews:** text, Markdown and code previews reopen, follow Discord redirects, renew expired links and show an honest limit for oversized files; the Licenses screen opens again.
 - **Video at any resolution:** previews from 640×360 up to about 16 megapixels (e.g. 4500×3000) scale into the preview box (1920×1080 landscape, 1080×1920 portrait) without upscaling; playing a video no longer freezes the app; codecs the system cannot decode (HEVC, AV1 or VP9 without the Windows extension) do not play and the card states the real reason with Download video / Open original.
 - **Windows DLL protection:** the executable resolves its dependencies only from System32 and warns — without blocking — when system-named DLLs sit next to it.
-- **Local error log:** errors go to a rotating, redacted log (5 files × 2 MiB); an unexpected exit shows a crash report on the next launch, and Settings > Help has "Copy error log" and "Open logs folder". Nothing is sent anywhere automatically.
+- **Local error log:** errors from the main paths (downloads, attachment previews, window compositing, app registration) go to a rotating, redacted log (5 files × 2 MiB); if the app panics, the next launch shows a crash report, and Settings > Help has "Copy error log" and "Open logs folder". Nothing is sent anywhere automatically; a few internal diagnostics (update handoff, tray fallback, GPU/video) still only reach the console.
 - **Motion and clarity:** one motion token set with a "Reduce motion" switch (Settings > Appearance); disabled icon buttons explain why on hover; destructive actions get one confirmation.
 - **Also in this round:** Push to Mute on mouse 4/5 (unassigned by default), the Windows tray voice-state icon, compact timeline layout, HEIC preview via Windows WIC, Discord polls, single-instance lock, and ~3% smaller Windows executables.
 
@@ -179,7 +179,7 @@ Interface text lives in one file per language under `crates/ui/locales/`; adding
 | **Server & Group Actions** | Implemented | Server dropdown with friend invites and leave server; group DM actions (edit name/icon preview, mute, leave) |
 | **Context Menus & Shortcuts** | Implemented | Right-click context menus for messages, media (save/copy), server channels and members |
 | **Typing Indicators** | Implemented | Shows incoming typing with short expiry; Nivra strictly avoids emitting outgoing typing signals |
-| **Diagnostics & Error Log** | Implemented | Rotating local log (5 × 2 MiB) with tokens, cookies, e-mails, IDs and message text never written; crash report on the next launch; Copy error log / Open logs folder in Settings > Help; nothing is uploaded |
+| **Diagnostics & Error Log** | Implemented | Rotating local log (5 × 2 MiB) for the migrated paths (downloads, previews, compositing, app registration) with tokens, cookies, e-mails, IDs and message text never written; panic report on the next launch; Copy error log / Open logs folder in Settings > Help; nothing is uploaded |
 | **Persistence & Drafts** | Implemented | Bounded SQLite cache for history, drafts, settings and diagnostics; OS credential store for auth tokens; sanitary logout |
 | **Internationalization** | Implemented / partial | English, Português (Brasil) and Español available; CJK and Arabic fallback fonts included; full IME and bidirectional editing unverified |
 
@@ -218,7 +218,7 @@ nivra/
 - **Bounded local cache:** SQLite databases store recent channel history, drafts, settings, diagnostics and image-preview metadata within bounded byte and count limits. The local SQLite store is **not** encrypted by the application.
 - **Sanitary logout:** An explicit logout destroys active network sessions, purges active secrets from memory, deletes the token from the OS credential store, and erases that account's local cache and drafts.
 - **No telemetry:** Nivra contains no analytics, telemetry, tracking beacons, third-party relay or background crash collector. Nothing is uploaded automatically and there is no reporting service.
-- **Local, redacted error log:** Errors are written to rotating local files (5 × 2 MiB). Tokens, cookies, e-mail addresses, channel/message IDs and message text are never written. If the app exits unexpectedly, the next launch shows a local crash report, and Settings > Help offers "Copy error log" and "Open logs folder". On Windows the folder is `%LOCALAPPDATA%\nivra\logs`; on Linux and macOS it is `nivra/logs` under the platform's local data directory. You decide whether to attach it to an issue — it is never sent for you.
+- **Local, redacted error log:** Errors from the migrated paths (downloads, attachment previews, window compositing and application registration) are written to rotating local files (5 × 2 MiB). Tokens, cookies, e-mail addresses, channel/message IDs and message text are never written. If the app panics, a redacted report is kept and shown on the next launch (a native crash, forced kill or power loss does not produce one); Settings > Help offers "Copy error log" and "Open logs folder". On Windows the folder is `%LOCALAPPDATA%\nivra\logs`; on Linux and macOS it is `nivra/logs` under the platform's local data directory. Some internal diagnostics (update handoff, tray-icon fallback, GPU/video) still only reach the console. You decide whether to attach the log to an issue — it is never sent for you.
 - **Platform integrity:** No fingerprint spoofing, CAPTCHA/MFA bypasses, bot substitutions, token scrapers or third-party relays.
 
 For full details, review the [Storage Policy](docs/storage-policy.md) and [Threat Model](docs/threat-model.md).
@@ -250,7 +250,7 @@ For full details, review the [Storage Policy](docs/storage-policy.md) and [Threa
 
 ## Reporting problems
 
-Report Nivra issues at [vitorhubdev/Nivra/issues](https://github.com/vitorhubdev/Nivra/issues); do not file Nivra bugs upstream. Include the app version (Settings > About, or `--version`), your OS and version, and steps to reproduce. If Nivra logged an error, open **Settings > Help** and press **Copy error log**; paste it into the issue if you are comfortable sharing it. If the app closed unexpectedly, the next launch shows a crash report with **Copy report**.
+Report Nivra issues at [vitorhubdev/Nivra/issues](https://github.com/vitorhubdev/Nivra/issues); do not file Nivra bugs upstream. Include the app version (Settings > About, or `--version`), your OS and version, and steps to reproduce. If Nivra logged an error, open **Settings > Help** and press **Copy error log**; paste it into the issue if you are comfortable sharing it. If the app panicked, the next launch shows a crash report with **Copy report**.
 
 ---
 
@@ -261,7 +261,7 @@ Report Nivra issues at [vitorhubdev/Nivra/issues](https://github.com/vitorhubdev
 - Text preview and the Licenses screen open again; oversized files and expired links show the right message, and the account card keeps its content height.
 - Video preview accepts any resolution from 640×360 up to about 16 megapixels; HEVC/AV1 without a system decoder still do not play.
 - Call cues play while the window is minimized or hidden in the tray, with a 64-cue queue and member-name notifications on join/leave.
-- Windows DLL hardening plus a local, redacted rotating error log, crash report and Settings > Help tools.
+- Windows DLL hardening plus a local, redacted rotating error log, panic report and Settings > Help tools.
 - One motion token set with a "Reduce motion" option, hover explanations for disabled buttons, and a single confirmation for destructive actions.
 - Windows executables are about 3% smaller.
 

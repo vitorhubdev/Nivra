@@ -253,3 +253,194 @@ impl Page {
 			})
 	}
 }
+
+/// One card-only snapshot of a forum's post list for the on-disk cache: titles, authors,
+/// tags, counters, the card excerpt and image metadata. Never a full message body.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct CachedPage {
+	pub posts: Vec<CachedPost>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CachedPost {
+	pub id: Id,
+	#[serde(default)]
+	pub name: String,
+	#[serde(default)]
+	pub last_message: Option<Id>,
+	#[serde(default)]
+	pub message_count: Option<u32>,
+	#[serde(default)]
+	pub applied: Vec<Id>,
+	#[serde(default)]
+	pub pinned: bool,
+	#[serde(default)]
+	pub starter: Option<CachedStarter>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CachedStarter {
+	pub author_id: Id,
+	#[serde(default)]
+	pub author: String,
+	#[serde(default)]
+	pub roles: Vec<Id>,
+	#[serde(default)]
+	pub webhook: bool,
+	#[serde(default)]
+	pub excerpt: String,
+	#[serde(default)]
+	pub images: Vec<CachedImage>,
+	#[serde(default)]
+	pub image_count: u16,
+	#[serde(default)]
+	pub reactions: Vec<Reaction>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CachedImage {
+	pub media: EmbedMedia,
+	/// Attachment identity, absent for embed artwork.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub id: Option<Id>,
+	#[serde(default)]
+	pub size: u64,
+	#[serde(default)]
+	pub spoiler: bool,
+	#[serde(default)]
+	pub animated: bool,
+	#[serde(default)]
+	pub video: bool,
+}
+
+impl CachedPage {
+	/// Snapshot the card fields of one forum's loaded posts, bounded by `MAX_POSTS`.
+	pub fn from_posts(posts: impl IntoIterator<Item = (Channel, Option<Starter>)>) -> Self {
+		let posts = posts
+			.into_iter()
+			.take(MAX_POSTS)
+			.map(|(channel, starter)| CachedPost {
+				id: channel.id,
+				name: channel.name.chars().take(512).collect(),
+				last_message: channel.last_message,
+				message_count: channel.message_count,
+				applied: channel
+					.tags
+					.as_deref()
+					.map_or(Vec::new(), |tags| tags.applied.clone()),
+				pinned: channel.tags.as_deref().is_some_and(|tags| tags.pinned),
+				starter: starter.map(|starter| CachedStarter {
+					author_id: starter.author_id,
+					author: starter.author.chars().take(MAX_PREVIEW_AUTHOR).collect(),
+					roles: starter.roles,
+					webhook: starter.webhook,
+					excerpt: starter.excerpt.chars().take(MAX_PREVIEW_EXCERPT).collect(),
+					images: starter
+						.images
+						.into_iter()
+						.map(|image| CachedImage {
+							media: image.media,
+							id: (image.id.0 > 0).then_some(image.id),
+							size: image.size,
+							spoiler: image.spoiler,
+							animated: image.animated,
+							video: image.video,
+						})
+						.collect(),
+					image_count: starter.image_count,
+					reactions: starter.reactions,
+				}),
+			})
+			.collect();
+		Self { posts }
+	}
+
+	/// The channels a cached list seeds into navigation; only card fields are restored.
+	pub fn channels(&self, parent: Id, guild: Id) -> Vec<Channel> {
+		self.posts
+			.iter()
+			.map(|post| {
+				let tags = (post.pinned || !post.applied.is_empty()).then(|| {
+					Box::new(Tags {
+						applied: post.applied.clone(),
+						pinned: post.pinned,
+						..Tags::default()
+					})
+				});
+				Channel {
+					id: post.id,
+					guild: Some(guild),
+					parent_id: Some(parent),
+					kind: 11,
+					name: post.name.clone(),
+					position: 0,
+					recipients: Vec::new(),
+					last_message: post.last_message,
+					icon: None,
+					member_list_id: None,
+					message_count: post.message_count,
+					tags,
+				}
+			})
+			.collect()
+	}
+
+	/// The starter previews a cached list restores.
+	pub fn previews(&self) -> Vec<(Id, Starter)> {
+		self.posts
+			.iter()
+			.filter_map(|post| {
+				post.starter.as_ref().map(|starter| {
+					(
+						post.id,
+						Starter {
+							author_id: starter.author_id,
+							author: starter.author.clone(),
+							roles: starter.roles.clone(),
+							webhook: starter.webhook,
+							excerpt: starter.excerpt.clone(),
+							images: starter
+								.images
+								.iter()
+								.map(|image| StarterImage {
+									media: image.media.clone(),
+									id: image.id.unwrap_or(Id(0)),
+									size: image.size,
+									spoiler: image.spoiler,
+									animated: image.animated,
+									video: image.video,
+								})
+								.collect(),
+							image_count: starter.image_count,
+							reactions: starter.reactions.clone(),
+						},
+					)
+				})
+			})
+			.collect()
+	}
+
+	/// Bounds of a snapshot that may be trusted from disk or memory.
+	pub fn valid(&self) -> bool {
+		self.posts.len() <= MAX_POSTS
+			&& self.posts.iter().enumerate().all(|(i, post)| {
+				post.id.0 > 0
+					&& post.name.len() <= 512
+					&& post.applied.len() <= MAX_APPLIED_TAGS
+					&& post.applied.iter().all(|id| id.0 > 0)
+					&& self.posts[..i].iter().all(|other| other.id != post.id)
+					&& post.starter.as_ref().is_none_or(|starter| {
+						starter.author_id.0 > 0
+							&& starter.author.len() <= MAX_PREVIEW_AUTHOR
+							&& starter.roles.len() <= crate::permissions::MAX_MEMBER_ROLES
+							&& starter.excerpt.len() <= MAX_PREVIEW_EXCERPT
+							&& starter.images.len() <= MAX_PREVIEW_IMAGES
+							&& starter.images.len() <= usize::from(starter.image_count)
+							&& starter
+								.images
+								.iter()
+								.all(|image| image.media.valid() && image.media.url.is_some())
+							&& starter.reactions.len() <= MAX_PREVIEW_REACTIONS
+							&& crate::reactions::valid_reactions(&starter.reactions)
+					})
+			})
+	}
+}

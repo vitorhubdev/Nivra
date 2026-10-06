@@ -1,6 +1,7 @@
 //! Account-isolated bounded SQLite cache. This is not Discord's authoritative state.
 mod account_presence;
 mod channel_preferences;
+mod forum_pages;
 use model::{Id, Message, ReadingPreferences, User};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{
@@ -483,6 +484,13 @@ impl LocalStore {
             CREATE TABLE IF NOT EXISTS channel_preferences(
                 account TEXT PRIMARY KEY NOT NULL,
                 value TEXT NOT NULL CHECK(typeof(value)='text' AND length(CAST(value AS BLOB))<=8192)
+            );
+            CREATE TABLE IF NOT EXISTS forum_pages(
+                account TEXT NOT NULL,
+                forum TEXT NOT NULL,
+                value TEXT NOT NULL CHECK(typeof(value)='text' AND length(CAST(value AS BLOB))<=262144),
+                fetched_at INTEGER NOT NULL CHECK(typeof(fetched_at)='integer' AND fetched_at>=0),
+                PRIMARY KEY(account,forum)
             );
             CREATE TABLE IF NOT EXISTS account_presence(
                 account TEXT PRIMARY KEY NOT NULL,
@@ -1666,6 +1674,7 @@ impl LocalStore {
 			"drafts",
 			"gif_favorites",
 			"channel_preferences",
+			"forum_pages",
 			"account_presence",
 			"accounts",
 		] {

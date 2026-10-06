@@ -1622,3 +1622,5 @@ Press Enter to start a post with this title. = "Press Enter to start a post with
 Nothing is posted here yet; archived posts load on request. = "Nothing is posted here yet; archived posts load on request."
 
 This forum is large; loading another way… = "This forum is large; loading another way…"
+
+Updated = "Updated"

@@ -9,6 +9,10 @@ pub const MAX_TITLE: usize = 100;
 pub struct Posts {
 	// At most 200 starter previews, bounded like the posts they sit beside.
 	previews: std::collections::BTreeMap<Id, model::forum::Starter>,
+	/// The snapshot this forum opened from, used to mark what the refresh changed.
+	cached: Option<(Id, model::forum::CachedPage)>,
+	/// Posts whose card data changed since that snapshot.
+	changed: std::collections::BTreeSet<Id>,
 	/// The last guild-wide fallback for the open forum, shown as a slow-list notice.
 	pub fallback: Option<model::forum::FallbackReport>,
 	/// The same report, held until the app logs it once.
@@ -276,12 +280,68 @@ impl State {
 		if let Some(report) = page.fallback {
 			self.posts.pending_fallback_log = Some((parent, report));
 		}
-		for (post, starter) in page.previews {
-			self.posts.remember_preview(post, starter);
-		}
+		// Mark what the refresh changed against the cached snapshot this forum opened from.
+		self.posts.changed = self.changed_against_cache(parent, &page.threads);
+		self.posts.cached = None;
 		// Every returned row advances the offset, even one this state already knew.
 		let returned = page.threads.len();
-		for post in page.threads {
+		if let Err(label) = self.merge_forum_page(parent, guild, page.threads, page.previews) {
+			self.posts.error = Some(label);
+			self.posts.more = false;
+			return;
+		}
+		self.posts.loaded = self.posts.loaded.saturating_add(returned);
+		self.posts.more = page.more && returned > 0;
+	}
+
+	/// Posts whose card data differs from the cached snapshot of this forum.
+	fn changed_against_cache(
+		&self,
+		parent: Id,
+		threads: &[Channel],
+	) -> std::collections::BTreeSet<Id> {
+		let mut changed = std::collections::BTreeSet::new();
+		let Some((cached_parent, cached)) = &self.posts.cached else {
+			return changed;
+		};
+		if *cached_parent != parent {
+			return changed;
+		}
+		for post in threads {
+			let same = cached
+				.posts
+				.iter()
+				.find(|old| old.id == post.id)
+				.is_some_and(|old| {
+					old.last_message == post.last_message
+						&& old.message_count == post.message_count
+						&& old.name == post.name
+						&& old.pinned == post.tags.as_deref().is_some_and(|tags| tags.pinned)
+						&& old.applied
+							== post
+								.tags
+								.as_deref()
+								.map_or(&[][..], |tags| tags.applied.as_slice())
+				});
+			if !same {
+				changed.insert(post.id);
+			}
+		}
+		changed
+	}
+
+	/// Insert or update the posts of one forum page, bounded by the navigation budget.
+	fn merge_forum_page(
+		&mut self,
+		parent: Id,
+		guild: Id,
+		threads: Vec<Channel>,
+		previews: Vec<(Id, model::forum::Starter)>,
+	) -> std::result::Result<(), &'static str> {
+		for (post, starter) in previews {
+			self.posts.remember_preview(post, starter);
+		}
+		for post in threads {
 			if let Some(index) = self.channel_index(post.id) {
 				let existing = &self.channels[index];
 				if existing.parent_id == Some(parent) && existing.guild == Some(guild) {
@@ -292,9 +352,7 @@ impl State {
 							+ post.name.capacity()
 							+ tag_bytes(&post);
 					if bytes + self.permissions.bytes() > model::account::MAX_BYTES {
-						self.posts.error = Some("Posts exceed the navigation budget");
-						self.posts.more = false;
-						return;
+						return Err("Posts exceed the navigation budget");
 					}
 					let existing = &mut self.channels[index];
 					existing.last_message = existing.last_message.max(post.last_message);
@@ -310,15 +368,57 @@ impl State {
 				|| bytes + post.bytes() + self.permissions.bytes() > model::account::MAX_BYTES
 				|| self.channels.try_reserve_exact(1).is_err()
 			{
-				self.posts.error = Some("Posts exceed the navigation budget");
-				self.posts.more = false;
-				return;
+				return Err("Posts exceed the navigation budget");
 			}
 			self.channels.push(post);
 			self.invalidate_navigation();
 		}
-		self.posts.loaded = self.posts.loaded.saturating_add(returned);
-		self.posts.more = page.more && returned > 0;
+		Ok(())
+	}
+
+	/// Seed the open forum with its cached card snapshot before the fresh page arrives.
+	/// Returns false when the snapshot does not belong to the current open forum or is
+	/// already superseded by a fresh page.
+	pub fn apply_forum_cache(&mut self, parent: Id, cached: model::forum::CachedPage) -> bool {
+		if self.demo
+			|| self.selected != Some(parent)
+			|| !self.can_load_posts(parent)
+			|| !cached.valid()
+		{
+			return false;
+		}
+		// A fresh page already replaced the cache for this open forum.
+		if self.posts.parent == Some(parent) && self.posts.loaded > 0 {
+			return false;
+		}
+		let Some(guild) = self.channel(parent).and_then(|channel| channel.guild) else {
+			return false;
+		};
+		let threads = cached.channels(parent, guild);
+		let previews = cached.previews();
+		if self
+			.merge_forum_page(parent, guild, threads, previews)
+			.is_err()
+		{
+			return false;
+		}
+		self.posts.cached = Some((parent, cached));
+		self.posts.changed.clear();
+		true
+	}
+
+	/// Whether a card shows the "updated" marker after a background refresh.
+	pub fn post_changed(&self, post: Id) -> bool {
+		self.posts.changed.contains(&post)
+	}
+
+	/// Snapshot the open forum's card fields for the on-disk cache.
+	pub fn cached_forum_page(&self, forum: Id) -> model::forum::CachedPage {
+		model::forum::CachedPage::from_posts(
+			self.forum_posts(forum)
+				.into_iter()
+				.map(|post| (post.clone(), self.post_preview(post.id).cloned())),
+		)
 	}
 
 	pub fn can_create_post(&self, parent: Id) -> bool {
@@ -627,6 +727,181 @@ mod tests {
 			Some("🔥")
 		);
 		assert!(state.post_preview(Id(999)).is_none());
+	}
+
+	fn cached_starter(post: Id) -> model::forum::Starter {
+		model::forum::Starter {
+			author_id: Id(7),
+			author: "Synthetic".into(),
+			roles: vec![],
+			webhook: false,
+			excerpt: "Synthetic excerpt".into(),
+			images: vec![model::forum::StarterImage {
+				media: model::EmbedMedia {
+					url: Some(format!("https://cdn.example/{post}.png")),
+					proxy_url: None,
+					width: 8,
+					height: 8,
+					placeholder: Vec::new(),
+				},
+				id: Id(post.0 + 9_000),
+				size: 4_096,
+				spoiler: false,
+				animated: false,
+				video: false,
+			}],
+			image_count: 1,
+			reactions: vec![],
+		}
+	}
+
+	fn cached_page(posts: impl IntoIterator<Item = (Id, Option<Id>)>) -> model::forum::CachedPage {
+		model::forum::CachedPage::from_posts(posts.into_iter().map(|(id, last)| {
+			let mut post = channel(id.0, Some(Id(20)), 11);
+			post.last_message = last;
+			post.message_count = Some(2);
+			post.tags = Some(Box::new(model::forum::Tags {
+				applied: vec![Id(31)],
+				..Default::default()
+			}));
+			(post, Some(cached_starter(id)))
+		}))
+	}
+
+	#[test]
+	fn a_cached_snapshot_seeds_the_forum_and_the_refresh_marks_changes() {
+		let mut state = state();
+		state.channels[1].tags = Some(Box::new(model::forum::Tags {
+			available: vec![model::forum::Tag {
+				id: Id(31),
+				name: "Help".into(),
+				moderated: false,
+				emoji_id: None,
+				emoji_name: None,
+			}],
+			..Default::default()
+		}));
+		assert!(state.select(Id(20)).is_none());
+		state.request_forum_posts(Id(20), false).unwrap();
+		let cached = cached_page([(Id(21), Some(Id(500))), (Id(22), Some(Id(400)))]);
+		assert!(state.apply_forum_cache(Id(20), cached));
+		let posts: Vec<_> = state
+			.forum_posts(Id(20))
+			.iter()
+			.map(|post| post.id)
+			.collect();
+		assert_eq!(posts, vec![Id(21), Id(22)]);
+		assert_eq!(state.posts.loaded, 0, "the fresh page is still pending");
+		assert_eq!(state.post_preview(Id(21)).unwrap().author, "Synthetic");
+		assert_eq!(
+			state.post_tags(state.channel(Id(21)).unwrap())[0].id,
+			Id(31)
+		);
+		// The refresh marks the changed post and the new one, and leaves the same one quiet.
+		state.apply_forum_posts(
+			Id(20),
+			state.posts.request,
+			Ok(model::forum::Page {
+				threads: vec![
+					{
+						let mut post = channel(21, Some(Id(20)), 11);
+						post.last_message = Some(Id(600));
+						post
+					},
+					{
+						// Identical to the cached card: no marker.
+						let mut post = channel(22, Some(Id(20)), 11);
+						post.last_message = Some(Id(400));
+						post.message_count = Some(2);
+						post.tags = Some(Box::new(model::forum::Tags {
+							applied: vec![Id(31)],
+							..Default::default()
+						}));
+						post
+					},
+					channel(23, Some(Id(20)), 11),
+				],
+				more: false,
+				previews: Vec::new(),
+				fallback: None,
+			}),
+		);
+		assert!(state.post_changed(Id(21)), "new activity is marked");
+		assert!(!state.post_changed(Id(22)), "an unchanged post stays quiet");
+		assert!(state.post_changed(Id(23)), "a new post is marked");
+		// The snapshot for disk keeps the card fields only.
+		let snapshot = state.cached_forum_page(Id(20));
+		assert_eq!(snapshot.posts.len(), 3);
+		assert!(snapshot.posts.iter().any(|post| post.id == Id(23)));
+		let cached = snapshot
+			.posts
+			.iter()
+			.find(|post| post.id == Id(21))
+			.expect("cached post");
+		assert_eq!(
+			cached
+				.starter
+				.as_ref()
+				.map(|starter| starter.author.as_str()),
+			Some("Synthetic")
+		);
+		assert!(snapshot.valid());
+	}
+
+	#[test]
+	fn a_cache_is_refused_for_another_forum_or_after_a_fresh_page() {
+		let mut state = state();
+		assert!(state.select(Id(20)).is_none());
+		state.request_forum_posts(Id(20), false).unwrap();
+		// Not the open forum.
+		assert!(!state.apply_forum_cache(Id(99), cached_page([(Id(30), Some(Id(1)))])));
+		// The open forum seeds once, then a fresh page makes the cache stale.
+		assert!(state.apply_forum_cache(Id(20), cached_page([(Id(21), Some(Id(1)))])));
+		state.apply_forum_posts(
+			Id(20),
+			state.posts.request,
+			Ok(model::forum::Page {
+				threads: vec![channel(21, Some(Id(20)), 11)],
+				more: false,
+				previews: Vec::new(),
+				fallback: None,
+			}),
+		);
+		assert!(!state.apply_forum_cache(Id(20), cached_page([(Id(24), Some(Id(2)))])));
+		assert!(
+			state
+				.forum_posts(Id(20))
+				.iter()
+				.all(|post| post.id != Id(24))
+		);
+	}
+
+	#[test]
+	fn a_two_hundred_post_cache_seeds_the_open_forum_well_under_a_hundred_milliseconds() {
+		let mut state = state();
+		assert!(state.select(Id(20)).is_none());
+		state.request_forum_posts(Id(20), false).unwrap();
+		let cached = cached_page(
+			(0..model::forum::MAX_POSTS)
+				.map(|index| (Id(1_000 + index as u64), Some(Id(2_000 + index as u64)))),
+		);
+		let started = std::time::Instant::now();
+		assert!(state.apply_forum_cache(Id(20), cached));
+		let elapsed = started.elapsed();
+		assert_eq!(
+			state
+				.forum_posts(Id(20))
+				.iter()
+				.filter(|post| (1_000..1_200).contains(&post.id.0))
+				.count(),
+			model::forum::MAX_POSTS
+		);
+		assert_eq!(state.post_preview(Id(1_000)).unwrap().author, "Synthetic");
+		println!("200-post cache seeded in {elapsed:?} (debug, in-memory state)");
+		assert!(
+			elapsed < std::time::Duration::from_millis(100),
+			"cache seed took {elapsed:?}"
+		);
 	}
 
 	#[test]

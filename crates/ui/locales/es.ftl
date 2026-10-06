@@ -1622,3 +1622,5 @@ Press Enter to start a post with this title. = "Pulsa Enter para iniciar una pub
 Nothing is posted here yet; archived posts load on request. = "Aquí todavía no hay publicaciones; las archivadas se cargan a petición."
 
 This forum is large; loading another way… = "Este foro es grande; cargando de otra manera…"
+
+Updated = "Actualizado"

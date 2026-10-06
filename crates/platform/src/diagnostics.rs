@@ -61,11 +61,12 @@ pub fn log_dir() -> PathBuf {
 	if let Some(dir) = APP_LOG_DIR.get() {
 		return dir.clone();
 	}
-	std::env::temp_dir().join(format!("nivra-scratch-logs-{}", std::process::id()))
+	std::env::temp_dir().join("nivra-scratch-logs")
 }
 
-/// Removes lines written by old test runs that probed `127.0.0.1`/`evil.test` from the
-/// live log and its rotations, keeping every real line. Rewrites only files that match.
+/// Removes lines written by old test runs that probed `127.0.0.1` from the live log and
+/// its rotations, keeping every real line. A genuine off-host redirect from Discord logs
+/// its own host and must survive. Rewrites only files that match.
 fn purge_test_lines_in(dir: &Path) {
 	for name in std::iter::once("nivra.log".to_string())
 		.chain((1..MAX_FILES).map(|i| format!("nivra.{i}.log")))
@@ -74,12 +75,12 @@ fn purge_test_lines_in(dir: &Path) {
 		let Ok(text) = std::fs::read_to_string(&path) else {
 			continue;
 		};
-		if !text.contains("host=127.0.0.1") && !text.contains("evil.test") {
+		if !text.contains("host=127.0.0.1") {
 			continue;
 		}
 		let kept: String = text
 			.lines()
-			.filter(|line| !line.contains("host=127.0.0.1") && !line.contains("evil.test"))
+			.filter(|line| !line.contains("host=127.0.0.1"))
 			.collect::<Vec<_>>()
 			.join("\n");
 		let kept = if kept.is_empty() {
@@ -538,7 +539,7 @@ mod tests {
 		);
 		assert!(
 			dir.file_name()
-				.is_some_and(|name| name.to_string_lossy().starts_with("nivra-scratch-logs-")),
+				.is_some_and(|name| name == "nivra-scratch-logs"),
 			"scratch dir must be unmistakable: {dir:?}"
 		);
 	}
@@ -565,7 +566,7 @@ mod tests {
 		std::fs::create_dir_all(&dir).unwrap();
 		std::fs::write(
 			dir.join("nivra.log"),
-			"1 INFO real startup line\n2 INFO text preview refused: host=127.0.0.1 status=404\n3 WARN text preview redirect: host=127.0.0.1 status=302 location-host=evil.test\n4 ERROR real failure\n",
+			"1 INFO real startup line\n2 INFO text preview refused: host=127.0.0.1 status=404\n3 WARN text preview redirect: host=127.0.0.1 status=302 location-host=evil.test\n4 ERROR real failure\n5 WARN text preview redirect: host=cdn.discordapp.com status=302 location-host=shady.example\n",
 		)
 		.unwrap();
 		std::fs::write(
@@ -577,10 +578,10 @@ mod tests {
 		let live = std::fs::read_to_string(dir.join("nivra.log")).unwrap();
 		assert!(live.contains("real startup line"), "{live}");
 		assert!(live.contains("real failure"), "{live}");
-		assert!(
-			!live.contains("127.0.0.1") && !live.contains("evil.test"),
-			"{live}"
-		);
+		// A genuine off-host redirect logged by the real app survives the purge.
+		assert!(live.contains("location-host=shady.example"), "{live}");
+		assert!(!live.contains("127.0.0.1"), "{live}");
+		assert!(!live.contains("location-host=evil.test"), "{live}");
 		let rotated = std::fs::read_to_string(dir.join("nivra.1.log")).unwrap();
 		assert!(rotated.is_empty(), "{rotated:?}");
 		let _ = std::fs::remove_dir_all(&dir);

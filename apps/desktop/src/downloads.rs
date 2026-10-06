@@ -464,14 +464,16 @@ pub(crate) fn proxy_attachment_url(attachment: &Attachment) -> Option<url::Url> 
 /// unusable, the declared size is out of range, or neither field is a signed Discord link.
 pub(crate) fn preview_sources(attachment: &Attachment) -> Option<(url::Url, Option<url::Url>)> {
 	let mut found: Vec<url::Url> = Vec::new();
-	for raw in [
-		attachment.media.url.as_deref(),
-		attachment.media.proxy_url.as_deref(),
-	]
-	.into_iter()
-	.flatten()
-	{
-		for host in ["cdn.discordapp.com", "media.discordapp.net"] {
+	// Host order, not field order: the signed CDN link is the primary source even when an
+	// older payload swapped `url` and `proxy_url`.
+	for host in ["cdn.discordapp.com", "media.discordapp.net"] {
+		for raw in [
+			attachment.media.url.as_deref(),
+			attachment.media.proxy_url.as_deref(),
+		]
+		.into_iter()
+		.flatten()
+		{
 			if let Some(url) = attachment_cdn_url(raw, attachment, host)
 				&& !found.contains(&url)
 			{
@@ -1803,9 +1805,10 @@ mod tests {
 		let (primary, fallback) = preview_sources(&attachment(None, Some(media))).unwrap();
 		assert_eq!(primary.as_str(), media);
 		assert!(fallback.is_none());
-		// Fields swapped by an older payload resolve on the Discord host it carries.
-		let (primary, _) = preview_sources(&attachment(Some(media), Some(cdn))).unwrap();
-		assert!(primary.as_str() == cdn || primary.as_str() == media);
+		// Fields swapped by an older payload still resolve CDN-first.
+		let (primary, fallback) = preview_sources(&attachment(Some(media), Some(cdn))).unwrap();
+		assert_eq!(primary.as_str(), cdn);
+		assert_eq!(fallback.unwrap().as_str(), media);
 		// Foreign hosts and unsigned links stay refused.
 		assert!(
 			preview_sources(&attachment(

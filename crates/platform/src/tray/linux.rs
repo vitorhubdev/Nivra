@@ -1,7 +1,7 @@
-use super::Event;
+use super::{Event, TrayLabels};
 use ksni::{TrayMethods, menu::StandardItem};
 use std::sync::{
-	Arc,
+	Arc, Mutex,
 	atomic::{AtomicU8, Ordering},
 };
 use std::time::Duration;
@@ -34,6 +34,9 @@ impl Events {
 pub struct Tray {
 	events: Arc<Events>,
 	_stop: oneshot::Sender<()>,
+	runtime: tokio::runtime::Handle,
+	labels: Arc<Mutex<TrayLabels>>,
+	handle: Arc<tokio::sync::Mutex<Option<ksni::Handle<Item>>>>,
 }
 
 impl Tray {
@@ -41,6 +44,7 @@ impl Tray {
 	pub fn new(
 		wake: impl Fn() + Send + Sync + 'static,
 		restore: impl Fn() + Send + Sync + 'static,
+		labels: TrayLabels,
 	) -> Result<Self, &'static str> {
 		let runtime = tokio::runtime::Handle::try_current()
 			.map_err(|_| "The tray requires the application runtime.")?;
@@ -50,8 +54,14 @@ impl Tray {
 			wake: Box::new(wake),
 			restore: Box::new(restore),
 		});
+		let shared_labels = Arc::new(Mutex::new(labels.clone()));
+		let handle_slot: Arc<tokio::sync::Mutex<Option<ksni::Handle<Item>>>> =
+			Arc::new(tokio::sync::Mutex::new(None));
 		let (stop, mut stopped) = oneshot::channel();
 		let worker_events = events.clone();
+		let worker_labels = shared_labels.clone();
+		let replay_labels = shared_labels.clone();
+		let worker_handle = handle_slot.clone();
 		runtime.spawn(async move {
 			let Ok(icon) = image::load_from_memory_with_format(
 				include_bytes!("../../../../packaging/linux/hicolor/32x32/apps/nivra.png"),
@@ -67,6 +77,7 @@ impl Tray {
 			let item = Item {
 				events: worker_events.clone(),
 				pixels,
+				labels: worker_labels,
 			};
 			let registration = item.disable_dbus_name(true).spawn();
 			let result = tokio::select! {
@@ -92,6 +103,19 @@ impl Tray {
 				let _ = tokio::time::timeout(Duration::from_secs(2), handle.shutdown()).await;
 				return;
 			}
+			*worker_handle.lock().await = Some(handle.clone());
+			// A language change during registration updated the shared labels but could
+			// not reach ksni yet; replay them now that the handle exists.
+			let pending = replay_labels.lock().map(|labels| labels.clone()).ok();
+			if let Some(labels) = pending {
+				let _ = handle
+					.update(move |item| {
+						if let Ok(mut current) = item.labels.lock() {
+							*current = labels;
+						}
+					})
+					.await;
+			}
 			if worker_events
 				.availability
 				.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
@@ -105,10 +129,34 @@ impl Tray {
 		Ok(Self {
 			events,
 			_stop: stop,
+			runtime,
+			labels: shared_labels,
+			handle: handle_slot,
 		})
 	}
 	pub fn is_available(&self) -> bool {
 		self.events.availability.load(Ordering::Acquire) == 1
+	}
+
+	/// Replaces the menu rows with the labels for the current interface language.
+	pub fn set_labels(&self, labels: &TrayLabels) {
+		if let Ok(mut current) = self.labels.lock() {
+			*current = labels.clone();
+		}
+		let handle = self.handle.clone();
+		let labels = labels.clone();
+		self.runtime.spawn(async move {
+			if let Some(handle) = handle.lock().await.clone() {
+				let labels = labels.clone();
+				let _ = handle
+					.update(move |item| {
+						if let Ok(mut current) = item.labels.lock() {
+							*current = labels;
+						}
+					})
+					.await;
+			}
+		});
 	}
 
 	pub fn take_event(&self) -> Option<Event> {
@@ -132,6 +180,7 @@ impl Tray {
 struct Item {
 	events: Arc<Events>,
 	pixels: Vec<u8>,
+	labels: Arc<Mutex<TrayLabels>>,
 }
 
 impl ksni::Tray for Item {
@@ -152,21 +201,26 @@ impl ksni::Tray for Item {
 		self.events.push(Event::Show);
 	}
 	fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+		let labels = self
+			.labels
+			.lock()
+			.map(|labels| labels.clone())
+			.unwrap_or_else(|_| TrayLabels::english());
 		vec![
 			StandardItem {
-				label: "Show Nivra".into(),
+				label: labels.show,
 				activate: Box::new(|item: &mut Self| item.events.push(Event::Show)),
 				..Default::default()
 			}
 			.into(),
 			StandardItem {
-				label: "Minimize Nivra".into(),
+				label: labels.minimize,
 				activate: Box::new(|item: &mut Self| item.events.push(Event::Minimize)),
 				..Default::default()
 			}
 			.into(),
 			StandardItem {
-				label: "Quit".into(),
+				label: labels.quit,
 				activate: Box::new(|item: &mut Self| item.events.push(Event::Quit)),
 				..Default::default()
 			}

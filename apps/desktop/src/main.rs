@@ -869,6 +869,8 @@ struct Desktop {
 	tray: Option<platform::tray::Tray>,
 	hotkeys: platform::hotkeys::Hotkeys,
 	tray_error: Option<&'static str>,
+	/// Interface language last applied to the tray menu, so a language change rebuilds it.
+	tray_labels_language: Option<model::Language>,
 	tray_window: tray_window::State,
 	/// Status last drawn on the tray icon, so it is only rebuilt when something changes.
 	#[cfg(target_os = "windows")]
@@ -2257,6 +2259,7 @@ impl Desktop {
 			tray_setting,
 			startup,
 			tray: None,
+			tray_labels_language: None,
 			tray_window,
 			#[cfg(target_os = "windows")]
 			tray_shown: None,
@@ -2799,9 +2802,20 @@ impl Desktop {
 		}
 		self.messaging.reading_status = self.reading.status();
 	}
+	/// Tray menu labels for the chosen interface language; the platform crate owns no
+	/// catalog, so the app hands over plain strings.
+	fn tray_labels(language: model::Language) -> platform::tray::TrayLabels {
+		let t = |english: &'static str| ui::i18n::text(language, english);
+		platform::tray::TrayLabels {
+			show: t("Show Nivra").to_owned(),
+			quit: t("Quit").to_owned(),
+			minimize: t("Minimize Nivra").to_owned(),
+		}
+	}
 	fn sync_tray(&mut self, ctx: &egui::Context) {
 		let previous_status = self.messaging.tray_status;
 		self.tray_setting.observe(self.messaging.minimize_to_tray);
+		let labels = Self::tray_labels(self.messaging.language);
 		if self.tray_setting.dirty && !self.tray_setting.saving {
 			self.tray_error = None;
 			let accepted = !self.fixture_only
@@ -2831,18 +2845,32 @@ impl Desktop {
 				platform::tray::Tray::new(
 					move || wake.request_repaint(),
 					self.tray_window.restorer(),
+					labels.clone(),
 				)
 			};
 			#[cfg(not(target_os = "linux"))]
-			let tray = platform::tray::Tray::new(self.window.clone(), move || wake.request_repaint());
+			let tray = platform::tray::Tray::new(
+				self.window.clone(),
+				move || wake.request_repaint(),
+				labels.clone(),
+			);
 			match tray {
-				Ok(tray) => self.tray = Some(tray),
+				Ok(tray) => {
+					self.tray = Some(tray);
+					self.tray_labels_language = Some(self.messaging.language);
+				}
 				Err(error) => self.tray_error = Some(error),
 			}
 			#[cfg(target_os = "windows")]
 			{
 				self.tray_shown = None;
 			}
+		}
+		if self.tray_labels_language != Some(self.messaging.language)
+			&& let Some(tray) = &self.tray
+		{
+			tray.set_labels(&labels);
+			self.tray_labels_language = Some(self.messaging.language);
 		}
 		#[cfg(target_os = "windows")]
 		self.sync_tray_status();
@@ -7854,6 +7882,21 @@ mod tests {
 		}
 	}
 	#[test]
+	fn tray_labels_follow_the_interface_language() {
+		let english = Desktop::tray_labels(model::Language::English);
+		assert_eq!(english.show, "Show Nivra");
+		assert_eq!(english.quit, "Quit");
+		assert_eq!(english.minimize, "Minimize Nivra");
+		let portuguese = Desktop::tray_labels(model::Language::PortugueseBrazil);
+		assert_eq!(portuguese.show, "Mostrar Nivra");
+		assert_eq!(portuguese.quit, "Sair");
+		assert_eq!(portuguese.minimize, "Minimizar Nivra");
+		let spanish = Desktop::tray_labels(model::Language::Spanish);
+		assert_eq!(spanish.show, "Mostrar Nivra");
+		assert_eq!(spanish.quit, "Salir");
+		assert_eq!(spanish.minimize, "Minimizar Nivra");
+	}
+	#[test]
 	fn diagnostics_export_zip_carries_log_freeze_and_system_sheet() {
 		let dir = std::env::temp_dir().join(format!("nivra-export-zip-{}", std::process::id()));
 		let _ = std::fs::remove_dir_all(&dir);
@@ -7873,7 +7916,6 @@ mod tests {
 		}
 		let _ = std::fs::remove_dir_all(&dir);
 	}
-
 	#[test]
 	fn tls_provider_supports_reqwest_client_build() {
 		discord_api::ensure_tls_provider();

@@ -6840,9 +6840,12 @@ impl eframe::App for Desktop {
 
 		let download_status = match self.downloads.poll() {
 			downloads::Status::Idle | downloads::Status::Choosing => String::new(),
-			downloads::Status::Downloading { total: 0, .. } => "Loading image…".into(),
+			downloads::Status::Downloading { total: 0, .. } => {
+				ui::i18n::text(self.messaging.language, "Loading image…").to_owned()
+			}
 			downloads::Status::Downloading { received, total } => {
-				format!("Downloading: {} / {} KiB", received / 1024, total / 1024)
+				let prefix = ui::i18n::text(self.messaging.language, "Downloading");
+				format!("{prefix}: {} / {} KiB", received / 1024, total / 1024)
 			}
 			downloads::Status::Saved {
 				filename,
@@ -6861,7 +6864,9 @@ impl eframe::App for Desktop {
 				String::new()
 			}
 			downloads::Status::Cancelled | downloads::Status::Copied => String::new(),
-			downloads::Status::Failed(error) => (*error).into(),
+			downloads::Status::Failed(error) => {
+				ui::i18n::text_str(self.messaging.language, error).into_owned()
+			}
 		};
 		self.messaging.downloads().active = self.downloads.is_active();
 		self.messaging.downloads().status = download_status;

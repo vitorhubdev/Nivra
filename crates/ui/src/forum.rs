@@ -1803,7 +1803,9 @@ fn posts_view(
 			.map(|post| card(ui, state, images, post, flags(post), now))
 			.collect(),
 		Layout::Gallery => {
-			let width = ui.available_width();
+			// A scroll area can remember a wider content size from an earlier frame; the
+			// visible clip is the truth, so a gallery row never spills sideways.
+			let width = ui.clip_rect().width().min(ui.available_width());
 			let columns =
 				(((width + TILE_GAP) / (GALLERY_TILE + TILE_GAP)).floor() as usize).max(1);
 			let tile_width = ((width - TILE_GAP * (columns - 1) as f32) / columns as f32).floor();
@@ -2055,6 +2057,52 @@ mod tests {
 		assert_eq!(label(at(15 * 86_400)), "15d ago");
 		assert_eq!(label(at(70 * 86_400)), "2mo ago");
 		assert_eq!(label(at(800 * 86_400)), "2y ago");
+	}
+
+	fn rightmost(shape: &egui::Shape, max_x: &mut f32) {
+		match shape {
+			egui::Shape::Mesh(mesh) => {
+				for vertex in &mesh.vertices {
+					*max_x = max_x.max(vertex.pos.x);
+				}
+			}
+			egui::Shape::Rect(rect) => *max_x = max_x.max(rect.rect.right()),
+			egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| rightmost(shape, max_x)),
+			_ => {}
+		}
+	}
+
+	#[test]
+	fn gallery_tiles_fit_the_conversation_panel() {
+		let ctx = egui::Context::default();
+		let mut view = crate::MessagingUi::default();
+		view.reading_preferences.show_members = false;
+		let mut state = test_support::forum_gallery_state();
+		let mut max_x = 0.0;
+		for frame in 0..3 {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(1024.0, 768.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					let _ = view.show(ui, &mut state);
+				},
+			);
+			max_x = 0.0;
+			for shape in &output.shapes {
+				rightmost(&shape.shape, &mut max_x);
+			}
+			output.drop_without_applying_deltas();
+			println!("frame {frame}: content reaches {max_x}");
+		}
+		assert!(
+			max_x <= 1024.0,
+			"gallery content reaches {max_x} in a 1024-wide window"
+		);
 	}
 
 	#[test]

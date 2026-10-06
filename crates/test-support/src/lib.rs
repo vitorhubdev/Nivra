@@ -779,12 +779,12 @@ pub fn forum_gallery_state() -> State {
 	else {
 		return state;
 	};
-	let mut add = |state: &mut State,
-	               id: u64,
-	               name: &str,
-	               tag: u64,
-	               images: usize,
-	               kind: (bool, bool, bool)| {
+	let add = |state: &mut State,
+	           id: u64,
+	           name: &str,
+	           tag: u64,
+	           images: usize,
+	           kind: (bool, bool, bool)| {
 		let mut post = template.clone();
 		post.id = Id(id);
 		post.name = name.into();

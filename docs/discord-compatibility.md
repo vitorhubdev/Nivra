@@ -1693,8 +1693,8 @@ HTTPS URL. A URL is never fetched or forwarded raw; it is exchanged for a media-
 through `/applications/{id}/external-assets`, the same unofficial route Discord's client uses,
 and cached per connection so repeated identical updates cost nothing. Registered assets are
 refetched at most once a minute when a key misses, so artwork uploaded seconds after a game
-connects still resolves. This addresses [#237](https://github.com/ViceVerse-cz/Serein/issues/237),
-where a plugin published its cover art as a URL.
+connects still resolves. This addresses an early compatibility report where a plugin
+published its cover art as a URL.
 
 A small image is a corner badge. Both the outgoing path and received presences now fall back
 to the application icon when no large image resolves, instead of promoting the badge into the

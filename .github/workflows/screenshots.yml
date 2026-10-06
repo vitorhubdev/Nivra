@@ -5,6 +5,11 @@
 name: screenshots
 on:
   workflow_dispatch:
+  # Temporary bootstrap trigger so the branch can produce its first artifact;
+  # removed before merge. Manual dispatch needs the file on the default branch.
+  push:
+    branches: [docs/readme-own-identity]
+    paths: ['.github/workflows/screenshots.yml']
 concurrency:
   group: screenshots-${{ github.ref }}
   cancel-in-progress: true

@@ -56,11 +56,21 @@ pub(super) struct ChannelMenu {
 	failure: Option<Id>,
 	preference_error: bool,
 	generation: u64,
+	/// Demo-only: opens this channel's context menu on the next frame so a
+	/// synthetic screenshot can show it without pointer input.
+	#[cfg(any(test, feature = "demo"))]
+	preview: Option<Id>,
 }
 
 impl ChannelMenu {
 	pub fn is_open(&self) -> bool {
 		self.dialog.is_some()
+	}
+
+	/// Demo-only hook used by the offline `--demo-channel-menu` preview.
+	#[cfg(any(test, feature = "demo"))]
+	pub fn preview_context(&mut self, channel: Id) {
+		self.preview = Some(channel);
 	}
 
 	/// Shows the shared "full" feedback so DM, group and guild pins report capacity alike.
@@ -80,7 +90,7 @@ impl ChannelMenu {
 		let Some(guild) = channel.guild else { return };
 		// Forum posts and text-channel threads both use the thread menu (close, rename, delete).
 		if matches!(channel.kind, 10..=12) && state.is_thread_channel(channel.id) {
-			self.posts.context(response, state, channel, view);
+			self.posts.context(response, state, channel, view, language);
 			if let Some(intent) = self.posts.shortcut_requested.take() {
 				self.shortcut_requested = Some(intent);
 			}
@@ -88,164 +98,183 @@ impl ChannelMenu {
 			return;
 		}
 		let colors = design::palette_for(&response.ctx);
-		user_menu::popup(
+		#[cfg(any(test, feature = "demo"))]
+		let forced = self.preview == Some(channel.id);
+		#[cfg(any(test, feature = "demo"))]
+		if forced {
+			self.preview = None;
+		}
+		#[allow(unused_mut)]
+		let mut popup = user_menu::popup(
 			response,
 			response.id.with(("channel-menu", state.generation)),
-		)
-		.frame(
-			egui::Frame::popup(&response.ctx.style_of(response.ctx.theme()))
-				.fill(colors.chat)
-				.inner_margin(8)
-				.corner_radius(8),
-		)
-		.show(|ui| {
-			let t = |english: &'static str| crate::i18n::text(language, english);
-			ui.set_width(232.0);
-			ui.spacing_mut().button_padding = egui::vec2(12.0, 8.0);
-			let available = (state.demo || state.gateway_connected)
-				&& !state.channel_action_pending()
-				&& state.can_view(channel.id);
-			let mut intent = None;
-			if row(
-				ui,
-				t("Mark As Read"),
-				state.can_mark_channel_read(channel.id),
-				false,
+		);
+		#[cfg(any(test, feature = "demo"))]
+		if forced {
+			popup = popup
+				.open_memory(Some(egui::SetOpenCommand::Bool(true)))
+				.at_position(egui::pos2(response.rect.left(), response.rect.bottom()));
+		}
+		popup
+			.frame(
+				egui::Frame::popup(&response.ctx.style_of(response.ctx.theme()))
+					.fill(colors.chat)
+					.inner_margin(8)
+					.corner_radius(8),
 			)
-			.clicked()
-			{
-				intent = Some(Intent::Read);
-			}
-			ui.separator();
-			if channel.kind != 4
-				&& row(
-					ui,
-					if view.contains(Shortcut::Favorite, channel.id) {
-						t("Remove From Favorites")
-					} else {
-						t("Add To Favorites")
-					},
-					view.available(),
-					false,
-				)
-				.on_hover_text(t("Favorites are saved on this device."))
-				.clicked()
-			{
-				self.shortcut_requested = Some(view.toggle(Shortcut::Favorite, channel.id));
-				self.generation = state.generation;
-				ui.close();
-			}
-			ui.separator();
-			if state.can_create_server_invite(guild, channel.id)
-				&& row(
-					ui,
-					t("Invite to Channel"),
-					available && !state.server_invite_pending() && !state.server_action_pending(),
-					false,
-				)
-				.clicked()
-			{
-				self.invite_requested = Some((guild, channel.id));
-				self.generation = state.generation;
-				ui.close();
-			}
-			if row(ui, t("Copy Link"), true, false).clicked() {
-				ui.ctx().copy_text(format!(
-					"https://discord.com/channels/{guild}/{}",
-					channel.id
-				));
-				ui.close();
-			}
-			ui.separator();
-			ui.add_enabled_ui(available, |ui| {
-				if state.guild_channel_muted(channel.id) == Some(true)
-					&& row(ui, t("Unmute Channel"), true, false).clicked()
-				{
-					intent = Some(Intent::Write(Action::Mute(Mute::Unmute)));
-				}
-				ui.menu_button(t("Mute Channel"), |ui| {
-					for (label, seconds) in [
-						("For 15 Minutes", 900),
-						("For 1 Hour", 3600),
-						("For 3 Hours", 10800),
-						("For 8 Hours", 28800),
-						("For 24 Hours", 86400),
-					] {
-						if row(ui, t(label), true, false).clicked() {
-							intent = Some(Intent::Write(Action::Mute(Mute::For(seconds))));
-						}
-					}
-					if row(ui, t("Until I Turn It Back On"), true, false).clicked() {
-						intent = Some(Intent::Write(Action::Mute(Mute::Forever)));
-					}
-				});
-				ui.menu_button("Notification Settings", |ui| {
-					let level = state.channel_notification_level(channel.id);
-					for (value, label) in [
-						(0, "All Messages"),
-						(1, "Only @mentions"),
-						(2, "Nothing"),
-						(3, "Use Server Default"),
-					] {
-						if ui.selectable_label(level == Some(value), label).clicked() {
-							intent = Some(Intent::Write(Action::Notifications(value)));
-						}
-					}
-				});
-			});
-			if state.can_open_channel_settings(channel.id) {
-				ui.separator();
+			.show(|ui| {
+				let t = |english: &'static str| crate::i18n::text(language, english);
+				ui.set_width(232.0);
+				ui.spacing_mut().button_padding = egui::vec2(12.0, 8.0);
+				let available = (state.demo || state.gateway_connected)
+					&& !state.channel_action_pending()
+					&& state.can_view(channel.id);
+				let mut intent = None;
 				if row(
 					ui,
-					if channel.kind == 4 {
-						"Edit Category"
-					} else {
-						"Edit Channel"
-					},
-					available,
+					t("Mark As Read"),
+					state.can_mark_channel_read(channel.id),
 					false,
 				)
 				.clicked()
 				{
-					intent = Some(Intent::Dialog(Kind::Edit));
+					intent = Some(Intent::Read);
 				}
-			}
-			if state.can_manage_channel(channel.id) {
-				for (label, kind) in [
-					(
-						if channel.kind == 4 {
-							"Duplicate Category"
+				ui.separator();
+				if channel.kind != 4
+					&& row(
+						ui,
+						if view.contains(Shortcut::Favorite, channel.id) {
+							t("Remove From Favorites")
 						} else {
-							"Duplicate Channel"
+							t("Add To Favorites")
 						},
-						Kind::Duplicate,
-					),
-					("Create Channel", Kind::Create),
-					(
+						view.available(),
+						false,
+					)
+					.on_hover_text(t("Favorites are saved on this device."))
+					.clicked()
+				{
+					self.shortcut_requested = Some(view.toggle(Shortcut::Favorite, channel.id));
+					self.generation = state.generation;
+					ui.close();
+				}
+				ui.separator();
+				if state.can_create_server_invite(guild, channel.id)
+					&& row(
+						ui,
+						t("Invite to Channel"),
+						available
+							&& !state.server_invite_pending()
+							&& !state.server_action_pending(),
+						false,
+					)
+					.clicked()
+				{
+					self.invite_requested = Some((guild, channel.id));
+					self.generation = state.generation;
+					ui.close();
+				}
+				if row(ui, t("Copy Link"), true, false).clicked() {
+					ui.ctx().copy_text(format!(
+						"https://discord.com/channels/{guild}/{}",
+						channel.id
+					));
+					ui.close();
+				}
+				ui.separator();
+				ui.add_enabled_ui(available, |ui| {
+					if state.guild_channel_muted(channel.id) == Some(true)
+						&& row(ui, t("Unmute Channel"), true, false).clicked()
+					{
+						intent = Some(Intent::Write(Action::Mute(Mute::Unmute)));
+					}
+					ui.menu_button(t("Mute Channel"), |ui| {
+						for (label, seconds) in [
+							("For 15 Minutes", 900),
+							("For 1 Hour", 3600),
+							("For 3 Hours", 10800),
+							("For 8 Hours", 28800),
+							("For 24 Hours", 86400),
+						] {
+							if row(ui, t(label), true, false).clicked() {
+								intent = Some(Intent::Write(Action::Mute(Mute::For(seconds))));
+							}
+						}
+						if row(ui, t("Until I Turn It Back On"), true, false).clicked() {
+							intent = Some(Intent::Write(Action::Mute(Mute::Forever)));
+						}
+					});
+					ui.menu_button(t("Notification Settings"), |ui| {
+						let level = state.channel_notification_level(channel.id);
+						for (value, label) in [
+							(0, "All Messages"),
+							(1, "Only @mentions"),
+							(2, "Nothing"),
+							(3, "Use Server Default"),
+						] {
+							if ui
+								.selectable_label(level == Some(value), t(label))
+								.clicked()
+							{
+								intent = Some(Intent::Write(Action::Notifications(value)));
+							}
+						}
+					});
+				});
+				if state.can_open_channel_settings(channel.id) {
+					ui.separator();
+					if row(
+						ui,
 						if channel.kind == 4 {
-							"Delete Category"
+							t("Edit Category")
 						} else {
-							"Delete Channel"
+							t("Edit Channel")
 						},
-						Kind::Delete,
-					),
-				] {
-					if row(ui, label, available, kind == Kind::Delete).clicked() {
-						intent = Some(Intent::Dialog(kind));
+						available,
+						false,
+					)
+					.clicked()
+					{
+						intent = Some(Intent::Dialog(Kind::Edit));
 					}
 				}
-			}
-			ui.separator();
-			if row(ui, t("Copy Channel ID"), true, false).clicked() {
-				ui.ctx().copy_text(channel.id.to_string());
-				ui.close();
-			}
-			if let Some(intent) = intent {
-				self.requested = Some((channel.id, intent));
-				self.generation = state.generation;
-				ui.close();
-			}
-		});
+				if state.can_manage_channel(channel.id) {
+					for (label, kind) in [
+						(
+							if channel.kind == 4 {
+								t("Duplicate Category")
+							} else {
+								t("Duplicate Channel")
+							},
+							Kind::Duplicate,
+						),
+						(t("Create Channel"), Kind::Create),
+						(
+							if channel.kind == 4 {
+								t("Delete Category")
+							} else {
+								t("Delete Channel")
+							},
+							Kind::Delete,
+						),
+					] {
+						if row(ui, label, available, kind == Kind::Delete).clicked() {
+							intent = Some(Intent::Dialog(kind));
+						}
+					}
+				}
+				ui.separator();
+				if row(ui, t("Copy Channel ID"), true, false).clicked() {
+					ui.ctx().copy_text(channel.id.to_string());
+					ui.close();
+				}
+				if let Some(intent) = intent {
+					self.requested = Some((channel.id, intent));
+					self.generation = state.generation;
+					ui.close();
+				}
+			});
 	}
 
 	pub fn sidebar_context(
@@ -282,8 +311,8 @@ impl ChannelMenu {
 			});
 			if let Some(anchor) = anchor {
 				for (label, kind) in [
-					("Create Channel", Kind::Create),
-					("Create Category", Kind::CreateCategory),
+					(t("Create Channel"), Kind::Create),
+					(t("Create Category"), Kind::CreateCategory),
 				] {
 					if row(ui, label, available, false).clicked() {
 						self.requested = Some((anchor.id, Intent::Dialog(kind)));
@@ -297,7 +326,7 @@ impl ChannelMenu {
 				.filter(|channel| state.can_create_server_invite(guild, *channel))
 				&& row(
 					ui,
-					"Invite to Server",
+					t("Invite to Server"),
 					available && !state.server_invite_pending() && !state.server_action_pending(),
 					false,
 				)
@@ -434,38 +463,44 @@ impl ChannelMenu {
 		let category = state.channel(dialog.channel).is_some_and(|c| c.kind == 4);
 		let mut delete_requested = false;
 		let current = dialog.kind != Kind::Edit || state.channel_details(dialog.channel).is_some();
+		let t = |english: &'static str| {
+			crate::i18n::text(crate::i18n::interface_language(ctx), english)
+		};
 		let (title, subtitle) = match dialog.kind {
 			Kind::Edit => (
 				if category {
-					"Category Settings"
+					t("Category Settings")
 				} else {
-					"Channel Settings"
+					t("Channel Settings")
 				},
-				"Customize settings and who can do what here.",
+				t("Customize settings and who can do what here."),
 			),
 			Kind::Duplicate => (
 				if category {
-					"Duplicate Category"
+					t("Duplicate Category")
 				} else {
-					"Duplicate Channel"
+					t("Duplicate Channel")
 				},
-				"Copies settings and permissions. Messages are not copied.",
+				t("Copies settings and permissions. Messages are not copied."),
 			),
 			Kind::Create => (
-				"Create Channel",
-				"Choose a space for messages, voice, or posts.",
+				t("Create Channel"),
+				t("Choose a space for messages, voice, or posts."),
 			),
-			Kind::CreateCategory => ("Create Category", "Categories organize related channels."),
+			Kind::CreateCategory => (
+				t("Create Category"),
+				t("Categories organize related channels."),
+			),
 			Kind::Delete => (
 				if category {
-					"Delete Category?"
+					t("Delete Category?")
 				} else {
-					"Delete Channel?"
+					t("Delete Channel?")
 				},
 				if category {
-					"Deleting a category leaves its channels in the server."
+					t("Deleting a category leaves its channels in the server.")
 				} else {
-					"Deleting a channel removes its messages for everyone."
+					t("Deleting a channel removes its messages for everyone.")
 				},
 			),
 		};
@@ -486,7 +521,7 @@ impl ChannelMenu {
 					dialog::notice(
 						ui,
 						dialog::Level::Warning,
-						"You no longer have permission to manage this channel.",
+						crate::tr_ui!(ui, "You no longer have permission to manage this channel."),
 					);
 				}
 				if !dialog.loaded {
@@ -499,10 +534,10 @@ impl ChannelMenu {
 						dialog::notice(
 							ui,
 							dialog::Level::Error,
-							"Channel settings could not be loaded.",
+							crate::tr_ui!(ui, "Channel settings could not be loaded."),
 						);
 						if ui
-							.add_enabled(allowed, egui::Button::new("Retry"))
+							.add_enabled(allowed, egui::Button::new(crate::tr_ui!(ui, "Retry")))
 							.clicked() && let Some(command) =
 							state.request_channel_action(dialog.channel, Action::Load)
 						{
@@ -514,9 +549,25 @@ impl ChannelMenu {
 					ui.add(
 						egui::Label::new(
 							egui::RichText::new(if category {
-								format!("Delete {}? Its channels will remain in the server. This cannot be undone.", dialog.draft.name)
+								format!(
+									"{} {}? {}",
+									crate::tr_ui!(ui, "Delete"),
+									dialog.draft.name,
+									crate::tr_ui!(
+										ui,
+										"Its channels will remain in the server. This cannot be undone."
+									)
+								)
 							} else {
-								format!("Are you sure you want to delete #{}? Its messages will be permanently deleted. This cannot be undone.", dialog.draft.name)
+								format!(
+									"{} #{}? {}",
+									crate::tr_ui!(ui, "Are you sure you want to delete"),
+									dialog.draft.name,
+									crate::tr_ui!(
+										ui,
+										"Its messages will be permanently deleted. This cannot be undone."
+									)
+								)
 							})
 							.size(14.0)
 							.color(colors.text),
@@ -537,10 +588,16 @@ impl ChannelMenu {
 					dialog::notice(
 						ui,
 						dialog::Level::Warning,
-						"Channel settings need to be refreshed before saving. Reloading replaces this draft.",
+						crate::tr_ui!(
+							ui,
+							"Channel settings need to be refreshed before saving. Reloading replaces this draft."
+						),
 					);
 					if ui
-						.add_enabled(allowed && !pending_now, egui::Button::new("Reload Channel"))
+						.add_enabled(
+							allowed && !pending_now,
+							egui::Button::new(crate::tr_ui!(ui, "Reload Channel")),
+						)
 						.clicked() && let Some(command) =
 						state.request_channel_action(dialog.channel, Action::Load)
 					{
@@ -549,7 +606,7 @@ impl ChannelMenu {
 					}
 				}
 				if state.demo {
-					dialog::hint(ui, "Offline preview · no server changes");
+					dialog::hint(ui, crate::tr_ui!(ui, "Offline preview · no server changes"));
 				}
 			});
 			d.footer(|ui| {
@@ -560,14 +617,26 @@ impl ChannelMenu {
 						client_core::channel_actions::valid_name(&dialog.draft.name)
 					};
 				let label = if pending_now {
-					"Working…"
+					crate::tr_ui!(ui, "Working…")
 				} else {
 					match dialog.kind {
-						Kind::Edit => "Save Changes",
-						Kind::Duplicate => if category { "Duplicate Category" } else { "Duplicate Channel" },
-						Kind::Create => "Create Channel",
-						Kind::CreateCategory => "Create Category",
-						Kind::Delete => if category { "Delete Category" } else { "Delete Channel" },
+						Kind::Edit => crate::tr_ui!(ui, "Save Changes"),
+						Kind::Duplicate => {
+							if category {
+								crate::tr_ui!(ui, "Duplicate Category")
+							} else {
+								crate::tr_ui!(ui, "Duplicate Channel")
+							}
+						}
+						Kind::Create => crate::tr_ui!(ui, "Create Channel"),
+						Kind::CreateCategory => crate::tr_ui!(ui, "Create Category"),
+						Kind::Delete => {
+							if category {
+								crate::tr_ui!(ui, "Delete Category")
+							} else {
+								crate::tr_ui!(ui, "Delete Channel")
+							}
+						}
 					}
 				};
 				let kind = if dialog.kind == Kind::Delete {
@@ -615,7 +684,11 @@ impl ChannelMenu {
 				}
 				close |= dialog::action(
 					ui,
-					if pending_now { "Close" } else { "Cancel" },
+					if pending_now {
+						crate::tr_ui!(ui, "Close")
+					} else {
+						crate::tr_ui!(ui, "Cancel")
+					},
 					dialog::Action::Neutral,
 				)
 				.clicked();
@@ -636,10 +709,10 @@ impl ChannelMenu {
 		if dialog.discard {
 			match dialog::Confirm::new(
 				"discard-channel-webhook",
-				"Discard webhook changes?",
-				"Your unsaved webhook changes will be lost.",
+				crate::tr_ctx!(ctx, "Discard webhook changes?"),
+				crate::tr_ctx!(ctx, "Your unsaved webhook changes will be lost."),
 			)
-			.confirm_label("Discard")
+			.confirm_label(crate::tr_ctx!(ctx, "Discard"))
 			.enabled(!state.server_admin.saving)
 			.show(ctx)
 			{
@@ -675,34 +748,42 @@ impl ChannelMenu {
 		if self.feedback.is_none() && !self.preference_error {
 			return;
 		}
+		let language = crate::i18n::interface_language(ctx);
 		let mut message = String::new();
 		if self.preference_error {
-			message.push_str(
+			message.push_str(crate::i18n::text(
+				language,
 				"Saved channel preferences are full. Remove a favorite or pin, or expand a category.",
-			);
+			));
 		}
 		if let Some(id) = self.feedback {
 			if !message.is_empty() {
 				message.push_str("\n\n");
 			}
-			message.push_str(if state.channel_action_pending() {
-				"Updating channel settings…"
+			if state.channel_action_pending() {
+				message.push_str(crate::i18n::text(language, "Updating channel settings…"));
 			} else {
-				state
+				let status = state
 					.channel_action_status(id)
-					.unwrap_or("The channel action could not be started.")
-			});
+					.unwrap_or("The channel action could not be started.");
+				message.push_str(&crate::i18n::text_str(language, status));
+			}
 		}
-		let dismissed = dialog::Dialog::new("channel-feedback", "Channel action")
-			.width(380.0)
-			.show(ctx, |d| {
-				let mut dismissed = false;
-				d.content(|ui| dialog::notice(ui, dialog::Level::Warning, &message));
-				d.footer(|ui| {
-					dismissed = dialog::action(ui, "Dismiss", dialog::Action::Primary).clicked();
-				});
-				dismissed
+		let dismissed = dialog::Dialog::new(
+			"channel-feedback",
+			crate::i18n::text(language, "Channel action"),
+		)
+		.width(380.0)
+		.show(ctx, |d| {
+			let mut dismissed = false;
+			d.content(|ui| dialog::notice(ui, dialog::Level::Warning, &message));
+			d.footer(|ui| {
+				dismissed =
+					dialog::action(ui, crate::tr_ui!(ui, "Dismiss"), dialog::Action::Primary)
+						.clicked();
 			});
+			dismissed
+		});
 		if dismissed.inner || dismissed.close {
 			self.feedback = None;
 			self.preference_error = false;
@@ -713,22 +794,22 @@ impl ChannelMenu {
 impl Dialog {
 	fn overview(&mut self, ui: &mut egui::Ui, channel: &Channel) {
 		if self.kind == Kind::Create {
-			dialog::label(ui, "Channel type");
+			dialog::label(ui, crate::tr_ui!(ui, "Channel type"));
 			for (kind, label, description) in [
 				(
 					CreateKind::Text,
-					"Text",
-					"Send messages, images, and files.",
+					crate::tr_ui!(ui, "Text"),
+					crate::tr_ui!(ui, "Send messages, images, and files."),
 				),
 				(
 					CreateKind::Voice,
-					"Voice",
-					"Talk together with voice, video, and screen sharing.",
+					crate::tr_ui!(ui, "Voice"),
+					crate::tr_ui!(ui, "Talk together with voice, video, and screen sharing."),
 				),
 				(
 					CreateKind::Forum,
-					"Forum",
-					"Organize discussions into separate posts.",
+					crate::tr_ui!(ui, "Forum"),
+					crate::tr_ui!(ui, "Organize discussions into separate posts."),
 				),
 			] {
 				ui.radio_value(&mut self.create_kind, kind, label);
@@ -740,9 +821,9 @@ impl Dialog {
 			ui,
 			if self.kind == Kind::CreateCategory || (channel.kind == 4 && self.kind != Kind::Create)
 			{
-				"Category name"
+				crate::tr_ui!(ui, "Category name")
 			} else {
-				"Channel name"
+				crate::tr_ui!(ui, "Channel name")
 			},
 		);
 		let name = dialog::input(
@@ -761,7 +842,7 @@ impl Dialog {
 		}
 		if self.kind == Kind::Edit && matches!(channel.kind, 0 | 5) {
 			ui.add_space(14.0);
-			let label = dialog::label(ui, "Topic");
+			let label = dialog::label(ui, crate::tr_ui!(ui, "Topic"));
 			let topic = dialog::input(
 				ui,
 				egui::TextEdit::multiline(&mut self.draft.topic)
@@ -777,22 +858,29 @@ impl Dialog {
 				self.draft.topic.shrink_to_fit();
 			}
 			ui.add_space(14.0);
-			dialog::label(ui, "Slowmode");
+			dialog::label(ui, crate::tr_ui!(ui, "Slowmode"));
 			ui.add(
 				egui::DragValue::new(&mut self.draft.slowmode)
 					.clip_text(true)
 					.range(0..=21600)
-					.suffix(" seconds"),
+					// The catalog value already carries its leading space.
+					.suffix(crate::tr_ui!(ui, "seconds")),
 			);
 			dialog::hint(
 				ui,
-				"Members will be restricted to one message in this interval.",
+				crate::tr_ui!(
+					ui,
+					"Members will be restricted to one message in this interval."
+				),
 			);
 			ui.add_space(6.0);
 			design::switch(
 				ui,
-				"Age-restricted channel",
-				Some("Members must confirm they are of age before viewing."),
+				crate::tr_ui!(ui, "Age-restricted channel"),
+				Some(crate::tr_ui!(
+					ui,
+					"Members must confirm they are of age before viewing."
+				)),
 				&mut self.draft.nsfw,
 			);
 		}
@@ -816,9 +904,9 @@ impl Dialog {
 		ui.add_space(12.0);
 		let mut tabs = |ui: &mut egui::Ui| {
 			for (page, label) in [
-				(Page::Overview, "Overview"),
-				(Page::Permissions, "Permissions"),
-				(Page::Integrations, "Integrations"),
+				(Page::Overview, crate::tr_ui!(ui, "Overview")),
+				(Page::Permissions, crate::tr_ui!(ui, "Permissions")),
+				(Page::Integrations, crate::tr_ui!(ui, "Integrations")),
 			] {
 				if page == Page::Integrations && !can_integrate {
 					continue;
@@ -843,9 +931,9 @@ impl Dialog {
 		row(
 			ui,
 			if channel.kind == 4 {
-				"Delete Category"
+				crate::tr_ui!(ui, "Delete Category")
 			} else {
-				"Delete Channel"
+				crate::tr_ui!(ui, "Delete Channel")
 			},
 			can_delete && !self.integrations.has_changes(),
 			true,
@@ -883,7 +971,7 @@ impl Dialog {
 				crate::i18n::interface_language(ui.ctx()),
 			),
 			Page::Overview => {
-				design::section(ui, "Overview", None);
+				design::section(ui, crate::tr_ui!(ui, "Overview"), None);
 				ui.add_enabled_ui(can_delete, |ui| this.overview(ui, &channel));
 			}
 		};
@@ -995,6 +1083,15 @@ mod tests {
 			ctx: &egui::Context,
 			events: Vec<Event>,
 		) -> (egui::Response, Vec<(String, Rect)>) {
+			self.frame_at(ctx, events, model::Language::English, Id(20))
+		}
+		fn frame_at(
+			&mut self,
+			ctx: &egui::Context,
+			events: Vec<Event>,
+			language: model::Language,
+			channel: Id,
+		) -> (egui::Response, Vec<(String, Rect)>) {
 			let mut row = None;
 			let output = ctx.run_ui(
 				egui::RawInput {
@@ -1010,9 +1107,9 @@ mod tests {
 					self.menu.context(
 						&response,
 						&self.state,
-						self.state.channel(Id(20)).unwrap(),
+						self.state.channel(channel).unwrap(),
 						ShortcutView::new(&self.prefs, true),
-						model::Language::English,
+						language,
 					);
 					row = Some(response);
 					self.menu.show(
@@ -1521,6 +1618,122 @@ mod tests {
 				] {
 					assert!(!text.iter().any(|(label, _)| label == hidden));
 				}
+			}
+		}
+	}
+
+	/// Item 2 guard: every string the channel and post menus ask the catalog for
+	/// exists in Portuguese and Spanish, so a new label cannot ship in English only.
+	#[test]
+	fn channel_and_post_menus_render_translated_in_both_languages() {
+		for language in [model::Language::PortugueseBrazil, model::Language::Spanish] {
+			let ctx = egui::Context::default();
+			design::apply(&ctx);
+			crate::i18n::store_interface_language(&ctx, language);
+			let mut state = test_support::chat_demo_state();
+			let mut permissions = test_support::permission_snapshot(&state);
+			for guild in &mut permissions.guilds {
+				guild.owner = state.user.as_ref().map(|u| u.id);
+			}
+			state.permissions.replace(permissions).unwrap();
+			let mut h = Harness {
+				state,
+				menu: ChannelMenu::default(),
+				prefs: Default::default(),
+				commands: vec![],
+				copied: vec![],
+				width: 1120.0,
+			};
+			h.menu.generation = h.state.generation;
+			let _ = crate::i18n::drain_untranslated_keys();
+			// Text-channel menu (favorites, mute, notification settings, edit...).
+			let (row, _) = h.frame_at(&ctx, vec![], language, Id(20));
+			for pressed in [true, false] {
+				h.frame_at(
+					&ctx,
+					pointer(row.rect.center(), PointerButton::Secondary, pressed),
+					language,
+					Id(20),
+				);
+			}
+			h.frame_at(&ctx, vec![], language, Id(20));
+			// Thread menu (follow, lock, mute, pin, delete...).
+			let (row, _) = h.frame_at(&ctx, vec![], language, Id(28));
+			for pressed in [true, false] {
+				h.frame_at(
+					&ctx,
+					pointer(row.rect.center(), PointerButton::Secondary, pressed),
+					language,
+					Id(28),
+				);
+			}
+			h.frame_at(&ctx, vec![], language, Id(28));
+			let missing = crate::i18n::drain_untranslated_keys();
+			assert!(missing.is_empty(), "{language:?} menus missing {missing:?}");
+		}
+	}
+
+	/// The dialogs the menus open (create, duplicate, delete confirm, edit with the
+	/// permission grid) render translated in both languages.
+	#[test]
+	fn channel_settings_dialogs_render_translated_in_both_languages() {
+		for language in [model::Language::PortugueseBrazil, model::Language::Spanish] {
+			let ctx = egui::Context::default();
+			design::apply(&ctx);
+			crate::i18n::store_interface_language(&ctx, language);
+			let mut state = test_support::chat_demo_state();
+			let mut permissions = test_support::permission_snapshot(&state);
+			for guild in &mut permissions.guilds {
+				guild.owner = state.user.as_ref().map(|u| u.id);
+			}
+			state.permissions.replace(permissions).unwrap();
+			let mut h = Harness {
+				state,
+				menu: ChannelMenu::default(),
+				prefs: Default::default(),
+				commands: vec![],
+				copied: vec![],
+				width: 1120.0,
+			};
+			h.menu.generation = h.state.generation;
+			let _ = crate::i18n::drain_untranslated_keys();
+			for kind in [Kind::Create, Kind::Duplicate, Kind::Delete] {
+				h.menu.requested = Some((Id(20), Intent::Dialog(kind)));
+				h.frame_at(&ctx, vec![], language, Id(20));
+			}
+			// Edit: answer the load with a synthetic snapshot so the editor and the
+			// permissions grid draw their full set of labels.
+			h.menu.requested = Some((Id(20), Intent::Dialog(Kind::Edit)));
+			h.frame_at(&ctx, vec![], language, Id(20));
+			let Command::ChannelAction {
+				guild,
+				channel,
+				request,
+				action: Action::Load,
+			} = h.commands.pop().expect("edit loads fresh settings")
+			else {
+				panic!("edit must load fresh settings")
+			};
+			h.state.apply(client_core::Envelope {
+				generation: h.state.generation,
+				event: client_core::Event::ChannelAction(
+					client_core::channel_actions::Event::Finished {
+						guild,
+						channel,
+						request,
+						result: Ok(client_core::channel_actions::Outcome::Details(Edit {
+							name: "getting-started".into(),
+							..Default::default()
+						})),
+					},
+				),
+			});
+			h.frame_at(&ctx, vec![], language, Id(20));
+			h.menu.dialog.as_mut().unwrap().page = Page::Permissions;
+			h.frame_at(&ctx, vec![], language, Id(20));
+			let missing = crate::i18n::drain_untranslated_keys();
+			if !missing.is_empty() {
+				panic!("{language:?} dialogs missing {missing:?}");
 			}
 		}
 	}

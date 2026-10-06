@@ -61,7 +61,7 @@ sha256sum --ignore-missing -c SHA256SUMS.txt
 shasum -a 256 Nivra-v1.0.12-macOS-ARM64.zip
 ```
 
-**These builds are not code-signed.** On Windows, SmartScreen may show *"Windows protected your PC"*: choose **More info** → **Run anyway**. On macOS, Gatekeeper may block the first launch of the `.app`: right-click it, choose **Open**, and confirm; macOS also allows it later under System Settings → Privacy & Security.
+**Signing status differs by platform.** Windows and Linux packages are unsigned. The macOS `.app` is ad-hoc signed and not notarized (tag builds); a manual release-workflow build with Apple credentials is Developer ID-signed and notarized instead. If Gatekeeper still warns about the app you downloaded, right-click it, choose **Open**, and confirm; macOS also allows it later under System Settings → Privacy & Security. On Windows, SmartScreen may show *"Windows protected your PC"*: choose **More info** → **Run anyway**.
 
 ---
 
@@ -171,7 +171,7 @@ Interface text lives in one file per language under `crates/ui/locales/`; adding
 | **Voice Messages** | Implemented | Inline voice message playback with interactive waveforms and bounded streaming audio buffering |
 | **Screen Sharing & Video** | Implemented | Native screen capture (macOS ScreenCaptureKit, Windows Graphics Capture, Linux portal/PipeWire with VA-API/NVENC hardware encoding and software fallback; Linux native capture remains unverified), quality presets (720p/1080p, up to 60 fps), and local camera/screen previews |
 | **Camera Video & Stream Viewing** | Implemented | Hardware-accelerated decoding (macOS VideoToolbox, Linux VA-API, Windows DXVA/D3D11) for incoming screen streams and camera feeds |
-| **System Tray** | Implemented | Closing the window hides it to the tray by default, with re-open and Quit in the tray menu; Windows shows the voice state (active, muted, deafened, idle); call cues and notifications work while the window is hidden |
+| **System Tray** | Implemented | Closing the window hides it to the tray when a tray host exists (Windows, macOS, or Linux with a StatusNotifier host); without one it minimizes instead of disappearing, so there is always a way back. Re-open and Quit in the tray menu; Windows shows the voice state (active, muted, deafened, idle); call cues and notifications work while the window is hidden |
 | **Threads & Forum Channels** | Implemented | Forum post listing, recent-activity sorting, active thread browsing, and new forum post / thread creation |
 | **Server Administration** | Implemented | Server profile editor (banners, icons, traits), role management with permissions matrix, audit log viewer, invite tracking and revocation, integrations/webhooks, and member moderation |
 | **Extensions & Theme Shop** | Implemented | Git-backed plugins, community theme catalog with preview cards and color presets, permission prompts, and a deleted-message protector |

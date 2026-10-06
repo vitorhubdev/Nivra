@@ -572,6 +572,8 @@ mod tests {
 					nonce: "synthetic".into(),
 					delivery: Delivery::Ambiguous,
 					confirmed: None,
+					reason: None,
+					reply: None,
 				});
 			}
 			let mut source = deleted_source(101, 50, 1);
@@ -598,6 +600,8 @@ mod tests {
 			nonce: "synthetic".into(),
 			delivery: Delivery::Ambiguous,
 			confirmed: None,
+			reason: None,
+			reply: None,
 		});
 		let mut source = deleted_source(101, 50, 1);
 		source.reply_deleted = false;
@@ -626,6 +630,8 @@ mod tests {
 			nonce: "other".into(),
 			delivery: Delivery::Ambiguous,
 			confirmed: None,
+			reason: None,
+			reply: None,
 		});
 		apply(
 			&mut state,
@@ -677,6 +683,8 @@ mod tests {
 			nonce: "synthetic".into(),
 			delivery: Delivery::Ambiguous,
 			confirmed: None,
+			reason: None,
+			reply: None,
 		});
 		let request = state.request;
 		let revision = state.revision;

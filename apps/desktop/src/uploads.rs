@@ -328,6 +328,9 @@ pub struct Uploads {
 	notice: Option<&'static str>,
 	/// Per-file ceiling for the active conversation (account vs server boost).
 	file_limit: u64,
+	/// Sources of the send in flight or last rejected, keyed by `(channel, nonce)`.
+	/// A retry resends exactly these files even if the composer selection changed.
+	bound: Option<(Id, String, Vec<Source>)>,
 }
 impl Default for Uploads {
 	fn default() -> Self {
@@ -342,6 +345,7 @@ impl Default for Uploads {
 			last: None,
 			notice: None,
 			file_limit: client_core::upload_limit::account_upload_bytes(None),
+			bound: None,
 		}
 	}
 }
@@ -620,6 +624,8 @@ impl Uploads {
 		if let Some(uploading) = &mut self.uploading {
 			let status = uploading.progress.borrow_and_update().clone();
 			let closed = uploading.progress.has_changed().is_err();
+			// The composer copy only goes away once the message exists or was cancelled.
+			let dismissed = matches!(status, Status::Finished | Status::Cancelled);
 			if closed {
 				// A stream that ends mid-flight is a failure to announce, not a state to hold.
 				let (reached, problem) = match status {
@@ -646,6 +652,11 @@ impl Uploads {
 			// Cancellation retains this slot until the actual network worker releases its sender.
 			if closed {
 				self.uploading = None;
+				if dismissed {
+					self.selected.clear();
+					self.previewing.clear();
+					self.bound = None;
+				}
 			}
 		}
 		if self.busy() {
@@ -689,6 +700,7 @@ impl Uploads {
 		if !self.busy() && index < self.selected.len() {
 			let removed = self.selected.remove(index);
 			self.previewing.retain(|(key, _)| *key != removed.key);
+			self.bound = None;
 		}
 	}
 
@@ -722,6 +734,7 @@ impl Uploads {
 	pub fn remove(&mut self) {
 		self.selected.clear();
 		self.previewing.clear();
+		self.bound = None;
 		self.cancel();
 		self.last = None;
 	}
@@ -734,6 +747,46 @@ impl Uploads {
 			uploading.cancelling = true;
 			uploading.cancel.send_replace(true);
 		}
+	}
+	/// Copies the staged sources for one upload while leaving them staged. A failed
+	/// send keeps them so the pending card can retry; the progress poll clears them
+	/// only after Discord confirms the message.
+	/// Sources for the send with `nonce`: the bound set when that nonce already failed,
+	/// otherwise the current composer selection, which is then bound to the nonce.
+	pub fn send_sources(
+		&mut self,
+		generation: u64,
+		channel: Id,
+		nonce: &str,
+	) -> Option<Vec<Source>> {
+		if let Some((bound_channel, bound_nonce, sources)) = &self.bound
+			&& *bound_channel == channel
+			&& bound_nonce == nonce
+			&& !sources.is_empty()
+		{
+			return Some(sources.clone());
+		}
+		if self.scope != Some((generation, channel)) || self.selected.is_empty() {
+			return None;
+		}
+		let sources: Vec<Source> = self
+			.selected
+			.iter()
+			.map(|chosen| chosen.source.clone())
+			.collect();
+		self.bound = Some((channel, nonce.to_owned(), sources.clone()));
+		Some(sources)
+	}
+	pub fn clone_source(&mut self, generation: u64, channel: Id) -> Option<Vec<Source>> {
+		if self.scope != Some((generation, channel)) || self.selected.is_empty() {
+			return None;
+		}
+		Some(
+			self.selected
+				.iter()
+				.map(|chosen| chosen.source.clone())
+				.collect(),
+		)
 	}
 	pub fn take_source(&mut self, generation: u64, channel: Id) -> Option<Vec<Source>> {
 		if self.scope != Some((generation, channel)) || self.busy() {
@@ -752,7 +805,7 @@ impl Uploads {
 		progress: watch::Receiver<Status>,
 		cancel: watch::Sender<bool>,
 	) -> Result<(), &'static str> {
-		if self.busy() || !self.selected.is_empty() || self.scope.is_none() {
+		if self.busy() || self.scope.is_none() {
 			cancel.send_replace(true);
 			return Err("Attachment operation already active or no selection scope");
 		}
@@ -1109,6 +1162,7 @@ mod tests {
 			last: None,
 			notice: None,
 			file_limit: client_core::upload_limit::account_upload_bytes(None),
+			bound: None,
 		};
 		uploads.poll(2, Some(Id(2)), true, &context);
 		assert!(cancelled.load(Ordering::Acquire));
@@ -1140,5 +1194,61 @@ mod tests {
 		uploads.poll(2, Some(Id(2)), true, &context);
 		assert!(!uploads.busy());
 		assert_eq!(uploads.take_notice(), None);
+	}
+
+	#[test]
+	fn a_retry_resends_the_sources_bound_to_its_nonce() {
+		let mut uploads = Uploads::default();
+		uploads.scope = Some((1, Id(2)));
+		uploads.push(Source::pasted_png(vec![1]).unwrap(), None);
+		let first = uploads.send_sources(1, Id(2), "n1").unwrap();
+		assert_eq!(first.len(), 1);
+		// The user swaps the composer selection after the send failed.
+		uploads.selected.clear();
+		uploads.push(Source::pasted_png(vec![2, 3]).unwrap(), None);
+		let retry = uploads.send_sources(1, Id(2), "n1").unwrap();
+		assert_eq!(
+			retry[0].size(),
+			1,
+			"the retry resends the failed file, not the new selection"
+		);
+		// A different nonce binds the current selection.
+		let fresh = uploads.send_sources(1, Id(2), "n2").unwrap();
+		assert_eq!(fresh[0].size(), 2);
+		// Removing the staged attachments invalidates the binding.
+		uploads.remove();
+		assert!(uploads.send_sources(1, Id(2), "n2").is_none());
+	}
+
+	#[test]
+	fn staged_attachments_survive_a_failed_upload_and_clear_on_success() {
+		let context = egui::Context::default();
+		let source = Source::pasted_png(vec![1, 2, 3]).unwrap();
+		let mut uploads = Uploads::default();
+		uploads.scope = Some((1, Id(2)));
+		uploads.push(source, None);
+		let (progress, receive) = watch::channel(Status::Preparing);
+		let (cancel, _) = watch::channel(false);
+		assert!(uploads.begin_upload(receive, cancel).is_ok());
+		progress.send_replace(Status::Failed("File upload failed; no message was sent"));
+		drop(progress);
+		uploads.poll(1, Some(Id(2)), true, &context);
+		assert_eq!(
+			uploads.files().len(),
+			1,
+			"a failed upload keeps the staged source so Try again can resend it"
+		);
+		assert!(uploads.take_notice().is_some());
+
+		let (progress, receive) = watch::channel(Status::Uploading { sent: 3, total: 3 });
+		let (cancel, _) = watch::channel(false);
+		assert!(uploads.begin_upload(receive, cancel).is_ok());
+		progress.send_replace(Status::Finished);
+		drop(progress);
+		uploads.poll(1, Some(Id(2)), true, &context);
+		assert!(
+			uploads.files().is_empty(),
+			"a confirmed send clears the composer copy"
+		);
 	}
 }

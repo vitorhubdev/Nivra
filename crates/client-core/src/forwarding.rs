@@ -53,6 +53,8 @@ impl State {
 					nonce: nonce.clone(),
 					delivery: Delivery::Sending,
 					confirmed: None,
+					reason: None,
+					reply: None,
 				});
 				commands.push(if let Some(content) = content {
 					Command::Send {

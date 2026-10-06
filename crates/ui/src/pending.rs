@@ -39,7 +39,7 @@ pub fn show(
 		&mut crate::markdown::FormatCache,
 	),
 	upload: Option<&Upload>,
-	(restore, cancel): (&mut Option<String>, &mut bool),
+	(restore, retry, cancel): (&mut Option<String>, &mut Option<String>, &mut bool),
 ) {
 	let colors = design::palette(ui);
 	let (avatars, opening, profile, channel, formats) = media;
@@ -200,7 +200,14 @@ pub fn show(
 							ui.add_space(6.0);
 							ui.scope(|ui| {
 								ui.set_max_width(ui.available_width().min(MAX_WIDTH));
-								send_alert(ui, pending.delivery, restore, &pending.nonce);
+								send_alert(
+									ui,
+									pending.delivery,
+									pending.reason,
+									restore,
+									retry,
+									&pending.nonce,
+								);
 							});
 						} else {
 							if pending.delivery == Delivery::Ambiguous {
@@ -338,7 +345,14 @@ fn files(ui: &mut egui::Ui, pending: &Pending, upload: Option<&Upload>, failed: 
 }
 
 /// Failure sits on the preview, not in the message header.
-fn send_alert(ui: &mut egui::Ui, delivery: Delivery, restore: &mut Option<String>, nonce: &str) {
+fn send_alert(
+	ui: &mut egui::Ui,
+	delivery: Delivery,
+	reason: Option<&str>,
+	restore: &mut Option<String>,
+	retry: &mut Option<String>,
+	nonce: &str,
+) {
 	let colors = design::palette(ui);
 	let (title, detail) = match delivery {
 		Delivery::Ambiguous => (
@@ -349,6 +363,13 @@ fn send_alert(ui: &mut egui::Ui, delivery: Delivery, restore: &mut Option<String
 			"Not sent",
 			"This file did not upload. It is still only on your device.",
 		),
+	};
+	// The transport's real reason, translated when the catalog knows it.
+	let detail = match reason {
+		Some(reason) => {
+			crate::i18n::text_str(crate::i18n::interface_language(ui.ctx()), reason).into_owned()
+		}
+		None => detail.to_owned(),
 	};
 	egui::Frame::new()
 		.fill(colors.danger.gamma_multiply(0.16))
@@ -370,8 +391,18 @@ fn send_alert(ui: &mut egui::Ui, delivery: Delivery, restore: &mut Option<String
 						egui::Label::new(RichText::new(detail).size(13.0).color(colors.text))
 							.wrap(),
 					);
+					let language = crate::i18n::interface_language(ui.ctx());
+					// Ambiguous deliveries may already exist remotely; only a rejected send
+					// can be retried safely with the same nonce.
+					if delivery == Delivery::Rejected
+						&& ui
+							.button(crate::i18n::text(language, "Try again"))
+							.clicked()
+					{
+						*retry = Some(nonce.to_owned());
+					}
 					if ui
-						.button(crate::tr_ui!(ui, "Restore to composer"))
+						.button(crate::i18n::text(language, "Restore to composer"))
 						.clicked()
 					{
 						*restore = Some(nonce.to_owned());
@@ -471,6 +502,80 @@ fn upload_strip(ui: &mut egui::Ui, pending: &Pending, upload: Option<&Upload>, c
 mod tests {
 	use super::*;
 	#[test]
+	fn a_rejected_send_shows_the_transport_reason_and_offers_retry() {
+		use egui_kittest::kittest::Queryable as _;
+		struct Fixture {
+			pending: Pending,
+			retry: Option<String>,
+		}
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				|ui, fixture: &mut Fixture| {
+					let Fixture { pending, retry } = fixture;
+					let state = State {
+						demo: true,
+						..Default::default()
+					};
+					let mut profile = crate::profiles::ProfileSession::default();
+					show(
+						ui,
+						pending,
+						true,
+						&state,
+						(
+							&mut crate::avatars::Avatars::default(),
+							&mut None,
+							&mut profile,
+							&mut None,
+							&mut crate::markdown::FormatCache::default(),
+						),
+						None,
+						(&mut None, retry, &mut false),
+					);
+				},
+				Fixture {
+					pending: Pending {
+						sticker: None,
+						channel: model::Id(1),
+						content: "Retry me".into(),
+						attachments: vec!["pasted-image.png".into()],
+						nonce: "local-retry".into(),
+						delivery: Delivery::Rejected,
+						confirmed: None,
+						reason: Some("File upload incomplete; no message was sent"),
+						reply: None,
+					},
+					retry: None,
+				},
+			);
+		harness.run();
+		assert!(
+			harness
+				.query_by_label_contains("File upload incomplete; no message was sent")
+				.is_some(),
+			"the card must show the transport's real reason"
+		);
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Try again")
+			.click();
+		harness.run();
+		assert_eq!(
+			harness.state().retry.as_deref(),
+			Some("local-retry"),
+			"Try again must ask for a retry of the failed nonce"
+		);
+		harness.state_mut().pending.delivery = Delivery::Ambiguous;
+		harness.run();
+		assert!(
+			harness
+				.query_by_role_and_label(egui::Role::Button, "Try again")
+				.is_none(),
+			"an ambiguous delivery may exist remotely and offers no retry"
+		);
+	}
+
+	#[test]
 	fn pending_content_progress_and_failure_remain_visible() {
 		fn text(shape: &egui::Shape, result: &mut String) {
 			match shape {
@@ -492,6 +597,8 @@ mod tests {
 			nonce: "local".into(),
 			delivery: Delivery::Sending,
 			confirmed: None,
+			reason: None,
+			reply: None,
 		};
 		let mut upload = Upload {
 			nonce: pending.nonce.clone(),
@@ -556,7 +663,7 @@ mod tests {
 								&mut crate::markdown::FormatCache::default(),
 							),
 							Some(&upload),
-							(&mut None, &mut false),
+							(&mut None, &mut None, &mut false),
 						);
 					},
 				);

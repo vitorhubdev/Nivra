@@ -3329,7 +3329,9 @@ impl Desktop {
 				&& self.state.selected == Some(channel)
 				&& self.connection.is_some();
 			if available
-				&& let Some(source) = self.uploads.take_source(self.state.generation, channel)
+				&& let Some(source) =
+					self.uploads
+						.send_sources(self.state.generation, channel, &nonce)
 			{
 				let (progress, receive) =
 					tokio::sync::watch::channel(discord_api::upload::Status::Preparing);
@@ -3385,7 +3387,7 @@ impl Desktop {
 				&& self.state.selected == Some(parent)
 				&& self.connection.is_some();
 			if available
-				&& let Some(source) = self.uploads.take_source(self.state.generation, parent)
+				&& let Some(source) = self.uploads.clone_source(self.state.generation, parent)
 			{
 				let (progress, receive) =
 					tokio::sync::watch::channel(discord_api::upload::Status::Preparing);

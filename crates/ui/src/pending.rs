@@ -392,9 +392,12 @@ fn send_alert(
 							.wrap(),
 					);
 					let language = crate::i18n::interface_language(ui.ctx());
-					if ui
-						.button(crate::i18n::text(language, "Try again"))
-						.clicked()
+					// Ambiguous deliveries may already exist remotely; only a rejected send
+					// can be retried safely with the same nonce.
+					if delivery == Delivery::Rejected
+						&& ui
+							.button(crate::i18n::text(language, "Try again"))
+							.clicked()
 					{
 						*retry = Some(nonce.to_owned());
 					}
@@ -561,6 +564,14 @@ mod tests {
 			harness.state().retry.as_deref(),
 			Some("local-retry"),
 			"Try again must ask for a retry of the failed nonce"
+		);
+		harness.state_mut().pending.delivery = Delivery::Ambiguous;
+		harness.run();
+		assert!(
+			harness
+				.query_by_role_and_label(egui::Role::Button, "Try again")
+				.is_none(),
+			"an ambiguous delivery may exist remotely and offers no retry"
 		);
 	}
 

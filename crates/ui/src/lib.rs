@@ -3033,6 +3033,7 @@ impl MessagingUi {
 				image: None,
 			};
 			let mut requested = false;
+			let mut deferred_read = false;
 			let frame = ctx.cumulative_frame_nr();
 			ctx.input_mut(|input| {
 				// eframe often delivers Ctrl+V key-down before the clipboard payload.
@@ -3076,8 +3077,10 @@ impl MessagingUi {
 					} else if start {
 						// The platform may deliver the payload one frame after the key-up
 						// (Windows). Wait one frame before reading the OS clipboard ourselves,
-						// so one press can never queue two pastes.
+						// so one press can never queue two pastes. Schedule that frame here
+						// because the key-up may be the last event eframe receives.
 						self.paste_pending_read = Some(frame);
+						deferred_read = true;
 					}
 					input.events.retain_mut(|event| match event {
 						egui::Event::Paste(text) => {
@@ -3097,6 +3100,9 @@ impl MessagingUi {
 					});
 				}
 			});
+			if deferred_read {
+				ctx.request_repaint();
+			}
 			if requested {
 				if request
 					.text

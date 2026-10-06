@@ -525,11 +525,20 @@ impl DiscordApi {
 					if let Some(bytes) = &source.bytes {
 						Box::new(std::io::Cursor::new(bytes.clone()))
 					} else {
-						Box::new(
-							File::open(&source.path)
+						let file = File::open(&source.path)
+							.await
+							.map_err(|_| Failure::ProtocolAt(CHANGED))?;
+						// The file may have changed during the backoff; never stream a
+						// retry body that no longer matches the declared source.
+						if !source.matches(
+							&file
+								.metadata()
 								.await
 								.map_err(|_| Failure::ProtocolAt(CHANGED))?,
-						)
+						) {
+							return Err(Failure::ProtocolAt(CHANGED));
+						}
+						Box::new(file)
 					};
 				put(url, reqwest::Body::wrap_stream(body(retry)))
 					.send()

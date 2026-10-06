@@ -1596,3 +1596,7 @@ Attachment or non-text message = "Attachment or non-text message"
 New Post = "New Post"
 
 (New) = "(New)"
+
+just now = "just now"
+ago = "ago"
+Posted = "Posted"

@@ -51,6 +51,8 @@ pub enum Sort {
 pub struct Tags {
 	pub available: Vec<Tag>,
 	pub applied: Vec<Id>,
+	/// The post is pinned in its forum's list, shown as Discord's pin badge.
+	pub pinned: bool,
 	/// The container requires at least one tag on every new post.
 	pub required: bool,
 	/// The emoji members react to posts with from the post list.

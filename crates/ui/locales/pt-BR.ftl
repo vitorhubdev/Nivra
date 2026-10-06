@@ -1596,3 +1596,7 @@ Attachment or non-text message = "Anexo ou mensagem sem texto"
 New Post = "Nova publicação"
 
 (New) = "(Nova)"
+
+just now = "agora mesmo"
+ago = "atrás"
+Posted = "Postado"

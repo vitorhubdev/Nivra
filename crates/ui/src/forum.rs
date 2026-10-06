@@ -764,6 +764,9 @@ fn stats_row(
 	let colors = design::palette(ui);
 	ui.horizontal(|ui| {
 		ui.spacing_mut().item_spacing.x = 6.0;
+		if is_pinned(post) {
+			icons::inline(ui, icons::Icon::Pin, 14.0, colors.muted);
+		}
 		if let Some(reaction) = state.post_reaction(post) {
 			reaction_chip(ui, images, state.demo, reaction);
 			ui.add_space(4.0);
@@ -777,9 +780,13 @@ fn stats_row(
 		}
 		ui.label(RichText::new("·").color(colors.muted));
 		ui.label(
-			RichText::new(ago(post.last_message.unwrap_or(post.id), now))
-				.size(13.0)
-				.color(colors.muted),
+			RichText::new(format!(
+				"{} {}",
+				crate::tr_ui!(ui, "Posted"),
+				ago_label(ui, post.id, now)
+			))
+			.size(13.0)
+			.color(colors.muted),
 		);
 		if archived {
 			ui.label(RichText::new("·").color(colors.muted));
@@ -1378,19 +1385,34 @@ fn archive_footer(
 }
 
 // Discord snowflakes carry milliseconds since 2015-01-01; all u64 IDs fit time's range.
-fn ago(id: Id, now: time::OffsetDateTime) -> String {
+/// The post's age as `(value, unit)`; `"now"` reads as just now, the rest take "ago".
+fn ago_parts(id: Id, now: time::OffsetDateTime) -> (u64, &'static str) {
 	let created =
 		time::OffsetDateTime::from_unix_timestamp(((id.0 >> 22) / 1000) as i64 + 1_420_070_400)
 			.expect("snowflake timestamp is in range");
 	let seconds = (now - created).whole_seconds().max(0);
 	match seconds {
-		0..60 => "just now".to_owned(),
-		60..3_600 => format!("{}m ago", seconds / 60),
-		3_600..86_400 => format!("{}h ago", seconds / 3_600),
-		86_400..2_592_000 => format!("{}d ago", seconds / 86_400),
-		2_592_000..31_536_000 => format!("{}mo ago", seconds / 2_592_000),
-		_ => format!("{}y ago", seconds / 31_536_000),
+		0..60 => (0, "now"),
+		60..3_600 => ((seconds / 60) as u64, "m"),
+		3_600..86_400 => ((seconds / 3_600) as u64, "h"),
+		86_400..2_592_000 => ((seconds / 86_400) as u64, "d"),
+		2_592_000..31_536_000 => ((seconds / 2_592_000) as u64, "mo"),
+		_ => ((seconds / 31_536_000) as u64, "y"),
 	}
+}
+
+/// "2m ago" in the interface language.
+fn ago_label(ui: &egui::Ui, id: Id, now: time::OffsetDateTime) -> String {
+	let (value, unit) = ago_parts(id, now);
+	if unit == "now" {
+		return crate::tr_ui!(ui, "just now").to_owned();
+	}
+	format!("{value}{unit} {}", crate::tr_ui!(ui, "ago"))
+}
+
+/// A pinned post keeps its Discord pin badge before the title.
+fn is_pinned(post: &Channel) -> bool {
+	post.tags.as_deref().is_some_and(|tags| tags.pinned)
 }
 
 #[cfg(test)]
@@ -1431,16 +1453,49 @@ mod tests {
 
 	#[test]
 	fn relative_times_round_down() {
+		let ctx = egui::Context::default();
 		let now = time::OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
 		let at = |seconds_ago: i64| {
 			Id((((1_800_000_000 - seconds_ago - 1_420_070_400) as u64) * 1000) << 22)
 		};
-		assert_eq!(ago(at(5), now), "just now");
-		assert_eq!(ago(at(125), now), "2m ago");
-		assert_eq!(ago(at(7_200), now), "2h ago");
-		assert_eq!(ago(at(15 * 86_400), now), "15d ago");
-		assert_eq!(ago(at(70 * 86_400), now), "2mo ago");
-		assert_eq!(ago(at(800 * 86_400), now), "2y ago");
+		let label = |id| {
+			let mut out = String::new();
+			let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+				out = ago_label(ui, id, now);
+			});
+			output.drop_without_applying_deltas();
+			out
+		};
+		assert_eq!(label(at(5)), "just now");
+		assert_eq!(label(at(125)), "2m ago");
+		assert_eq!(label(at(7_200)), "2h ago");
+		assert_eq!(label(at(15 * 86_400)), "15d ago");
+		assert_eq!(label(at(70 * 86_400)), "2mo ago");
+		assert_eq!(label(at(800 * 86_400)), "2y ago");
+	}
+
+	#[test]
+	fn pinned_posts_keep_their_badge() {
+		let mut post = Channel {
+			id: Id(5),
+			guild: Some(Id(1)),
+			parent_id: Some(Id(2)),
+			kind: 11,
+			name: "Synthetic".into(),
+			position: 0,
+			recipients: vec![],
+			last_message: None,
+			icon: None,
+			member_list_id: None,
+			message_count: None,
+			tags: Some(Box::new(model::forum::Tags {
+				pinned: true,
+				..Default::default()
+			})),
+		};
+		assert!(is_pinned(&post));
+		post.tags = None;
+		assert!(!is_pinned(&post));
 	}
 
 	#[test]

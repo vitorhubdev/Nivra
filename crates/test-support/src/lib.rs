@@ -612,6 +612,7 @@ pub fn demo_state() -> State {
 				},
 			],
 			applied: vec![],
+			pinned: false,
 			required: false,
 			reaction: Some(model::ReactionEmoji {
 				id: None,

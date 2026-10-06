@@ -9,6 +9,10 @@ pub struct ReadingPreferences {
 	pub scroll_speed_percent: u16,
 	pub hide_media_links: bool,
 	pub confirm_external_links: bool,
+	/// Play short visible videos automatically, muted and looping.
+	pub autoplay_short_videos: bool,
+	/// Autoplayed videos start with sound instead of muted.
+	pub autoplay_short_videos_sound: bool,
 }
 impl Default for ReadingPreferences {
 	fn default() -> Self {
@@ -21,6 +25,8 @@ impl Default for ReadingPreferences {
 			scroll_speed_percent: 100,
 			hide_media_links: true,
 			confirm_external_links: true,
+			autoplay_short_videos: true,
+			autoplay_short_videos_sound: false,
 		}
 	}
 }
@@ -42,6 +48,7 @@ mod tests {
 		assert_eq!(defaults.zoom_percent, 100);
 		assert_eq!(defaults.sidebar_width, 236);
 		assert!(defaults.show_members && defaults.smooth_scrolling && defaults.is_valid());
+		assert!(defaults.autoplay_short_videos && !defaults.autoplay_short_videos_sound);
 		for zoom_percent in [0, 79, 80, 150, 151, u16::MAX] {
 			for sidebar_width in [0, 189, 190, 360, 361, u16::MAX] {
 				for show_members in [false, true] {
@@ -54,6 +61,8 @@ mod tests {
 						scroll_speed_percent: 100,
 						hide_media_links: true,
 						confirm_external_links: true,
+						autoplay_short_videos: true,
+						autoplay_short_videos_sound: false,
 					};
 					assert_eq!(
 						preferences.is_valid(),

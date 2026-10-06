@@ -123,6 +123,26 @@ impl MessagingUi {
 				Some("Hide standalone links when their image or GIF preview is shown."),
 				&mut value.hide_media_links,
 			);
+			design::card_divider(ui);
+			design::switch(
+				ui,
+				"Autoplay short videos",
+				Some(
+					"Videos up to 15 seconds and 25 MB play muted and loop while they are visible. Larger videos keep the play button.",
+				),
+				&mut value.autoplay_short_videos,
+			);
+			if value.autoplay_short_videos {
+				design::card_divider(ui);
+				design::switch(
+					ui,
+					"With sound",
+					Some(
+						"On starts short videos with sound. Off starts them muted until you click the picture or the speaker.",
+					),
+					&mut value.autoplay_short_videos_sound,
+				);
+			}
 		});
 		design::group(ui, "Links", |ui| {
 			design::switch(
@@ -156,6 +176,8 @@ impl MessagingUi {
 			value.confirm_external_links = defaults.confirm_external_links;
 			value.smooth_scrolling = defaults.smooth_scrolling;
 			value.scroll_speed_percent = defaults.scroll_speed_percent;
+			value.autoplay_short_videos = defaults.autoplay_short_videos;
+			value.autoplay_short_videos_sound = defaults.autoplay_short_videos_sound;
 			self.reading_save_requested = true;
 		}
 		self.reading_save_notice(ui, demo);
@@ -266,6 +288,8 @@ mod tests {
 			scroll_speed_percent: 100,
 			hide_media_links: true,
 			confirm_external_links: true,
+			autoplay_short_videos: true,
+			autoplay_short_videos_sound: false,
 		};
 		view.apply_reading_preferences(&ctx, custom);
 		for _ in 0..3 {

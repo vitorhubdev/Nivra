@@ -155,6 +155,8 @@ struct Session {
 	volume: Arc<AtomicU32>,
 	seek: Arc<AtomicU64>,
 	update: Mutex<Update>,
+	/// Short autoplay clips restart at the beginning instead of ending.
+	looping: AtomicBool,
 }
 impl Session {
 	fn new(volume: f32, id: u64) -> Self {
@@ -171,6 +173,7 @@ impl Session {
 				state: VideoState::Loading,
 				..Default::default()
 			}),
+			looping: AtomicBool::new(false),
 		}
 	}
 }
@@ -256,16 +259,23 @@ impl Video {
 	) {
 		match command {
 			VideoCommand::Stop => self.stop(),
-			VideoCommand::Play(attachment) => {
+			VideoCommand::Play {
+				attachment,
+				muted,
+				looping,
+			} => {
 				self.stop();
-				if let Err(error) = self.start(attachment, player.volume, runtime, ctx, demo, true)
+				let volume = if muted { 0.0 } else { player.volume };
+				if let Err(error) =
+					self.start(attachment, volume, runtime, ctx, demo, true, looping)
 				{
 					player.state = VideoState::Failed(error);
 				}
 			}
 			VideoCommand::Preview(attachment) => {
 				self.stop();
-				if let Err(error) = self.start(attachment, player.volume, runtime, ctx, demo, false)
+				if let Err(error) =
+					self.start(attachment, player.volume, runtime, ctx, demo, false, false)
 				{
 					player.state = VideoState::Failed(error);
 				}
@@ -293,6 +303,7 @@ impl Video {
 			}
 		}
 	}
+	#[allow(clippy::too_many_arguments)]
 	fn start(
 		&mut self,
 		attachment: model::Attachment,
@@ -301,6 +312,7 @@ impl Video {
 		ctx: &eframe::egui::Context,
 		demo: bool,
 		autoplay: bool,
+		looping: bool,
 	) -> Result<(), &'static str> {
 		if !attachment.is_video() {
 			return Err("This file is not a video");
@@ -337,6 +349,7 @@ impl Video {
 		// A poster open stays paused until the play button resumes it; the worker
 		// still decodes and publishes the first frame.
 		session.paused.store(!autoplay, Ordering::Release);
+		session.looping.store(looping, Ordering::Release);
 		if !try_acquire_video_worker(&LIVE_VIDEO_WORKERS) {
 			// No waiting: start() runs on the render thread, and four healthy
 			// concurrent plays must fail fast instead of freezing input.
@@ -684,6 +697,24 @@ fn play_decoded(
 				last_progress = now;
 			}
 			let finished = video_ended && audio_drained && frames.is_empty();
+			// A looping short clip restarts at zero without ever reporting Ended, so
+			// the player never flickers the replay button between passes.
+			if finished
+				&& session.looping.load(Ordering::Acquire)
+				&& !session.cancelled.load(Ordering::Acquire)
+			{
+				drop(output);
+				target = 0.0;
+				seeking = true;
+				if let Ok(mut update) = session.update.try_lock().or_else(|_| session.update.lock())
+				{
+					update.frame = None;
+					update.state = VideoState::Loading;
+					update.position = 0.0;
+				}
+				ctx.request_repaint();
+				continue 'seek;
+			}
 			let mut changed = false;
 			if let Ok(mut update) = session.update.try_lock().or_else(|_| session.update.lock()) {
 				let state = if finished {
@@ -1053,6 +1084,7 @@ mod attachment_url_tests {
 				&eframe::egui::Context::default(),
 				false,
 				true,
+				false,
 			)
 			.expect_err("full slots refuse");
 		assert!(
@@ -1140,7 +1172,11 @@ mod attachment_url_tests {
 		let mut player = VideoUi::default();
 		let mut video = Video::default();
 		video.command(
-			VideoCommand::Play(attachment),
+			VideoCommand::Play {
+				attachment,
+				muted: false,
+				looping: false,
+			},
 			&mut player,
 			runtime.handle(),
 			&eframe::egui::Context::default(),
@@ -1188,7 +1224,11 @@ mod attachment_url_tests {
 		let mut player = VideoUi::default();
 		let mut video = Video::default();
 		video.command(
-			VideoCommand::Play(attachment),
+			VideoCommand::Play {
+				attachment,
+				muted: false,
+				looping: false,
+			},
 			&mut player,
 			runtime.handle(),
 			&eframe::egui::Context::default(),
@@ -1234,7 +1274,11 @@ mod attachment_url_tests {
 		let mut player = VideoUi::default();
 		let mut video = Video::default();
 		video.command(
-			VideoCommand::Play(attachment),
+			VideoCommand::Play {
+				attachment,
+				muted: false,
+				looping: false,
+			},
 			&mut player,
 			runtime.handle(),
 			&eframe::egui::Context::default(),
@@ -1279,7 +1323,11 @@ mod attachment_url_tests {
 		};
 		// Start first video
 		video.command(
-			VideoCommand::Play(make_attachment(1)),
+			VideoCommand::Play {
+				attachment: make_attachment(1),
+				muted: false,
+				looping: false,
+			},
 			&mut player,
 			runtime.handle(),
 			&eframe::egui::Context::default(),
@@ -1290,7 +1338,11 @@ mod attachment_url_tests {
 
 		// Start second video immediately
 		video.command(
-			VideoCommand::Play(make_attachment(2)),
+			VideoCommand::Play {
+				attachment: make_attachment(2),
+				muted: false,
+				looping: false,
+			},
 			&mut player,
 			runtime.handle(),
 			&eframe::egui::Context::default(),
@@ -1338,7 +1390,11 @@ mod attachment_url_tests {
 				},
 			};
 			video.command(
-				VideoCommand::Play(attachment.clone()),
+				VideoCommand::Play {
+					attachment: attachment.clone(),
+					muted: false,
+					looping: false,
+				},
 				&mut player,
 				runtime.handle(),
 				&eframe::egui::Context::default(),
@@ -1353,7 +1409,11 @@ mod attachment_url_tests {
 				}
 				std::thread::sleep(Duration::from_millis(1));
 				video.command(
-					VideoCommand::Play(attachment.clone()),
+					VideoCommand::Play {
+						attachment: attachment.clone(),
+						muted: false,
+						looping: false,
+					},
 					&mut player,
 					runtime.handle(),
 					&eframe::egui::Context::default(),
@@ -1598,6 +1658,58 @@ mod player_tests {
 			bytes.len(),
 			poster_ms
 		);
+	}
+
+	#[test]
+	fn a_looping_short_clip_restarts_without_reporting_the_end() {
+		let _turn = SINK_LOCK
+			.lock()
+			.unwrap_or_else(|poison| poison.into_inner());
+		discord_api::ensure_tls_provider();
+		let bytes: &'static [u8] = include_bytes!("../tests/fixtures/video.mov");
+		let cdn = start_cdn(bytes);
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(2)
+			.enable_all()
+			.build()
+			.unwrap();
+		let session = Arc::new(Session::new(0., 51));
+		session.looping.store(true, Ordering::Release);
+		*session.output.lock().unwrap() = Some("null-sink".into());
+		let request = Request {
+			session: session.clone(),
+			url: Some(url::Url::parse(&format!("{}/media/short.mov", cdn.origin)).unwrap()),
+			fallback: None,
+			size: bytes.len(),
+		};
+		let handle = runtime.handle().clone();
+		let outcome: Arc<Mutex<Option<Result<(), &'static str>>>> = Arc::new(Mutex::new(None));
+		let outcome_slot = outcome.clone();
+		let worker = {
+			let request = request.clone();
+			std::thread::spawn(move || {
+				let ctx = eframe::egui::Context::default();
+				let result = play(&request, &handle, &ctx);
+				*outcome_slot.lock().unwrap() = Some(result);
+				result
+			})
+		};
+		let wait = |limit: Duration, label: &str, ready: &dyn Fn(&Update) -> bool| {
+			wait_for(&session, &outcome, limit, label, ready)
+		};
+		// The first pass reaches the middle of the ~3 s clip.
+		wait(Duration::from_secs(6), "first pass", &|update| {
+			update.position > 1.0
+		});
+		// Without the loop flag the next stop would be Ended at ~3 s; with it the
+		// media clock restarts near zero and never reports Ended between passes.
+		wait(Duration::from_secs(8), "loop restart", &|update| {
+			update.position < 0.8 && update.state != VideoState::Ended
+		});
+		let state = session.update.lock().unwrap().state;
+		assert_ne!(state, VideoState::Ended, "a looping clip never ends");
+		session.cancelled.store(true, Ordering::Release);
+		let _ = worker.join();
 	}
 
 	#[test]

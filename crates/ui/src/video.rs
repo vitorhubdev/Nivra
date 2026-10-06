@@ -6,6 +6,20 @@ const CORNER: u8 = 8;
 const MAX_WIDTH: f32 = crate::avatars::media::MEDIA_MAX_WIDTH;
 const MAX_HEIGHT: f32 = crate::avatars::media::MEDIA_MAX_HEIGHT;
 const BAR_HEIGHT: f32 = 60.0;
+/// Short clips autoplay only when both the stated duration and size are small.
+const AUTOPLAY_MAX_MILLIS: u32 = 15_000;
+const AUTOPLAY_MAX_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Whether a card has enough metadata to autoplay as a short clip: a video
+/// attachment (not an embed preview, whose size is unknown) with a stated
+/// duration and size inside the caps.
+fn short_autoplay_clip(attachment: &Attachment) -> bool {
+	attachment.size > 0
+		&& attachment.size <= AUTOPLAY_MAX_BYTES
+		&& attachment
+			.duration_ms
+			.is_some_and(|millis| (1..=AUTOPLAY_MAX_MILLIS).contains(&millis))
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum VideoState {
@@ -17,9 +31,14 @@ pub enum VideoState {
 	Ended,
 	Failed(&'static str),
 }
+#[derive(Debug)]
 pub enum VideoCommand {
-	/// Open and play immediately (autoplay, retry, replay).
-	Play(Attachment),
+	/// Open and play immediately. A short autoplay clip opens muted and loops.
+	Play {
+		attachment: Attachment,
+		muted: bool,
+		looping: bool,
+	},
 	/// Open and show the first frame paused, so the card has a poster before play.
 	Preview(Attachment),
 	Pause(bool),
@@ -38,6 +57,16 @@ pub struct VideoUi {
 	pub command: Option<VideoCommand>,
 	pub seen: bool,
 	pub volume: f32,
+	/// Playback started by the short-video autoplay and is currently muted; the
+	/// first click on the picture unmutes instead of pausing.
+	pub muted: bool,
+	/// Settings > Chat: play short visible videos automatically.
+	pub autoplay_short_videos: bool,
+	/// Settings > Chat: autoplay with sound instead of muted.
+	pub autoplay_with_sound: bool,
+	/// The current playback was started by autoplay, so a newer visible short
+	/// video may take it over; a manually opened video stays until it leaves.
+	autoplay_owned: bool,
 	texture: Option<egui::TextureHandle>,
 	/// Staging pixels for the current frame. The renderer drops its reference after the
 	/// upload, so the same allocation is refilled each frame instead of reallocating up to
@@ -63,6 +92,10 @@ impl Default for VideoUi {
 			command: None,
 			seen: false,
 			volume: 1.0,
+			muted: false,
+			autoplay_short_videos: false,
+			autoplay_with_sound: false,
+			autoplay_owned: false,
 			texture: None,
 			frame: None,
 			shade: None,
@@ -83,6 +116,8 @@ impl VideoUi {
 		self.duration = 0.0;
 		self.seek_preview = None;
 		self.seen = false;
+		self.muted = false;
+		self.autoplay_owned = false;
 		self.command = Some(VideoCommand::Stop);
 	}
 	fn exit_fullscreen(&mut self) {
@@ -165,6 +200,12 @@ impl VideoUi {
 		true
 	}
 	fn toggle(&mut self, message: &Message, attachment: &Attachment, state: VideoState) {
+		// A short clip autoplayed muted; the first click gives it sound instead of
+		// pausing, so one click is never lost on a silent picture.
+		if self.muted && matches!(state, VideoState::Playing | VideoState::Paused) {
+			self.set_muted(false);
+			return;
+		}
 		self.command = Some(match state {
 			VideoState::Loading => {
 				self.stop();
@@ -177,14 +218,36 @@ impl VideoUi {
 				return;
 			}
 			_ => {
-				self.begin(message, attachment, false);
+				self.begin(message, attachment, true);
 				return;
 			}
 		});
 	}
+	/// Mutes or unmutes the running player, keeping `volume` as the user's level.
+	pub fn set_muted(&mut self, muted: bool) {
+		self.muted = muted;
+		self.command = Some(VideoCommand::Volume(if muted { 0.0 } else { self.volume }));
+	}
+	/// Opens a short clip the autoplay picked: plays at once, muted (unless the
+	/// sound preference is on) and loops while visible.
+	pub fn begin_autoplay(&mut self, message: &Message, attachment: &Attachment, sound: bool) {
+		self.begin_with(message, attachment, true, !sound, true);
+		self.autoplay_owned = true;
+	}
 	/// Opens the inline player: `autoplay` starts the clock, the default shows the
 	/// first frame as a poster and waits for the play button.
 	pub fn begin(&mut self, message: &Message, attachment: &Attachment, autoplay: bool) {
+		self.begin_with(message, attachment, autoplay, false, false);
+		self.autoplay_owned = false;
+	}
+	fn begin_with(
+		&mut self,
+		message: &Message,
+		attachment: &Attachment,
+		autoplay: bool,
+		muted: bool,
+		looping: bool,
+	) {
 		self.active = Some((message.channel, message.id, attachment.clone()));
 		self.texture = None;
 		self.frame = None;
@@ -193,8 +256,13 @@ impl VideoUi {
 		self.duration = 0.0;
 		self.seek_preview = None;
 		self.seen = true;
+		self.muted = muted;
 		self.command = Some(if autoplay {
-			VideoCommand::Play(attachment.clone())
+			VideoCommand::Play {
+				attachment: attachment.clone(),
+				muted,
+				looping,
+			}
 		} else {
 			VideoCommand::Preview(attachment.clone())
 		});
@@ -240,10 +308,10 @@ impl VideoUi {
 		demo: bool,
 	) -> egui::Response {
 		let colors = crate::design::palette(ui);
-		let active = self.active.as_ref().is_some_and(|(channel, id, file)| {
+		let mut active = self.active.as_ref().is_some_and(|(channel, id, file)| {
 			*channel == message.channel && *id == message.id && file == attachment
 		});
-		let state = if active { self.state } else { VideoState::Idle };
+		let mut state = if active { self.state } else { VideoState::Idle };
 		let width = ui.available_width().clamp(1.0, MAX_WIDTH);
 		let size = if fullscreen {
 			ui.available_size().max(egui::Vec2::splat(1.0))
@@ -253,6 +321,37 @@ impl VideoUi {
 		let (stage, mut response) = ui.allocate_exact_size(size, egui::Sense::hover());
 		if active && self.is_fullscreen() && !fullscreen {
 			return response;
+		}
+		// The card left the viewport: stop and free its texture so a scrolled-away
+		// clip cannot keep a decoder and its frame buffer alive.
+		if active && !fullscreen && !ui.is_rect_visible(stage) {
+			self.stop();
+			active = false;
+			state = VideoState::Idle;
+		}
+		// Short clips play on their own while visible, muted and in a loop. Reduce
+		// motion, a file over the caps or a manually opened player keep the poster
+		// and the play button.
+		if !active
+			&& !fullscreen
+			&& self.autoplay_short_videos
+			&& !crate::anim::reduce_motion(ui.ctx())
+			&& ui.input(|input| input.focused)
+			&& !ui.input(|input| input.viewport().minimized.unwrap_or(false))
+			&& ui.is_rect_visible(stage)
+			&& short_autoplay_clip(attachment)
+		{
+			// One player only: a newer visible clip takes over an older autoplay
+			// one, but never a clip the user opened by hand.
+			let may_take_over = self
+				.active
+				.as_ref()
+				.is_none_or(|(_, id, _)| self.autoplay_owned && *id < message.id);
+			if may_take_over {
+				self.begin_autoplay(message, attachment, self.autoplay_with_sound);
+				active = true;
+				state = self.state;
+			}
 		}
 		let label = match state {
 			VideoState::Loading => crate::tr_ui!(ui, "Cancel"),
@@ -579,9 +678,9 @@ impl VideoUi {
 							let (rect, button) = ui
 								.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::click());
 							let label = if fullscreen {
-								"Exit fullscreen (Esc)"
+								crate::tr_ui!(ui, "Exit fullscreen (Esc)")
 							} else {
-								"Fullscreen"
+								crate::tr_ui!(ui, "Fullscreen")
 							};
 							button.widget_info(|| {
 								egui::WidgetInfo::labeled(
@@ -638,6 +737,7 @@ impl VideoUi {
 							ui.spacing_mut().slider_width =
 								(ui.available_width() - 24.0).clamp(24.0, 56.0);
 							let mut volume_value = self.volume;
+							let volume_label = crate::tr_ui!(ui, "Video volume");
 							let volume = ui.add(
 								egui::Slider::new(&mut volume_value, 0.0..=1.0)
 									.show_value(false)
@@ -647,24 +747,70 @@ impl VideoUi {
 								egui::WidgetInfo::slider(
 									ui.is_enabled(),
 									volume_value as f64,
-									"Video volume",
+									volume_label,
 								)
 							});
 							controls_focused |= volume.has_focus();
 							response |= volume.clone();
-							if volume
-								.on_hover_text(crate::tr_ui!(ui, "Video volume"))
-								.changed() && !context_click
-							{
+							if volume.on_hover_text(volume_label).changed() && !context_click {
+								// Moving the volume is a request to hear: leave mute.
+								self.muted = false;
 								self.volume = volume_value;
 								self.command = Some(VideoCommand::Volume(self.volume));
 							}
-							crate::icons::inline(
-								ui,
+							let mute_label = if self.muted {
+								crate::tr_ui!(ui, "Unmute video")
+							} else {
+								crate::tr_ui!(ui, "Mute video")
+							};
+							let (speaker_rect, speaker) = ui
+								.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::click());
+							speaker.widget_info(|| {
+								egui::WidgetInfo::labeled(
+									egui::Role::Button,
+									ui.is_enabled(),
+									mute_label,
+								)
+							});
+							let speaker_color = if speaker.hovered() {
+								white
+							} else {
+								egui::Color32::from_white_alpha(220)
+							};
+							controls_focused |= speaker.has_focus();
+							if speaker.has_focus() {
+								ui.painter().rect_stroke(
+									speaker_rect,
+									3,
+									egui::Stroke::new(2.0, colors.accent),
+									egui::StrokeKind::Inside,
+								);
+							}
+							let glyph = speaker_rect.shrink(4.0);
+							crate::icons::paint(
+								ui.painter(),
 								crate::icons::Icon::Speaker,
-								16.0,
-								egui::Color32::from_white_alpha(220),
+								glyph,
+								speaker_color,
 							);
+							if self.muted {
+								// A slash over the same glyph is the visible muted state.
+								ui.painter().line_segment(
+									[
+										egui::pos2(glyph.left() + 1.0, glyph.bottom() - 1.0),
+										egui::pos2(glyph.right() - 1.0, glyph.top() + 1.0),
+									],
+									egui::Stroke::new(2.0, speaker_color),
+								);
+							}
+							response |= speaker.clone();
+							if speaker
+								.on_hover_text(mute_label)
+								.on_hover_cursor(egui::CursorIcon::PointingHand)
+								.clicked()
+							{
+								self.set_muted(!self.muted);
+							}
 						});
 					});
 				},
@@ -684,21 +830,22 @@ impl VideoUi {
 			|ui| {
 				ui.spacing_mut().item_spacing.x = 6.0;
 				let idle = !demo && !download.busy();
+				let disabled_hover = if demo {
+					crate::tr_ui!(ui, "Downloads are disabled for synthetic attachments")
+				} else {
+					crate::tr_ui!(ui, "A download is already active")
+				};
 				if ui
 					.add_enabled_ui(idle, |ui| {
 						crate::attachments::glass_button(
 							ui,
 							crate::icons::Icon::Download,
 							28.0,
-							"Download",
+							crate::tr_ui!(ui, "Download"),
 						)
 					})
 					.inner
-					.on_disabled_hover_text(if demo {
-						"Downloads are disabled for synthetic attachments"
-					} else {
-						"A download is already active"
-					})
+					.on_disabled_hover_text(disabled_hover)
 					.clicked()
 				{
 					download.request = Some(attachment.clone());
@@ -712,7 +859,7 @@ impl VideoUi {
 						ui,
 						crate::icons::Icon::External,
 						28.0,
-						"Open original…",
+						crate::tr_ui!(ui, "Open original…"),
 					)
 					.clicked()
 				{
@@ -852,9 +999,11 @@ mod tests {
 			for key in [egui::Key::Tab, egui::Key::Enter] {
 				frame(&mut video, Some(key));
 			}
-			assert!(
-				matches!(video.command.take(), Some(VideoCommand::Preview(file)) if file == attachment)
-			);
+			assert!(matches!(
+				video.command.take(),
+				Some(VideoCommand::Play { attachment: file, muted: false, looping: false })
+					if file == attachment
+			));
 			assert!(video.seen);
 			assert!(!video.accept_frame(&ctx, frame_of(1921, 1080, 0)));
 			assert!(!video.accept_frame(&ctx, frame_of(1, 1921, 0)));
@@ -991,7 +1140,7 @@ mod tests {
 	}
 
 	#[test]
-	fn an_idle_card_opens_a_paused_poster_and_the_play_button_starts_it() {
+	fn an_idle_card_plays_on_the_first_click() {
 		let mut message = test_support::message(1, Id(2));
 		let attachment = Attachment {
 			id: Id(3),
@@ -1010,31 +1159,260 @@ mod tests {
 		};
 		message.attachments.push(attachment.clone());
 		let mut video = VideoUi::default();
-		// First click on the idle card opens the poster: the worker decodes the first
-		// frame and stays paused, so the card is never a mute black rectangle.
+		// One click on the idle card starts playback instead of opening a paused
+		// poster that needs a second click on play.
 		video.toggle(&message, &attachment, VideoState::Idle);
 		assert!(
-			matches!(video.command, Some(VideoCommand::Preview(_))),
-			"idle opens a preview, not immediate playback: {:?}",
-			video.command.is_some()
+			matches!(
+				video.command,
+				Some(VideoCommand::Play {
+					muted: false,
+					looping: false,
+					..
+				})
+			),
+			"idle plays on the first activation"
 		);
 		assert_eq!(video.state, VideoState::Loading);
 		assert!(video.active.is_some());
-		// The poster arrives; the overlay play button resumes instead of reopening.
-		video.state = VideoState::Paused;
-		video.toggle(&message, &attachment, VideoState::Paused);
-		assert!(matches!(video.command, Some(VideoCommand::Pause(false))));
-		// Replay after the end starts immediately (autoplay), not as a poster again.
-		video.state = VideoState::Ended;
-		video.toggle(&message, &attachment, VideoState::Ended);
-		assert!(
-			matches!(video.command, Some(VideoCommand::Play(_))),
-			"replay autoplays"
-		);
 		// A running clip still pauses on click.
 		video.state = VideoState::Playing;
 		video.toggle(&message, &attachment, VideoState::Playing);
 		assert!(matches!(video.command, Some(VideoCommand::Pause(true))));
+		// A paused clip resumes, and the end replays from the start (autoplay).
+		video.state = VideoState::Paused;
+		video.toggle(&message, &attachment, VideoState::Paused);
+		assert!(matches!(video.command, Some(VideoCommand::Pause(false))));
+		video.state = VideoState::Ended;
+		video.toggle(&message, &attachment, VideoState::Ended);
+		assert!(matches!(
+			video.command,
+			Some(VideoCommand::Play {
+				muted: false,
+				looping: false,
+				..
+			})
+		));
+	}
+
+	#[test]
+	fn clicking_a_muted_autoplay_clip_sounds_it_before_pausing() {
+		let mut message = test_support::message(7, Id(2));
+		let attachment = Attachment {
+			id: Id(8),
+			filename: "clip.mp4".into(),
+			description: None,
+			content_type: Some("video/mp4".into()),
+			size: 4096,
+			media: model::EmbedMedia {
+				width: 640,
+				height: 360,
+				..Default::default()
+			},
+			spoiler: false,
+			duration_ms: Some(4000),
+			waveform: Vec::new(),
+		};
+		message.attachments.push(attachment.clone());
+		let mut video = VideoUi::default();
+		video.volume = 0.8;
+		video.begin_autoplay(&message, &attachment, false);
+		assert!(video.muted);
+		assert!(matches!(
+			video.command,
+			Some(VideoCommand::Play {
+				muted: true,
+				looping: true,
+				..
+			})
+		));
+		video.command = None;
+		video.state = VideoState::Playing;
+		// The first click gives the silent picture sound; a second one pauses.
+		video.toggle(&message, &attachment, VideoState::Playing);
+		assert!(!video.muted);
+		assert!(matches!(video.command, Some(VideoCommand::Volume(v)) if v == 0.8));
+		video.command = None;
+		video.toggle(&message, &attachment, VideoState::Playing);
+		assert!(matches!(video.command, Some(VideoCommand::Pause(true))));
+	}
+
+	fn short_clip_message(message_id: u64, duration_ms: Option<u32>, size: u64) -> Message {
+		let mut message = test_support::message(message_id, Id(2));
+		message.attachments.push(Attachment {
+			id: Id(message_id + 100),
+			filename: format!("clip-{message_id}.mp4"),
+			description: None,
+			content_type: Some("video/mp4".into()),
+			size,
+			media: model::EmbedMedia {
+				width: 640,
+				height: 360,
+				..Default::default()
+			},
+			spoiler: false,
+			duration_ms,
+			waveform: Vec::new(),
+		});
+		message
+	}
+
+	/// Draws one card (or two, in order) the way the timeline does, and returns the
+	/// last autoplay command the frame produced.
+	fn draw_cards(
+		ctx: &egui::Context,
+		video: &mut VideoUi,
+		messages: &[Message],
+		clip: Option<egui::Rect>,
+	) -> Option<VideoCommand> {
+		let mut command = None;
+		let output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(436.0, 620.0),
+				)),
+				focused: true,
+				..Default::default()
+			},
+			|ui| {
+				if let Some(clip) = clip {
+					ui.set_clip_rect(clip);
+				}
+				ui.set_width(420.0);
+				for (index, message) in messages.iter().enumerate() {
+					crate::attachments::show(
+						ui,
+						message,
+						&mut crate::avatars::Avatars::default(),
+						&mut None,
+						&mut None,
+						&mut crate::attachments::DownloadUi::default(),
+						&mut crate::AudioUi::default(),
+						video,
+						false,
+						&mut crate::select::Surface::new(ui, format!("autoplay-{index}")),
+					);
+				}
+				command = video.command.take();
+			},
+		);
+		output.drop_without_applying_deltas();
+		command
+	}
+
+	#[test]
+	fn a_visible_short_video_autoplays_muted_and_looping() {
+		let message = short_clip_message(1, Some(4000), 1_000_000);
+		let attachment = message.attachments[0].clone();
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut video = VideoUi::default();
+		video.autoplay_short_videos = true;
+		video.volume = 0.7;
+		let command = draw_cards(&ctx, &mut video, std::slice::from_ref(&message), None);
+		assert!(
+			matches!(
+				command,
+				Some(VideoCommand::Play { muted: true, looping: true, attachment: ref file })
+					if *file == attachment
+			),
+			"the visible 4 s clip starts on its own, silent and looping: {command:?}"
+		);
+		assert!(video.muted);
+		assert_eq!(video.state, VideoState::Loading);
+		assert!(
+			video
+				.active
+				.as_ref()
+				.is_some_and(|(_, id, file)| *id == message.id && *file == attachment)
+		);
+	}
+
+	#[test]
+	fn a_long_video_and_reduce_motion_wait_for_the_play_button() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		// Over the 15 s cap: no autoplay, but one click plays.
+		let long = short_clip_message(2, Some(40_000), 1_000_000);
+		let long_attachment = long.attachments[0].clone();
+		let mut video = VideoUi::default();
+		video.autoplay_short_videos = true;
+		assert!(draw_cards(&ctx, &mut video, std::slice::from_ref(&long), None).is_none());
+		assert!(video.active.is_none());
+		video.toggle(&long, &long_attachment, VideoState::Idle);
+		assert!(matches!(
+			video.command,
+			Some(VideoCommand::Play {
+				muted: false,
+				looping: false,
+				..
+			})
+		));
+		// Over the 25 MB cap: same, the poster stays until clicked.
+		let big = short_clip_message(3, Some(4000), 26 * 1024 * 1024);
+		let mut video = VideoUi::default();
+		video.autoplay_short_videos = true;
+		assert!(draw_cards(&ctx, &mut video, std::slice::from_ref(&big), None).is_none());
+		assert!(video.active.is_none());
+		// Reduce motion turns the policy off entirely.
+		crate::anim::set_reduce_motion(&ctx, true);
+		let short = short_clip_message(4, Some(4000), 1_000_000);
+		let mut video = VideoUi::default();
+		video.autoplay_short_videos = true;
+		assert!(draw_cards(&ctx, &mut video, std::slice::from_ref(&short), None).is_none());
+		assert!(video.active.is_none());
+	}
+
+	#[test]
+	fn an_offscreen_autoplay_clip_stops_and_frees_its_texture() {
+		let message = short_clip_message(5, Some(4000), 1_000_000);
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut video = VideoUi::default();
+		video.autoplay_short_videos = true;
+		draw_cards(&ctx, &mut video, std::slice::from_ref(&message), None);
+		assert!(video.active.is_some());
+		video.texture = Some(ctx.load_texture(
+			"autoplay-texture",
+			egui::ColorImage::filled([2, 2], egui::Color32::BLACK),
+			egui::TextureOptions::LINEAR,
+		));
+		video.state = VideoState::Playing;
+		video.command = None;
+		// The card is out of the clip: the next frame stops it and drops the frame.
+		let clip = egui::Rect::from_min_size(egui::pos2(4000.0, 4000.0), egui::vec2(10.0, 10.0));
+		let command = draw_cards(&ctx, &mut video, std::slice::from_ref(&message), Some(clip));
+		assert!(matches!(command, Some(VideoCommand::Stop)));
+		assert!(video.active.is_none());
+		assert!(video.texture.is_none());
+		assert_eq!(video.state, VideoState::Idle);
+	}
+
+	#[test]
+	fn only_the_newest_visible_short_video_plays() {
+		let older = short_clip_message(6, Some(4000), 1_000_000);
+		let newer = short_clip_message(7, Some(4000), 1_000_000);
+		let newest = newer.attachments[0].clone();
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut video = VideoUi::default();
+		video.autoplay_short_videos = true;
+		let command = draw_cards(&ctx, &mut video, &[older, newer], None);
+		assert!(
+			matches!(
+				command,
+				Some(VideoCommand::Play { muted: true, looping: true, attachment: ref file })
+					if *file == newest
+			),
+			"the newest visible clip owns the single player: {command:?}"
+		);
+		assert!(
+			video
+				.active
+				.as_ref()
+				.is_some_and(|(_, id, file)| *id == Id(7) && *file == newest)
+		);
 	}
 
 	#[test]

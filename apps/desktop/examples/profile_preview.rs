@@ -667,7 +667,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				// These captures have no synthetic member list; keep the timeline full width.
 				messaging.reading_preferences.show_members = false;
 			}
-			if page == "text-preview" {
+			if matches!(page.as_str(), "overview" | "video" | "voice-call") {
+				// The base surface is the capture; the video player opens after the first
+				// frame and the voice fixture already stages its synthetic call.
+			} else if page == "text-preview" {
 				messaging.set_preview(ui::text_preview::TextPreview {
 					filename: "release-notes.md".into(),
 					format: ui::text_preview::PreviewFormat::Markdown,
@@ -677,10 +680,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				});
 			} else if page == "image-viewer" {
 				messaging.preview_image_viewer(model::Id(500), model::Id(700));
-			} else if page == "video" {
-				// The player is opened after the first frame; see `Preview::ui`.
-			} else if page == "voice-call" {
-				// The voice fixture already stages its synthetic call.
 			} else if matches!(page.as_str(), "member-tags" | "dm-tags") {
 				// State is primed above; the normal offline messaging surface renders the list.
 			} else if page == "slash-commands" {

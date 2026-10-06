@@ -6374,39 +6374,26 @@ impl eframe::App for Desktop {
 				.messaging
 				.voice_toggle_pressed(ctx, self.hotkeys.global_toggle_mask());
 		if voice_toggles != 0 && !self.fixture_only {
-			let mut muted = self.messaging.voice_muted;
-			let mut deafened = self.messaging.voice_deafened;
-			let mut mic_toggled = false;
-			let mut deaf_toggled = false;
-			if voice_toggles & 1 != 0 {
-				muted = !muted;
-				mic_toggled = true;
-			}
-			if voice_toggles & 2 != 0 {
-				deafened = !deafened;
-				deaf_toggled = true;
-			}
-			self.messaging.voice_muted = muted;
-			self.messaging.voice_deafened = deafened;
-			if deaf_toggled {
-				let cue = if deafened {
-					model::notification_preferences::Sound::Deafen
-				} else {
-					model::notification_preferences::Sound::Undeafen
-				};
-				if self.messaging.notification_options.allows(cue) {
-					self.messaging.notification_preview = Some(cue);
+			// The same transition as the buttons: unmuting while deafened also
+			// un-deafens, and both cues play.
+			for (pressed, deafen) in [
+				(voice_toggles & 1 != 0, false),
+				(voice_toggles & 2 != 0, true),
+			] {
+				if !pressed {
+					continue;
 				}
-			} else if mic_toggled {
-				let cue = if muted {
-					model::notification_preferences::Sound::Mute
-				} else {
-					model::notification_preferences::Sound::Unmute
-				};
-				if self.messaging.notification_options.allows(cue) {
-					self.messaging.notification_preview = Some(cue);
+				let (_, _, mic_cue, deafen_cue) = self.messaging.toggle_voice_intent(deafen);
+				if deafen_cue {
+					self.messaging
+						.queue_voice_toggle_cue(true, self.messaging.voice_deafened);
+				}
+				if mic_cue {
+					self.messaging
+						.queue_voice_toggle_cue(false, self.messaging.voice_muted);
 				}
 			}
+			let (muted, deafened) = (self.messaging.voice_muted, self.messaging.voice_deafened);
 			if self.state.auth == AuthState::Authenticated
 				&& let Some(command) = self.state.set_call_mute(muted, deafened)
 				&& !self.state.demo

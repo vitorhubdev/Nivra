@@ -149,8 +149,6 @@ enum Notice {
 	TransportOnly,
 	/// The transport is resuming a session that survived a network drop.
 	Resuming(u8),
-	/// The voice socket closed with a terminal code; the shared slot carries the details.
-	Closed,
 }
 struct Live {
 	generation: u64,
@@ -715,20 +713,30 @@ impl Voice {
 			let attempt = attempts + 1;
 			self.reconnect_attempts = attempt;
 			let delay = reconnect_delay(attempt);
+			let (channel, request, muted, deafened) =
+				(call.channel, call.request, call.muted, call.deafened);
 			self.reconnect = Some(Reconnect {
-				channel: call.channel,
-				muted: call.muted,
-				deafened: call.deafened,
+				channel,
+				muted,
+				deafened,
 				at: Instant::now() + delay,
 			});
-			ui.voice_reconnecting = true;
+			let message = match attempt {
+				1 => "Reconnecting… (attempt 1 of 3)",
+				2 => "Reconnecting… (attempt 2 of 3)",
+				_ => "Reconnecting… (attempt 3 of 3)",
+			};
+			// The scheduled rejoin may only replace a call in `Failed`; keep the visible
+			// reconnecting message after the transition.
+			state.apply_voice(client_core::voice::Event::Failed {
+				channel,
+				request,
+				message,
+			});
 			if let Some(active) = state.voice.active.as_mut() {
-				active.error = Some(match attempt {
-					1 => "Reconnecting… (attempt 1 of 3)",
-					2 => "Reconnecting… (attempt 2 of 3)",
-					_ => "Reconnecting… (attempt 3 of 3)",
-				});
+				active.error = Some(message);
 			}
+			ui.voice_reconnecting = true;
 			self.stop();
 			platform::diagnostics::warn(&format!(
 				"voice call dropped: {error} (code={}); reconnect attempt {attempt}/{RECONNECT_ATTEMPTS} in {}s",
@@ -1019,7 +1027,6 @@ impl Voice {
 					Notice::Resuming(attempt) => {
 						platform::diagnostics::info(&format!("voice resume attempt {attempt}"));
 					}
-					Notice::Closed => {}
 					// Notices wake the UI; only the current device configuration can be ready.
 					Notice::DeviceReady | Notice::RemoteAudio => {}
 				}
@@ -1738,8 +1745,11 @@ impl Voice {
 							return Ok(());
 						}
 						Status::Closed { code, disposition } => {
+							// The code travels through the shared slot; the terminal error is
+							// returned by the transport even when the notice queue is full.
 							let _ = transport_closed.set((code, disposition));
-							Notice::Closed
+							status_wake.request_repaint();
+							return Ok(());
 						}
 						Status::Speaking(snapshot) => {
 							speaking.send_replace(snapshot);
@@ -1991,6 +2001,47 @@ mod tests {
 			"Voice call was terminated by Discord (code 4022); rejoin the call",
 			Some((Some(4022), CloseDisposition::Terminated))
 		));
+	}
+
+	#[test]
+	fn a_retryable_drop_fails_the_call_and_the_scheduled_rejoin_replaces_it() {
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		state.gateway_connected = true;
+		state.start_call(Id(22), false).unwrap();
+		let mut manager = Voice::default();
+		let mut ui = ui::MessagingUi::default();
+		let ctx = egui::Context::default();
+		let command = manager.fail_with_retry(
+			&mut state,
+			&mut ui,
+			&ctx,
+			"Voice session timed out (code 4009); rejoin the call",
+			Some((Some(4009), discord_voice::CloseDisposition::SessionExpired)),
+		);
+		assert!(command.is_none(), "the retry waits for its backoff");
+		assert_eq!(
+			state.voice.active.as_ref().unwrap().phase,
+			Phase::Failed,
+			"the scheduled rejoin may only replace a failed call"
+		);
+		assert_eq!(
+			state.voice.active.as_ref().unwrap().error,
+			Some("Reconnecting… (attempt 1 of 3)")
+		);
+		assert!(ui.voice_reconnecting);
+		assert!(manager.reconnect.is_some());
+		// Fire the backoff: the join command must go out and the call becomes connectable.
+		manager.reconnect.as_mut().unwrap().at = Instant::now();
+		let command = manager.poll_reconnect(&mut state, &mut ui, &ctx);
+		assert!(
+			matches!(command, Some(Command::Voice(voice::Command::Join { channel, .. })) if channel == Id(22)),
+			"the scheduled rejoin must return a Join command"
+		);
+		assert_eq!(
+			state.voice.active.as_ref().unwrap().phase,
+			Phase::Connecting
+		);
 	}
 
 	#[test]

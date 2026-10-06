@@ -2441,7 +2441,9 @@ mod tests {
 				)))
 				.await
 				.unwrap();
-				// A terminal disconnect must never attempt another connection.
+				// Hold the socket until the client acknowledges the close, so the terminal
+				// code cannot race the drop's RST, then prove no resume was attempted.
+				let _ = timeout(Duration::from_secs(2), ws.next()).await;
 				assert!(
 					timeout(Duration::from_millis(100), listener.accept())
 						.await
@@ -2569,7 +2571,7 @@ mod tests {
 					.await
 					.unwrap()
 					.unwrap(),
-				Err("Discord voice connection closed; rejoin the call")
+				Err("Disconnected from voice by Discord (code 4014); rejoin the call")
 			);
 			drop(control_tx);
 		} else {
@@ -3093,7 +3095,16 @@ mod tests {
 			}
 			assert!(plain_ok, "transport-only audio did not continue");
 			assert!(churn_packets >= 10, "too few packets during roster churn");
-			ws.send(Message::Close(None)).await.unwrap();
+			ws.send(Message::Close(Some(
+				tokio_tungstenite::tungstenite::protocol::CloseFrame {
+					code: 4014.into(),
+					reason: "synthetic terminal disconnect".into(),
+				},
+			)))
+			.await
+			.unwrap();
+			// Hold until the client acknowledges the close so the code cannot race the drop.
+			let _ = timeout(Duration::from_secs(2), ws.next()).await;
 		});
 		let credentials = VoiceConnection {
 			channel: Id(3),
@@ -3164,7 +3175,7 @@ mod tests {
 			.unwrap();
 		assert_eq!(
 			result,
-			Err("Discord voice connection closed; rejoin the call")
+			Err("Disconnected from voice by Discord (code 4014); rejoin the call")
 		);
 		assert!(ready);
 		assert!(transport_only);

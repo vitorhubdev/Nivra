@@ -161,6 +161,7 @@ mod tests {
 					member_list_id: None,
 					message_count: None,
 					last_message: None,
+					tags: None,
 				})
 				.collect(),
 			..State::default()

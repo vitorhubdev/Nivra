@@ -448,6 +448,7 @@ mod tests {
 				member_list_id: Some("everyone".into()),
 				message_count: None,
 				last_message: None,
+				tags: None,
 			}],
 			members: Some(MemberList {
 				guild: Some(Id(10)),

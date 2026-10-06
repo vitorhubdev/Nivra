@@ -97,6 +97,7 @@ fn navigation() {
 			member_list_id: None,
 			message_count: None,
 			icon: None,
+			tags: None,
 		})
 		.collect();
 	state.selected = None;

@@ -3682,6 +3682,8 @@ impl Desktop {
 							position: Patch::Absent,
 							kind: Patch::Absent,
 							message_count: Patch::Absent,
+
+							tags: Patch::Absent,
 						}),
 					};
 					Event::GroupAction(GroupEvent::Written {
@@ -3852,6 +3854,7 @@ impl Desktop {
 							last_message: None,
 							member_list_id: None,
 							message_count: Some(0),
+							tags: None,
 						}),
 					}
 				}
@@ -3902,6 +3905,7 @@ impl Desktop {
 							last_message: None,
 							member_list_id: None,
 							message_count: None,
+							tags: None,
 						})
 						.collect();
 					Event::Archives {
@@ -4136,7 +4140,7 @@ impl Desktop {
 					};
 					Event::Members(demo_members(guild, channel, request))
 				}
-				Command::ForumPosts { .. } | Command::ForumSummaries { .. } => return,
+				Command::ForumPosts { .. } => return,
 				Command::History { before, after, .. } => {
 					test_support::load_page_with_cursors(&mut self.state, before, after);
 					return;

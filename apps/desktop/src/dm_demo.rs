@@ -27,6 +27,7 @@ pub fn channel(state: &State, user: Id) -> Result<Channel, Failure> {
 			icon: None,
 			member_list_id: None,
 			message_count: None,
+			tags: None,
 		}))
 }
 

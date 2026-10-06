@@ -1734,15 +1734,21 @@ already request guild membership through the profile endpoint. Normal-account
 Gateway behavior remains unofficial and live compatibility is unverified by the
 synthetic check.
 
-Forum cards now load a bounded recent-message page for visible active posts through
-[Get Channel Messages](https://discord.com/developers/docs/resources/message#get-channel-messages).
-Up to four visible cards load concurrently under the existing REST permit bound.
-They show the latest plain preview with the author's known guild role color and count IDs newer than the service read cursor;
-`50+ New` indicates that the cursor precedes the retained 50-message window. Failed
-or unavailable summaries remain explicitly unavailable until refresh or new activity;
-successful summaries are reused when returning to a forum during the same session.
-Startup preserves cursors for threads loaded after READY. These changes have synthetic
-offline coverage; normal-account behavior remains unofficial and live-unverified.
+Forum cards load one bounded page per forum through the per-forum thread search route
+`GET /channels/{channel}/threads/search?archived=false&sort_by=last_message_time&sort_order=desc&limit=25&offset=0`.
+The response's unofficial `first_messages` array carries the starter message of each listed
+post, so a card's mosaic, author, excerpt and reactions arrive with the page and no per-post
+message request is made. The documented guild-wide
+[threads/active](https://discord.com/developers/docs/resources/channel#list-active-guild-threads)
+route still serves the first page when a service rejects the search route; those rows carry no
+starters, so their cards show the quiet stand-in until the forum is refreshed.
+Applied tags ride on each thread's `applied_tags`, and the forum's `available_tags`,
+`default_forum_layout`, `default_sort_order`, `default_reaction_emoji` and
+`default_tag_setting` come from the channel objects READY and channel updates carry; the
+formerly used 50-message page per post is gone. A page that does not decode inside its wire
+budget surfaces a clear error with a Retry control instead of leaving the list loading. These
+changes have synthetic offline coverage; normal-account behavior remains unofficial and
+live-unverified.
 
 ### Spotify profile activity — September 22, 2026
 

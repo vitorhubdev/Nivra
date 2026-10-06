@@ -187,6 +187,18 @@ pub struct ChannelDto {
 	pub is_message_request: bool,
 	#[serde(default, deserialize_with = "lossy::null_default")]
 	pub is_spam: bool,
+	#[serde(default)]
+	pub available_tags: Option<forum::TagList>,
+	#[serde(default)]
+	pub applied_tags: Option<forum::AppliedTags>,
+	#[serde(default)]
+	pub default_reaction_emoji: Option<forum::DefaultReaction>,
+	#[serde(default)]
+	pub default_forum_layout: Option<u8>,
+	#[serde(default)]
+	pub default_sort_order: Option<u8>,
+	#[serde(default)]
+	pub default_tag_setting: Option<String>,
 }
 const CHANNEL_FLAG_SPAM: u64 = 1 << 5;
 impl ChannelDto {
@@ -232,6 +244,18 @@ impl ChannelDto {
 			recipients,
 			member_list_id: None,
 			message_count: self.message_count,
+			tags: forum::tags(
+				self.kind,
+				self.available_tags,
+				self.applied_tags,
+				self.flags,
+				forum::Defaults {
+					reaction: self.default_reaction_emoji,
+					layout: self.default_forum_layout,
+					sort: self.default_sort_order,
+					tag_setting: self.default_tag_setting,
+				},
+			),
 		}
 	}
 }
@@ -260,6 +284,18 @@ pub struct ChannelPatchDto {
 	pub is_message_request: Patch<bool>,
 	#[serde(default)]
 	pub is_spam: Patch<bool>,
+	#[serde(default)]
+	pub available_tags: Patch<forum::TagList>,
+	#[serde(default)]
+	pub applied_tags: Patch<forum::AppliedTags>,
+	#[serde(default)]
+	pub default_reaction_emoji: Option<forum::DefaultReaction>,
+	#[serde(default)]
+	pub default_forum_layout: Option<u8>,
+	#[serde(default)]
+	pub default_sort_order: Option<u8>,
+	#[serde(default)]
+	pub default_tag_setting: Option<String>,
 }
 impl ChannelPatchDto {
 	pub fn is_obfuscated(&self) -> bool {
@@ -332,6 +368,18 @@ impl ChannelPatchDto {
 			name: self.name,
 			parent_id: self.parent_id,
 			position: self.position,
+			tags: forum::patched_tags(
+				self.kind.clone(),
+				self.available_tags,
+				self.applied_tags,
+				&self.flags,
+				forum::Defaults {
+					reaction: self.default_reaction_emoji,
+					layout: self.default_forum_layout,
+					sort: self.default_sort_order,
+					tag_setting: self.default_tag_setting,
+				},
+			),
 			kind: self.kind,
 			message_count: self.message_count,
 		}

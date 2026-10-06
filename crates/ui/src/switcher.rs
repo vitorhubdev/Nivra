@@ -701,6 +701,7 @@ mod tests {
 				message_count: None,
 				icon: None,
 				last_message: None,
+				tags: None,
 			})
 			.collect();
 		state.selected = Some(Id(25));

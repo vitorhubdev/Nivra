@@ -794,6 +794,7 @@ impl State {
 								position: Patch::Absent,
 								kind: Patch::Absent,
 								message_count: Patch::Absent,
+								tags: Patch::Absent,
 							}),
 						});
 					}
@@ -958,6 +959,7 @@ impl State {
 							position: Patch::Value(position),
 							kind: Patch::Absent,
 							message_count: Patch::Absent,
+							tags: Patch::Absent,
 						}),
 					});
 					for (shift_id, shift_pos) in shifts {
@@ -972,6 +974,7 @@ impl State {
 								position: Patch::Value(shift_pos),
 								kind: Patch::Absent,
 								message_count: Patch::Absent,
+								tags: Patch::Absent,
 							}),
 						});
 					}
@@ -1049,6 +1052,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			..State::default()
 		};
@@ -1282,6 +1286,7 @@ mod tests {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				}),
 				permissions: None,
 			}),
@@ -1308,6 +1313,7 @@ mod tests {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				}),
 				permissions: None,
 			}),
@@ -1434,6 +1440,8 @@ mod tests {
 			position: Patch::Absent,
 			kind: Patch::Absent,
 			message_count: Patch::Absent,
+
+			tags: Patch::Absent,
 		}));
 		finish(&mut state, pending, Ok(Outcome::Deleted));
 		assert!(state.channel(Id(3)).is_none());

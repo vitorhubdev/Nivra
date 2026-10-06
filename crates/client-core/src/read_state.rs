@@ -900,6 +900,7 @@ mod navigation_tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			..Default::default()
 		};

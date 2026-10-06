@@ -5672,6 +5672,7 @@ mod composer_tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			selected: Some(Id(1)),
 			auth: client_core::auth::AuthState::Authenticated,
@@ -5880,6 +5881,7 @@ mod composer_tests {
 			icon: None,
 			member_list_id: None,
 			message_count: None,
+			tags: None,
 		});
 		denied.selected = Some(Id(20));
 		denied.drafts.insert(Id(20), "x".repeat(2500));
@@ -6172,6 +6174,7 @@ mod composer_tests {
 				member_list_id: None,
 				message_count: None,
 				icon: None,
+				tags: None,
 			}],
 			user: Some(user.clone()),
 			demo: true,
@@ -7254,6 +7257,7 @@ mod composer_tests {
 			member_list_id: None,
 			message_count: None,
 			icon: None,
+			tags: None,
 		});
 		state
 			.apply_read_state(client_core::read_state::Event::Snapshot {
@@ -7907,6 +7911,7 @@ mod composer_tests {
 				member_list_id: None,
 				message_count: None,
 				icon: None,
+				tags: None,
 			});
 			edit_frame(&ctx, &mut view, &mut state, vec![]);
 			view.deleting = Some((Id(10), Id(20)));
@@ -8127,6 +8132,7 @@ mod composer_tests {
 				member_list_id: Some("everyone".into()),
 				message_count: None,
 				icon: None,
+				tags: None,
 			}],
 			members: Some(model::MemberList {
 				channel: Id(1),
@@ -8812,6 +8818,7 @@ mod composer_tests {
 					member_list_id: None,
 					message_count: None,
 					icon: None,
+					tags: None,
 				}],
 				..Default::default()
 			};
@@ -9117,6 +9124,7 @@ mod composer_tests {
 				member_list_id: None,
 				message_count: None,
 				icon: None,
+				tags: None,
 			}],
 			..Default::default()
 		};

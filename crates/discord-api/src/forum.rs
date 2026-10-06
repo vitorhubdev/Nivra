@@ -3,27 +3,6 @@ use model::{Id, forum::Page};
 use reqwest::Method;
 
 impl DiscordApi {
-	pub(super) async fn forum_summary(
-		&self,
-		channel: Id,
-	) -> Result<model::forum::Summary, Failure> {
-		if channel.0 == 0 {
-			return Err(Failure::Protocol);
-		}
-		let bytes = self
-			.request_limited(
-				Method::GET,
-				&format!("/channels/{channel}/messages?limit=50"),
-				None,
-				discord_protocol::forum::MAX_WIRE,
-			)
-			.await?;
-		discord_protocol::decode::<discord_protocol::forum::Recent>(&bytes)
-			.map_err(|_| Failure::Protocol)?
-			.into_summary(channel)
-			.map_err(|_| Failure::Protocol)
-	}
-
 	/// Active posts of one forum. The gateway only syncs joined threads, so the list is fetched.
 	///
 	/// The per-forum search route is unofficial client behavior; a service that rejects it falls
@@ -93,10 +72,12 @@ mod tests {
 			))
 			.unwrap();
 			api.base = format!("http://{}", listener.local_addr().unwrap());
-			let row = |guild: &str| format!(r#"{{"id":"9","guild_id":"{guild}","parent_id":"2","type":11,"name":"Synthetic","thread_metadata":{{"archived":false}}}}"#);
+			let row = |guild: &str| format!(r#"{{"id":"9","guild_id":"{guild}","parent_id":"2","type":11,"name":"Synthetic","thread_metadata":{{"archived":false}},"applied_tags":["31"]}}"#);
+			// The starter message travels with the search page; no per-post request is made.
+			let starter = r#"{"id":"9","channel_id":"9","author":{"id":"5","username":"Synthetic","discriminator":"0"},"content":"Synthetic starter","attachments":[{"id":"77","filename":"a.png","content_type":"image/png","size":10,"url":"https://cdn.test/a.png","proxy_url":"https://media.test/a.png","width":8,"height":8}],"reactions":[{"count":2,"me":false,"emoji":{"id":null,"name":"🔥"}}]}"#;
 			let server = tokio::spawn(async move {
 				for (route, status, body) in [
-					("/channels/2/threads/search?archived=false&sort_by=last_message_time&sort_order=desc&limit=25&offset=0","200 OK",format!(r#"{{"threads":[{}],"members":[],"has_more":true,"total_results":2}}"#, row("1"))),
+					("/channels/2/threads/search?archived=false&sort_by=last_message_time&sort_order=desc&limit=25&offset=0","200 OK",format!(r#"{{"threads":[{}],"members":[],"has_more":true,"total_results":2,"first_messages":[{starter}]}}"#, row("1"))),
 					("/channels/2/threads/search?archived=false&sort_by=last_message_time&sort_order=desc&limit=25&offset=25","200 OK",r#"{"threads":[],"members":[],"has_more":false}"#.to_owned()),
 					("/channels/2/threads/search?archived=false&sort_by=last_message_time&sort_order=desc&limit=25&offset=0","404 Not Found",r#"{"code":0}"#.to_owned()),
 					("/guilds/1/threads/active","200 OK",format!(r#"{{"threads":[{}],"members":[]}}"#, row("1"))),
@@ -148,6 +129,9 @@ mod tests {
 			};
 			assert_eq!(page.threads[0].id, Id(9));
 			assert!(page.more);
+			assert_eq!(page.previews.len(), 1);
+			assert_eq!(page.previews[0].1.images.len(), 1);
+			assert_eq!(page.threads[0].tags.as_deref().unwrap().applied, vec![Id(31)]);
 			let exhausted = api.forum_posts(Id(2), Id(1), 25).await.unwrap();
 			assert!(exhausted.threads.is_empty() && !exhausted.more);
 			// A rejected search route falls back to the documented guild-wide active list.

@@ -186,6 +186,7 @@ enum Destination {
 	Post {
 		guild: model::Id,
 		title: String,
+		tags: Vec<model::Id>,
 		request: u64,
 	},
 }
@@ -276,6 +277,7 @@ impl DiscordApi {
 				title,
 				content,
 				request,
+				tags,
 				..
 			} => (
 				parent,
@@ -283,6 +285,7 @@ impl DiscordApi {
 				Destination::Post {
 					guild,
 					title,
+					tags,
 					request,
 				},
 			),
@@ -370,12 +373,13 @@ impl DiscordApi {
 			Destination::Post {
 				guild,
 				title,
+				tags,
 				request,
 			} => {
 				let result = tokio::select! {
 					biased;
 					_ = cancelled(&mut cancel) => Err(Failure::Ambiguous),
-					result = self.create_post(channel, guild, &title, &content, Some(attachment)) => result,
+					result = self.create_post(channel, guild, (&title, &tags), &content, Some(attachment)) => result,
 				};
 				progress.send_replace(status(&result));
 				Event::PostCreated {

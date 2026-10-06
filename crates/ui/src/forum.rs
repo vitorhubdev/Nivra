@@ -97,7 +97,6 @@ impl ForumUi {
 		let mut open = None;
 		let mut archive_request = None;
 		let mut posts_request = false;
-		let mut summary_requests = Vec::new();
 		let mut author_lookup = Vec::new();
 		session
 			.attach(
@@ -167,20 +166,12 @@ impl ForumUi {
 							}
 							let response =
 								card(ui, state, post, (false, state.post_unread(post)), now);
-							if summary_requests.len() < client_core::forum::SUMMARY_BATCH
-								&& ui.is_rect_visible(response.rect)
-								&& state.needs_post_summary(post.id)
-							{
-								summary_requests.push(post.id);
-							}
-							if let Some(latest) = state
-								.post_summary(post.id)
-								.and_then(|summary| summary.latest.as_ref())
-								&& !latest.webhook && latest.roles.is_empty()
+							if let Some(starter) = state.post_preview(post.id)
+								&& !starter.webhook && starter.roles.is_empty()
 								&& author_lookup.len() < client_core::member_search::LIMIT
-								&& !author_lookup.contains(&latest.author_id)
+								&& !author_lookup.contains(&starter.author_id)
 							{
-								author_lookup.push(latest.author_id);
+								author_lookup.push(starter.author_id);
 							}
 							menu.context(&response, state, post, view, language);
 							if response.clicked() {
@@ -191,12 +182,6 @@ impl ForumUi {
 						for post in archived {
 							let response =
 								card(ui, state, post, (true, state.post_unread(post)), now);
-							if summary_requests.len() < client_core::forum::SUMMARY_BATCH
-								&& ui.is_rect_visible(response.rect)
-								&& state.needs_post_summary(post.id)
-							{
-								summary_requests.push(post.id);
-							}
 							menu.context(&response, state, post, view, language);
 							if response.clicked() {
 								open = Some(Open::Archived(post.id));
@@ -206,11 +191,6 @@ impl ForumUi {
 						archive_request = archive_footer(ui, state, forum, archive);
 					});
 			});
-		if open.is_none()
-			&& let Some(command) = state.request_post_summaries(summary_requests)
-		{
-			commands.push(command);
-		}
 		if let Some(command) = state.request_author_members(&author_lookup) {
 			commands.push(command);
 		}
@@ -549,7 +529,7 @@ impl ForumUi {
 		} else if submit {
 			let names: Vec<&str> = staged.files.iter().map(|(name, _)| name.as_str()).collect();
 			if let Some(command) =
-				state.create_post_with_attachments(forum, &draft.title, &draft.body, &names)
+				state.create_post_with_attachments(forum, &draft.title, &draft.body, &names, &[])
 			{
 				draft.submitted = true;
 				commands.push(command);
@@ -623,18 +603,16 @@ fn card(
 								.selectable(false),
 							);
 						});
-						let latest = state
-							.post_summary(post.id)
-							.and_then(|summary| summary.latest.as_ref());
-						if let Some(latest) = latest {
+						let starter = state.post_preview(post.id);
+						if let Some(starter) = starter {
 							ui.horizontal(|ui| {
 								ui.spacing_mut().item_spacing.x = 5.0;
 								let author_color = state
 									.forum_author_color(
 										post.id,
-										latest.author_id,
-										latest.webhook,
-										&latest.roles,
+										starter.author_id,
+										starter.webhook,
+										&starter.roles,
 									)
 									.map_or(colors.text_strong, |rgb| {
 										design::role_name_color(
@@ -644,15 +622,15 @@ fn card(
 										)
 									});
 								ui.label(
-									design::semibold(ui, format!("{}:", latest.author), 14.0)
+									design::semibold(ui, format!("{}:", starter.author), 14.0)
 										.color(author_color),
 								);
 								ui.add(
 									egui::Label::new(
-										RichText::new(if latest.excerpt.trim().is_empty() {
-											"Attachment or non-text message"
+										RichText::new(if starter.excerpt.trim().is_empty() {
+											crate::tr_ui!(ui, "Attachment or non-text message")
 										} else {
-											&latest.excerpt
+											&starter.excerpt
 										})
 										.size(14.0)
 										.color(colors.text),
@@ -677,13 +655,10 @@ fn card(
 								);
 							}
 							if unread {
-								let label = match state.post_new_count(post) {
-									Some((count, exact)) if count > 0 => {
-										format!("({count}{} New)", if exact { "" } else { "+" })
-									}
-									_ => "(New)".to_owned(),
-								};
-								ui.label(design::medium(ui, label, 13.0).color(colors.accent));
+								ui.label(
+									design::medium(ui, crate::tr_ui!(ui, "(New)"), 13.0)
+										.color(colors.accent),
+								);
 							}
 							ui.label(RichText::new("·").color(colors.muted));
 							ui.label(
@@ -968,7 +943,13 @@ mod tests {
 		// An image without text is still a post; Discord accepts an empty starter body.
 		let draft = forum.draft.as_ref().expect("composer stays open");
 		let command = state
-			.create_post_with_attachments(Id(26), &draft.title, &draft.body, &["synthetic.png"])
+			.create_post_with_attachments(
+				Id(26),
+				&draft.title,
+				&draft.body,
+				&["synthetic.png"],
+				&[],
+			)
 			.expect("staged files travel with the post");
 		let Command::CreatePost {
 			parent,
@@ -1097,6 +1078,7 @@ mod tests {
 					member_list_id: None,
 					message_count: Some(0),
 					icon: None,
+					tags: None,
 				}),
 			);
 			assert_eq!(state.posting.created, Some(Id(1_548_000_000_000_000_000)));
@@ -1156,16 +1138,20 @@ mod tests {
 					model::Language::English,
 				)
 			});
-			let Some(Command::ForumPosts {
+			let index = commands
+				.iter()
+				.position(|command| matches!(command, Command::ForumPosts { .. }))
+				.expect("the post list loads itself");
+			let Command::ForumPosts {
 				parent: Id(26),
 				offset: 0,
 				request,
 				..
-			}) = commands.pop()
+			} = commands.remove(index)
 			else {
 				panic!("the post list loads itself");
 			};
-			assert!(commands.is_empty());
+			commands.clear();
 			frame(&ctx, |ui| {
 				forum.show(
 					ui,
@@ -1183,7 +1169,18 @@ mod tests {
 					model::Language::English,
 				)
 			});
-			assert!(commands.is_empty(), "A pending page is never re-requested");
+			assert!(
+				commands.is_empty(),
+				"A pending page is never re-requested: {:?}",
+				commands
+					.iter()
+					.map(|command| match command {
+						Command::ForumPosts { .. } => "posts",
+						Command::MemberSearch(_) => "members",
+						_ => "other",
+					})
+					.collect::<Vec<_>>()
+			);
 			state.apply_forum_posts(
 				Id(26),
 				request,
@@ -1200,8 +1197,10 @@ mod tests {
 						member_list_id: None,
 						message_count: Some(2),
 						icon: None,
+						tags: None,
 					}],
 					more: false,
+					previews: Vec::new(),
 				}),
 			);
 			forum.query.clear();

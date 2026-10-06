@@ -274,6 +274,7 @@ mod tests {
 						primary_guild: None,
 					},
 				],
+				tags: None,
 			}],
 			..Default::default()
 		}

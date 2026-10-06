@@ -970,6 +970,7 @@ mod tests {
 				member_list_id: None,
 				message_count: None,
 				icon: None,
+				tags: None,
 			});
 			if let Some(guild) = guild {
 				use model::permissions as p;
@@ -1120,6 +1121,7 @@ mod tests {
 			member_list_id: None,
 			message_count: None,
 			icon: None,
+			tags: None,
 		}
 	}
 	#[test]

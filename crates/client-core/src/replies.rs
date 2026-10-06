@@ -266,6 +266,7 @@ mod tests {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				})
 				.collect(),
 			..State::default()

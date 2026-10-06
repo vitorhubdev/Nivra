@@ -300,6 +300,7 @@ mod tests {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				})
 				.collect(),
 			..State::default()
@@ -610,6 +611,8 @@ mod tests {
 				message_count: Patch::Absent,
 				position: Patch::Absent,
 				last_message: Patch::Absent,
+
+				tags: Patch::Absent,
 			}),
 			Event::Unavailable(Id(1)),
 			Event::Resync,

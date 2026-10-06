@@ -29,10 +29,12 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 function Get-NivraProcesses {
-    @(Get-Process -Name 'Nivra*' -ErrorAction SilentlyContinue)
+    $items = @(Get-Process -Name 'Nivra*' -ErrorAction SilentlyContinue)
+    return ,$items
 }
 function Get-DiscordProcesses {
-    @(Get-Process -Name 'Discord' -ErrorAction SilentlyContinue)
+    $items = @(Get-Process -Name 'Discord' -ErrorAction SilentlyContinue)
+    return ,$items
 }
 function Get-CpuSeconds {
     param([object[]] $Processes)

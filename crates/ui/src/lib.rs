@@ -9425,6 +9425,46 @@ mod account_card_tests {
 	}
 
 	#[test]
+	fn voice_panel_with_five_speakers_stays_under_the_frame_budget() {
+		let ctx = egui::Context::default();
+		ctx.set_theme(egui::ThemePreference::Dark);
+		let mut state = test_support::demo_state();
+		let mut call = demo_call();
+		call.phase = client_core::voice::Phase::Connected;
+		call.participants = (2..=6)
+			.map(|id| client_core::voice::Participant {
+				user: model::Id(id),
+				muted: false,
+				deafened: false,
+				server_muted: false,
+				server_deafened: false,
+				video: false,
+				streaming: false,
+			})
+			.collect();
+		state.voice.active = Some(call);
+		let mut view = MessagingUi {
+			voice_speaking: (2..=6).map(model::Id).collect(),
+			..MessagingUi::default()
+		};
+		view.voice_speaking_levels.extend(
+			(2..=6u64)
+				.enumerate()
+				.map(|(index, id)| (model::Id(id), 200 + index as u8)),
+		);
+		// Warm up fonts, textures and the layout cache before measuring.
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let started = std::time::Instant::now();
+		frame(&ctx, &mut view, &mut state, egui::vec2(1100.0, 800.0));
+		let elapsed = started.elapsed();
+		println!("voice frame with 5 speakers: {elapsed:?}");
+		assert!(
+			elapsed < std::time::Duration::from_millis(50),
+			"the voice phase must stay under 50 ms per frame: {elapsed:?}"
+		);
+	}
+
+	#[test]
 	fn a_stale_stored_panel_height_does_not_survive_a_frame() {
 		let ctx = egui::Context::default();
 		ctx.set_theme(egui::ThemePreference::Dark);

@@ -547,6 +547,17 @@ fn signed_attachment_query(url: &url::Url) -> bool {
 	ex && is_param && hm
 }
 
+/// A media-proxy URL with sizing parameters serves a transformed rendition: its length is
+/// not the original attachment's length, so an exact-size check cannot apply to it.
+fn sized_rendition(url: &url::Url) -> bool {
+	url.query_pairs().any(|(name, _)| {
+		matches!(
+			name.as_ref(),
+			"width" | "height" | "format" | "quality" | "size" | "animated" | "fit"
+		)
+	})
+}
+
 struct Partial<'a> {
 	cleanup_failed: &'a AtomicBool,
 	path: PathBuf,
@@ -829,6 +840,7 @@ pub(crate) async fn download(
 	if cancelled.load(Ordering::Acquire) {
 		return Err("Cancelled");
 	}
+	let rendition = sized_rendition(&url);
 	let response = tokio::select! {
 		biased;
 		_ = wake_cancel.notified() => return Err("Cancelled"),
@@ -844,7 +856,7 @@ pub(crate) async fn download(
 	{
 		return Err("Unexpected attachment encoding; reload the conversation");
 	}
-	let expected = if expected == 0 {
+	let (expected, exact) = if expected == 0 {
 		// Only the validated embedded-image entry point supplies an unknown size.
 		if !response
 			.headers()
@@ -860,19 +872,35 @@ pub(crate) async fn download(
 			}) {
 			return Err("Embedded image proxy did not return PNG");
 		}
-		response
+		(
+			response
+				.headers()
+				.get(reqwest::header::CONTENT_LENGTH)
+				.and_then(|value| value.to_str().ok())
+				.and_then(|value| value.parse::<u64>().ok())
+				.filter(|length| (1..=MAX_EMBED_BYTES).contains(length))
+				.ok_or("Embedded image needs a nonempty Content-Length of at most 16 MiB")?,
+			true,
+		)
+	} else if rendition {
+		// A media-proxy URL with sizing parameters serves a resized rendition whose length
+		// legitimately differs from the original attachment, so its own bounded
+		// Content-Length is the only length that can be checked. Without one the transfer
+		// is bounded by the download cap and published as it arrives.
+		let length = response
 			.headers()
 			.get(reqwest::header::CONTENT_LENGTH)
 			.and_then(|value| value.to_str().ok())
 			.and_then(|value| value.parse::<u64>().ok())
-			.filter(|length| (1..=MAX_EMBED_BYTES).contains(length))
-			.ok_or("Embedded image needs a nonempty Content-Length of at most 16 MiB")?
+			.filter(|length| (1..=MAX_BYTES).contains(length));
+		(length.unwrap_or(MAX_BYTES), length.is_some())
 	} else {
-		expected
+		(expected, true)
 	};
-	if response
-		.content_length()
-		.is_some_and(|length| length != expected)
+	if !rendition
+		&& response
+			.content_length()
+			.is_some_and(|length| length != expected)
 	{
 		return Err("Attachment size changed; reload the conversation");
 	}
@@ -924,7 +952,7 @@ pub(crate) async fn download(
 				repaint = Instant::now();
 			}
 		}
-		if received != expected {
+		if received != expected && exact {
 			return Err("Attachment transfer incomplete");
 		}
 		if cancelled.load(Ordering::Acquire) {
@@ -1325,6 +1353,65 @@ mod tests {
 		}
 		drop(file);
 		assert!(!failed.load(Ordering::Acquire));
+	}
+
+	#[tokio::test]
+	async fn a_resized_rendition_uses_its_own_length_and_an_original_change_still_fails() {
+		discord_api::ensure_tls_provider();
+		let root = std::env::temp_dir().join(format!(
+			"nivra-download-tests-rendition-{}",
+			std::process::id()
+		));
+		fs::create_dir_all(&root).unwrap();
+		let destination = root.join("rendition.png");
+		let client = reqwest::Client::builder()
+			.no_proxy()
+			.redirect(reqwest::redirect::Policy::none())
+			.timeout(Duration::from_secs(5))
+			.build()
+			.unwrap();
+		let cancelled = AtomicBool::new(false);
+		let wake = Notify::new();
+		let body = vec![7u8; 4096];
+		// A sized media-proxy URL serves a resized rendition; the declared size is the
+		// original's, which the rendition never matches.
+		let (url, task) = endpoint(body.clone(), false, false).await;
+		let mut url = url;
+		url.set_query(Some("format=png&width=64&height=64&quality=lossless"));
+		download(
+			&client,
+			url,
+			&destination,
+			body.len() as u64 * 4,
+			false,
+			&cancelled,
+			&wake,
+			&|_| {},
+		)
+		.await
+		.unwrap();
+		task.await.unwrap();
+		assert_eq!(fs::read(&destination).unwrap(), body);
+		fs::remove_file(&destination).unwrap();
+		// An original link whose declared size no longer matches still fails before writing.
+		let (url, task) = endpoint(body.clone(), false, false).await;
+		assert_eq!(
+			download(
+				&client,
+				url,
+				&destination,
+				body.len() as u64 + 1,
+				false,
+				&cancelled,
+				&wake,
+				&|_| {},
+			)
+			.await,
+			Err("Attachment size changed; reload the conversation")
+		);
+		task.await.unwrap();
+		assert!(!destination.exists());
+		let _ = fs::remove_dir_all(&root);
 	}
 
 	#[tokio::test]

@@ -2616,6 +2616,23 @@ impl MessagingUi {
 	}
 
 	/// Mute or deafen toggle: red slashed glyph while active, like Discord's user area.
+	/// Discord's rules for the microphone and headphone buttons, shared by the account
+	/// card, the call bar and the pre-call card. Returns the new raw intent and which
+	/// cues to play (`mic_cue`, `deafen_cue`). Clicking the microphone while deafened
+	/// un-deafens and unmutes; un-deafening otherwise restores the saved mic intent.
+	fn toggle_voice_intent(&mut self, deafen: bool) -> (bool, bool, bool, bool) {
+		if deafen {
+			self.voice_deafened = !self.voice_deafened;
+			(self.voice_muted, self.voice_deafened, false, true)
+		} else if self.voice_deafened {
+			self.voice_deafened = false;
+			self.voice_muted = false;
+			(false, false, true, true)
+		} else {
+			self.voice_muted = !self.voice_muted;
+			(self.voice_muted, self.voice_deafened, true, false)
+		}
+	}
 	pub(super) fn mute_toggle(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -2629,7 +2646,7 @@ impl MessagingUi {
 			let active = if deafen {
 				self.voice_deafened
 			} else {
-				self.voice_muted
+				self.voice_muted || self.voice_deafened
 			};
 			let label = match (deafen, active) {
 				(true, true) => "Undeafen",
@@ -2657,20 +2674,27 @@ impl MessagingUi {
 				egui::WidgetInfo::selected(egui::Role::Button, true, active, label)
 			});
 			if response.clicked() {
-				if deafen {
-					self.voice_deafened = !active;
-					self.queue_voice_toggle_cue(true, !active);
-				} else {
-					self.voice_muted = !active;
-					self.queue_voice_toggle_cue(false, !active);
+				let (muted, deafened, mic_cue, deafen_cue) = self.toggle_voice_intent(deafen);
+				if deafen_cue {
+					self.queue_voice_toggle_cue(true, deafened);
+				}
+				if mic_cue {
+					self.queue_voice_toggle_cue(false, muted);
 				}
 			}
-			return response.on_hover_text(format!("{label}; applies to your next call."));
+			let hint = if !deafen && self.voice_deafened {
+				crate::tr_ui!(ui, "Microphone off because you are deafened")
+			} else {
+				return response.on_hover_text(format!("{label}; applies to your next call."));
+			};
+			return response.on_hover_text(hint);
 		};
 		let channel = call.channel;
 		let can_speak = state.can_speak(channel);
 		let (mut muted, mut deafened) = (self.voice_muted || !can_speak, self.voice_deafened);
-		let active = if deafen { deafened } else { muted };
+		// Deafen mutes the microphone too: the card and the call bar show the same glyph
+		// the voice list shows for the state sent to the server.
+		let active = if deafen { deafened } else { muted || deafened };
 		let enabled =
 			(self.controls_enabled(state) || state.demo) && (deafen || can_speak || state.demo);
 		let label = match (deafen, active) {
@@ -2679,6 +2703,7 @@ impl MessagingUi {
 			(false, true) => "Unmute",
 			(false, false) => "Mute",
 		};
+		let deafened_hint = !deafen && deafened;
 		let response = ui
 			.add_enabled_ui(enabled, |ui| {
 				let (rect, response) =
@@ -2708,23 +2733,27 @@ impl MessagingUi {
 				response
 			})
 			.inner
-			.on_hover_text(if enabled {
-				label
-			} else if !can_speak && !deafen {
-				"Speaking is unavailable in this channel."
+			.on_hover_text(if !enabled {
+				if !can_speak && !deafen {
+					"Speaking is unavailable in this channel."
+				} else {
+					"Controls are unavailable in this build or preview."
+				}
+			} else if deafened_hint {
+				crate::tr_ui!(ui, "Microphone off because you are deafened")
 			} else {
-				"Controls are unavailable in this build or preview."
+				label
 			});
 		if response.clicked() {
-			if deafen {
-				deafened = !deafened;
+			let (raw_muted, now_deafened, mic_cue, deafen_cue) = self.toggle_voice_intent(deafen);
+			muted = raw_muted || !can_speak;
+			deafened = now_deafened;
+			if deafen_cue {
 				self.queue_voice_toggle_cue(true, deafened);
-			} else {
-				muted = !muted;
+			}
+			if mic_cue {
 				self.queue_voice_toggle_cue(false, muted);
 			}
-			self.voice_muted = muted;
-			self.voice_deafened = deafened;
 			if let Some(command) = state.set_call_mute(muted, deafened) {
 				commands.push(command);
 			}
@@ -2766,20 +2795,24 @@ impl MessagingUi {
 			ui.spacing_mut().item_spacing.x = BAR_GAP;
 			ui.add_space(((ui.available_width() - width) * 0.5).max(0.0));
 			pill(ui, pill_width, |ui| {
+				// Same effective state as the card: deafen shows the microphone cut too.
+				let mic_muted = muted || deafened;
 				let mic = control(
 					ui,
-					if muted {
+					if mic_muted {
 						crate::icons::Icon::MicrophoneSlash
 					} else {
 						crate::icons::Icon::Microphone
 					},
 					48.0,
 					voice_toggles && (can_speak || state.demo),
-					if muted { colors.danger } else { STAGE_TEXT },
-					if muted { t("Unmute") } else { t("Mute") },
-					if !can_speak {
+					if mic_muted { colors.danger } else { STAGE_TEXT },
+					if mic_muted { t("Unmute") } else { t("Mute") },
+					if deafened {
+						t("Microphone off because you are deafened")
+					} else if !can_speak {
 						t("Speaking is unavailable in this channel.")
-					} else if muted {
+					} else if mic_muted {
 						t("Turn on microphone")
 					} else {
 						t("Turn off microphone")
@@ -2922,16 +2955,26 @@ impl MessagingUi {
 			commands.push(command);
 		}
 		if mute_clicked {
-			muted = !muted;
-			self.queue_voice_toggle_cue(false, muted);
+			let (raw_muted, now_deafened, mic_cue, deafen_cue) = self.toggle_voice_intent(false);
+			muted = raw_muted || !can_speak;
+			deafened = now_deafened;
+			if deafen_cue {
+				self.queue_voice_toggle_cue(true, deafened);
+			}
+			if mic_cue {
+				self.queue_voice_toggle_cue(false, muted);
+			}
 		}
 		if deafen_clicked {
-			deafened = !deafened;
-			self.queue_voice_toggle_cue(true, deafened);
-		}
-		if mute_clicked || deafen_clicked {
-			self.voice_muted = muted;
-			self.voice_deafened = deafened;
+			let (raw_muted, now_deafened, mic_cue, deafen_cue) = self.toggle_voice_intent(true);
+			muted = raw_muted || !can_speak;
+			deafened = now_deafened;
+			if deafen_cue {
+				self.queue_voice_toggle_cue(true, deafened);
+			}
+			if mic_cue {
+				self.queue_voice_toggle_cue(false, muted);
+			}
 		}
 		if (mute_clicked || deafen_clicked)
 			&& let Some(command) = state.set_call_mute(muted, deafened)
@@ -5750,6 +5793,29 @@ mod tests {
 		view.set_voice_user_mutes(&(0..200).collect::<Vec<u64>>());
 		assert_eq!(view.voice_user_mutes().len(), MAX_USER_MUTES);
 		assert!(!view.voice_user_mutes().contains(&0));
+	}
+
+	#[test]
+	fn deafen_clicks_follow_discords_microphone_rules() {
+		let mut view = MessagingUi::default();
+		// `muted || deafened` is the one effective state the card, the call bar and the
+		// voice list show (the server receives the same rule).
+		let effective = |view: &MessagingUi| view.voice_muted || view.voice_deafened;
+		assert!(!effective(&view));
+		// Microphone click: mute.
+		assert_eq!(view.toggle_voice_intent(false), (true, false, true, false));
+		assert!(effective(&view));
+		// Deafening keeps the saved microphone intent.
+		assert_eq!(view.toggle_voice_intent(true), (true, true, false, true));
+		assert!(effective(&view));
+		// Clicking the microphone while deafened un-deafens and unmutes, with both cues.
+		assert_eq!(view.toggle_voice_intent(false), (false, false, true, true));
+		assert!(!effective(&view));
+		// Muted before deafening stays muted after un-deafening.
+		assert_eq!(view.toggle_voice_intent(false), (true, false, true, false));
+		assert_eq!(view.toggle_voice_intent(true), (true, true, false, true));
+		assert_eq!(view.toggle_voice_intent(true), (true, false, false, true));
+		assert!(effective(&view));
 	}
 
 	#[test]

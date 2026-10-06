@@ -86,6 +86,8 @@ impl eframe::App for Preview {
 				event,
 			});
 		}
+		// The desktop bridge draws the fetched text body after the main surface.
+		self.messaging.show_preview(&ctx);
 		for request in std::mem::take(&mut self.messaging.extensions.requests) {
 			if let ui::ExtensionRequest::PreviewTheme { theme, image } = request {
 				ui::design::set_extension_theme(theme.as_deref());
@@ -161,6 +163,132 @@ impl eframe::App for Preview {
 		}
 		ctx.request_repaint_after(Duration::from_millis(100));
 	}
+}
+
+/// Synthetic member list for the identity captures; names and statuses are invented.
+fn showcase_members(state: &mut client_core::State) {
+	use model::{ClientPlatforms, Id, Member, MemberList, MemberSlot, RichActivity, User};
+	for guild in state.permissions.guilds.values_mut() {
+		if let Some(roles) = &mut guild.roles {
+			roles.extend([
+				model::permissions::Role {
+					id: Id(9001),
+					bits: 0,
+					name: "Founders".into(),
+					color: 0xe78284,
+					position: 2,
+					hoist: true,
+				},
+				model::permissions::Role {
+					id: Id(9002),
+					bits: 0,
+					name: "Community".into(),
+					color: 0xe5c769,
+					position: 1,
+					hoist: true,
+				},
+			]);
+		}
+	}
+	let channel = state.selected.expect("selected fixture channel");
+	let guild = state.channel(channel).and_then(|channel| channel.guild);
+	let person = |id: u64,
+	              name: &str,
+	              status: &str,
+	              roles: Vec<Id>,
+	              custom: Option<&str>,
+	              activity: Option<RichActivity>| {
+		Member {
+			user: User {
+				id: Id(id),
+				name: name.into(),
+				avatar: None,
+				webhook: false,
+				kind: Default::default(),
+				discriminator: 0,
+				primary_guild: None,
+			},
+			nick: None,
+			roles,
+			status: Some(status.into()),
+			custom_status: custom.map(str::to_owned),
+			activities: activity.into_iter().collect(),
+			clients: ClientPlatforms::default(),
+		}
+	};
+	let members = vec![
+		person(
+			1,
+			"You (synthetic)",
+			"online",
+			vec![Id(9002)],
+			Some("Building quiet software for loud places"),
+			None,
+		),
+		person(
+			2,
+			"Robin (synthetic)",
+			"idle",
+			vec![Id(9001)],
+			None,
+			Some(RichActivity {
+				kind: 0,
+				name: "Stardew Valley".into(),
+				details: Some("Tending the synthetic farm".into()),
+				state: Some("Spring - Day 12".into()),
+				image: None,
+				small_image: None,
+				ends_at: None,
+				started_at: None,
+			}),
+		),
+		person(
+			9003,
+			"Alex (synthetic)",
+			"online",
+			vec![],
+			Some("Sipping synthetic coffee"),
+			None,
+		),
+		person(9004, "Sam (synthetic)", "dnd", vec![], None, None),
+		person(9005, "Taylor (synthetic)", "offline", vec![], None, None),
+	];
+	state.members = Some(MemberList {
+		guild,
+		channel,
+		request: 0,
+		total: members.len() as u64,
+		start: 0,
+		slots: members
+			.into_iter()
+			.map(|member| Some(MemberSlot::Person(member)))
+			.collect(),
+		lazy: false,
+		groups: vec![],
+		ranges: vec![],
+		freshness: model::Freshness::Fresh,
+	});
+}
+
+/// Original synthetic frame for the offline player capture; no decoded media bytes.
+fn synthetic_video_frame() -> egui::ColorImage {
+	let (width, height) = (320usize, 180usize);
+	let mut image = egui::ColorImage::filled([width, height], egui::Color32::BLACK);
+	for y in 0..height {
+		for x in 0..width {
+			let mut color =
+				egui::Color32::from_rgb((x * 255 / width) as u8, (y * 255 / height) as u8, 190);
+			let (cx, cy) = (x as i32 - 96, y as i32 - 90);
+			if cx * cx + cy * cy < 44 * 44 {
+				color = egui::Color32::from_rgb(250, 181, 98);
+			}
+			if (248..width).contains(&x) && (24..height - 24).contains(&y) && (y / 12) % 2 == 0 {
+				color = egui::Color32::from_rgb(235, 238, 242);
+			}
+			image.pixels[y * width + x] = color;
+		}
+	}
+	image
 }
 
 fn prime_profile(state: &mut client_core::State) {
@@ -353,13 +481,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args: Vec<_> = std::env::args().skip(1).collect();
 	let value = |prefix: &str| args.iter().find_map(|arg| arg.strip_prefix(prefix));
 	if !args.iter().any(|arg| arg == "--demo") {
-		return Err("Usage: profile_preview --demo --output=PATH.png [--page=stickers|slash-commands|slash-command-search|slash-command-options|profile|profile-card|member-tags|dm-tags|account|appearance|general|keybinds|extensions|server|server-engagement|server-stickers] [--command=help|weather] [--themes] [--extension=ID] [--thumbnail] [--width=1120] [--height=760] [--light] [--timeline-text] [--poll] [--poll-presence]".into());
+		return Err("Usage: profile_preview --demo --output=PATH.png [--page=overview|voice-call|text-preview|video|image-viewer|stickers|slash-commands|slash-command-search|slash-command-options|profile|profile-card|member-tags|dm-tags|account|appearance|chat|notifications|voice|keybinds|help|extensions|server|server-engagement|server-stickers] [--state=default|voice|video] [--command=help|weather] [--themes] [--extension=ID] [--thumbnail] [--width=1120] [--height=760] [--light] [--timeline-text] [--poll] [--poll-presence]".into());
 	}
 	let output = PathBuf::from(value("--output=").ok_or("Missing --output=PATH.png")?);
 	let page = value("--page=").unwrap_or("profile").to_owned();
 	if !matches!(
 		page.as_str(),
-		"profile"
+		"overview"
+			| "voice-call"
+			| "text-preview"
+			| "video" | "image-viewer"
+			| "profile"
 			| "stickers"
 			| "slash-commands"
 			| "slash-command-search"
@@ -369,6 +501,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			| "dm-tags"
 			| "account"
 			| "appearance"
+			| "chat" | "notifications"
+			| "voice" | "help"
 			| "general"
 			| "keybinds"
 			| "extensions"
@@ -376,7 +510,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			| "server-engagement"
 			| "server-stickers"
 	) {
-		return Err("Page must be profile, profile-card, member-tags, dm-tags, account, appearance, general, keybinds, extensions, slash-commands, slash-command-search, slash-command-options, server, server-engagement or server-stickers".into());
+		return Err("Page must be overview, voice-call, text-preview, video, image-viewer, profile, profile-card, member-tags, dm-tags, account, appearance, chat, notifications, voice, keybinds, help, extensions, slash-commands, slash-command-search, slash-command-options, server, server-engagement or server-stickers".into());
+	}
+	let state_kind = value("--state=").unwrap_or("default").to_owned();
+	if !matches!(state_kind.as_str(), "default" | "voice" | "video") {
+		return Err("State fixture must be default, voice or video".into());
 	}
 	let slash_command = value("--command=").unwrap_or("help").to_owned();
 	if !matches!(slash_command.as_str(), "help" | "weather") {
@@ -400,7 +538,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let saved = Arc::new(AtomicBool::new(false));
 	let completed = saved.clone();
 	eframe::run_native(
-		"Serein · offline profile preview",
+		"Nivra · offline preview",
 		eframe::NativeOptions {
 			viewport: egui::ViewportBuilder::default()
 				.with_inner_size([width, height])
@@ -422,6 +560,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				"slash-commands" | "slash-command-search" | "slash-command-options"
 			) {
 				slash_demo::preview()
+			} else if state_kind == "voice" {
+				test_support::voice_demo_state()
+			} else if state_kind == "video" {
+				test_support::video_demo_state()
 			} else {
 				test_support::demo_state()
 			};
@@ -462,6 +604,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			if page == "profile" {
 				prime_profile(&mut state);
 			}
+			if page == "overview" {
+				showcase_members(&mut state);
+			}
 			if page == "member-tags" {
 				let user = test_support::message(1, model::Id(20)).author;
 				state.members = Some(model::MemberList {
@@ -498,7 +643,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			messaging.startup_available = platform::startup::available();
 			messaging.startup_enabled = args.iter().any(|arg| arg == "--startup-enabled");
 			messaging.startup_minimized = args.iter().any(|arg| arg == "--startup-minimized");
-			if matches!(page.as_str(), "member-tags" | "dm-tags") {
+			if page == "overview" {
+				// The wide People pane is part of the normal layout for this capture.
+				messaging.reading_preferences.show_members = true;
+			} else if page == "text-preview" {
+				messaging.set_preview(ui::text_preview::TextPreview {
+					filename: "release-notes.md".into(),
+					format: ui::text_preview::PreviewFormat::Markdown,
+					text: "# Synthetic release notes\n\nThis preview is the real bounded dialog the desktop opens after fetching a text, Markdown or code attachment. Every line below is invented for the capture.\n\n- **Bold**, *italics*, `inline code` and [links](https://example.com) all render on the render thread only.\n- Oversized files stop at the disclosed window and offer *Show more*; nothing is written to disk.\n\n> Attachments are fetched once, decoded in memory and never executed.\n\n```rust\nfn main() {\n    println!(\"offline fixture\");\n}\n```\n".into(),
+					truncated: false,
+					shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
+				});
+			} else if page == "image-viewer" {
+				messaging.preview_image_viewer(model::Id(500), model::Id(700));
+			} else if page == "video" {
+				if let Some(message) = state.timeline.get(model::Id(601)).cloned()
+					&& let Some(attachment) = message.attachments.first().cloned()
+				{
+					let player = messaging.video();
+					player.begin(&message, &attachment, false);
+					let _ = player.accept_frame(&cc.egui_ctx, synthetic_video_frame());
+					player.state = ui::VideoState::Paused;
+					player.position = 1.2;
+					player.duration = 3.0;
+				}
+			} else if page == "voice-call" {
+				// The voice fixture already stages its synthetic call.
+			} else if matches!(page.as_str(), "member-tags" | "dm-tags") {
 				// State is primed above; the normal offline messaging surface renders the list.
 			} else if page == "slash-commands" {
 				messaging.preview_slash_commands();

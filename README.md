@@ -13,7 +13,8 @@
 <p align="center">
   <a href="#download"><strong>📦 Download</strong></a> &nbsp;•&nbsp;
   <a href="#highlights"><strong>⚡ Highlights</strong></a> &nbsp;•&nbsp;
-  <a href="#benchmarks"><strong>📊 Benchmarks</strong></a> &nbsp;•&nbsp;
+  <a href="#screenshots"><strong>🖼️ Screenshots</strong></a> &nbsp;•&nbsp;
+  <a href="#performance"><strong>📊 Performance</strong></a> &nbsp;•&nbsp;
   <a href="#build-from-source"><strong>🛠️ Build</strong></a> &nbsp;•&nbsp;
   <a href="#feature-matrix"><strong>📋 Features</strong></a> &nbsp;•&nbsp;
   <a href="#architecture"><strong>🏗️ Architecture</strong></a> &nbsp;•&nbsp;
@@ -22,8 +23,6 @@
 
 <p align="center">
   <a href="https://github.com/vitorhubdev/Nivra/releases/latest"><img src="https://img.shields.io/github/v/release/vitorhubdev/Nivra?label=release&color=blue" alt="Nivra release" /></a>
-  <a href="Cargo.toml"><img src="https://img.shields.io/badge/rust-1.98.1_pinned-blue.svg?logo=rust" alt="Rust 1.98.1 Pinned" /></a>
-  <a href="crates/ui"><img src="https://img.shields.io/badge/ui-egui%20%2F%20wgpu-orange.svg" alt="UI egui/wgpu" /></a>
   <a href="docs/platform-support.md"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-informational.svg" alt="Platform Support" /></a>
   <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License: MIT or Apache-2.0" /></a>
 </p>
@@ -32,13 +31,13 @@
 
 > [!WARNING]
 > **Unofficial and not endorsed by Discord.**
-> Nivra is a modified Serein fork that talks to Discord's public gateway and REST endpoints with your existing account. Automating normal accounts outside the official OAuth2/bot API violates Discord's Terms of Service and carries a risk of account termination. Technical interoperability does not imply platform approval. Review the [compatibility matrix](docs/discord-compatibility.md) and the [authentication guide](docs/authentication.md) before use.
+> Nivra talks to Discord's public gateway and REST endpoints with your existing account. Automating normal accounts outside the official OAuth2/bot API violates Discord's Terms of Service and carries a risk of account termination. Technical interoperability does not imply platform approval. Review the [compatibility matrix](docs/discord-compatibility.md) and the [authentication guide](docs/authentication.md) before use.
 
 ---
 
 ## Download
 
-Stable builds are published on the [Releases page](https://github.com/vitorhubdev/Nivra/releases/latest). On Windows, download the single `.exe` and open it: there is nothing to extract. Installers, Flatpaks, AppImages, Homebrew packages or package repositories published by upstream Serein are not Nivra binaries.
+Stable builds are published on the [Releases page](https://github.com/vitorhubdev/Nivra/releases/latest). On Windows, download the single `.exe` and open it: there is nothing to extract. Only the assets attached to a release on that page are Nivra binaries.
 
 | System | Asset (v1.0.12 example) | Notes |
 | --- | --- | --- |
@@ -73,9 +72,7 @@ Nivra is built around three voice pillars, each covered by an offline, measured 
 - **Pillar 2 — calls that stay up.** Two synthetic clients exchange decoded, DAVE-encrypted audio (450/650 Hz tones, at least 60 frames per direction); a 10-second UDP blackout recovers without rejoining; switching a device during a call, 50 join/leave cycles and 20 channel switches all pass.
 - **Pillar 3 — you are told about everything.** Every voice-state update paints the right icon in one frame; join, leave, mute, unmute, deafen and call drop/reconnect cues go through ordered, identity-deduplicated queues that keep the newest bounded set when full. The cues play with the window focused, minimized or hidden in the tray, and join/leave also raise a system notification with the member name.
 
-These pillars are synthetic, offline tests. Live Discord interoperability and physical microphone/speaker behavior remain unverified.
-
-**Measured performance:** in the benchmark scenario below, Nivra used about **9× less RAM** and **2.8× less CPU** than the official Electron client — one process instead of seven helpers.
+These pillars are synthetic, offline tests. Live Discord interoperability and physical microphone/speaker behavior remain unverified. Memory and CPU claims live in [Performance](#performance); they stay unverified until the owner measures both clients in the same scenario.
 
 **Recently added** (1.0.9–1.0.12):
 
@@ -88,21 +85,30 @@ These pillars are synthetic, offline tests. Live Discord interoperability and ph
 
 ---
 
-## Benchmarks
+## Screenshots
 
-> **Testing scenario:** browsing channels while joined in a voice channel and streaming screen at 60 FPS, on macOS.
+All captures come from the offline demo (`cargo run --locked -p nivra --features demo -- --demo`) or from [`profile_preview`](apps/desktop/examples/profile_preview.rs) with synthetic state: invented names, no account session, no network and no media bytes. The set is regenerated by the manual [`screenshots`](.github/workflows/screenshots.yml) workflow.
 
-| Metric | Official Discord Client (Electron) | Nivra (Native Rust + egui/wgpu) | Advantage |
-|---|:---:|:---:|:---:|
-| **Memory (RAM)** | **1,178.4 MB** *(across 7 helper processes)* | **129.7 MB** *(single unified process)* | **~9× less memory (-89%)** |
-| **CPU Usage** | **22.8%** *(Renderer + Helper processes)* | **8.1%** | **~2.8× lower CPU (-64%)** |
+| Voice call | Text preview | Video player |
+| :---: | :---: | :---: |
+| <img src="docs/screenshots/voice-call.png" alt="Voice call with synthetic participants" width="380" /> | <img src="docs/screenshots/text-preview.png" alt="Bounded text attachment preview" width="380" /> | <img src="docs/screenshots/video-player.png" alt="Inline video player with synthetic frame" width="380" /> |
+| **Image viewer** | **Settings — Voice & Video** | **Settings — Notifications** |
+| <img src="docs/screenshots/image-viewer.png" alt="Image attachment viewer" width="380" /> | <img src="docs/screenshots/settings-voice.png" alt="Voice and video settings" width="380" /> | <img src="docs/screenshots/settings-notifications.png" alt="Notification settings" width="380" /> |
+| **Light theme** | **Dark theme** | **Settings — Help** |
+| <img src="docs/screenshots/light-theme.png" alt="Light theme overview" width="380" /> | <img src="docs/screenshots/dark-theme.png" alt="Dark theme overview" width="380" /> | <img src="docs/screenshots/settings-help.png" alt="Help settings with Copy error log" width="380" /> |
 
-| Official Discord (Electron) | Nivra (Native Rust) |
-| :---: | :---: |
-| **RAM: ~1,178.4 MB across 7 processes** | **RAM: 129.7 MB single process** |
-| <img src="docs/screenshots/perf-discord-ram.png" alt="Discord RAM Usage" width="450" /> | <img src="docs/screenshots/perf-nivra-ram.png" alt="Nivra RAM Usage" width="450" /> |
-| **CPU: 22.8% total** | **CPU: 8.1% total** |
-| <img src="docs/screenshots/perf-discord-cpu.png" alt="Discord CPU Usage" width="450" /> | <img src="docs/screenshots/perf-nivra-cpu.png" alt="Nivra CPU Usage" width="450" /> |
+---
+
+## Performance
+
+> [!NOTE]
+> **Measurement pending.** Nivra publishes no memory or CPU comparison until the owner runs the measurement below on real hardware. Treat any performance claim about Nivra as unverified until a table measured with this script is attached.
+
+[`scripts/measure.ps1`](scripts/measure.ps1) samples the working set (memory) and average CPU of `Nivra*.exe` and `Discord.exe` for 60 seconds and prints one table per scenario. Run it with both clients open in the **same** scenario, for example idle on one text channel, then a voice call, then screen share at 60 FPS, and report each result as:
+
+> Measured by the owner on **<date>**, Windows 11, **<scenario>**, with `scripts/measure.ps1` at `<seconds>` s.
+
+The script only reads process working set and processor time. It never starts, stops or inspects either client, and no account data, message text or identifiers are read.
 
 ---
 
@@ -245,14 +251,13 @@ For full details, review the [Storage Policy](docs/storage-policy.md) and [Threa
 - [SDK Examples and Offline Authoring Guide](examples/extensions/README.md)
 - [Theme API Specification](docs/theme-api.md)
 - [Threat Model & Security](docs/threat-model.md)
-- [Serein extension wiki (upstream reference)](https://github.com/ViceVerse-cz/Serein/wiki) — the original Serein project's wiki; Nivra has no wiki of its own
 - [Third-Party Licenses & Notices](THIRD_PARTY_NOTICES.md)
 
 ---
 
 ## Reporting problems
 
-Report Nivra issues at [vitorhubdev/Nivra/issues](https://github.com/vitorhubdev/Nivra/issues); do not file Nivra bugs upstream. Include the app version (Settings > About, or `--version`), your OS and version, and steps to reproduce. If Nivra logged an error, open **Settings > Help** and press **Copy error log**; paste it into the issue if you are comfortable sharing it. If the app panicked, the next launch shows a crash report with **Copy report**.
+Report Nivra issues at [vitorhubdev/Nivra/issues](https://github.com/vitorhubdev/Nivra/issues). Include the app version (Settings > About, or `--version`), your OS and version, and steps to reproduce. If Nivra logged an error, open **Settings > Help** and press **Copy error log**; paste it into the issue if you are comfortable sharing it. If the app panicked, the next launch shows a crash report with **Copy report**.
 
 ---
 
@@ -273,36 +278,21 @@ Report Nivra issues at [vitorhubdev/Nivra/issues](https://github.com/vitorhubdev
 - The measured three-pillar voice suite above ships with numbers; noise suppression, DAVE audio exchange, UDP-blackout recovery and cue queues are covered by tests.
 - Push to Mute (mouse 4/5), Windows tray voice-state icon, compact timeline layout, HEIC preview and Discord polls.
 
-Older releases (SereinExt 1.0.1–1.0.4 and Nivra 1.0.5 onward) are documented in [CHANGELOG.md](CHANGELOG.md). Upstream Serein documentation can still be useful as technical reference, but its downloads belong to the original project, not this fork.
+Older releases (1.0.5 onward) are documented in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Origin & attribution
+## Credits
 
-Nivra originated as an independent fork of
-[Serein](https://github.com/ViceVerse-cz/Serein),
-developed by the Serein contributors and ViceVerse-cz.
-
-Nivra is independently maintained by
-[vitorhubdev](https://github.com/vitorhubdev)
-and has since developed its own fixes, features, integrations,
-branding and release lifecycle.
-
-Original Serein code remains copyright the Serein contributors
-and is available under MIT OR Apache-2.0.
-
-Nivra is not affiliated with, endorsed by, or an official client
-of Discord Inc.
+Nivra started from [Serein](https://github.com/ViceVerse-cz/Serein) (MIT OR Apache-2.0) and has since been developed independently.
 
 ---
 
 ## License
 
-Original Serein code is dual-licensed under either:
-- **MIT License** ([LICENSE-MIT](LICENSE-MIT))
-- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE))
+Nivra is distributed under the **MIT License** ([LICENSE-MIT](LICENSE-MIT)) or the **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE)), at your option.
 
-at your option. Third-party library notices, bundled font licenses (Inter, Noto Sans CJK/Arabic), and Twemoji graphics licenses are cataloged in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Code inherited from the project Nivra started from keeps the original copyright notice and the same MIT OR Apache-2.0 terms; the Nivra copyright line is added to [LICENSE-MIT](LICENSE-MIT) without removing the original notice. Third-party library notices, bundled font licenses (Inter, Noto Sans CJK/Arabic), and Twemoji graphics licenses are cataloged in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Demo fixtures and simulated actions are excluded from normal app and CI packages.
 Build with `--features demo` and launch with `--demo` to enable them; `--demo-*`
@@ -313,4 +303,4 @@ without demo support, while offline tests can still use synthetic fixtures.
 
 ## Português
 
-O Nivra é um cliente Discord nativo e não oficial, escrito em Rust (egui + wgpu) para Windows, Linux e macOS. No cenário de teste medido (macOS, canais abertos em chamada de voz com transmissão de tela a 60 FPS), ele usou cerca de 9× menos memória que o cliente oficial; tem voz clara (supressão de ruído DeepFilterNet no modo Máximo), toca os sons da chamada com a janela minimizada e mantém um log de erros local — nada é enviado sozinho. Baixe a versão mais recente na página de [Releases](https://github.com/vitorhubdev/Nivra/releases/latest): no Windows é um único `.exe` sem assinatura (o SmartScreen pode avisar; escolha "Mais informações" e "Executar assim mesmo"). Para reportar um problema, abra uma [issue](https://github.com/vitorhubdev/Nivra/issues) com a versão do app, o sistema e os passos, e use "Copiar log de erros" em Configurações > Ajuda se quiser anexar o log. O Nivra não é afiliado ao Discord e usar uma conta normal com ele é por sua conta e risco.
+O Nivra é um cliente Discord nativo e não oficial, escrito em Rust (egui + wgpu) para Windows, Linux e macOS. Tem voz clara (supressão de ruído DeepFilterNet no modo Máximo), toca os sons da chamada com a janela minimizada, pré-visualiza textos e vídeos em qualquer resolução e mantém um log de erros local — nada é enviado sozinho. Baixe a versão mais recente na página de [Releases](https://github.com/vitorhubdev/Nivra/releases/latest): no Windows é um único `.exe` sem assinatura (o SmartScreen pode avisar; escolha "Mais informações" e "Executar assim mesmo"). Para reportar um problema, abra uma [issue](https://github.com/vitorhubdev/Nivra/issues) com a versão do app, o sistema e os passos, e use "Copiar log de erros" em Configurações > Ajuda se quiser anexar o log. As comparações de memória e CPU ficam pendentes até a medição com `scripts/measure.ps1`; o Nivra não é afiliado ao Discord e usar uma conta normal com ele é por sua conta e risco.

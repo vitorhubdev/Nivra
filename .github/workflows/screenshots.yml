@@ -1,0 +1,57 @@
+# Offline identity captures for README and documentation; manual only.
+# The example renders the repository's synthetic demo state into a real wgpu
+# window and saves the native framebuffer. No account, network or media bytes
+# are involved, and no release binary is built.
+name: screenshots
+on:
+  workflow_dispatch:
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: screenshots
+          cache-on-failure: true
+      - name: Build the offline capture example
+        timeout-minutes: 45
+        run: cargo build --locked -p nivra --features demo --example profile_preview
+      - name: Capture the identity screenshots
+        shell: pwsh
+        env:
+          # Software DX12 (WARP) is the only adapter a hosted runner can rely on.
+          WGPU_BACKEND: dx12
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          $shots = @(
+            @{ Name = 'preview';                Args = '--page=overview --width=1280 --height=800' },
+            @{ Name = 'voice-call';             Args = '--page=voice-call --state=voice --width=1280 --height=800' },
+            @{ Name = 'text-preview';           Args = '--page=text-preview --width=1120 --height=760' },
+            @{ Name = 'video-player';           Args = '--page=video --state=video --width=1120 --height=760' },
+            @{ Name = 'image-viewer';           Args = '--page=image-viewer --width=1120 --height=760' },
+            @{ Name = 'settings-voice';         Args = '--page=voice --width=1120 --height=760' },
+            @{ Name = 'settings-notifications'; Args = '--page=notifications --width=1120 --height=760' },
+            @{ Name = 'settings-help';          Args = '--page=help --width=1120 --height=760' },
+            @{ Name = 'light-theme';            Args = '--page=overview --light --width=1280 --height=800' },
+            @{ Name = 'dark-theme';             Args = '--page=overview --width=1280 --height=800' }
+          )
+          foreach ($shot in $shots) {
+            $arguments = @('--demo') + ($shot.Args -split ' ') + @("--output=out/$($shot.Name).png")
+            & target/debug/examples/profile_preview.exe @arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "Capture failed for $($shot.Name) (exit $LASTEXITCODE)"
+            }
+          }
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: nivra-identity-screenshots
+          path: out/
+          if-no-files-found: warn

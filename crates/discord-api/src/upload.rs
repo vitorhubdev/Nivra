@@ -481,36 +481,67 @@ impl DiscordApi {
 			sent: completed,
 			total: batch_total,
 		});
-		let updates = progress.clone();
-		let stream = futures_util::stream::try_unfold((file, 0u64), move |(mut file, sent)| {
-			let updates = updates.clone();
-			async move {
-				if sent == total {
-					return Ok::<_, std::io::Error>(None);
+		let body = |file: Box<dyn tokio::io::AsyncRead + Send + Unpin>| {
+			let updates = progress.clone();
+			futures_util::stream::try_unfold((file, 0u64), move |(mut file, sent)| {
+				let updates = updates.clone();
+				async move {
+					if sent == total {
+						return Ok::<_, std::io::Error>(None);
+					}
+					let mut bytes = vec![0; (total - sent).min(CHUNK_BYTES as u64) as usize];
+					file.read_exact(&mut bytes).await?;
+					let sent = sent + bytes.len() as u64;
+					// Latest-value progress cannot fill the session event queue. Bytes count
+					// data supplied to HTTP, not a remote receipt or confirmed message.
+					updates.send_replace(Status::Uploading {
+						sent: completed + sent,
+						total: batch_total,
+					});
+					Ok(Some((bytes, (file, sent))))
 				}
-				let mut bytes = vec![0; (total - sent).min(CHUNK_BYTES as u64) as usize];
-				file.read_exact(&mut bytes).await?;
-				let sent = sent + bytes.len() as u64;
-				// Latest-value progress cannot fill the session event queue. Bytes count
-				// data supplied to HTTP, not a remote receipt or confirmed message.
-				updates.send_replace(Status::Uploading {
-					sent: completed + sent,
-					total: batch_total,
-				});
-				Ok(Some((bytes, (file, sent))))
-			}
-		});
-		let mut response = client
-			.put(url)
-			.header(
-				reqwest::header::CONTENT_TYPE,
-				content_type(source.filename()),
-			)
-			.header(reqwest::header::CONTENT_LENGTH, total)
-			.body(reqwest::Body::wrap_stream(stream))
+			})
+		};
+		let put = |url: Url, body: reqwest::Body| {
+			client
+				.put(url)
+				.header(
+					reqwest::header::CONTENT_TYPE,
+					content_type(source.filename()),
+				)
+				.header(reqwest::header::CONTENT_LENGTH, total)
+				.body(body)
+		};
+		let mut response = match put(url.clone(), reqwest::Body::wrap_stream(body(file)))
 			.send()
 			.await
-			.map_err(|_| Failure::ProtocolAt("File upload failed; no message was sent"))?;
+		{
+			Ok(response) => response,
+			// The connection never opened: no byte reached storage, so one retry with a
+			// fresh body is safe. The first image pasted in a session was failing here.
+			Err(error) if error.is_connect() => {
+				tokio::time::sleep(Duration::from_millis(200)).await;
+				let retry: Box<dyn tokio::io::AsyncRead + Send + Unpin> =
+					if let Some(bytes) = &source.bytes {
+						Box::new(std::io::Cursor::new(bytes.clone()))
+					} else {
+						Box::new(
+							File::open(&source.path)
+								.await
+								.map_err(|_| Failure::ProtocolAt(CHANGED))?,
+						)
+					};
+				put(url, reqwest::Body::wrap_stream(body(retry)))
+					.send()
+					.await
+					.map_err(|_| Failure::ProtocolAt("File upload failed; no message was sent"))?
+			}
+			Err(_) => {
+				return Err(Failure::ProtocolAt(
+					"File upload failed; no message was sent",
+				));
+			}
+		};
 		if !response.status().is_success() {
 			return Err(Failure::ProtocolAt(
 				"File upload rejected; no message was sent",
@@ -805,6 +836,55 @@ mod tests {
             assert_eq!(*status.borrow(), Status::Finished);
             server.await.unwrap();
         }).await.unwrap();
+	}
+
+	#[tokio::test]
+	async fn a_refused_first_storage_connection_is_retried_once() {
+		crate::ensure_tls_provider();
+		tokio::time::timeout(Duration::from_secs(10), async {
+			let fixture = Fixture::new(&[b'x'; 64]).await;
+			let source = Source::inspect(fixture.0.clone()).await.unwrap();
+			let api_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+			// A port nothing listens on yet: the first PUT cannot connect.
+			let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
+			let storage_addr = probe.local_addr().unwrap();
+			drop(probe);
+			let mut api = api();
+			api.base = format!("http://{}", api_listener.local_addr().unwrap());
+			api.upload_origin = Some(storage_addr);
+			let upload_url = format!("http://{storage_addr}/signed?retry");
+			let server = tokio::spawn(async move {
+				let (mut socket, _) = api_listener.accept().await.unwrap();
+				let (head, _) = request(&mut socket).await;
+				assert!(head.starts_with("POST /channels/1/attachments HTTP/1.1"));
+				respond(&mut socket, "200 OK", &serde_json::json!({"attachments":[{"id":"0","upload_url":upload_url,"upload_filename":"synthetic-upload/0/file.txt"}]}).to_string()).await;
+				// The client's retry lands after this bind.
+				tokio::time::sleep(Duration::from_millis(80)).await;
+				let storage = TcpListener::bind(storage_addr).await.unwrap();
+				let (mut socket, _) = storage.accept().await.unwrap();
+				let (head, bytes) = request(&mut socket).await;
+				assert!(head.starts_with("PUT /signed?retry HTTP/1.1"));
+				assert_eq!(bytes, vec![b'x'; 64]);
+				respond(&mut socket, "200 OK", "").await;
+				let (mut socket, _) = api_listener.accept().await.unwrap();
+				let (head, _) = request(&mut socket).await;
+				assert!(head.starts_with("POST /channels/1/messages HTTP/1.1"));
+				respond(&mut socket, "200 OK", r#"{"id":"3","channel_id":"1","author":{"id":"4","username":"Synthetic"},"nonce":"synthetic-upload"}"#).await;
+			});
+			let (progress, status) = watch::channel(Status::Preparing);
+			let (_cancel, cancelled) = watch::channel(false);
+			let result = api
+				.upload_messages(command(), vec![source], MAX_BYTES, progress, cancelled)
+				.await;
+			let Event::SendResult { result: Ok(message), .. } = result else {
+				panic!("first refused storage connection was not retried");
+			};
+			assert_eq!(message.id, model::Id(3));
+			assert_eq!(*status.borrow(), Status::Finished);
+			server.await.unwrap();
+		})
+		.await
+		.unwrap();
 	}
 
 	#[tokio::test]

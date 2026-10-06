@@ -613,6 +613,10 @@ pub struct Pending {
 	pub nonce: String,
 	pub delivery: Delivery,
 	pub confirmed: Option<Id>,
+	/// Reply target retained so a rejected send can be retried unchanged.
+	pub reply: Option<Reply>,
+	/// Why the transport rejected this send, shown in plain language on the card.
+	pub reason: Option<&'static str>,
 }
 #[derive(Default)]
 pub struct NavigationIndex {
@@ -1870,6 +1874,11 @@ impl State {
 			.unwrap_or_default()
 			.as_millis();
 		let nonce = fingerprint::nonce(epoch, self.send_sequence);
+		let reply = match (explicit_reply, explicit_content) {
+			(Some(reply), _) => Some(reply),
+			(None, None) => self.reply.take(),
+			(None, Some(_)) => None,
+		};
 		self.pending.push(Pending {
 			sticker: sticker.cloned(),
 			channel,
@@ -1878,6 +1887,8 @@ impl State {
 			nonce: nonce.clone(),
 			delivery: Delivery::Sending,
 			confirmed: None,
+			reply,
+			reason: None,
 		});
 		if sticker.is_none() && !preserve_draft {
 			self.drafts.remove(&channel);
@@ -1888,11 +1899,25 @@ impl State {
 			channel,
 			content,
 			nonce,
-			reply: match (explicit_reply, explicit_content) {
-				(Some(reply), _) => Some(reply),
-				(None, None) => self.reply.take(),
-				(None, Some(_)) => None,
-			},
+			reply,
+		})
+	}
+	/// Re-issues a rejected send with its original nonce. The transport only marks a
+	/// send `Rejected` when the server definitively did not create it, so the retry
+	/// cannot duplicate the message even if a previous attempt raced.
+	pub fn retry_pending(&mut self, nonce: &str) -> Option<Command> {
+		let pending = self
+			.pending
+			.iter_mut()
+			.find(|p| p.nonce == nonce && p.delivery == Delivery::Rejected)?;
+		pending.delivery = Delivery::Sending;
+		pending.reason = None;
+		Some(Command::Send {
+			sticker: pending.sticker.as_ref().map(|s| s.id),
+			channel: pending.channel,
+			content: pending.content.clone(),
+			nonce: pending.nonce.clone(),
+			reply: pending.reply,
 		})
 	}
 	/// Reports a command the transport could not accept as a bounded outcome error.
@@ -3524,6 +3549,7 @@ impl State {
 							} else {
 								Delivery::Rejected
 							};
+							p.reason = Some(f.label());
 						}
 						if f.ends_session() {
 							self.fail(f);
@@ -4377,6 +4403,58 @@ mod tests {
 		assert_eq!(state.auth, auth::AuthState::Expired);
 		assert_eq!(state.freshness, Freshness::Stale);
 		assert!(!state.gateway_connected);
+	}
+	#[test]
+	fn a_rejected_send_retries_with_the_same_nonce_and_reply() {
+		let mut state = State {
+			channels: vec![Channel {
+				id: Id(1),
+				guild: None,
+				parent_id: None,
+				kind: 1,
+				name: "Synthetic DM".into(),
+				position: 0,
+				recipients: vec![],
+				last_message: None,
+				icon: None,
+				member_list_id: None,
+				message_count: None,
+			}],
+			selected: Some(Id(1)),
+			auth: auth::AuthState::Authenticated,
+			freshness: Freshness::Fresh,
+			gateway_connected: true,
+			reply: Some(Reply::to(Id(9))),
+			..State::default()
+		};
+		let command = state.prepare_send_with_attachment(Some("a.txt")).unwrap();
+		let Command::Send { nonce, reply, .. } = &command else {
+			panic!()
+		};
+		let (nonce, reply) = (nonce.clone(), *reply);
+		state.command_rejected(command);
+		assert_eq!(state.pending[0].delivery, Delivery::Rejected);
+		assert!(state.pending[0].reason.is_some());
+		let retry = state.retry_pending(&nonce).expect("rejected send retries");
+		let Command::Send {
+			nonce: retried,
+			reply: retried_reply,
+			channel,
+			..
+		} = retry
+		else {
+			panic!()
+		};
+		assert_eq!(
+			retried, nonce,
+			"the retry reuses the nonce to avoid duplicates"
+		);
+		assert_eq!(retried_reply, reply, "the reply target survives the retry");
+		assert_eq!(channel, Id(1));
+		assert_eq!(state.pending[0].delivery, Delivery::Sending);
+		assert!(state.pending[0].reason.is_none());
+		// A retry while the new attempt is in flight is refused.
+		assert!(state.retry_pending(&nonce).is_none());
 	}
 	#[test]
 	fn attachment_only_sends_are_bounded_and_keep_existing_confirmation() {

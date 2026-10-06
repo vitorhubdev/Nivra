@@ -620,6 +620,8 @@ impl Uploads {
 		if let Some(uploading) = &mut self.uploading {
 			let status = uploading.progress.borrow_and_update().clone();
 			let closed = uploading.progress.has_changed().is_err();
+			// The composer copy only goes away once the message exists or was cancelled.
+			let dismissed = matches!(status, Status::Finished | Status::Cancelled);
 			if closed {
 				// A stream that ends mid-flight is a failure to announce, not a state to hold.
 				let (reached, problem) = match status {
@@ -646,6 +648,10 @@ impl Uploads {
 			// Cancellation retains this slot until the actual network worker releases its sender.
 			if closed {
 				self.uploading = None;
+				if dismissed {
+					self.selected.clear();
+					self.previewing.clear();
+				}
 			}
 		}
 		if self.busy() {
@@ -735,6 +741,20 @@ impl Uploads {
 			uploading.cancel.send_replace(true);
 		}
 	}
+	/// Copies the staged sources for one upload while leaving them staged. A failed
+	/// send keeps them so the pending card can retry; the progress poll clears them
+	/// only after Discord confirms the message.
+	pub fn clone_source(&mut self, generation: u64, channel: Id) -> Option<Vec<Source>> {
+		if self.scope != Some((generation, channel)) || self.selected.is_empty() {
+			return None;
+		}
+		Some(
+			self.selected
+				.iter()
+				.map(|chosen| chosen.source.clone())
+				.collect(),
+		)
+	}
 	pub fn take_source(&mut self, generation: u64, channel: Id) -> Option<Vec<Source>> {
 		if self.scope != Some((generation, channel)) || self.busy() {
 			return None;
@@ -752,7 +772,7 @@ impl Uploads {
 		progress: watch::Receiver<Status>,
 		cancel: watch::Sender<bool>,
 	) -> Result<(), &'static str> {
-		if self.busy() || !self.selected.is_empty() || self.scope.is_none() {
+		if self.busy() || self.scope.is_none() {
 			cancel.send_replace(true);
 			return Err("Attachment operation already active or no selection scope");
 		}
@@ -1140,5 +1160,37 @@ mod tests {
 		uploads.poll(2, Some(Id(2)), true, &context);
 		assert!(!uploads.busy());
 		assert_eq!(uploads.take_notice(), None);
+	}
+
+	#[test]
+	fn staged_attachments_survive_a_failed_upload_and_clear_on_success() {
+		let context = egui::Context::default();
+		let source = Source::pasted_png(vec![1, 2, 3]).unwrap();
+		let mut uploads = Uploads::default();
+		uploads.scope = Some((1, Id(2)));
+		uploads.push(source, None);
+		let (progress, receive) = watch::channel(Status::Preparing);
+		let (cancel, _) = watch::channel(false);
+		assert!(uploads.begin_upload(receive, cancel).is_ok());
+		progress.send_replace(Status::Failed("File upload failed; no message was sent"));
+		drop(progress);
+		uploads.poll(1, Some(Id(2)), true, &context);
+		assert_eq!(
+			uploads.files().len(),
+			1,
+			"a failed upload keeps the staged source so Try again can resend it"
+		);
+		assert!(uploads.take_notice().is_some());
+
+		let (progress, receive) = watch::channel(Status::Uploading { sent: 3, total: 3 });
+		let (cancel, _) = watch::channel(false);
+		assert!(uploads.begin_upload(receive, cancel).is_ok());
+		progress.send_replace(Status::Finished);
+		drop(progress);
+		uploads.poll(1, Some(Id(2)), true, &context);
+		assert!(
+			uploads.files().is_empty(),
+			"a confirmed send clears the composer copy"
+		);
 	}
 }

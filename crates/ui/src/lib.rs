@@ -446,6 +446,9 @@ pub struct MessagingUi {
 	pub attachment_paste_requested: Option<AttachmentPaste>,
 	pub pasted_text: Option<(Id, egui::Id, String)>,
 	paste_key_handled: bool,
+	/// Frame a Ctrl+V key-up was seen without a Paste payload; the payload gets one
+	/// frame to arrive before the host reads the OS clipboard itself.
+	paste_pending_read: Option<u64>,
 	pasted_text_frame: Option<u64>,
 	pub remove_attachment_requested: bool,
 	pub cancel_upload_requested: bool,
@@ -3010,18 +3013,6 @@ impl MessagingUi {
 			edit_state.store(ctx, composer_id);
 		}
 		let pasted_text = self.pasted_text.take();
-		let paste_key_released = ctx.input(|input| {
-			input.events.iter().any(|event| {
-				matches!(
-					event,
-					egui::Event::Key {
-						key: egui::Key::V,
-						pressed: false,
-						..
-					}
-				)
-			})
-		});
 		let paste_enabled = keyboard_enabled
 			&& !editing_here
 			&& self.slash_commands.active.is_none()
@@ -3042,6 +3033,7 @@ impl MessagingUi {
 				image: None,
 			};
 			let mut requested = false;
+			let frame = ctx.cumulative_frame_nr();
 			ctx.input_mut(|input| {
 				// eframe often delivers Ctrl+V key-down before the clipboard payload.
 				// Starting the read on that key-down fails once and needs a second press.
@@ -3068,13 +3060,24 @@ impl MessagingUi {
 				let has_paste = input.events.iter().any(|event| {
 					matches!(event, egui::Event::Paste(_) | egui::Event::PasteImage(_))
 				});
-				let start = has_paste || (key_up && !self.paste_key_handled);
+				if key_down {
+					// A new Ctrl+V press discards any deferral from the previous one.
+					self.paste_pending_read = None;
+					self.paste_key_handled = false;
+				}
+				let deferred = self.paste_pending_read.is_some();
+				let grace_over = self.paste_pending_read.is_some_and(|at| frame > at);
+				let start = has_paste || (key_up && !self.paste_key_handled) || deferred;
 				if start || key_down {
-					if start {
+					if start && (has_paste || grace_over) {
 						requested = true;
+						self.paste_pending_read = None;
 						self.paste_key_handled = true;
-					} else {
-						self.paste_key_handled = false;
+					} else if start {
+						// The platform may deliver the payload one frame after the key-up
+						// (Windows). Wait one frame before reading the OS clipboard ourselves,
+						// so one press can never queue two pastes.
+						self.paste_pending_read = Some(frame);
 					}
 					input.events.retain_mut(|event| match event {
 						egui::Event::Paste(text) => {
@@ -3112,9 +3115,6 @@ impl MessagingUi {
 					self.upload_busy = true;
 				}
 			}
-		}
-		if paste_key_released {
-			self.paste_key_handled = false;
 		}
 		if !editing_here
 			&& state
@@ -5025,6 +5025,11 @@ impl MessagingUi {
 						}
 						if let Some(id) = self.timeline.remove_preserved.take() {
 							state.discard_preserved_deleted(id);
+						}
+						if let Some(nonce) = self.timeline.retry_pending.take()
+							&& let Some(command) = state.retry_pending(&nonce)
+						{
+							commands.push(command);
 						}
 						if let Some(nonce) = self.timeline.restore_pending.take() {
 							if state
@@ -9636,5 +9641,139 @@ mod preview_card_tests {
 			view.take_preview_request().is_some(),
 			"a Preview click inside the search pane must reach the timeline download slot"
 		);
+	}
+}
+
+#[cfg(test)]
+mod paste_event_tests {
+	use super::*;
+
+	fn ctrl_v(pressed: bool) -> egui::Event {
+		egui::Event::Key {
+			key: egui::Key::V,
+			physical_key: None,
+			pressed,
+			repeat: false,
+			modifiers: egui::Modifiers::CTRL,
+		}
+	}
+
+	fn image() -> std::sync::Arc<egui::ColorImage> {
+		std::sync::Arc::new(egui::ColorImage::filled([2, 2], egui::Color32::RED))
+	}
+
+	fn paste_frames(events_per_frame: Vec<Vec<egui::Event>>) -> Vec<AttachmentPaste> {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		let channel = state.selected.expect("selected channel");
+		let mut view = MessagingUi::default();
+		let mut editor = egui::Id::NULL;
+		ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(900.0, 700.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				editor = ui.make_persistent_id("message-input");
+				view.composer(ui, &mut state, channel, &ctx, &mut vec![]);
+			},
+		)
+		.drop_without_applying_deltas();
+		ctx.memory_mut(|m| m.request_focus(editor));
+		let mut requests = Vec::new();
+		for events in events_per_frame {
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 700.0),
+					)),
+					events,
+					..Default::default()
+				},
+				|ui| {
+					view.composer(ui, &mut state, channel, &ctx, &mut vec![]);
+				},
+			)
+			.drop_without_applying_deltas();
+			if let Some(request) = view.attachment_paste_requested.take() {
+				requests.push(request);
+			}
+		}
+		requests
+	}
+
+	fn report(name: &str, requests: &[AttachmentPaste]) {
+		println!(
+			"{name}: {} request(s) with images {:?}",
+			requests.len(),
+			requests
+				.iter()
+				.map(|r| r.image.is_some())
+				.collect::<Vec<_>>()
+		);
+	}
+
+	#[test]
+	fn five_ctrl_v_presses_each_queue_one_paste() {
+		let mut frames = Vec::new();
+		for _ in 0..5 {
+			frames.push(vec![ctrl_v(true)]);
+			frames.push(vec![ctrl_v(false)]);
+			frames.push(vec![egui::Event::PasteImage(image())]);
+		}
+		let requests = paste_frames(frames);
+		report("five presses", &requests);
+		assert_eq!(requests.len(), 5, "every press queues exactly one paste");
+		assert!(requests.iter().all(|request| request.image.is_some()));
+	}
+
+	#[test]
+	fn paste_event_order_matrix() {
+		// eframe may deliver the image with the key-down, with the key-up, or one frame later.
+		for (name, frames) in [
+			(
+				"image with key-down",
+				vec![
+					vec![ctrl_v(true), egui::Event::PasteImage(image())],
+					vec![ctrl_v(false)],
+				],
+			),
+			(
+				"image with key-up",
+				vec![
+					vec![ctrl_v(true)],
+					vec![ctrl_v(false), egui::Event::PasteImage(image())],
+				],
+			),
+			(
+				"image after key-up",
+				vec![
+					vec![ctrl_v(true)],
+					vec![ctrl_v(false)],
+					vec![egui::Event::PasteImage(image())],
+				],
+			),
+		] {
+			let requests = paste_frames(frames);
+			report(name, &requests);
+			assert_eq!(
+				requests.len(),
+				1,
+				"{name}: one press must queue exactly one paste"
+			);
+			assert!(
+				requests[0].image.is_some(),
+				"{name}: the delivered payload must win over the clipboard fallback"
+			);
+		}
+		// One frame after the key-up the deferred clipboard fallback still reads once.
+		let fallback = paste_frames(vec![vec![ctrl_v(true)], vec![ctrl_v(false)], vec![]]);
+		report("clipboard fallback", &fallback);
+		assert_eq!(fallback.len(), 1);
+		assert!(fallback[0].image.is_none() && fallback[0].text.is_none());
 	}
 }

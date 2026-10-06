@@ -42,6 +42,8 @@ pub struct TimelineView {
 	pub(super) extension_request: Option<(crate::extensions_ui::MenuAction, String)>,
 	pub(super) user_action: Option<crate::user_menu::Action>,
 	pub(super) restore_pending: Option<String>,
+	/// A failed send asked to be retried with its original nonce.
+	pub(super) retry_pending: Option<String>,
 	pub(super) cancel_upload: bool,
 	pending_heights: BTreeMap<String, f32>,
 	pub(super) hide_media_links: bool,
@@ -3992,7 +3994,11 @@ impl TimelineView {
 							&mut self.pending_formatted,
 						),
 						upload,
-						(&mut self.restore_pending, &mut self.cancel_upload),
+						(
+							&mut self.restore_pending,
+							&mut self.retry_pending,
+							&mut self.cancel_upload,
+						),
 					);
 				});
 				let measured = response.response.rect.height();
@@ -5524,6 +5530,8 @@ mod tests {
 			attachments: vec![],
 			delivery: model::Delivery::Sending,
 			confirmed: None,
+			reason: None,
+			reply: None,
 		});
 		let mut rendered = Vec::new();
 		for compact in [false, true] {
@@ -6236,6 +6244,8 @@ mod tests {
 				attachments: vec![],
 				delivery: model::Delivery::Sending,
 				confirmed: None,
+				reason: None,
+				reply: None,
 			})
 			.collect();
 		let mut view = TimelineView {

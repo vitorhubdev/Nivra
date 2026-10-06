@@ -68,6 +68,13 @@ enum RequestContent {
 	Json(serde_json::Value),
 	Multipart { content_type: String, body: Vec<u8> },
 }
+/// Bounded local trace of one limited request: the HTTP status and the response bytes
+/// involved in the outcome (declared size, wire cap or decoded body).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct RequestTrace {
+	pub status: Option<u16>,
+	pub bytes: usize,
+}
 // Unofficial wire fields: discord.py-self errors.py CaptchaRequired and http.py request.
 // Borrow ordinary fields; escaped JSON strings are bounded by the 64 KiB wire cap.
 fn invite_captcha(bytes: &[u8]) -> Option<client_core::captcha::Challenge> {
@@ -194,8 +201,32 @@ impl DiscordApi {
 			max_bytes,
 			None,
 			None,
+			None,
 		)
 		.await
+	}
+	/// One limited request plus a bounded local trace of its status and size, used to explain
+	/// a forum fallback without touching shared state between concurrent requests.
+	async fn request_limited_traced(
+		&self,
+		method: Method,
+		path: &str,
+		body: Option<serde_json::Value>,
+		max_bytes: usize,
+	) -> (Result<Vec<u8>, Failure>, RequestTrace) {
+		let mut trace = RequestTrace::default();
+		let result = self
+			.request_with_content(
+				method,
+				path,
+				body.map(RequestContent::Json),
+				max_bytes,
+				None,
+				None,
+				Some(&mut trace),
+			)
+			.await;
+		(result, trace)
 	}
 	async fn request_multipart_limited(
 		&self,
@@ -209,6 +240,7 @@ impl DiscordApi {
 			path,
 			Some(RequestContent::Multipart { content_type, body }),
 			max_bytes,
+			None,
 			None,
 			None,
 		)
@@ -231,9 +263,11 @@ impl DiscordApi {
 			max_bytes,
 			retry,
 			challenge,
+			None,
 		)
 		.await
 	}
+	#[allow(clippy::too_many_arguments)] // one shared request path plus an optional trace
 	async fn request_with_content(
 		&self,
 		method: Method,
@@ -242,6 +276,7 @@ impl DiscordApi {
 		max_bytes: usize,
 		retry: Option<&client_core::captcha::Retry>,
 		mut challenge: Option<&mut Option<client_core::captcha::Challenge>>,
+		mut trace: Option<&mut RequestTrace>,
 	) -> Result<Vec<u8>, Failure> {
 		// Only typed adapter methods construct paths. Never accept a URL or route from UI/content.
 		if !path.starts_with('/')
@@ -317,6 +352,9 @@ impl DiscordApi {
 			}
 		})?;
 		let status = response.status();
+		if let Some(trace) = trace.as_mut() {
+			trace.status = Some(status.as_u16());
+		}
 		let exhausted = response
 			.headers()
 			.get("x-ratelimit-remaining")
@@ -344,6 +382,9 @@ impl DiscordApi {
 			.content_length()
 			.is_some_and(|n| n > max_bytes as u64)
 		{
+			if let Some(trace) = trace.as_mut() {
+				trace.bytes = response.content_length().unwrap_or(0) as usize;
+			}
 			return Err(Failure::Capacity);
 		}
 		let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(
@@ -357,9 +398,15 @@ impl DiscordApi {
 			}
 		})? {
 			if bytes.len() + chunk.len() > max_bytes {
+				if let Some(trace) = trace.as_mut() {
+					trace.bytes = max_bytes;
+				}
 				return Err(Failure::Capacity);
 			}
 			bytes.extend_from_slice(&chunk);
+		}
+		if let Some(trace) = trace.as_mut() {
+			trace.bytes = bytes.len();
 		}
 		if !status.is_success() {
 			let error = decode::<ErrorBody>(&bytes).unwrap_or_default();

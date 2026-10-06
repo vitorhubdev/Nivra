@@ -539,6 +539,52 @@ mod tests {
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 
+	/// Child process for the forum fallback line: writes one line into the scratch dir.
+	#[test]
+	fn forum_fallback_child() {
+		if std::env::var_os("NIVRA_FALLBACK_CHILD").is_none() {
+			return;
+		}
+		let report = model::forum::FallbackReport {
+			reason: model::forum::FallbackReason::Status(404),
+			bytes: 12,
+			elapsed: std::time::Duration::from_millis(4_200),
+		};
+		warn(&report.log_line(model::Id(42)));
+	}
+
+	#[test]
+	fn forum_fallback_line_lands_in_the_log_with_a_timestamp() {
+		let dir = std::env::temp_dir().join(format!("nivra-fallback-log-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		let status = std::process::Command::new(std::env::current_exe().unwrap())
+			.args([
+				"--exact",
+				"diagnostics::tests::forum_fallback_child",
+				"--nocapture",
+			])
+			.env("NIVRA_LOG_DIR", &dir)
+			.env("NIVRA_FALLBACK_CHILD", "1")
+			.status()
+			.expect("spawn the child test");
+		assert!(status.success(), "the child writes one log line");
+		let log = std::fs::read_to_string(dir.join("nivra.log")).expect("nivra.log");
+		let line = log
+			.lines()
+			.find(|line| line.contains("forum fallback:"))
+			.unwrap_or_else(|| panic!("no fallback line in: {log}"));
+		assert!(line.contains("reason=status:404"), "{line}");
+		assert!(line.contains("bytes=12"), "{line}");
+		assert!(line.contains("elapsed_ms=4200"), "{line}");
+		// The line starts with the local timestamp the log requires.
+		assert!(line.len() > 19, "{line}");
+		assert_eq!(line.as_bytes()[4], b'-', "{line}");
+		assert_eq!(line.as_bytes()[10], b' ', "{line}");
+		assert_eq!(line.as_bytes()[13], b':', "{line}");
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
 	#[test]
 	fn rotation_keeps_five_bounded_files() {
 		let dir = std::env::temp_dir().join(format!(

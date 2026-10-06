@@ -5990,6 +5990,9 @@ impl Desktop {
 				self.extensions.access_changed(&mut self.messaging);
 			}
 			self.state.apply(event);
+			if let Some((forum, report)) = self.state.take_fallback_log() {
+				platform::diagnostics::warn(&report.log_line(forum));
+			}
 			if gateway_disconnected && self.app_settings.current.voice_auto_rejoin_short_disconnect
 			{
 				self.state.capture_auto_rejoin();

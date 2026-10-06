@@ -1,5 +1,6 @@
 //! A bounded page of active forum posts fetched on demand, mirroring the archive page budget.
 use crate::{Channel, EmbedMedia, Id, Reaction, ReactionEmoji};
+use std::time::Duration;
 
 pub const PAGE_SIZE: usize = 25;
 pub const MAX_BYTES: usize = 128 * 1024;
@@ -161,11 +162,65 @@ impl Starter {
 	}
 }
 
+/// Why the per-forum search page was replaced by the documented active list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FallbackReason {
+	/// The service answered with this non-success HTTP status.
+	Status(u16),
+	/// The search page exceeded its wire budget before it could decode.
+	Oversized,
+	/// The search page did not decode into a valid page.
+	Decode,
+}
+
+/// What the fallback cost, for the diagnostic log and the slow-list notice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FallbackReport {
+	pub reason: FallbackReason,
+	/// Response bytes involved in the decision (declared size, wire cap or decoded body).
+	pub bytes: usize,
+	/// Wall time the fallback route took.
+	pub elapsed: Duration,
+}
+impl FallbackReport {
+	/// One log line: the forum id is hashed and no service text, URL or content appears.
+	pub fn log_line(&self, forum: Id) -> String {
+		let reason = match self.reason {
+			FallbackReason::Status(status) => format!("status:{status}"),
+			FallbackReason::Oversized => "oversized".to_owned(),
+			FallbackReason::Decode => "decode".to_owned(),
+		};
+		format!(
+			"forum fallback: forum={} reason={reason} bytes={} elapsed_ms={}",
+			short_hash(forum),
+			self.bytes,
+			self.elapsed.as_millis()
+		)
+	}
+	/// A fallback that took long enough to deserve a discreet explanation.
+	pub fn slow(&self) -> bool {
+		self.elapsed > Duration::from_secs(3)
+	}
+}
+
+/// Stable, non-reversible 8-hex label for an id in logs; never the raw snowflake.
+fn short_hash(id: Id) -> String {
+	let mut hash = 0xcbf2_9ce4_8422_2325u64;
+	for byte in id.0.to_le_bytes() {
+		hash ^= u64::from(byte);
+		hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+	}
+	format!("{:08x}", (hash >> 32) as u32)
+}
+
 pub struct Page {
 	pub threads: Vec<Channel>,
 	pub more: bool,
 	/// The starter message of each listed post, when the service sent one.
 	pub previews: Vec<(Id, Starter)>,
+	/// Set when this page came from the documented guild-wide active list instead of the
+	/// per-forum search route.
+	pub fallback: Option<FallbackReport>,
 }
 impl Page {
 	pub fn bytes(&self) -> usize {

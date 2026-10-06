@@ -1620,3 +1620,5 @@ No posts match = "No posts match"
 No posts loaded = "No posts loaded"
 Press Enter to start a post with this title. = "Press Enter to start a post with this title."
 Nothing is posted here yet; archived posts load on request. = "Nothing is posted here yet; archived posts load on request."
+
+This forum is large; loading another way… = "This forum is large; loading another way…"

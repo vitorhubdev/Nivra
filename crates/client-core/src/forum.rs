@@ -9,6 +9,10 @@ pub const MAX_TITLE: usize = 100;
 pub struct Posts {
 	// At most 200 starter previews, bounded like the posts they sit beside.
 	previews: std::collections::BTreeMap<Id, model::forum::Starter>,
+	/// The last guild-wide fallback for the open forum, shown as a slow-list notice.
+	pub fallback: Option<model::forum::FallbackReport>,
+	/// The same report, held until the app logs it once.
+	pending_fallback_log: Option<(Id, model::forum::FallbackReport)>,
 	pub parent: Option<Id>,
 	pub request: u64,
 	pub loading: bool,
@@ -51,6 +55,11 @@ impl State {
 	}
 
 	/// The starter message's card preview: images, author and reactions.
+	/// The last fallback report, consumed once so the app logs it exactly once.
+	pub fn take_fallback_log(&mut self) -> Option<(Id, model::forum::FallbackReport)> {
+		self.posts.pending_fallback_log.take()
+	}
+
 	pub fn post_preview(&self, post: Id) -> Option<&model::forum::Starter> {
 		self.can_view(post)
 			.then(|| self.posts.previews.get(&post))
@@ -261,6 +270,12 @@ impl State {
 			self.posts.error = Some("The service returned unexpected posts");
 			return;
 		};
+		// A guild-wide fallback is shown as a slow-list notice and logged once by the app;
+		// a later successful search page clears the notice.
+		self.posts.fallback = page.fallback;
+		if let Some(report) = page.fallback {
+			self.posts.pending_fallback_log = Some((parent, report));
+		}
 		for (post, starter) in page.previews {
 			self.posts.remember_preview(post, starter);
 		}
@@ -574,6 +589,7 @@ mod tests {
 			threads: vec![first, channel(22, Some(Id(20)), 11)],
 			more: false,
 			previews: vec![(Id(21), starter(5)), (Id(22), starter(0))],
+			fallback: None,
 		};
 		state.apply_forum_posts(Id(20), state.posts.request, Ok(page));
 		let post = state.channel(Id(21)).unwrap();
@@ -611,6 +627,53 @@ mod tests {
 			Some("🔥")
 		);
 		assert!(state.post_preview(Id(999)).is_none());
+	}
+
+	#[test]
+	fn a_guild_wide_fallback_is_kept_for_the_notice_and_logged_once() {
+		let mut state = state();
+		state.request_forum_posts(Id(20), false).unwrap();
+		let report = model::forum::FallbackReport {
+			reason: model::forum::FallbackReason::Status(404),
+			bytes: 12,
+			elapsed: std::time::Duration::from_millis(4_200),
+		};
+		state.apply_forum_posts(
+			Id(20),
+			state.posts.request,
+			Ok(model::forum::Page {
+				threads: vec![channel(21, Some(Id(20)), 11)],
+				more: false,
+				previews: Vec::new(),
+				fallback: Some(report),
+			}),
+		);
+		// The notice copy survives for the open forum, and the log entry is consumed once.
+		assert_eq!(state.posts.fallback, Some(report));
+		assert!(state.posts.fallback.is_some_and(|report| report.slow()));
+		let (forum, logged) = state.take_fallback_log().expect("one log entry");
+		assert_eq!((forum, logged), (Id(20), report));
+		assert!(state.take_fallback_log().is_none(), "logged only once");
+		assert_eq!(state.posts.fallback, Some(report));
+		// The line carries the hashed forum, reason, bytes and time, and no raw snowflake.
+		let line = report.log_line(Id(20));
+		assert!(line.contains("reason=status:404"), "{line}");
+		assert!(line.contains("bytes=12"), "{line}");
+		assert!(line.contains("elapsed_ms=4200"), "{line}");
+		let hash = line
+			.split("forum=")
+			.nth(1)
+			.and_then(|rest| rest.split_whitespace().next())
+			.expect("hashed forum");
+		assert_eq!(hash.len(), 8, "{line}");
+		assert!(hash.chars().all(|c| c.is_ascii_hexdigit()), "{line}");
+		assert_ne!(report.log_line(Id(20)), report.log_line(Id(21)));
+		// A fast fallback keeps the report but does not deserve the notice.
+		let fast = model::forum::FallbackReport {
+			elapsed: std::time::Duration::from_millis(120),
+			..report
+		};
+		assert!(!fast.slow());
 	}
 
 	#[test]
@@ -666,6 +729,7 @@ mod tests {
 				threads: vec![post],
 				more: false,
 				previews: Vec::new(),
+				fallback: None,
 			}),
 		);
 		assert_eq!(state.navigation_bytes(), expected);
@@ -688,6 +752,7 @@ mod tests {
 				threads: vec![post],
 				more: true,
 				previews: Vec::new(),
+				fallback: None,
 			}),
 		);
 		assert!(state.channel(Id(21)) == Some(&original));
@@ -721,6 +786,7 @@ mod tests {
 				.collect(),
 			more,
 			previews: Vec::new(),
+			fallback: None,
 		};
 		// A stale reply for another request is ignored.
 		state.apply_forum_posts(Id(20), request.wrapping_sub(1), Ok(page(&[30], false)));

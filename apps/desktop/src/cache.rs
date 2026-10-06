@@ -971,6 +971,8 @@ mod tests {
 			scroll_speed_percent: 100,
 			hide_media_links: true,
 			confirm_external_links: true,
+			autoplay_short_videos: true,
+			autoplay_short_videos_sound: false,
 		};
 		store
 			.as_mut()

@@ -4176,6 +4176,9 @@ impl MessagingUi {
 		}
 		self.timeline.audio.seen = false;
 		self.timeline.video.seen = false;
+		self.timeline.video.autoplay_short_videos = self.reading_preferences.autoplay_short_videos;
+		self.timeline.video.autoplay_with_sound =
+			self.reading_preferences.autoplay_short_videos_sound;
 		let side = self.drain_side_press();
 		// Bound side buttons run their binding instead of history navigation.
 		let side = scroll::SidePress {

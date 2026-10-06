@@ -538,6 +538,18 @@ impl LocalStore {
 		if !has_smooth_scrolling {
 			transaction.execute_batch("ALTER TABLE reading_preferences ADD COLUMN smooth_scrolling INTEGER NOT NULL DEFAULT 1 CHECK(typeof(smooth_scrolling)='integer' AND smooth_scrolling IN (0,1));")?;
 		}
+		let has_autoplay_short_videos: bool = transaction.query_row(
+			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('reading_preferences') WHERE name='autoplay_short_videos')", [], |row| row.get(0),
+		)?;
+		if !has_autoplay_short_videos {
+			transaction.execute_batch("ALTER TABLE reading_preferences ADD COLUMN autoplay_short_videos INTEGER NOT NULL DEFAULT 1 CHECK(typeof(autoplay_short_videos)='integer' AND autoplay_short_videos IN (0,1));")?;
+		}
+		let has_autoplay_short_videos_sound: bool = transaction.query_row(
+			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('reading_preferences') WHERE name='autoplay_short_videos_sound')", [], |row| row.get(0),
+		)?;
+		if !has_autoplay_short_videos_sound {
+			transaction.execute_batch("ALTER TABLE reading_preferences ADD COLUMN autoplay_short_videos_sound INTEGER NOT NULL DEFAULT 0 CHECK(typeof(autoplay_short_videos_sound)='integer' AND autoplay_short_videos_sound IN (0,1));")?;
+		}
 		let has_scroll_speed: bool = transaction.query_row(
 			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('reading_preferences') WHERE name='scroll_speed_percent')", [], |row| row.get(0),
 		)?;
@@ -729,7 +741,7 @@ impl LocalStore {
 		let stored = self
 			.0
 			.query_row(
-				"SELECT zoom_percent,sidebar_width,show_members,animate_gifs,hide_media_links,confirm_external_links,smooth_scrolling,scroll_speed_percent FROM reading_preferences WHERE singleton=1",
+				"SELECT zoom_percent,sidebar_width,show_members,animate_gifs,hide_media_links,confirm_external_links,smooth_scrolling,scroll_speed_percent,autoplay_short_videos,autoplay_short_videos_sound FROM reading_preferences WHERE singleton=1",
 				[],
 				|row| {
 					Ok(match (
@@ -741,6 +753,8 @@ impl LocalStore {
 						row.get_ref(5)?,
 						row.get_ref(6)?,
 						row.get_ref(7)?,
+						row.get_ref(8)?,
+						row.get_ref(9)?,
 					) {
 						(
 							ValueRef::Integer(zoom @ 80..=150),
@@ -751,6 +765,8 @@ impl LocalStore {
 							ValueRef::Integer(confirm_external_links @ 0..=1),
 							ValueRef::Integer(smooth_scrolling @ 0..=1),
 							ValueRef::Integer(scroll_speed_percent @ 25..=300),
+							ValueRef::Integer(autoplay_short_videos @ 0..=1),
+							ValueRef::Integer(autoplay_short_videos_sound @ 0..=1),
 						) => Some(ReadingPreferences {
 							zoom_percent: zoom as u16,
 							sidebar_width: width as u16,
@@ -760,6 +776,8 @@ impl LocalStore {
 							confirm_external_links: confirm_external_links == 1,
 							smooth_scrolling: smooth_scrolling == 1,
 							scroll_speed_percent: scroll_speed_percent as u16,
+							autoplay_short_videos: autoplay_short_videos == 1,
+							autoplay_short_videos_sound: autoplay_short_videos_sound == 1,
 						}),
 						_ => None,
 					})
@@ -781,10 +799,10 @@ impl LocalStore {
 			self.0
 				.execute("DELETE FROM reading_preferences WHERE singleton=1", [])?;
 		} else {
-			self.0.execute("INSERT INTO reading_preferences(singleton,zoom_percent,sidebar_width,show_members,animate_gifs,hide_media_links,confirm_external_links,smooth_scrolling,scroll_speed_percent)
-				VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(singleton) DO UPDATE SET
-				zoom_percent=excluded.zoom_percent,sidebar_width=excluded.sidebar_width,show_members=excluded.show_members,animate_gifs=excluded.animate_gifs,hide_media_links=excluded.hide_media_links,confirm_external_links=excluded.confirm_external_links,smooth_scrolling=excluded.smooth_scrolling,scroll_speed_percent=excluded.scroll_speed_percent",
-				params![preferences.zoom_percent, preferences.sidebar_width, preferences.show_members, preferences.animate_gifs, preferences.hide_media_links, preferences.confirm_external_links, preferences.smooth_scrolling, preferences.scroll_speed_percent])?;
+			self.0.execute("INSERT INTO reading_preferences(singleton,zoom_percent,sidebar_width,show_members,animate_gifs,hide_media_links,confirm_external_links,smooth_scrolling,scroll_speed_percent,autoplay_short_videos,autoplay_short_videos_sound)
+				VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(singleton) DO UPDATE SET
+				zoom_percent=excluded.zoom_percent,sidebar_width=excluded.sidebar_width,show_members=excluded.show_members,animate_gifs=excluded.animate_gifs,hide_media_links=excluded.hide_media_links,confirm_external_links=excluded.confirm_external_links,smooth_scrolling=excluded.smooth_scrolling,scroll_speed_percent=excluded.scroll_speed_percent,autoplay_short_videos=excluded.autoplay_short_videos,autoplay_short_videos_sound=excluded.autoplay_short_videos_sound",
+				params![preferences.zoom_percent, preferences.sidebar_width, preferences.show_members, preferences.animate_gifs, preferences.hide_media_links, preferences.confirm_external_links, preferences.smooth_scrolling, preferences.scroll_speed_percent, preferences.autoplay_short_videos, preferences.autoplay_short_videos_sound])?;
 		}
 		Ok(())
 	}
@@ -2589,6 +2607,8 @@ mod tests {
 			scroll_speed_percent: 100,
 			hide_media_links: true,
 			confirm_external_links: true,
+			autoplay_short_videos: true,
+			autoplay_short_videos_sound: false,
 		};
 		for (name, legacy, expected_kind, expected_markers, expected_preferences) in [
 			(
@@ -2981,6 +3001,8 @@ mod tests {
 			scroll_speed_percent: 100,
 			hide_media_links: true,
 			confirm_external_links: true,
+			autoplay_short_videos: true,
+			autoplay_short_videos_sound: false,
 		};
 		store.save_reading_preferences(preferences).unwrap();
 		drop(store);
@@ -2999,6 +3021,8 @@ mod tests {
 				scroll_speed_percent: 100,
 				hide_media_links: true,
 				confirm_external_links: true,
+				autoplay_short_videos: true,
+				autoplay_short_videos_sound: false,
 			},
 		] {
 			assert_eq!(
@@ -3142,6 +3166,39 @@ mod tests {
 		assert_eq!(store.reading_preferences().unwrap(), preferences);
 	}
 	#[test]
+	fn short_video_autoplay_migrates_on_and_sound_off_and_round_trips() {
+		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+		store
+			.save_reading_preferences(ReadingPreferences {
+				autoplay_short_videos: false,
+				autoplay_short_videos_sound: true,
+				..Default::default()
+			})
+			.unwrap();
+		store
+			.0
+			.execute_batch(
+				"ALTER TABLE reading_preferences DROP COLUMN autoplay_short_videos; ALTER TABLE reading_preferences DROP COLUMN autoplay_short_videos_sound; PRAGMA user_version=26;",
+			)
+			.unwrap();
+		let store = LocalStore::initialize(store.0).unwrap();
+		let mut preferences = store.reading_preferences().unwrap();
+		assert!(
+			preferences.autoplay_short_videos,
+			"short autoplay defaults on"
+		);
+		assert!(
+			!preferences.autoplay_short_videos_sound,
+			"autoplay sound defaults off"
+		);
+		preferences.autoplay_short_videos = false;
+		preferences.autoplay_short_videos_sound = true;
+		store.save_reading_preferences(preferences).unwrap();
+		let store = LocalStore::initialize(store.0).unwrap();
+		assert_eq!(store.reading_preferences().unwrap(), preferences);
+	}
+
+	#[test]
 	fn reading_preferences_validate_storage_types_bounds_and_atomic_replacement() {
 		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
 		for (zoom_percent, sidebar_width) in [(80, 190), (150, 360)] {
@@ -3155,6 +3212,8 @@ mod tests {
 					scroll_speed_percent: 100,
 					hide_media_links: true,
 					confirm_external_links: true,
+					autoplay_short_videos: true,
+					autoplay_short_videos_sound: false,
 				};
 				store.save_reading_preferences(preferences).unwrap();
 				assert_eq!(store.reading_preferences().unwrap(), preferences);
@@ -3180,6 +3239,8 @@ mod tests {
 					scroll_speed_percent: 100,
 					hide_media_links: true,
 					confirm_external_links: true,
+					autoplay_short_videos: true,
+					autoplay_short_videos_sound: false,
 				}),
 				Err(StoreError::Capacity)
 			);
@@ -3196,6 +3257,8 @@ mod tests {
 				scroll_speed_percent: 100,
 				hide_media_links: true,
 				confirm_external_links: true,
+				autoplay_short_videos: true,
+				autoplay_short_videos_sound: false,
 			}),
 			Err(StoreError::Unavailable)
 		);

@@ -39,8 +39,11 @@ impl MessagingUi {
 		let mut zoom = self.reading_zoom_draft.unwrap_or(value.zoom_percent);
 		let response = design::slider_row(
 			ui,
-			"Zoom",
-			Some("Scales text and controls across the app."),
+			crate::tr_ui!(ui, "Zoom"),
+			Some(crate::tr_ui!(
+				ui,
+				"Scales text and controls across the app."
+			)),
 			&mut zoom,
 			80..=150,
 			"%",
@@ -72,14 +75,21 @@ impl MessagingUi {
 	/// Zoom, sidebar width and member list: the Layout group of the Appearance page.
 	pub fn layout_settings(&mut self, ui: &mut egui::Ui, demo: bool) {
 		let mut value = self.reading_preferences;
-		let reset = Self::header_with_reset(ui, "Layout", "Reset layout");
+		let reset = Self::header_with_reset(
+			ui,
+			crate::tr_ui!(ui, "Layout"),
+			crate::tr_ui!(ui, "Reset layout"),
+		);
 		design::card(ui, |ui| {
 			self.zoom_row(ui, &mut value);
 			ui.add_space(10.0);
 			design::slider_row(
 				ui,
-				"Sidebar width",
-				Some("Channel and conversation list width in wide windows."),
+				crate::tr_ui!(ui, "Sidebar width"),
+				Some(crate::tr_ui!(
+					ui,
+					"Channel and conversation list width in wide windows."
+				)),
 				&mut value.sidebar_width,
 				190..=360,
 				" px",
@@ -87,8 +97,11 @@ impl MessagingUi {
 			design::card_divider(ui);
 			design::switch(
 				ui,
-				"Show People in wide windows",
-				Some("Keep the member list open whenever the window is wide enough."),
+				crate::tr_ui!(ui, "Show People in wide windows"),
+				Some(crate::tr_ui!(
+					ui,
+					"Keep the member list open whenever the window is wide enough."
+				)),
 				&mut value.show_members,
 			);
 		});
@@ -108,42 +121,80 @@ impl MessagingUi {
 	/// Media, link and scrolling behaviour shown on the Chat page.
 	pub fn chat_reading_settings(&mut self, ui: &mut egui::Ui, demo: bool) {
 		let mut value = self.reading_preferences;
-		let reset = Self::header_with_reset(ui, "Messages and media", "Reset chat");
+		let reset = Self::header_with_reset(
+			ui,
+			crate::tr_ui!(ui, "Messages and media"),
+			crate::tr_ui!(ui, "Reset chat"),
+		);
 		design::card(ui, |ui| {
 			design::switch(
 				ui,
-				"Animate GIFs",
-				Some("Visible chat GIFs play automatically."),
+				crate::tr_ui!(ui, "Animate GIFs"),
+				Some(crate::tr_ui!(ui, "Visible chat GIFs play automatically.")),
 				&mut value.animate_gifs,
 			);
 			design::card_divider(ui);
 			design::switch(
 				ui,
-				"Hide image and GIF links",
-				Some("Hide standalone links when their image or GIF preview is shown."),
+				crate::tr_ui!(ui, "Hide image and GIF links"),
+				Some(crate::tr_ui!(
+					ui,
+					"Hide standalone links when their image or GIF preview is shown."
+				)),
 				&mut value.hide_media_links,
 			);
-		});
-		design::group(ui, "Links", |ui| {
+			design::card_divider(ui);
 			design::switch(
 				ui,
-				"Confirm before opening links",
-				Some("Ask before opening external links. Discord links always open directly."),
+				crate::tr_ui!(ui, "Autoplay short videos"),
+				Some(crate::tr_ui!(
+					ui,
+					"Videos up to 15 seconds and 25 MB play muted and loop while they are visible. Larger videos keep the play button."
+				)),
+				&mut value.autoplay_short_videos,
+			);
+			if value.autoplay_short_videos {
+				design::card_divider(ui);
+				design::switch(
+					ui,
+					crate::tr_ui!(ui, "With sound"),
+					Some(crate::tr_ui!(
+						ui,
+						"On starts short videos with sound. Off starts them muted until you click the picture or the speaker."
+					)),
+					&mut value.autoplay_short_videos_sound,
+				);
+			}
+		});
+		design::group(ui, crate::tr_ui!(ui, "Links"), |ui| {
+			design::switch(
+				ui,
+				crate::tr_ui!(ui, "Confirm before opening links"),
+				Some(crate::tr_ui!(
+					ui,
+					"Ask before opening external links. Discord links always open directly."
+				)),
 				&mut value.confirm_external_links,
 			);
 		});
-		design::group(ui, "Scrolling", |ui| {
+		design::group(ui, crate::tr_ui!(ui, "Scrolling"), |ui| {
 			design::switch(
 				ui,
-				"Smooth scrolling",
-				Some("Animate wheel movement and jumps between messages."),
+				crate::tr_ui!(ui, "Smooth scrolling"),
+				Some(crate::tr_ui!(
+					ui,
+					"Animate wheel movement and jumps between messages."
+				)),
 				&mut value.smooth_scrolling,
 			);
 			ui.add_space(10.0);
 			design::slider_row(
 				ui,
-				"Scrolling speed",
-				Some("Mouse wheel and trackpad movement. 100% is the default."),
+				crate::tr_ui!(ui, "Scrolling speed"),
+				Some(crate::tr_ui!(
+					ui,
+					"Mouse wheel and trackpad movement. 100% is the default."
+				)),
 				&mut value.scroll_speed_percent,
 				25..=300,
 				"%",
@@ -156,6 +207,8 @@ impl MessagingUi {
 			value.confirm_external_links = defaults.confirm_external_links;
 			value.smooth_scrolling = defaults.smooth_scrolling;
 			value.scroll_speed_percent = defaults.scroll_speed_percent;
+			value.autoplay_short_videos = defaults.autoplay_short_videos;
+			value.autoplay_short_videos_sound = defaults.autoplay_short_videos_sound;
 			self.reading_save_requested = true;
 		}
 		self.reading_save_notice(ui, demo);
@@ -166,8 +219,13 @@ impl MessagingUi {
 
 	fn reading_save_notice(&mut self, ui: &mut egui::Ui, demo: bool) {
 		if !demo && self.reading_status.contains("could not") {
-			design::notice(ui, design::Level::Warning, self.reading_status);
-			if design::text_action(ui, "Retry saving reading settings").clicked() {
+			design::notice(
+				ui,
+				design::Level::Warning,
+				&crate::i18n::text_str(self.language, self.reading_status),
+			);
+			if design::text_action(ui, crate::tr_ui!(ui, "Retry saving reading settings")).clicked()
+			{
 				self.reading_save_requested = true;
 			}
 		}
@@ -266,6 +324,8 @@ mod tests {
 			scroll_speed_percent: 100,
 			hide_media_links: true,
 			confirm_external_links: true,
+			autoplay_short_videos: true,
+			autoplay_short_videos_sound: false,
 		};
 		view.apply_reading_preferences(&ctx, custom);
 		for _ in 0..3 {

@@ -1409,7 +1409,11 @@ mod tests {
 			message.embeds[0].video.as_ref().unwrap(),
 		);
 		let command = video.command.take().expect("play command");
-		let crate::VideoCommand::Play(synthetic) = command else {
+		let crate::VideoCommand::Play {
+			attachment: synthetic,
+			..
+		} = command
+		else {
 			panic!("play command");
 		};
 		assert_eq!(synthetic.media.url.as_deref(), Some(file));

@@ -1,12 +1,19 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-Samples working-set memory and average CPU of Nivra and the official Discord client.
+Samples private memory and average CPU of Nivra and the official Discord client.
 .DESCRIPTION
 Open both clients and leave them in the SAME scenario, then run this script. It
-never starts, stops or inspects either client: it only reads the working set and
-processor time of processes named Nivra* (any packaged build) and Discord, once
-per interval, for the requested duration, and prints a table.
+never starts, stops or inspects either client: it only reads the private memory
+and processor time of processes named Nivra* (any packaged build) and Discord,
+once per interval, for the requested duration, and prints a table.
+
+Private memory is used instead of the total working set on purpose: working sets
+contain pages shared between processes, and summing them across Discord's helper
+processes would count the same physical page several times. Private memory is
+per-process and cannot be shared, so the comparison is not biased by the number
+of helpers (Microsoft documents the working-set background at
+https://learn.microsoft.com/en-us/windows/win32/procthread/process-working-set).
 
 Run one scenario per invocation, for example:
   - idle on one text channel;
@@ -50,13 +57,13 @@ function Get-CpuSeconds {
     }
     return $total
 }
-function Get-WorkingSetBytes {
+function Get-PrivateMemoryBytes {
     param([object[]] $Processes)
     $total = 0L
     foreach ($process in $Processes) {
         try {
             $process.Refresh()
-            $total += $process.WorkingSet64
+            $total += $process.PrivateMemorySize64
         } catch {
             # Same as above: a process that exited contributes nothing.
         }
@@ -77,11 +84,11 @@ $nivraCpu = 0.0
 $discordCpu = 0.0
 $nivraPrevious = Get-CpuSeconds (Get-NivraProcesses)
 $discordPrevious = Get-CpuSeconds (Get-DiscordProcesses)
-$nivraWorkingSetSum = 0L
-$nivraWorkingSetPeak = 0L
+$nivraMemorySum = 0L
+$nivraMemoryPeak = 0L
 $nivraSamples = 0
-$discordWorkingSetSum = 0L
-$discordWorkingSetPeak = 0L
+$discordMemorySum = 0L
+$discordMemoryPeak = 0L
 $discordSamples = 0
 
 $clock = [Diagnostics.Stopwatch]::StartNew()
@@ -95,16 +102,16 @@ while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
     $discordCpu += [Math]::Max(0.0, $discordNow - $discordPrevious)
     $nivraPrevious = $nivraNow
     $discordPrevious = $discordNow
-    $nivraWorkingSet = Get-WorkingSetBytes (Get-NivraProcesses)
-    $discordWorkingSet = Get-WorkingSetBytes (Get-DiscordProcesses)
-    if ($nivraWorkingSet -gt 0) {
-        $nivraWorkingSetSum += $nivraWorkingSet
-        $nivraWorkingSetPeak = [Math]::Max($nivraWorkingSetPeak, $nivraWorkingSet)
+    $nivraMemory = Get-PrivateMemoryBytes (Get-NivraProcesses)
+    $discordMemory = Get-PrivateMemoryBytes (Get-DiscordProcesses)
+    if ($nivraMemory -gt 0) {
+        $nivraMemorySum += $nivraMemory
+        $nivraMemoryPeak = [Math]::Max($nivraMemoryPeak, $nivraMemory)
         $nivraSamples++
     }
-    if ($discordWorkingSet -gt 0) {
-        $discordWorkingSetSum += $discordWorkingSet
-        $discordWorkingSetPeak = [Math]::Max($discordWorkingSetPeak, $discordWorkingSet)
+    if ($discordMemory -gt 0) {
+        $discordMemorySum += $discordMemory
+        $discordMemoryPeak = [Math]::Max($discordMemoryPeak, $discordMemory)
         $discordSamples++
     }
 }
@@ -133,18 +140,18 @@ $rows = @(
     [pscustomobject]@{
         Client     = 'Nivra'
         Processes  = (Get-NivraProcesses).Count
-        'Working set avg (MB)'  = Get-AverageMegabytes $nivraWorkingSetSum $nivraSamples
-        'Working set peak (MB)' = Get-AverageMegabytes $nivraWorkingSetPeak $(if ($nivraSamples -gt 0) { 1 } else { 0 })
-        'CPU avg (% total)'     = Get-AverageCpuPercent $nivraCpu $logical $true
-        'CPU avg (% one core)'  = Get-AverageCpuPercent $nivraCpu $logical $false
+        'Private memory avg (MB)'  = Get-AverageMegabytes $nivraMemorySum $nivraSamples
+        'Private memory peak (MB)' = Get-AverageMegabytes $nivraMemoryPeak $(if ($nivraSamples -gt 0) { 1 } else { 0 })
+        'CPU avg (% total)'        = Get-AverageCpuPercent $nivraCpu $logical $true
+        'CPU avg (% one core)'     = Get-AverageCpuPercent $nivraCpu $logical $false
     }
     [pscustomobject]@{
         Client     = 'Discord'
         Processes  = (Get-DiscordProcesses).Count
-        'Working set avg (MB)'  = Get-AverageMegabytes $discordWorkingSetSum $discordSamples
-        'Working set peak (MB)' = Get-AverageMegabytes $discordWorkingSetPeak $(if ($discordSamples -gt 0) { 1 } else { 0 })
-        'CPU avg (% total)'     = Get-AverageCpuPercent $discordCpu $logical $true
-        'CPU avg (% one core)'  = Get-AverageCpuPercent $discordCpu $logical $false
+        'Private memory avg (MB)'  = Get-AverageMegabytes $discordMemorySum $discordSamples
+        'Private memory peak (MB)' = Get-AverageMegabytes $discordMemoryPeak $(if ($discordSamples -gt 0) { 1 } else { 0 })
+        'CPU avg (% total)'        = Get-AverageCpuPercent $discordCpu $logical $true
+        'CPU avg (% one core)'     = Get-AverageCpuPercent $discordCpu $logical $false
     }
 )
 
@@ -154,5 +161,6 @@ Write-Host "Measured : $((Get-Date).ToString('yyyy-MM-dd HH:mm')) - $os - $logic
 Write-Host "Window   : $([Math]::Round($elapsed, 1)) s ($IntervalMilliseconds ms interval)"
 Write-Host ''
 $rows | Format-Table -AutoSize
-Write-Host 'Report these numbers with the scenario, date and Windows version. No account data,'
-Write-Host 'message text or identifiers are read by this script.'
+Write-Host 'Private memory is per-process and never counts shared pages twice, so a client'
+Write-Host 'with several helper processes is not inflated. No account data, message text or'
+Write-Host 'identifiers are read by this script.'

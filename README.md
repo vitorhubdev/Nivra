@@ -104,11 +104,11 @@ All captures come from the offline demo (`cargo run --locked -p nivra --features
 > [!NOTE]
 > **Measurement pending.** Nivra publishes no memory or CPU comparison until the owner runs the measurement below on real hardware. Treat any performance claim about Nivra as unverified until a table measured with this script is attached.
 
-[`scripts/measure.ps1`](scripts/measure.ps1) samples the working set (memory) and average CPU of `Nivra*.exe` and `Discord.exe` for 60 seconds and prints one table per scenario. Run it with both clients open in the **same** scenario, for example idle on one text channel, then a voice call, then screen share at 60 FPS, and report each result as:
+[`scripts/measure.ps1`](scripts/measure.ps1) samples private memory (per-process and not double-counted across helper processes) and the average CPU of `Nivra*.exe` and `Discord.exe` for 60 seconds and prints one table per scenario. Run it with both clients open in the **same** scenario, for example idle on one text channel, then a voice call, then screen share at 60 FPS, and report each result as:
 
 > Measured by the owner on **<date>**, Windows 11, **<scenario>**, with `scripts/measure.ps1` at `<seconds>` s.
 
-The script only reads process working set and processor time. It never starts, stops or inspects either client, and no account data, message text or identifiers are read.
+The script only reads process private memory and processor time. It never starts, stops or inspects either client, and no account data, message text or identifiers are read.
 
 ---
 

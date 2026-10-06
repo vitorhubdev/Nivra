@@ -127,3 +127,50 @@ Original upstream:
 Serein by the Serein contributors / ViceVerse-cz.
 
 Existing installations are migrated where applicable.
+
+## SereinExt 1.0.4
+
+Version 1.0.4 keeps the 1.0.3 client and adds the local work finished after that release:
+
+- saved logins survive a system keyring hiccup, with clearer guidance when sign-in needs attention;
+- the app tells you when the PC cannot keep up with Maximum noise suppression and switches to Standard;
+- the first-run terms dialog is simpler;
+- link previews handle X, Vimeo and YouTube addresses more strictly.
+
+## SereinExt 1.0.3
+
+Version 1.0.3 keeps the 1.0.2 client and adds the local work finished after that release:
+
+- the app language follows Windows on first launch when Portuguese or Spanish is available, with a language control on the sign-in screen;
+- login, chat chrome and call controls use the chosen language;
+- screen sharing starts from the whole display, with audio under it and apps folded away;
+- someone connecting to or leaving the current call plays a sound, including while Do Not Disturb is on, and retries if playback is busy;
+- a failed image or file send shows the error on the preview, with a way to put the file back in the composer.
+
+## SereinExt 1.0.2
+
+Version 1.0.2 integrates selected upstream improvements that fit SereinExt without replacing the fork-specific fixes:
+
+- expanded Extension SDK capabilities for bounded app queries, messaging settings, guild folders, native actions and action-result feedback (upstream #411);
+- Discord-like inline image sizing, higher-quality media renditions and smoother MP4/MOV/M4V-backed gifv motion while preserving SereinExt isolated web previews (upstream #409);
+- permission-gated server sticker management with static PNG/JPEG/WebP preparation, upload, edit and delete support (upstream #412);
+- the upstream server-creation flow with create/join picker, server name/icon preparation and bounded request state (upstream #414);
+- the existing SereinExt voice, login, multi-device presence, PT-BR/ES, moderation, Hyprland and web-media changes remain preserved.
+
+Server creation is included as an **experimental compatibility feature**: upstream notes that the normal-user `POST /guilds` behavior is unofficial and was not live-verified, so SereinExt keeps the flow bounded and should not treat a failed request as proof that no server was created.
+
+## SereinExt 1.0.1
+
+Version 1.0.1 is the first maintained SereinExt line. The current `main` includes:
+
+- corrected remote voice join/leave cues, AEC delay handling and selected-device recovery;
+- moderator/member-removal fixes and lower drag/presentation latency;
+- direct join-video flow with bounded failure state;
+- compact Discord multi-device presence for desktop/mobile/web;
+- more reliable Discord login WebView focus and Linux permission flow;
+- persistent English, Português (Brasil) and Español UI locale infrastructure;
+- isolated in-app YouTube, X/Twitter and Vimeo previews with device permissions denied;
+- Hyprland tray/notification restoration ported from upstream;
+- SereinExt-specific credential/update identity and cleaned voice UI encoding.
+
+The source is still being validated before a binary GitHub Release is published. A tag does not imply that upstream Serein packages are SereinExt builds.

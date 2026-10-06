@@ -2,17 +2,280 @@
 
 <p align="center">
   <a href="https://github.com/vitorhubdev/Nivra">
-    <img src="docs/preview.png" alt="Nivra — independent fork of Serein" width="900" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+    <img src="docs/preview.png" alt="Nivra — unofficial native Discord client in Rust" width="900" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
   </a>
 </p>
 
 <p align="center">
-  <strong>Nivra — a native community and communication client built with Rust, egui and wgpu.</strong>
+  <strong>Unofficial native Discord client in Rust (egui + wgpu) for Windows, Linux and macOS.</strong>
 </p>
 
-> [!IMPORTANT]
-> **Nivra is an independent modified fork of [ViceVerse-cz/Serein](https://github.com/ViceVerse-cz/Serein).**
-> Upstream remains credited as the original project. Nivra versions and changes are maintained in this repository and may intentionally diverge from upstream.
+<p align="center">
+  <a href="#download"><strong>📦 Download</strong></a> &nbsp;•&nbsp;
+  <a href="#highlights"><strong>⚡ Highlights</strong></a> &nbsp;•&nbsp;
+  <a href="#benchmarks"><strong>📊 Benchmarks</strong></a> &nbsp;•&nbsp;
+  <a href="#build-from-source"><strong>🛠️ Build</strong></a> &nbsp;•&nbsp;
+  <a href="#feature-matrix"><strong>📋 Features</strong></a> &nbsp;•&nbsp;
+  <a href="#architecture"><strong>🏗️ Architecture</strong></a> &nbsp;•&nbsp;
+  <a href="#whats-new"><strong>🆕 What's new</strong></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/vitorhubdev/Nivra/releases/latest"><img src="https://img.shields.io/github/v/release/vitorhubdev/Nivra?label=release&color=blue" alt="Nivra release" /></a>
+  <a href="Cargo.toml"><img src="https://img.shields.io/badge/rust-1.98.1_pinned-blue.svg?logo=rust" alt="Rust 1.98.1 Pinned" /></a>
+  <a href="crates/ui"><img src="https://img.shields.io/badge/ui-egui%20%2F%20wgpu-orange.svg" alt="UI egui/wgpu" /></a>
+  <a href="docs/platform-support.md"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-informational.svg" alt="Platform Support" /></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License: MIT or Apache-2.0" /></a>
+</p>
+
+---
+
+> [!WARNING]
+> **Unofficial and not endorsed by Discord.**
+> Nivra is a modified Serein fork that talks to Discord's public gateway and REST endpoints with your existing account. Automating normal accounts outside the official OAuth2/bot API violates Discord's Terms of Service and carries a risk of account termination. Technical interoperability does not imply platform approval. Review the [compatibility matrix](docs/discord-compatibility.md) and the [authentication guide](docs/authentication.md) before use.
+
+---
+
+## Download
+
+Stable builds are published on the [Releases page](https://github.com/vitorhubdev/Nivra/releases/latest). On Windows, download the single `.exe` and open it: there is nothing to extract. Installers, Flatpaks, AppImages, Homebrew packages or package repositories published by upstream Serein are not Nivra binaries.
+
+| System | Asset (v1.0.12 example) | Notes |
+| --- | --- | --- |
+| Windows x64 | `Nivra-v1.0.12-Windows-X64.exe` | Single executable, no installer |
+| Windows ARM64 | `Nivra-v1.0.12-Windows-ARM64.exe` | Maximum noise suppression (DeepFilterNet) is unavailable and falls back to RNNoise |
+| Linux x64 | `Nivra-v1.0.12-Linux-X64.tar.gz` | Extract and run |
+| macOS Apple Silicon | `Nivra-v1.0.12-macOS-ARM64.zip` | Intel macOS is not published |
+
+Every release also attaches a `SHA256SUMS.txt` checksum file. Verify the file you downloaded before running it:
+
+```powershell
+# Windows (PowerShell) — compare the output with the matching line in SHA256SUMS.txt
+Get-FileHash .\Nivra-v1.0.12-Windows-X64.exe -Algorithm SHA256
+```
+
+```sh
+# Linux — checks the files that are present and ignores the rest of the manifest
+sha256sum --ignore-missing -c SHA256SUMS.txt
+# macOS — compare the printed hash with the matching line in SHA256SUMS.txt
+shasum -a 256 Nivra-v1.0.12-macOS-ARM64.zip
+```
+
+**Signing status differs by platform.** Windows and Linux packages are unsigned. The macOS `.app` is ad-hoc signed and not notarized (tag builds); a manual release-workflow build with Apple credentials is Developer ID-signed and notarized instead. If Gatekeeper still warns about the app you downloaded, right-click it, choose **Open**, and confirm; macOS also allows it later under System Settings → Privacy & Security. On Windows, SmartScreen may show *"Windows protected your PC"*: choose **More info** → **Run anyway**.
+
+---
+
+## Highlights
+
+Nivra is built around three voice pillars, each covered by an offline, measured test suite (details in [CHANGELOG.md](CHANGELOG.md) and [docs/voice.md](docs/voice.md)):
+
+- **Pillar 1 — clear voice (noise suppression).** Four modes: Off, Light (WebRTC), Standard (RNNoise) and Maximum (DeepFilterNet), with a crossfade between modes so a switch never clicks. The benchmark keeps the p99 cost under 5,000 µs per 10 ms frame with zero budget blowouts: Off 0/0, Light 50/58, Standard 55/90, Maximum 97/138 µs (p50/p99). The Maximum figure measures the synthetic worker path, not the real model. DeepFilterNet is unavailable on Windows ARM64, where Nivra falls back to RNNoise.
+- **Pillar 2 — calls that stay up.** Two synthetic clients exchange decoded, DAVE-encrypted audio (450/650 Hz tones, at least 60 frames per direction); a 10-second UDP blackout recovers without rejoining; switching a device during a call, 50 join/leave cycles and 20 channel switches all pass.
+- **Pillar 3 — you are told about everything.** Every voice-state update paints the right icon in one frame; join, leave, mute, unmute, deafen and call drop/reconnect cues go through ordered, identity-deduplicated queues that keep the newest bounded set when full. The cues play with the window focused, minimized or hidden in the tray, and join/leave also raise a system notification with the member name.
+
+These pillars are synthetic, offline tests. Live Discord interoperability and physical microphone/speaker behavior remain unverified.
+
+**Measured performance:** in the benchmark scenario below, Nivra used about **9× less RAM** and **2.8× less CPU** than the official Electron client — one process instead of seven helpers.
+
+**Recently added** (1.0.9–1.0.12):
+
+- **File previews:** text, Markdown and code previews reopen, follow Discord redirects, renew expired links and show an honest limit for oversized files; the Licenses screen opens again.
+- **Video at any resolution:** previews from 640×360 up to about 16 megapixels (e.g. 4500×3000) scale into the preview box (1920×1080 landscape, 1080×1920 portrait) without upscaling; playing a video no longer freezes the app; codecs the system cannot decode (HEVC, AV1 or VP9 without the Windows extension) do not play and the card states the real reason with Download video / Open original.
+- **Windows DLL protection:** the executable resolves its dependencies only from System32 and warns — without blocking — when system-named DLLs sit next to it.
+- **Local error log:** errors from the main paths (downloads, attachment previews, window compositing, app registration) go to a rotating, redacted log (5 files × 2 MiB); if the app panics, the next launch shows a crash report, and Settings > Help has "Copy error log" and "Open logs folder". Nothing is sent anywhere automatically; a few internal diagnostics (update handoff, tray fallback, GPU/video) still only reach the console.
+- **Motion and clarity:** one motion token set with a "Reduce motion" switch (Settings > Appearance); disabled icon buttons explain why on hover; destructive actions get one confirmation.
+- **Also in this round:** Push to Mute on mouse 4/5 (unassigned by default), the Windows tray voice-state icon, compact timeline layout, HEIC preview via Windows WIC, Discord polls, single-instance lock, and ~3% smaller Windows executables.
+
+---
+
+## Benchmarks
+
+> **Testing scenario:** browsing channels while joined in a voice channel and streaming screen at 60 FPS, on macOS.
+
+| Metric | Official Discord Client (Electron) | Nivra (Native Rust + egui/wgpu) | Advantage |
+|---|:---:|:---:|:---:|
+| **Memory (RAM)** | **1,178.4 MB** *(across 7 helper processes)* | **129.7 MB** *(single unified process)* | **~9× less memory (-89%)** |
+| **CPU Usage** | **22.8%** *(Renderer + Helper processes)* | **8.1%** | **~2.8× lower CPU (-64%)** |
+
+| Official Discord (Electron) | Nivra (Native Rust) |
+| :---: | :---: |
+| **RAM: ~1,178.4 MB across 7 processes** | **RAM: 129.7 MB single process** |
+| <img src="docs/screenshots/perf-discord-ram.png" alt="Discord RAM Usage" width="450" /> | <img src="docs/screenshots/perf-nivra-ram.png" alt="Nivra RAM Usage" width="450" /> |
+| **CPU: 22.8% total** | **CPU: 8.1% total** |
+| <img src="docs/screenshots/perf-discord-cpu.png" alt="Discord CPU Usage" width="450" /> | <img src="docs/screenshots/perf-nivra-cpu.png" alt="Nivra CPU Usage" width="450" /> |
+
+---
+
+## Build from source
+
+### Prerequisites
+
+Rust **1.98.1** is pinned (see `rust-toolchain.toml`); the current workspace version is **1.0.12**. You also need the standard C/C++ toolchain, CMake and `bun` 1.4.2 for the JS test harnesses:
+
+- **macOS:** Xcode command-line tools (`xcode-select --install`)
+- **Linux:** GCC/Clang, ALSA development headers, `pkg-config`, GTK 4, WebKitGTK 6.0, GStreamer, fontconfig and Vulkan drivers (see [Platform Support](docs/platform-support.md))
+- **Windows:** Visual Studio C++ build tools and the WebView2 Runtime
+
+### Running locally
+
+```sh
+git clone https://github.com/vitorhubdev/Nivra.git
+cd Nivra
+
+# 1. Release build of the standard client with voice
+cargo build --locked --release -p nivra
+
+# 2. Run it from source (uses the saved login or the official sign-in webview)
+cargo run --locked
+
+# 3. Offline synthetic demo (no network, synthetic state)
+cargo run --locked -p nivra --features demo -- --demo
+```
+
+The demo makes no network requests and uses synthetic state; it still performs the normal local startup migration (data folder, keyring entries, shortcuts) like any other launch.
+
+### Workspace commands
+
+```sh
+# Run full workspace validation (formatting, Clippy, tests, policy checks)
+cargo xtask check
+
+# Run the release reducer benchmark (not an RSS or frame-timing measurement)
+cargo replay
+
+# Run the authentication bridge JS test harness
+node tests/login-handoff.cjs
+
+# Package the release including voice (macOS .app bundle, Linux .deb by default)
+cargo xtask package
+```
+
+Interface text lives in one file per language under `crates/ui/locales/`; adding a language is adding a file, with no screen changes — see [Languages](docs/i18n.md). Platform-specific runtime and build requirements remain documented under [Platform Support](docs/platform-support.md) and in the `packaging/` directory.
+
+---
+
+## Feature matrix
+
+| Capability | Status | Notes |
+|---|---|---|
+| **Navigation & Guilds** | Implemented | Collapsible categories, cached icons, guild channels, forum channels, active threads, DM lists, People pane, and server channel context menus |
+| **Message Timeline** | Implemented | Virtualized variable-height rows, inline link confirmations, spoiler text/media reveal, unread message banners, deleted message protector, local timezone timestamps, and a compact layout option (time \| author \| text) |
+| **Markdown & System Messages** | Implemented | Bold, italics, code blocks, blockquotes, clickable links, and styled system events with tinted Phosphor icons and clickable member names |
+| **Reactions & Emojis** | Implemented | Twemoji rendering, native reaction counts, eight-emoji quick picker, full emoji picker, custom guild emojis, and add/remove reaction controls |
+| **Polls** | Implemented | View, vote, unvote, live results and closed state. Voting uses the unofficial normal-user route and has not been validated on a live account |
+| **GIFs & Media Search** | Implemented | KLIPY GIF picker with search, favorites category, and one-click direct sending |
+| **User Mentions & Autocomplete** | Implemented | Clickable user mentions with interactive composer autocompletion and visual highlight styling |
+| **Media Previews & Video Player** | Implemented | Inline MOV/MP4 playback from 640×360 up to about 16 megapixels, first-frame poster, drag-seek, and per-failure reasons with retry/download/open; image viewer, Windows WIC HEIC preview, text/Markdown preview, and media copy/save context menus |
+| **File & Attachment Uploads** | Implemented | Multi-attachment batch staging with file-type badges (PDF, ZIP, STL, images), thumbnails, per-file removal, upload progress, and drag-and-drop |
+| **Voice Engine & Calls** | Implemented | 1-to-1/group DM calls and server channels, Opus, DAVE v1 E2EE, Sonora AEC3 echo cancellation, noise suppression Off/Light (WebRTC)/Standard (RNNoise)/Maximum (DeepFilterNet — falls back to RNNoise on Windows ARM64), push-to-talk (`V`), Push to Mute (mouse 4/5, unassigned by default), and device selectors |
+| **Voice Messages** | Implemented | Inline voice message playback with interactive waveforms and bounded streaming audio buffering |
+| **Screen Sharing & Video** | Implemented | Native screen capture (macOS ScreenCaptureKit, Windows Graphics Capture, Linux portal/PipeWire with VA-API/NVENC hardware encoding and software fallback; Linux native capture remains unverified), quality presets (720p/1080p, up to 60 fps), and local camera/screen previews |
+| **Camera Video & Stream Viewing** | Implemented | Hardware-accelerated decoding (macOS VideoToolbox, Linux VA-API, Windows DXVA/D3D11) for incoming screen streams and camera feeds |
+| **System Tray** | Implemented | Closing the window hides it to the tray when a tray host exists (Windows, macOS, or Linux with a StatusNotifier host); without one it minimizes instead of disappearing, so there is always a way back. Re-open and Quit in the tray menu; Windows shows the voice state (active, muted, deafened, idle); call cues and notifications work while the window is hidden |
+| **Threads & Forum Channels** | Implemented | Forum post listing, recent-activity sorting, active thread browsing, and new forum post / thread creation |
+| **Server Administration** | Implemented | Server profile editor (banners, icons, traits), role management with permissions matrix, audit log viewer, invite tracking and revocation, integrations/webhooks, and member moderation |
+| **Extensions & Theme Shop** | Implemented | Git-backed plugins, community theme catalog with preview cards and color presets, permission prompts, and a deleted-message protector |
+| **Keybinds & Shortcuts** | Implemented | In-app keybind cheat sheet with raised keycaps, quick edit (`Up`), quick delete (`Backspace`), keyboard navigation; global shortcuts stay off until enabled in Settings > Keybinds |
+| **Rich Presence & Game IPC** | Implemented | Discord IPC and WebSocket RPC servers plus running-game detection; shows activities in member rosters, DMs and profiles |
+| **Profile Cards & Editing** | Implemented | On-demand profile popouts with banners, bios, badges and connections; in-app editor for display name, bio, pronouns and accent color with live preview |
+| **Server & Group Actions** | Implemented | Server dropdown with friend invites and leave server; group DM actions (edit name/icon preview, mute, leave) |
+| **Context Menus & Shortcuts** | Implemented | Right-click context menus for messages, media (save/copy), server channels and members |
+| **Typing Indicators** | Implemented | Shows incoming typing with short expiry; Nivra strictly avoids emitting outgoing typing signals |
+| **Diagnostics & Error Log** | Implemented | Rotating local log (5 × 2 MiB) for the migrated paths (downloads, previews, compositing, app registration) with tokens, cookies, e-mails, IDs and message text never written; panic report on the next launch; Copy error log / Open logs folder in Settings > Help; nothing is uploaded |
+| **Persistence & Drafts** | Implemented | Bounded SQLite cache for history, drafts, settings and diagnostics; OS credential store for auth tokens; sanitary logout |
+| **Internationalization** | Implemented / partial | English, Português (Brasil) and Español available; CJK and Arabic fallback fonts included; full IME and bidirectional editing unverified |
+
+---
+
+## Architecture
+
+Nivra is engineered as a clean multi-crate Cargo workspace, isolating UI rendering from networking, persistence and service protocols:
+
+```
+nivra/
+├── apps/
+│   └── desktop/          # Application entrypoint, CLI flags, window lifecycle
+├── crates/
+│   ├── client-core/      # Client state coordinator, generation tracking, events
+│   ├── session-cache/    # In-memory bounded cache and state reconciliation
+│   ├── ui/               # egui widgets, message virtualizer, themes, design tokens
+│   ├── model/            # Strongly-typed Discord domain entities
+│   ├── discord-protocol/ # Wire protocol serialization and partial payload patches
+│   ├── discord-api/      # HTTP/2 REST client with rate limiting and backoff
+│   ├── discord-gateway/  # WebSocket gateway client with heartbeat and resume
+│   ├── discord-voice/    # Opus codecs, RTP/UDP transport, DAVE v1, AEC3, RNNoise/DeepFilterNet, video decoding
+│   ├── local-store/      # Bounded SQLite database for history, drafts, settings
+│   ├── platform/         # OS credential store, tray, notifications, shortcuts, diagnostics/logging
+│   └── test-support/     # Deterministic synthetic fixtures and mocks
+└── tools/
+    ├── replay-bench/     # Benchmarking harness for state reducers
+    └── xtask/            # Workspace automation tasks (packaging, checks, linting)
+```
+
+---
+
+## Security and privacy
+
+- **Token protection:** Tokens are saved solely in the native OS credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service). A plaintext token fallback is strictly prohibited, and active tokens remain redacted in memory.
+- **Bounded local cache:** SQLite databases store recent channel history, drafts, settings, diagnostics and image-preview metadata within bounded byte and count limits. The local SQLite store is **not** encrypted by the application.
+- **Sanitary logout:** An explicit logout destroys active network sessions, purges active secrets from memory, deletes the token from the OS credential store, and erases that account's local cache and drafts.
+- **No telemetry:** Nivra contains no analytics, telemetry, tracking beacons, third-party relay or background crash collector. Nothing is uploaded automatically and there is no reporting service.
+- **Local, redacted error log:** Errors from the migrated paths (downloads, attachment previews, window compositing and application registration) are written to rotating local files (5 × 2 MiB). Tokens, cookies, e-mail addresses, channel/message IDs and message text are never written. If the app panics, a redacted report is kept and shown on the next launch (a native crash, forced kill or power loss does not produce one); Settings > Help offers "Copy error log" and "Open logs folder". On Windows the folder is `%LOCALAPPDATA%\nivra\logs`; on Linux and macOS it is `nivra/logs` under the platform's local data directory. Some internal diagnostics (update handoff, tray-icon fallback, GPU/video) still only reach the console. You decide whether to attach the log to an issue — it is never sent for you.
+- **Platform integrity:** No fingerprint spoofing, CAPTCHA/MFA bypasses, bot substitutions, token scrapers or third-party relays.
+
+For full details, review the [Storage Policy](docs/storage-policy.md) and [Threat Model](docs/threat-model.md).
+
+---
+
+## Documentation
+
+- [Architecture & Monorepo Design](docs/architecture.md)
+- [Discord Compatibility & Protocol Details](docs/discord-compatibility.md)
+- [Authentication & Login Handoff](docs/authentication.md)
+- [Storage Policy & Cache Retention](docs/storage-policy.md)
+- [Platform Support & Build Requirements](docs/platform-support.md)
+- [Voice Architecture & Procedure](docs/voice.md)
+- [Design Tokens & UI Styling](docs/design.md)
+- [Languages & Locale Files](docs/i18n.md)
+- [Extensions & Plugin Architecture](docs/extensions.md)
+- [Extension SDK Overview](docs/extension-sdk-overview.md)
+- [Extension SDK Reference](docs/extension-sdk-reference.md)
+- [Extension SDK Actions](docs/extension-sdk-actions.md)
+- [Extension SDK Troubleshooting](docs/extension-sdk-troubleshooting.md)
+- [SDK Examples and Offline Authoring Guide](examples/extensions/README.md)
+- [Theme API Specification](docs/theme-api.md)
+- [Threat Model & Security](docs/threat-model.md)
+- [Serein extension wiki (upstream reference)](https://github.com/ViceVerse-cz/Serein/wiki) — the original Serein project's wiki; Nivra has no wiki of its own
+- [Third-Party Licenses & Notices](THIRD_PARTY_NOTICES.md)
+
+---
+
+## Reporting problems
+
+Report Nivra issues at [vitorhubdev/Nivra/issues](https://github.com/vitorhubdev/Nivra/issues); do not file Nivra bugs upstream. Include the app version (Settings > About, or `--version`), your OS and version, and steps to reproduce. If Nivra logged an error, open **Settings > Help** and press **Copy error log**; paste it into the issue if you are comfortable sharing it. If the app panicked, the next launch shows a crash report with **Copy report**.
+
+---
+
+## What's new
+
+### 1.0.12
+
+- Text preview and the Licenses screen open again; oversized files and expired links show the right message, and the account card keeps its content height.
+- Video preview accepts any resolution from 640×360 up to about 16 megapixels; HEVC/AV1 without a system decoder still do not play.
+- Call cues play while the window is minimized or hidden in the tray, with a 64-cue queue and member-name notifications on join/leave.
+- Windows DLL hardening plus a local, redacted rotating error log, panic report and Settings > Help tools.
+- One motion token set with a "Reduce motion" option, hover explanations for disabled buttons, and a single confirmation for destructive actions.
+- Windows executables are about 3% smaller.
+
+### 1.0.11
+
+- The video freeze is fixed (egui context re-lock); audio-less clips play to the end, the card shows a first frame before Play, and a stall watchdog writes a bounded `nivra-freeze.log`.
+- The measured three-pillar voice suite above ships with numbers; noise suppression, DAVE audio exchange, UDP-blackout recovery and cue queues are covered by tests.
+- Push to Mute (mouse 4/5), Windows tray voice-state icon, compact timeline layout, HEIC preview and Discord polls.
+
+Older releases (SereinExt 1.0.1–1.0.4 and Nivra 1.0.5 onward) are documented in [CHANGELOG.md](CHANGELOG.md). Upstream Serein documentation can still be useful as technical reference, but its downloads belong to the original project, not this fork.
+
+---
 
 ## Origin & attribution
 
@@ -31,316 +294,6 @@ and is available under MIT OR Apache-2.0.
 Nivra is not affiliated with, endorsed by, or an official client
 of Discord Inc.
 
-### Nivra 1.0.7
-
-The local database keeps a 2 MiB page cache, which already holds the file. A write past the 256 MiB cap returns an error. Saving a channel at that cap drops the oldest cached channel to make room, then retries. Text, Markdown and code previews detect UTF-8 and UTF-16, read a legacy Windows text file, and show a long file in steps. Video stays on the operating system's decoder. There is no VLC and no bundled FFmpeg. A PDF attachment is still a file card.
-
-### Nivra 1.0.6
-
-A call stays up when someone joins or leaves, through a short resume, and while the PC is stalled. Global shortcuts are off until they are turned on under Settings, Keybinds. Chat can be exported as text or Markdown. The Windows build remains one executable, without a notification install script, and these builds are unsigned.
-
-### Nivra 1.0.5
-
-SereinExt is now Nivra.
-
-The project retains its existing version history and Git history.
-This release introduces the new Nivra identity and begins the
-migration of application identifiers from SereinExt/Serein.
-
-Previous project name:
-SereinExt
-
-Original upstream:
-Serein by the Serein contributors / ViceVerse-cz.
-
-Existing installations are migrated where applicable.
-
-### SereinExt 1.0.4
-
-Version 1.0.4 keeps the 1.0.3 client and adds the local work finished after that release:
-
-- saved logins survive a system keyring hiccup, with clearer guidance when sign-in needs attention;
-- the app tells you when the PC cannot keep up with Maximum noise suppression and switches to Standard;
-- the first-run terms dialog is simpler;
-- link previews handle X, Vimeo and YouTube addresses more strictly.
-
-### SereinExt 1.0.3
-
-Version 1.0.3 keeps the 1.0.2 client and adds the local work finished after that release:
-
-- the app language follows Windows on first launch when Portuguese or Spanish is available, with a language control on the sign-in screen;
-- login, chat chrome and call controls use the chosen language;
-- screen sharing starts from the whole display, with audio under it and apps folded away;
-- someone connecting to or leaving the current call plays a sound, including while Do Not Disturb is on, and retries if playback is busy;
-- a failed image or file send shows the error on the preview, with a way to put the file back in the composer.
-
-### SereinExt 1.0.2
-
-Version 1.0.2 integrates selected upstream improvements that fit SereinExt without replacing the fork-specific fixes:
-
-- expanded Extension SDK capabilities for bounded app queries, messaging settings, guild folders, native actions and action-result feedback (upstream #411);
-- Discord-like inline image sizing, higher-quality media renditions and smoother MP4/MOV/M4V-backed gifv motion while preserving SereinExt isolated web previews (upstream #409);
-- permission-gated server sticker management with static PNG/JPEG/WebP preparation, upload, edit and delete support (upstream #412);
-- the upstream server-creation flow with create/join picker, server name/icon preparation and bounded request state (upstream #414);
-- the existing SereinExt voice, login, multi-device presence, PT-BR/ES, moderation, Hyprland and web-media changes remain preserved.
-
-Server creation is included as an **experimental compatibility feature**: upstream notes that the normal-user `POST /guilds` behavior is unofficial and was not live-verified, so SereinExt keeps the flow bounded and should not treat a failed request as proof that no server was created.
-
-### SereinExt 1.0.1
-
-Version 1.0.1 is the first maintained SereinExt line. The current `main` includes:
-
-- corrected remote voice join/leave cues, AEC delay handling and selected-device recovery;
-- moderator/member-removal fixes and lower drag/presentation latency;
-- direct join-video flow with bounded failure state;
-- compact Discord multi-device presence for desktop/mobile/web;
-- more reliable Discord login WebView focus and Linux permission flow;
-- persistent English, Português (Brasil) and Español UI locale infrastructure;
-- isolated in-app YouTube, X/Twitter and Vimeo previews with device permissions denied;
-- Hyprland tray/notification restoration ported from upstream;
-- SereinExt-specific credential/update identity and cleaned voice UI encoding.
-
-The source is still being validated before a binary GitHub Release is published. A tag does not imply that upstream Serein packages are SereinExt builds.
-
-
-<p align="center">
-  <a href="#downloads--installation"><strong>📦 Downloads</strong></a> &nbsp;•&nbsp;
-  <a href="#highlights"><strong>⚡ Highlights</strong></a> &nbsp;•&nbsp;
-  <a href="#feature-showcase"><strong>✨ Showcase</strong></a> &nbsp;•&nbsp;
-  <a href="#measured-performance-vs-official-discord"><strong>📊 Benchmarks</strong></a> &nbsp;•&nbsp;
-  <a href="#quick-start"><strong>🛠️ Quick Start</strong></a> &nbsp;•&nbsp;
-  <a href="#feature-matrix"><strong>📋 Features</strong></a> &nbsp;•&nbsp;
-  <a href="#architecture-overview"><strong>🏗️ Architecture</strong></a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/vitorhubdev/Nivra/tags"><img src="https://img.shields.io/github/v/tag/vitorhubdev/Nivra?label=tag&color=blue" alt="Nivra tag" /></a>
-  <a href="Cargo.toml"><img src="https://img.shields.io/badge/rust-1.98.1_pinned-blue.svg?logo=rust" alt="Rust 1.98.1 Pinned" /></a>
-  <a href="crates/ui"><img src="https://img.shields.io/badge/ui-egui%20%2F%20wgpu-orange.svg" alt="UI egui/wgpu" /></a>
-  <a href="docs/platform-support.md"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-informational.svg" alt="Platform Support" /></a>
-  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg" alt="License: MIT or Apache-2.0" /></a>
-</p>
-
----
-
-> [!WARNING]
-> **Unofficial and not endorsed by Discord.**
-> Nivra is a modified Serein fork and communicates directly with Discord's public gateway and REST endpoints for your existing account. Automating normal accounts outside the official OAuth2/bot API violates Discord's Terms of Service and carries risk of account termination. Technical interoperability does not imply platform approval. Review the [compatibility matrix](docs/discord-compatibility.md) and [authentication guide](docs/authentication.md) before use.
-
----
-
-## Downloads & Installation
-
-Stable builds are published on the [Releases page](https://github.com/vitorhubdev/Nivra/releases). Do not treat installers, Flatpaks, AppImages, Homebrew packages or package repositories published by upstream Serein as Nivra binaries.
-
-### Release channels
-
-- **production**: tested releases, tagged `v<version>` (for example `v1.0.5`). Each production release attaches a `SHA256SUMS.txt` checksum file plus one asset per platform: Windows is a single `Nivra-v<version>-Windows-<arch>.exe` (download it and open it, nothing to extract), Linux a `.tar.gz`, macOS a `.zip`.
-- **nightly**: automated builds from `main`, tagged `v<version>-nightly.<date>.<run>` and marked as pre-release. Nightlies track development and may be unstable.
-
-### Current source
-
-- Repository: [`vitorhubdev/Nivra`](https://github.com/vitorhubdev/Nivra)
-- Development branch: `main`
-- Workspace version: `1.0.7`
-- Version history: [Tags](https://github.com/vitorhubdev/Nivra/tags)
-
-### Build from source
-
-The workspace pins Rust **1.98** and uses the same native platform dependencies documented in this repository.
-
-```sh
-git clone https://github.com/vitorhubdev/Nivra.git
-cd Nivra
-cargo build --locked --release -p nivra
-```
-
-Interface text lives in one file per language under `crates/ui/locales/`; adding a language is adding a file, with no screen changes: see [Languages](docs/i18n.md). 
-
-Platform-specific runtime/build requirements remain documented under [Platform Support](docs/platform-support.md) and the `packaging/` directory. Upstream documentation can still be useful as technical reference, but its downloads belong to the original project, not this fork.
-
-### Requirements
-
-Rust **1.98.1** is pinned (see `rust-toolchain.toml`). You also need the standard C/C++ toolchain, CMake and `bun` 1.4.2 for the JS test harnesses. OS details (WebView2 on Windows, GTK/WebKit on Linux, Xcode tools on macOS) are listed under [Quick Start](#quick-start) and [Platform Support](docs/platform-support.md).
-
-### Reporting problems
-
-Report Nivra issues at [vitorhubdev/Nivra/issues](https://github.com/vitorhubdev/Nivra/issues). Include the app version (Settings or `--version`), the OS and version, and steps to reproduce. Do not file Nivra bugs upstream.
-
-
----
-
-## Highlights
-
-- ⚡ **Pure Native Performance:** Built with pure Rust, `egui`, and `wgpu`. Immediate-mode rendering with minimal idle CPU, low memory footprint, and instantaneous launch times—zero Electron, Node.js, or web runtime overhead.
-- 🌐 **Direct Gateway & REST Transports:** Direct connection to Discord's official endpoints with active rate-limiting cooldowns, heartbeat handling, reconnect/resume loops, and partial payload patching.
-- 🔒 **Secure OS Credential Storage:** Session tokens are stored exclusively in your operating system's secure vault (macOS Keychain, Windows Credential Manager, or Linux Secret Service). Never saved in plaintext.
-- 🛡️ **Ephemeral Authentication Webview:** Sign-in uses Discord's official hosted login page inside a temporary native webview (WKWebView, WebView2, or WebKitGTK) supporting email/password, QR login, and MFA. An origin-checked handoff secures the session credential and immediately terminates the webview.
-- 💾 **Bounded Local Persistence:** Recent chat history, drafts, image previews, settings, and diagnostics are stored in an account-isolated, bounded local SQLite database. All local data is strictly cleared upon explicit logout.
-- 🎙️ **Voice Calls, Video & Screen Sharing:** Complete native voice engine with 1-to-1 and group DM calls, server voice channels, push-to-talk, Sonora AEC3 acoustic echo cancellation, RNNoise noise suppression, Opus codec, and DAVE v1 end-to-end encryption. Includes native screen capture (macOS ScreenCaptureKit, Windows Graphics Capture, Linux portal/PipeWire with VA-API/NVENC hardware encoding and software fallback; Linux native capture remains unverified) and incoming stream & camera video playback with hardware-accelerated decoding (VideoToolbox, VA-API, DirectX).
-- 🧵 **Forum Channels & Active Threads:** Browse forum channels, view posts sorted by recent activity, read message threads with unread indicators, and create new forum posts directly in-app.
-- ⚙️ **Server Administration Suite:** Full server management interface including Server Profiles (banners, icons, traits, descriptions), role editor with fine-grained permission matrix, paginated audit logs with action filters, invite manager with revocation, integrations and webhooks, and member moderation.
-- ✨ **GIF & Twemoji Picker:** Instant KLIPY GIF search with favorites and one-click sending, full Twemoji picker with search and quick-reactions, plus custom guild emojis.
-- 📎 **Multi-Attachment Batch Uploads:** Composer staging tray supporting multiple files of any type (PDF, ZIP, 3D STL, videos, audio, images) with file-type badges, thumbnails, size indicators, individual removal, and progress tracking.
-- 👤 **Native Profile Customization:** In-app profile editor for global display names, bios / about me, pronouns, and custom accent colors with real-time live preview cards.
-- 🎨 **Extensions & Theme Shop:** Git-backed plugin engine and community theme shop with preview cards, color preset toggles, permission verification, and a built-in deleted-message retention protector.
-- 🎬 **Rich Media & Video Player:** Inline video playback for MOV and MP4 attachments, interactive seekable voice message waveforms, right-click media save/copy context menus, and full-resolution image viewer modals.
-- ⌨️ **Keybinds & Shortcuts:** Built-in keybind reference sheet styled with raised keycaps, quick edit (`Up`), quick delete (`Backspace`), and intuitive keyboard navigation.
-- 🎮 **Rich Presence & Game Detection:** Built-in Discord IPC and WebSocket RPC servers, plus executable-based detection of running games, showing live game activities in member rosters, DM lists, and user profiles, with opt-in system tray integration.
-
----
-
-## Feature Showcase
-
-| Voice Calls & Live Screen Sharing | User Settings & Profile Customizer |
-| :---: | :---: |
-| <img src="docs/screenshots/voice-calls-screenshare.png" alt="Voice Calls & Screen Sharing" width="450" /> | <img src="docs/screenshots/user-settings.png" alt="User Settings & Profile Customizer" width="450" /> |
-| **Server Administration & Profiles** | **Threads & Forum Channels** |
-| <img src="docs/screenshots/server-settings.png" alt="Server Administration & Profiles" width="450" /> | <img src="docs/screenshots/threads-forums.png" alt="Threads & Forum Channels" width="450" /> |
-| **Multi-File Attachment Uploads** | **GIFs & Twemoji Picker** |
-| <img src="docs/screenshots/file-uploads.png" alt="Multi-File Attachment Uploads" width="450" /> | <img src="docs/screenshots/gifs-and-emojis.png" alt="GIFs & Twemoji Picker" width="450" /> |
-
----
-
-## Measured Performance vs. Official Discord
-
-> **Testing Scenario:** Browsing channels while joined in a Voice Channel (VC) and streaming screen at 60 FPS on macOS.
-
-| Metric | Official Discord Client (Electron) | Nivra (Native Rust + egui/wgpu) | Advantage |
-|---|:---:|:---:|:---:|
-| **Memory (RAM)** | **1,178.4 MB** *(across 7 helper processes)* | **129.7 MB** *(single unified process)* | **~9× less memory (-89%)** |
-| **CPU Usage** | **22.8%** *(Renderer + Helper processes)* | **8.1%** | **~2.8× lower CPU (-64%)** |
-
-| Official Discord (Electron) | Nivra (Native Rust) |
-| :---: | :---: |
-| **RAM: ~1,178.4 MB across 7 processes** | **RAM: 129.7 MB single process** |
-| <img src="docs/screenshots/perf-discord-ram.png" alt="Discord RAM Usage" width="450" /> | <img src="docs/screenshots/perf-nivra-ram.png" alt="Nivra RAM Usage" width="450" /> |
-| **CPU: 22.8% total** | **CPU: 8.1% total** |
-| <img src="docs/screenshots/perf-discord-cpu.png" alt="Discord CPU Usage" width="450" /> | <img src="docs/screenshots/perf-nivra-cpu.png" alt="Nivra CPU Usage" width="450" /> |
-
----
-
-## Quick Start
-
-### Prerequisites
-Rust **1.98.1** is pinned. Ensure you have the standard C/C++ toolchain and CMake installed for your platform:
-- **macOS:** Xcode command-line tools (`xcode-select --install`)
-- **Linux:** GCC/Clang, ALSA development headers, `pkg-config`, GTK 4, WebKitGTK 6.0, fontconfig, and Vulkan drivers (see [Platform Support](docs/platform-support.md))
-- **Windows:** Visual Studio C++ build tools and WebView2 Runtime
-
-### Running Locally
-
-```sh
-# 1. Opt in to the offline synthetic demo (no network, no storage)
-cargo run --locked --features demo -- --demo
-
-# 2. Launch standard client with voice (uses saved login or official webview)
-cargo run --locked
-```
-
-### Workspace Commands
-
-```sh
-# Run full workspace validation (formatting, Clippy, tests, policy checks)
-cargo xtask check
-
-# Run release reducer benchmark
-cargo replay
-
-# Run authentication bridge JS test harness
-node tests/login-handoff.cjs
-
-# Package release including voice (macOS .app bundle, Linux .deb by default)
-cargo xtask package
-```
-
----
-
-## Feature Matrix
-
-| Capability | Status | Notes |
-|---|---|---|
-| **Navigation & Guilds** | Implemented | Collapsible categories, cached icons, guild channels, forum channels, active threads, DM lists, People pane, and server channel context menus |
-| **Message Timeline** | Implemented | Virtualized variable-height rows, inline link confirmations, spoiler text/media reveal, unread message banners, deleted message protector, and local timezone timestamps |
-| **Markdown & System Messages** | Implemented | Bold, italics, code blocks, blockquotes, clickable links, and styled system events with tinted Phosphor icons and clickable member names |
-| **Reactions & Emojis** | Implemented | Twemoji rendering, native reaction counts, eight-emoji quick picker, full emoji picker integration, custom guild emojis, and add/remove reaction controls |
-| **GIFs & Media Search** | Implemented | KLIPY GIF picker with search, favorites category, and one-click direct sending |
-| **User Mentions & Autocomplete** | Implemented | Clickable user mentions with interactive composer autocompletion and visual highlight styling |
-| **Media Previews & Video Player** | Implemented | Inline MOV and MP4 video playback, media copy/save context menus, inline image cards, embed cards, related embed image galleries, and full-resolution image viewer modals |
-| **File & Attachment Uploads** | Implemented | Multi-attachment batch staging with file-type badges (PDF, ZIP, STL, images), thumbnail previews, individual file removal, upload progress bar, and drag-and-drop |
-| **Voice Engine & Calls** | Implemented | 1-to-1/group DM calls & server channels, Opus codec, DAVE v1 E2EE, Sonora AEC3 acoustic echo cancellation, RNNoise suppression, push-to-talk (`V`), audio device selector |
-| **Voice Messages** | Implemented | Inline voice message playback with interactive waveforms and bounded streaming audio buffering |
-| **Screen Sharing & Video** | Implemented | Native screen capture (macOS ScreenCaptureKit, Windows Graphics Capture, Linux portal/PipeWire with VA-API/NVENC hardware encoding and software fallback; Linux native capture remains unverified), quality presets (720p/1080p, up to 60fps), and local camera/screen previews |
-| **Camera Video & Stream Viewing** | Implemented | Hardware-accelerated decoding (macOS VideoToolbox, Linux VA-API, Windows DXVA/D3D11) for incoming screen streams and camera video feeds |
-| **Threads & Forum Channels** | Implemented | Forum post listing, recent activity sorting, active thread browsing, and new forum post / thread creation |
-| **Server Administration** | Implemented | Server profile editor (banners, icons, traits), role management with permissions matrix, audit log viewer, invite tracking and revocation, integrations/webhooks, and member moderation |
-| **Extensions & Theme Shop** | Implemented | Git-backed plugins, community theme catalog with preview cards and color presets, permission prompt modals, and deleted-message protector |
-| **Keybinds & Shortcuts** | Implemented | In-app keybind cheat sheet with raised keycaps, quick edit (`Up`), quick delete (`Backspace`), and keyboard navigation hotkeys |
-| **Rich Presence & Game IPC** | Implemented | Discord IPC and WebSocket RPC servers plus running-game detection; displays activities in member rosters, DMs, and user profiles; opt-in system tray |
-| **Profile Cards & Editing** | Implemented | On-demand profile popouts with banners, bios, badges, connections; native in-app editor for display name, bio, pronouns, and custom accent color with live preview |
-| **Server & Group Actions** | Implemented | Server dropdown with friend invites and leave server; group DM actions (edit name/icon preview, mute, leave) |
-| **Context Menus & Shortcuts** | Implemented | Right-click context menus for messages, media (save/copy), server channels, and members |
-| **Typing Indicators** | Implemented | Displays incoming typing with short expiry; Nivra strictly avoids emitting outgoing typing signals |
-| **Persistence & Drafts** | Implemented | Bounded SQLite cache for history, drafts, settings, and diagnostics; OS credential store for auth tokens; sanitary logout |
-| **Internationalization** | Partial | Bundled Inter font, CJK and Arabic font fallbacks included; full IME and bidirectional editing unverified |
-
----
-
-## Architecture Overview
-
-Serein is engineered as a clean multi-crate Cargo workspace, isolating UI rendering from networking, persistence, and service protocols:
-
-```
-nivra/
-├── apps/
-│   └── desktop/          # Application entrypoint, CLI flags, window lifecycle
-├── crates/
-│   ├── client-core/      # Client state coordinator, generation tracking, events
-│   ├── session-cache/    # In-memory bounded cache and state reconciliation
-│   ├── ui/               # egui widgets, message virtualizer, themes, design tokens
-│   ├── model/            # Strongly-typed Discord domain entities
-│   ├── discord-protocol/ # Wire protocol serialization and partial payload patches
-│   ├── discord-api/      # HTTP/2 REST client with rate limiting and backoff
-│   ├── discord-gateway/  # WebSocket gateway client with heartbeat and resume
-│   ├── discord-voice/    # Opus codecs, RTP/UDP transport, DAVE v1, Sonora AEC, RNNoise, video decoding
-│   ├── local-store/      # Bounded SQLite database for history, drafts, settings
-│   ├── platform/         # OS credential store (Keychain/CredManager/SecretService)
-│   └── test-support/     # Deterministic synthetic fixtures and mocks
-└── tools/
-    ├── replay-bench/     # Benchmarking harness for state reducers
-    └── xtask/            # Workspace automation tasks (packaging, checks, linting)
-```
-
----
-
-## Security & Storage Policy
-
-- **Token Protection:** Tokens are saved solely in the native OS credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service). Plaintext token fallback is strictly prohibited. Active tokens remain redacted in memory.
-- **Local Cache Bounds:** SQLite databases store recent channel history, drafts, settings, diagnostics, and image preview metadata within bounded byte and count limits. The local SQLite store is **not** encrypted by the application.
-- **Sanitary Logout:** Executing an explicit logout destroys active network sessions, purges active secrets from memory, deletes the token from the OS credential store, and erases that account's local cache and drafts.
-- **Zero Telemetry:** Serein contains no analytics, telemetry, background crash collectors, or tracking beacons.
-- **Platform Integrity:** No fingerprint spoofing, CAPTCHA/MFA bypasses, bot substitutions, token scrapers, or third-party relays.
-
-For full details, review the [Storage Policy](docs/storage-policy.md) and [Threat Model](docs/threat-model.md).
-
----
-
-## Documentation
-
-- [Architecture & Monorepo Design](docs/architecture.md)
-- [Discord Compatibility & Protocol Details](docs/discord-compatibility.md)
-- [Authentication & Login Handoff](docs/authentication.md)
-- [Storage Policy & Cache Retention](docs/storage-policy.md)
-- [Platform Support & Build Requirements](docs/platform-support.md)
-- [Voice Architecture & Procedure](docs/voice.md)
-- [Design Tokens & UI Styling](docs/design.md)
-- [Extensions & Plugin Architecture](docs/extensions.md)
-- [Extension SDK Creator Wiki](https://github.com/ViceVerse-cz/Serein/wiki)
-- [SDK Examples and Offline Authoring Guide](examples/extensions/README.md)
-- [Theme API Specification](docs/theme-api.md)
-- [Threat Model & Security](docs/threat-model.md)
-- [Third-Party Licenses & Notices](THIRD_PARTY_NOTICES.md)
-
 ---
 
 ## License
@@ -355,3 +308,9 @@ Demo fixtures and simulated actions are excluded from normal app and CI packages
 Build with `--features demo` and launch with `--demo` to enable them; `--demo-*`
 scenario flags additionally require `--demo`. `cargo xtask package` always builds
 without demo support, while offline tests can still use synthetic fixtures.
+
+---
+
+## Português
+
+O Nivra é um cliente Discord nativo e não oficial, escrito em Rust (egui + wgpu) para Windows, Linux e macOS. No cenário de teste medido (macOS, canais abertos em chamada de voz com transmissão de tela a 60 FPS), ele usou cerca de 9× menos memória que o cliente oficial; tem voz clara (supressão de ruído DeepFilterNet no modo Máximo), toca os sons da chamada com a janela minimizada e mantém um log de erros local — nada é enviado sozinho. Baixe a versão mais recente na página de [Releases](https://github.com/vitorhubdev/Nivra/releases/latest): no Windows é um único `.exe` sem assinatura (o SmartScreen pode avisar; escolha "Mais informações" e "Executar assim mesmo"). Para reportar um problema, abra uma [issue](https://github.com/vitorhubdev/Nivra/issues) com a versão do app, o sistema e os passos, e use "Copiar log de erros" em Configurações > Ajuda se quiser anexar o log. O Nivra não é afiliado ao Discord e usar uma conta normal com ele é por sua conta e risco.

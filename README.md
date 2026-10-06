@@ -128,9 +128,11 @@ cargo build --locked --release -p nivra
 # 2. Run it from source (uses the saved login or the official sign-in webview)
 cargo run --locked
 
-# 3. Offline synthetic demo (no network, no storage)
+# 3. Offline synthetic demo (no network, synthetic state)
 cargo run --locked -p nivra --features demo -- --demo
 ```
+
+The demo makes no network requests and uses synthetic state; it still performs the normal local startup migration (data folder, keyring entries, shortcuts) like any other launch.
 
 ### Workspace commands
 

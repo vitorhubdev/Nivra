@@ -848,11 +848,18 @@ async fn run(
 	let mut cooldown = Instant::now();
 	// Eight bounded loads overlap; each downloads and decodes off this loop, which owns the disk.
 	let mut jobs = tokio::task::JoinSet::new();
-	let (mut viewer, mut inline) = (VecDeque::<String>::new(), VecDeque::<String>::new());
+	let (mut viewer, mut inline, mut prefetch) = (
+		VecDeque::<String>::new(),
+		VecDeque::<String>::new(),
+		VecDeque::<String>::new(),
+	);
 	loop {
 		while jobs.len() < JOBS
 			&& !*cancelled.borrow()
-			&& let Some(key) = viewer.pop_front().or_else(|| inline.pop_front())
+			&& let Some(key) = viewer
+				.pop_front()
+				.or_else(|| inline.pop_front())
+				.or_else(|| prefetch.pop_front())
 		{
 			let Some(MediaUrls { primary, fallback }) = job_urls(&key) else {
 				continue;
@@ -884,13 +891,13 @@ async fn run(
 				let Some(Ok(loaded)) = completed else { break };
 				loaded
 			},
-			key = requests.recv(), if viewer.len() + inline.len() < QUEUED => {
+			key = requests.recv(), if viewer.len() + inline.len() + prefetch.len() < QUEUED => {
 				let Some(key) = key else { break };
 				if *cancelled.borrow() { break; }
-				if Rendition::parse(&key).is_some_and(|rendition| rendition.lane == Lane::Viewer) {
-					viewer.push_back(key);
-				} else {
-					inline.push_back(key);
+				match Rendition::parse(&key).map(|rendition| rendition.lane) {
+					Some(Lane::Viewer) => viewer.push_back(key),
+					Some(Lane::Prefetch) => prefetch.push_back(key),
+					_ => inline.push_back(key),
 				}
 				continue;
 			},

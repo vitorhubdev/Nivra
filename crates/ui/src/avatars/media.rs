@@ -40,6 +40,27 @@ pub fn fit_edge(width: u32, height: u32, edge: u32) -> (u32, u32) {
 	)
 }
 
+/// Proxy edge a source needs to fill `rect` at `ppp` without visible minification.
+pub(crate) fn needed_size(
+	rect: egui::Vec2,
+	ppp: f32,
+	native: Option<[u32; 2]>,
+	cover: bool,
+) -> Size {
+	let needed = match native {
+		Some([width, height]) => {
+			let (width, height) = (width as f32, height as f32);
+			let (x, y) = (rect.x / width, rect.y / height);
+			width.max(height) * if cover { x.max(y) } else { x.min(y) } * ppp
+		}
+		None => rect.max_elem() * ppp,
+	};
+	Size::new(
+		Edge::for_target(needed, native.map(|[width, height]| width.max(height))),
+		native,
+	)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Edge(u32);
 
@@ -118,13 +139,15 @@ pub enum Motion {
 pub enum Lane {
 	Inline,
 	Viewer,
+	/// A card the user has not reached yet; it loads last and never delays a painted cell.
+	Prefetch,
 }
 
 impl Lane {
 	/// Decoded frame budget for one animation in this lane.
 	pub const fn frame_bytes(self) -> usize {
 		match self {
-			Self::Inline => 40 * 1024 * 1024,
+			Self::Inline | Self::Prefetch => 40 * 1024 * 1024,
 			Self::Viewer => 96 * 1024 * 1024,
 		}
 	}
@@ -179,6 +202,7 @@ impl Rendition {
 		let lane = match self.lane {
 			Lane::Inline => 'i',
 			Lane::Viewer => 'v',
+			Lane::Prefetch => 'p',
 		};
 		let motion = match self.motion {
 			Motion::Still => 's',
@@ -202,6 +226,7 @@ impl Rendition {
 			lane: match lane {
 				b'i' => Lane::Inline,
 				b'v' => Lane::Viewer,
+				b'p' => Lane::Prefetch,
 				_ => return None,
 			},
 			motion: match motion {
@@ -339,8 +364,8 @@ impl Held {
 	fn pool(&self) -> Pool {
 		match (self.lane, &self.pixels) {
 			(Lane::Viewer, _) => Pool::Viewer,
-			(Lane::Inline, Pixels::Still(_)) => Pool::Stills,
-			(Lane::Inline, Pixels::Playing { .. }) => Pool::Frames,
+			(_, Pixels::Still(_)) => Pool::Stills,
+			(_, Pixels::Playing { .. }) => Pool::Frames,
 		}
 	}
 }
@@ -754,10 +779,12 @@ impl MediaLibrary {
 	}
 
 	/// Once per frame after painting: a closed viewer releases its full-size pixels at once.
+	/// Prefetched cards keep their pixels until they are painted or swept.
 	pub(super) fn end_frame(&mut self) {
 		if !std::mem::take(&mut self.viewer_painted) {
 			for slot in self.slots.values_mut() {
-				slot.held.retain(|held| held.lane == Lane::Inline);
+				slot.held
+					.retain(|held| matches!(held.lane, Lane::Inline | Lane::Prefetch));
 			}
 		}
 	}
@@ -893,6 +920,46 @@ impl Avatars {
 		!self.media.playable(raw)
 	}
 
+	/// Queue a thumbnail for a card the user has not reached yet. Prefetched pixels load in
+	/// the lowest-priority lane and never paint or upgrade a visible cell.
+	pub(crate) fn prefetch_media(
+		&mut self,
+		media: &model::EmbedMedia,
+		size: egui::Vec2,
+		ctx: &egui::Context,
+		demo: bool,
+		surface: Surface,
+	) -> bool {
+		if demo || self.prefetches >= super::PREFETCHES {
+			return false;
+		}
+		let Some((raw, may_animate)) = pick(media, self.animate_gifs) else {
+			return false;
+		};
+		let Some(source) = self.media.source(raw) else {
+			return false;
+		};
+		let native = (media.width > 0 && media.height > 0)
+			.then(|| [media.width.min(16384), media.height.min(16384)]);
+		let want_size = needed_size(size, ctx.pixels_per_point(), native, surface.covers());
+		let (want, choice) = self.media.want(
+			&source,
+			may_animate && !demo,
+			want_size,
+			Lane::Prefetch,
+			Instant::now(),
+		);
+		if !choice.request || self.requests.len() >= REQUESTS {
+			return false;
+		}
+		self.requests.push(want.key());
+		self.media
+			.slot(&source)
+			.record(want.motion, want.size, Attempt::Pending);
+		self.prefetches += 1;
+		true
+	}
+
 	pub(crate) fn show_media(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -962,18 +1029,7 @@ impl Avatars {
 		let pass = ui.ctx().cumulative_pass_nr();
 		self.media.sweep(pass);
 		let ppp = ui.ctx().pixels_per_point();
-		let needed = match native {
-			Some([width, height]) => {
-				let (width, height) = (width as f32, height as f32);
-				let (x, y) = (rect.width() / width, rect.height() / height);
-				width.max(height) * if cover { x.max(y) } else { x.min(y) } * ppp
-			}
-			None => rect.size().max_elem() * ppp,
-		};
-		let size = Size::new(
-			Edge::for_target(needed, native.map(|[width, height]| width.max(height))),
-			native,
-		);
+		let size = needed_size(rect.size(), ppp, native, cover);
 		let lane = surface.lane();
 		self.media.viewer_painted |= viewer;
 		let (want, choice) = self
@@ -1142,5 +1198,85 @@ mod stand_in_tests {
 		assert!(library.playable(raw));
 		library.slot(&source).learned = super::Learned::Unplayable;
 		assert!(!library.playable(raw));
+	}
+}
+
+#[cfg(test)]
+mod lane_tests {
+	use super::*;
+
+	#[test]
+	fn prefetch_renditions_round_trip_their_lane() {
+		for lane in [Lane::Inline, Lane::Viewer, Lane::Prefetch] {
+			let rendition = Rendition {
+				source: Source::canonical("https://cdn.test/a.png").expect("valid source"),
+				motion: Motion::Still,
+				size: Size::Exact {
+					width: 64,
+					height: 64,
+				},
+				lane,
+			};
+			let parsed = Rendition::parse(&rendition.key()).expect("media keys parse");
+			assert_eq!(parsed.lane, lane);
+			assert_eq!(parsed, rendition);
+		}
+	}
+
+	#[test]
+	fn the_still_pool_evicts_past_its_byte_budget() {
+		let ctx = egui::Context::default();
+		let mut media = MediaLibrary::default();
+		for index in 0..110u64 {
+			let raw = format!("https://cdn.test/{index}.png");
+			let Some(source) = media.source(&raw) else {
+				continue;
+			};
+			let size = Size::Exact {
+				width: 512,
+				height: 512,
+			};
+			let now = Instant::now();
+			let (want, _) = media.want(&source, false, size, Lane::Prefetch, now);
+			media
+				.slot(&source)
+				.record(want.motion, want.size, Attempt::Pending);
+			let image = ColorImage::filled([512, 512], Color32::from_rgb(1, 2, 3));
+			assert!(media.accept_still(&ctx, want, Some(image)));
+		}
+		assert!(
+			media.bytes() <= INLINE_STILL_BYTES,
+			"{} bytes exceed the {} byte still budget",
+			media.bytes(),
+			INLINE_STILL_BYTES
+		);
+	}
+
+	#[test]
+	fn end_frame_keeps_prefetched_pixels_until_they_are_painted() {
+		let ctx = egui::Context::default();
+		let mut media = MediaLibrary::default();
+		let source = media
+			.source("https://cdn.test/prefetch.png")
+			.expect("valid source");
+		let size = Size::Exact {
+			width: 64,
+			height: 64,
+		};
+		let (want, _) = media.want(&source, false, size, Lane::Prefetch, Instant::now());
+		media
+			.slot(&source)
+			.record(want.motion, want.size, Attempt::Pending);
+		assert!(media.accept_still(
+			&ctx,
+			want,
+			Some(ColorImage::filled([64, 64], Color32::WHITE))
+		));
+		assert!(media.bytes() > 0);
+		media.end_frame();
+		assert!(
+			media.bytes() > 0,
+			"a prefetched still survives until its card is painted"
+		);
 	}
 }

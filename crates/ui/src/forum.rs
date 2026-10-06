@@ -1100,6 +1100,20 @@ fn card(
 							// Discord shows the starter's first image at the card's right edge.
 							if let Some(starter) = thumb {
 								let art = egui::Vec2::splat(PREVIEW);
+								// The next screen's cards warm their thumbnails before they scroll in.
+								let clip = ui.clip_rect();
+								let art_top = ui.cursor().min.y;
+								if art_top >= clip.bottom()
+									&& art_top <= clip.bottom() + clip.height().max(240.0)
+								{
+									images.prefetch_media(
+										&starter.images[0].media,
+										art,
+										ui.ctx(),
+										state.demo,
+										crate::avatars::Surface::Tile,
+									);
+								}
 								let (rect, _) = ui.allocate_exact_size(art, egui::Sense::hover());
 								let mut cell = ui.new_child(
 									egui::UiBuilder::new()
@@ -1160,6 +1174,23 @@ fn tile(
 						let art = egui::vec2(inner, (inner * TILE_ART).round());
 						match state.post_preview(post.id) {
 							Some(starter) if !starter.images.is_empty() => {
+								// Cards one screen below the viewport warm their thumbnails now, at the
+								// lowest priority, so scrolling never waits on the network.
+								let clip = ui.clip_rect();
+								let art_top = ui.cursor().min.y;
+								if art_top >= clip.bottom()
+									&& art_top <= clip.bottom() + clip.height().max(240.0)
+								{
+									for image in &starter.images {
+										images.prefetch_media(
+											&image.media,
+											art,
+											ui.ctx(),
+											state.demo,
+											crate::avatars::Surface::Tile,
+										);
+									}
+								}
 								let cells = mosaic(ui, images, starter, art, state.demo);
 								paint_mosaic_badges(ui, starter, &cells);
 								if let Some(cell) =
@@ -2064,5 +2095,145 @@ mod tests {
 		let defaults = state.forum_defaults(Id(26)).cloned().unwrap_or_default();
 		assert_eq!(defaults.layout, Layout::Gallery);
 		assert_eq!(forum.remembered_layout(Id(26)), Some(Layout::List));
+	}
+
+	#[test]
+	fn visible_cards_request_thumbnails_and_the_next_screen_prefetches() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		state.gateway_connected = true;
+		let template = state
+			.channels
+			.iter()
+			.find(|channel| channel.parent_id == Some(Id(26)))
+			.expect("the fixture forum has a post")
+			.clone();
+		state.channels.retain(|channel| {
+			!(channel.parent_id == Some(Id(26)) && matches!(channel.kind, 11 | 12))
+		});
+		state.posts = client_core::forum::Posts::default();
+		for index in 0..50u64 {
+			let id = 2000 + index;
+			let mut post = template.clone();
+			post.id = Id(id);
+			post.name = format!("Synthetic post {index}");
+			post.last_message = Some(Id(2_000_000 - index));
+			post.message_count = Some(index as u32);
+			state.channels.push(post);
+			state.posts.remember_preview(
+				Id(id),
+				starter_with(
+					(0..4)
+						.map(|image| {
+							let mut preview = preview_image(image, "png");
+							preview.media.url =
+								Some(format!("https://cdn.example/post-{id}-{image}.png"));
+							preview
+						})
+						.collect(),
+					4,
+				),
+			);
+		}
+		state.invalidate_navigation();
+		let mut forum = ForumUi::default();
+		let mut commands = Vec::new();
+		let mut scratch = Scratch::default();
+		let mut images = crate::avatars::Avatars::default();
+		let started = std::time::Instant::now();
+		let output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(1120.0, 700.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				let mut staged = staged(&mut scratch);
+				forum.show(
+					ui,
+					&mut state,
+					Id(26),
+					&mut commands,
+					(
+						&mut crate::scroll::Session::default(),
+						&mut staged,
+						&mut images,
+					),
+					(
+						&mut crate::channel_menu::ChannelMenu::default(),
+						crate::shortcuts::ShortcutView::new(&Default::default(), true),
+					),
+					model::Language::English,
+				);
+			},
+		);
+		output.drop_without_applying_deltas();
+		let frame = started.elapsed();
+		let requests = images.take_requests();
+		let visible = requests
+			.iter()
+			.filter(|key| key.starts_with("media:i"))
+			.count();
+		let prefetched = requests
+			.iter()
+			.filter(|key| key.starts_with("media:p"))
+			.count();
+		println!(
+			"Synthetic 50-post forum (4 images each): first frame {frame:?} debug headless, \
+			 {visible} visible thumbnail requests, {prefetched} prefetched, {} total",
+			requests.len()
+		);
+		assert!(
+			frame < std::time::Duration::from_secs(2),
+			"first frame took {frame:?}"
+		);
+		assert!(
+			visible > 0,
+			"visible cards request their thumbnails without a click: {requests:?}"
+		);
+		assert!(
+			prefetched > 0,
+			"the next screen pre-requests its thumbnails: {requests:?}"
+		);
+		assert!(
+			prefetched <= 6,
+			"{prefetched} prefetches in one frame is over the budget"
+		);
+		assert!(
+			!requests.iter().any(|key| key.contains("post-2049-")),
+			"a card many screens away stays cold"
+		);
+		assert!(
+			requests.iter().any(|key| key.contains("post-2000-")),
+			"the first card's thumbnail is requested"
+		);
+	}
+
+	#[test]
+	fn prefetch_budget_limits_off_screen_requests_per_frame() {
+		let ctx = egui::Context::default();
+		let mut images = crate::avatars::Avatars::default();
+		for index in 0..20 {
+			let media = model::EmbedMedia {
+				url: Some(format!("https://cdn.example/prefetch-{index}.png")),
+				proxy_url: None,
+				width: 800,
+				height: 600,
+				placeholder: Vec::new(),
+			};
+			images.prefetch_media(
+				&media,
+				egui::vec2(200.0, 120.0),
+				&ctx,
+				false,
+				crate::avatars::Surface::Tile,
+			);
+		}
+		let requests = images.take_requests();
+		assert_eq!(requests.len(), 6, "{requests:?}");
+		assert!(requests.iter().all(|key| key.starts_with("media:p")));
 	}
 }

@@ -1529,3 +1529,7 @@ Unknown channel = "Unknown channel"
 Text = "Text"
 Forum = "Forum"
 Webhooks = "Webhooks"
+
+Show Nivra = "Show Nivra"
+Quit = "Quit"
+Minimize Nivra = "Minimize Nivra"

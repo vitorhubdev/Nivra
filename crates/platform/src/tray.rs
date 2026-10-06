@@ -29,6 +29,25 @@ pub enum Voice {
 	Deafened,
 }
 
+/// Localized menu labels, owned by the caller so this crate never depends on the UI
+/// catalog. Windows and macOS use `show`/`quit`; Linux adds `minimize`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrayLabels {
+	pub show: String,
+	pub quit: String,
+	pub minimize: String,
+}
+impl TrayLabels {
+	/// The English fallback used before the app hands over the chosen language.
+	pub fn english() -> Self {
+		Self {
+			show: "Show Nivra".into(),
+			quit: "Quit".into(),
+			minimize: "Minimize Nivra".into(),
+		}
+	}
+}
+
 /// Maps a call to its tray badge. Deafen wins over mute; anything that is not
 /// an active connected/waiting call shows idle (upstream Serein #504).
 pub fn call_voice(in_call: bool, muted: bool, deafened: bool) -> Voice {
@@ -160,18 +179,20 @@ impl Tray {
 	pub fn new(
 		_window: std::sync::Arc<winit::window::Window>,
 		_wake: impl Fn() + 'static,
+		_labels: TrayLabels,
 	) -> Result<Self, &'static str> {
 		Err("The tray icon is unavailable on this platform.")
 	}
 	pub fn take_event(&self) -> Option<Event> {
 		None
 	}
+	pub fn set_labels(&self, _labels: &TrayLabels) {}
 }
 
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
 mod native {
-	use super::{Event, Events};
+	use super::{Event, Events, TrayLabels};
 	use std::{cell::Cell, rc::Rc, sync::Arc};
 	use windows::{
 		Win32::{
@@ -179,7 +200,7 @@ mod native {
 			System::Threading::GetCurrentThreadId,
 			UI::{Shell::*, WindowsAndMessaging::*},
 		},
-		core::w,
+		core::{PCWSTR, w},
 	};
 	use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -188,6 +209,11 @@ mod native {
 	const QUIT: usize = 2;
 	const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 	const UNAVAILABLE: &str = "The Windows tray is unavailable. The window will remain accessible.";
+
+	/// A NUL-terminated UTF-16 copy for the menu APIs.
+	fn wide(text: &str) -> Vec<u16> {
+		text.encode_utf16().chain(std::iter::once(0)).collect()
+	}
 
 	/// UI-thread-owned registration: no worker, timer or allocating event queue.
 	/// The retained window and Rc prevent cross-thread drop or a dangling subclass callback.
@@ -214,6 +240,7 @@ mod native {
 		pub fn new(
 			window: Arc<winit::window::Window>,
 			wake: impl Fn() + 'static,
+			labels: TrayLabels,
 		) -> Result<Self, &'static str> {
 			let RawWindowHandle::Win32(handle) =
 				window.window_handle().map_err(|_| UNAVAILABLE)?.as_raw()
@@ -290,8 +317,12 @@ mod native {
 			};
 			// SAFETY: menu and hwnd are live UI-thread handles; Rc keeps callback state stable.
 			unsafe {
-				AppendMenuW(menu, MF_STRING, SHOW, w!("Show Nivra")).map_err(|_| UNAVAILABLE)?;
-				AppendMenuW(menu, MF_STRING, QUIT, w!("Quit")).map_err(|_| UNAVAILABLE)?;
+				let show = wide(&labels.show);
+				AppendMenuW(menu, MF_STRING, SHOW, PCWSTR(show.as_ptr()))
+					.map_err(|_| UNAVAILABLE)?;
+				let quit = wide(&labels.quit);
+				AppendMenuW(menu, MF_STRING, QUIT, PCWSTR(quit.as_ptr()))
+					.map_err(|_| UNAVAILABLE)?;
 				SetMenuDefaultItem(menu, SHOW as u32, 0).map_err(|_| UNAVAILABLE)?;
 				let reference = Rc::into_raw(tray.state.clone());
 				if SetPropW(
@@ -319,6 +350,30 @@ mod native {
 
 		pub fn take_event(&self) -> Option<Event> {
 			self.state.events.take()
+		}
+
+		/// Replaces the two menu rows with the labels for the current interface language.
+		pub fn set_labels(&self, labels: &TrayLabels) {
+			let menu = self.state.menu;
+			let show = wide(&labels.show);
+			let quit = wide(&labels.quit);
+			// SAFETY: the retained menu is live on this UI thread and the buffers outlive the call.
+			unsafe {
+				let _ = ModifyMenuW(
+					menu,
+					SHOW as u32,
+					MF_BYCOMMAND | MF_STRING,
+					SHOW,
+					PCWSTR(show.as_ptr()),
+				);
+				let _ = ModifyMenuW(
+					menu,
+					QUIT as u32,
+					MF_BYCOMMAND | MF_STRING,
+					QUIT,
+					PCWSTR(quit.as_ptr()),
+				);
+			}
 		}
 
 		/// Replaces the tray picture with square straight-alpha RGBA pixels and sets the hover
@@ -558,10 +613,15 @@ mod native {
 			);
 			let wakes = Rc::new(Cell::new(0));
 			let wake = wakes.clone();
-			let tray = Tray::new(window.clone(), move || wake.set(wake.get() + 1)).unwrap();
+			let tray = Tray::new(
+				window.clone(),
+				move || wake.set(wake.get() + 1),
+				TrayLabels::english(),
+			)
+			.unwrap();
 			let icon = tray.state.icon.get();
 			let hwnd = icon.hWnd;
-			assert!(Tray::new(window.clone(), || {}).is_err());
+			assert!(Tray::new(window.clone(), || {}, TrayLabels::english()).is_err());
 			// SAFETY: every API here targets only this test-owned synthetic window/menu/icon.
 			unsafe {
 				let _ = ShowWindow(hwnd, SW_MINIMIZE);
@@ -600,7 +660,7 @@ mod native {
 				assert!(!Shell_NotifyIconW(NIM_MODIFY, &icon).as_bool());
 				// Startup can minimize before the asynchronous preference enables the tray.
 				let _ = ShowWindow(hwnd, SW_MINIMIZE);
-				let late_tray = Tray::new(window.clone(), || {}).unwrap();
+				let late_tray = Tray::new(window.clone(), || {}, TrayLabels::english()).unwrap();
 				assert!(IsIconic(hwnd).as_bool());
 				assert!(IsWindowVisible(hwnd).as_bool());
 				drop(late_tray);

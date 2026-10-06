@@ -564,6 +564,9 @@ pub struct MessagingUi {
 	pub notification_preview: Option<model::notification_preferences::Sound>,
 	/// Sounds tab asked to play the call-cue sequence on the current output.
 	pub notification_call_sounds_test: bool,
+	/// Explicit preview sequence; like the per-sound previews it ignores automatic
+	/// policy (Do Not Disturb, disabled sounds) so the owner can confirm the device.
+	pub notification_preview_sequence: Vec<model::notification_preferences::Sound>,
 	pub notification_sound_status: &'static str,
 	pub notification_test_available: bool,
 	pub notification_test_requested: bool,

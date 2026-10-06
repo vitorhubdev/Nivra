@@ -6526,16 +6526,14 @@ impl eframe::App for Desktop {
 		}
 		self.pump_call_cues(ctx);
 		if std::mem::take(&mut self.messaging.notification_call_sounds_test) {
-			// Explicit test sequence on the current output device; join/leave are the
-			// membership route and mute/unmute reuse the local toggles.
-			for cue in [
+			// Explicit previews ignore Do Not Disturb and the per-sound switches, so
+			// this really tests the four advertised sounds on the current output.
+			self.messaging.notification_preview_sequence = vec![
 				model::notification_preferences::Sound::UserJoin,
 				model::notification_preferences::Sound::UserLeave,
 				model::notification_preferences::Sound::Mute,
 				model::notification_preferences::Sound::Unmute,
-			] {
-				voice::push_membership_cue(&mut self.messaging.notification_cues, cue);
-			}
+			];
 			ctx.request_repaint();
 		}
 		if self.messaging.copy_log_requested {

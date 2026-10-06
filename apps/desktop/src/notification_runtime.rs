@@ -239,6 +239,12 @@ impl Runtime {
 		if let Some(preview) = ui.notification_preview.take() {
 			push_local_cue(&mut self.local, preview, membership_volume(options, false));
 		}
+		if !ui.notification_preview_sequence.is_empty() {
+			for cue in ui.notification_preview_sequence.drain(..) {
+				push_local_cue(&mut self.local, cue, membership_volume(options, false));
+			}
+			ctx.request_repaint();
+		}
 		let output = ui.voice_output.as_deref();
 		if membership_due(self.membership_due, Instant::now())
 			&& let Some((cue, volume)) = self.membership.pop_front()

@@ -658,6 +658,8 @@ impl Voice {
 					};
 					if ui.notification_options.allows(cue) {
 						ui.notification_preview = Some(cue);
+						// `ui` runs after the notification runtime; ask for the frame that plays it.
+						ctx.request_repaint();
 					}
 				}
 			}

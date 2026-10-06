@@ -5,9 +5,13 @@ use egui::RichText;
 use model::{
 	Channel, Id,
 	archives::Kind,
-	forum::{Layout, Sort, Starter, StarterImage},
+	forum::{Layout, Sort, Starter, StarterImage, Tag},
 };
 
+/// Filter chips beside Sort & View, and the smaller ones on a post card.
+const TAG_HEIGHT: f32 = 30.0;
+/// Tags a card lists before folding the rest into a "+N" pill.
+const CARD_TAGS: usize = 3;
 /// Edge of the starter image beside a list card.
 const PREVIEW: f32 = 72.0;
 /// Narrowest gallery tile before a row drops a column.
@@ -46,6 +50,8 @@ fn layout_label(ui: &egui::Ui, layout: Layout) -> &'static str {
 struct Draft {
 	title: String,
 	body: String,
+	/// Forum tags applied to the new post, in the order they were picked.
+	tags: Vec<Id>,
 	focus: bool,
 	submitted: bool,
 }
@@ -60,6 +66,10 @@ pub struct ForumUi {
 	layouts: Vec<(Id, Layout)>,
 	/// Open starter image in the full-window viewer.
 	viewing: Option<(Id, usize)>,
+	/// Tags that filter the list; a post matches when it carries any of them, or all with
+	/// `match_all`.
+	tags: Vec<Id>,
+	match_all: bool,
 	draft: Option<Draft>,
 	emoji: crate::emoji_picker::Picker,
 }
@@ -116,11 +126,13 @@ impl ForumUi {
 		if self.forum != Some(forum) {
 			self.forum = Some(forum);
 			self.query.clear();
+			self.tags.clear();
 			self.viewing = None;
 			// Each forum opens the way its moderators set it up; members may change it.
 			let defaults = state.forum_defaults(forum).cloned().unwrap_or_default();
 			self.sort = defaults.sort;
 			self.layout = self.remembered_layout(forum).unwrap_or(defaults.layout);
+			self.match_all = defaults.match_all;
 			self.discard_draft(staged);
 		}
 		if let Some(draft) = &self.draft
@@ -159,13 +171,24 @@ impl ForumUi {
 						ui.spacing_mut().item_spacing.y = 12.0;
 						self.toolbar(ui, state, forum);
 						if self.draft.is_some() {
-							self.composer(ui, state, forum, commands, staged);
+							self.composer(ui, state, forum, commands, staged, images);
 						}
-						self.sort_menu(ui, forum);
+						ui.horizontal(|ui| {
+							ui.spacing_mut().item_spacing.x = 8.0;
+							self.sort_menu(ui, forum);
+							self.tag_filter(ui, state, forum, images);
+						});
+						// Only tags the forum still offers filter; a removed one matches nothing.
+						let offered = state.forum_tags(forum);
+						self.tags
+							.retain(|id| offered.iter().any(|tag| tag.id == *id));
 						let query = self.query.trim().to_lowercase();
+						let (tags, all) = (&self.tags, self.match_all);
 						let matches = |post: &Channel| {
-							query.is_empty() || post.name.to_lowercase().contains(&query)
+							(query.is_empty() || post.name.to_lowercase().contains(&query))
+								&& carries(post, tags, all)
 						};
+						let filtered = !query.is_empty() || !tags.is_empty();
 						let mut posts: Vec<&Channel> = state.forum_posts(forum);
 						if self.sort == Sort::Created {
 							posts.sort_by_key(|post| std::cmp::Reverse(post.id));
@@ -188,20 +211,31 @@ impl ForumUi {
 								ui.label(
 									design::semibold(
 										ui,
-										if query.is_empty() {
-											"No posts loaded"
+										if filtered {
+											crate::tr_ui!(ui, "No posts match")
 										} else {
-											"No posts match"
+											crate::tr_ui!(ui, "No posts loaded")
 										},
 										16.0,
 									)
 									.color(colors.text_strong),
 								);
 								ui.label(
-									RichText::new(if query.is_empty() {
-										"Nothing is posted here yet; archived posts load on request."
+									RichText::new(if !query.is_empty() {
+										crate::tr_ui!(
+											ui,
+											"Press Enter to start a post with this title."
+										)
+									} else if filtered {
+										crate::tr_ui!(
+											ui,
+											"No loaded post carries the selected tags."
+										)
 									} else {
-										"Press Enter to start a post with this title."
+										crate::tr_ui!(
+											ui,
+											"Nothing is posted here yet; archived posts load on request."
+										)
 									})
 									.color(colors.muted),
 								);
@@ -338,6 +372,13 @@ impl ForumUi {
 		self.draft = Some(Draft {
 			title: title.trim().chars().take(MAX_TITLE).collect(),
 			body: String::new(),
+			// Tags the list is filtered by are a good guess for what the post is about.
+			tags: self
+				.tags
+				.iter()
+				.take(model::forum::MAX_APPLIED_TAGS)
+				.copied()
+				.collect(),
 			focus: true,
 			submitted: false,
 		});
@@ -394,6 +435,114 @@ impl ForumUi {
 		if let Some(layout) = changed {
 			self.remember_layout(forum, layout);
 		}
+	}
+
+	/// Discord's tag bar: the tags that fit as toggles, then a menu holding all of them.
+	fn tag_filter(&mut self, ui: &mut egui::Ui, state: &State, forum: Id, images: &mut Avatars) {
+		let colors = design::palette(ui);
+		let offered = state.forum_tags(forum);
+		if offered.is_empty() {
+			return;
+		}
+		let (rule, _) = ui.allocate_exact_size(egui::vec2(1.0, 20.0), egui::Sense::hover());
+		ui.painter().rect_filled(rule, 0, colors.border);
+		let menu_label = if self.tags.is_empty() {
+			crate::tr_ui!(ui, "All").to_owned()
+		} else {
+			format!("{} ({})", crate::tr_ui!(ui, "Tags"), self.tags.len())
+		};
+		let menu_width = action_width(ui, &menu_label, TAG_HEIGHT, 1);
+		let mut folded = false;
+		for tag in offered {
+			if pill_width(ui, tag, TAG_HEIGHT) + ui.spacing().item_spacing.x + menu_width
+				> ui.available_width()
+			{
+				folded = true;
+				break;
+			}
+			let selected = self.tags.contains(&tag.id);
+			if tag_pill(
+				ui,
+				(images, state.demo),
+				tag,
+				selected,
+				TAG_HEIGHT,
+				egui::Sense::click(),
+			)
+			.clicked()
+			{
+				toggle(&mut self.tags, tag.id);
+			}
+		}
+		let button = action_pill(
+			ui,
+			(None, Some(icons::Icon::ChevronDown)),
+			&menu_label,
+			TAG_HEIGHT,
+			!self.tags.is_empty(),
+		);
+		let button = if folded {
+			button.on_hover_text(crate::tr_ui!(ui, "More tags"))
+		} else {
+			button
+		};
+		egui::Popup::menu(&button)
+			.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+			.show(|ui| {
+				ui.set_max_width(360.0);
+				ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+				ui.horizontal(|ui| {
+					ui.label(
+						design::semibold(ui, crate::tr_ui!(ui, "Select tags"), 15.0)
+							.color(colors.muted),
+					);
+					count_badge(ui, self.tags.len());
+				});
+				ui.horizontal_wrapped(|ui| {
+					for tag in offered {
+						let selected = self.tags.contains(&tag.id);
+						if tag_pill(
+							ui,
+							(images, state.demo),
+							tag,
+							selected,
+							TAG_HEIGHT,
+							egui::Sense::click(),
+						)
+						.clicked()
+						{
+							toggle(&mut self.tags, tag.id);
+						}
+					}
+				});
+				ui.horizontal(|ui| {
+					ui.label(
+						RichText::new(crate::tr_ui!(ui, "Match"))
+							.size(13.0)
+							.color(colors.muted),
+					);
+					ui.radio_value(&mut self.match_all, false, crate::tr_ui!(ui, "Any"))
+						.on_hover_text(crate::tr_ui!(ui, "Show posts with any selected tag"));
+					ui.radio_value(&mut self.match_all, true, crate::tr_ui!(ui, "All"))
+						.on_hover_text(crate::tr_ui!(
+							ui,
+							"Show only posts with every selected tag"
+						));
+				});
+				ui.separator();
+				if ui
+					.add_enabled(
+						!self.tags.is_empty(),
+						egui::Button::new(
+							RichText::new(crate::tr_ui!(ui, "Clear tags")).color(colors.link),
+						)
+						.frame(false),
+					)
+					.clicked()
+				{
+					self.tags.clear();
+				}
+			});
 	}
 
 	/// Show the clicked starter image in the shared full-window viewer.
@@ -457,6 +606,7 @@ impl ForumUi {
 		forum: Id,
 		commands: &mut Vec<Command>,
 		staged: &mut Staged<'_>,
+		images: &mut Avatars,
 	) {
 		let colors = design::palette(ui);
 		let files_allowed = state.can_attach_post(forum);
@@ -587,6 +737,7 @@ impl ForumUi {
 							ui.add_space(10.0);
 							tray(ui, staged);
 						}
+						post_tags(ui, state, forum, &mut draft.tags, images);
 					});
 				let (rule, _) = ui.allocate_exact_size(
 					egui::vec2(ui.available_width(), 1.0),
@@ -656,9 +807,13 @@ impl ForumUi {
 			state.posting.error = None;
 		} else if submit {
 			let names: Vec<&str> = staged.files.iter().map(|(name, _)| name.as_str()).collect();
-			if let Some(command) =
-				state.create_post_with_attachments(forum, &draft.title, &draft.body, &names, &[])
-			{
+			if let Some(command) = state.create_post_with_attachments(
+				forum,
+				&draft.title,
+				&draft.body,
+				&names,
+				&draft.tags,
+			) {
 				draft.submitted = true;
 				commands.push(command);
 			}
@@ -887,6 +1042,394 @@ fn paint_emoji(
 	}
 }
 
+/// Flip one tag in a selection, never exceeding the forum's limit or repeating.
+fn toggle(tags: &mut Vec<Id>, id: Id) {
+	if let Some(index) = tags.iter().position(|known| *known == id) {
+		tags.remove(index);
+	} else if tags.len() < model::forum::MAX_APPLIED_TAGS {
+		tags.push(id);
+	}
+}
+
+/// Does a post carry the selected tags? Every one with `all`, any of them otherwise.
+fn carries(post: &Channel, selected: &[Id], all: bool) -> bool {
+	if selected.is_empty() {
+		return true;
+	}
+	let applied = post.tags.as_deref().map_or(&[][..], |tags| &tags.applied);
+	if all {
+		selected.iter().all(|id| applied.contains(id))
+	} else {
+		selected.iter().any(|id| applied.contains(id))
+	}
+}
+
+fn action_width(ui: &egui::Ui, label: &str, height: f32, icons: usize) -> f32 {
+	let text = ui
+		.painter()
+		.layout_no_wrap(label.to_owned(), tag_font(ui, height), egui::Color32::WHITE)
+		.size()
+		.x;
+	(height * 0.45).round() * 2.0 + text + icons as f32 * ((height * 0.5).round() + 6.0)
+}
+
+/// A pill button with an optional icon before and after its label.
+fn action_pill(
+	ui: &mut egui::Ui,
+	(leading, trailing): (Option<icons::Icon>, Option<icons::Icon>),
+	label: &str,
+	height: f32,
+	active: bool,
+) -> egui::Response {
+	let colors = design::palette(ui);
+	let count = usize::from(leading.is_some()) + usize::from(trailing.is_some());
+	let (rect, response) = ui.allocate_exact_size(
+		egui::vec2(action_width(ui, label, height, count), height),
+		egui::Sense::click(),
+	);
+	let enabled = ui.is_enabled();
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+	if !ui.is_rect_visible(rect) {
+		return response;
+	}
+	let hot = enabled && (response.hovered() || response.has_focus());
+	let fill = if active || response.is_pointer_button_down_on() {
+		colors.selected
+	} else if hot {
+		colors.hover
+	} else {
+		colors.raised
+	};
+	let text = match (enabled, active || hot) {
+		(false, _) => colors.muted.gamma_multiply(0.5),
+		(true, true) => colors.text_strong,
+		(true, false) => colors.muted,
+	};
+	let painter = ui.painter();
+	painter.rect(
+		rect,
+		height / 2.0,
+		fill,
+		egui::Stroke::new(1.0, colors.border),
+		egui::StrokeKind::Inside,
+	);
+	if response.has_focus() {
+		painter.rect_stroke(
+			rect.expand(2.0),
+			height / 2.0 + 2.0,
+			egui::Stroke::new(2.0, colors.accent),
+			egui::StrokeKind::Outside,
+		);
+	}
+	let icon_size = (height * 0.5).round();
+	let mut x = rect.left() + (height * 0.45).round();
+	let icon_rect = |x: f32| {
+		egui::Rect::from_min_size(
+			egui::pos2(x, rect.center().y - icon_size / 2.0),
+			egui::Vec2::splat(icon_size),
+		)
+	};
+	if let Some(icon) = leading {
+		icons::paint(painter, icon, icon_rect(x), text);
+		x += icon_size + 6.0;
+	}
+	let galley = painter.layout_no_wrap(label.to_owned(), tag_font(ui, height), text);
+	let width = galley.size().x;
+	painter.galley(
+		egui::pos2(x, rect.center().y - galley.size().y / 2.0),
+		galley,
+		text,
+	);
+	if let Some(icon) = trailing {
+		icons::paint(painter, icon, icon_rect(x + width + 6.0), text);
+	}
+	response
+}
+
+/// The accent count beside "Select tags".
+fn count_badge(ui: &mut egui::Ui, count: usize) {
+	let colors = design::palette(ui);
+	let galley = ui.painter().layout_no_wrap(
+		count.to_string(),
+		egui::FontId::new(12.0, design::semibold_family(ui.ctx())),
+		colors.accent_text,
+	);
+	let (rect, _) = ui.allocate_exact_size(
+		egui::vec2((galley.size().x + 10.0).max(20.0), 20.0),
+		egui::Sense::hover(),
+	);
+	ui.painter().rect_filled(rect, 10, colors.accent);
+	ui.painter().galley(
+		rect.center() - galley.size() / 2.0,
+		galley,
+		colors.accent_text,
+	);
+}
+
+fn tag_font(ui: &egui::Ui, height: f32) -> egui::FontId {
+	egui::FontId::new(
+		if height < TAG_HEIGHT { 12.0 } else { 14.0 },
+		design::semibold_family(ui.ctx()),
+	)
+}
+
+/// Does this emoji have artwork to paint: a custom emoji, or a Unicode one in the atlas?
+fn has_emoji(ctx: &egui::Context, id: Option<Id>, name: Option<&str>) -> bool {
+	id.is_some()
+		|| name.is_some_and(|name| crate::emoji::lookup(name).is_some() && crate::emoji::ready(ctx))
+}
+
+fn pill_width(ui: &egui::Ui, tag: &Tag, height: f32) -> f32 {
+	let text = ui
+		.painter()
+		.layout_no_wrap(tag.name.clone(), tag_font(ui, height), egui::Color32::WHITE)
+		.size()
+		.x;
+	let emoji = if has_emoji(ui.ctx(), tag.emoji_id, tag.emoji_name.as_deref()) {
+		(height * 0.6).round() + 6.0
+	} else {
+		0.0
+	};
+	(height * 0.45).round() * 2.0 + text + emoji
+}
+
+/// One rounded tag with its emoji: accent-filled when selected, quiet otherwise.
+fn tag_pill(
+	ui: &mut egui::Ui,
+	(images, demo): (&mut Avatars, bool),
+	tag: &Tag,
+	selected: bool,
+	height: f32,
+	sense: egui::Sense,
+) -> egui::Response {
+	let colors = design::palette(ui);
+	let (rect, response) =
+		ui.allocate_exact_size(egui::vec2(pill_width(ui, tag, height), height), sense);
+	let enabled = ui.is_enabled();
+	let interactive = sense.senses_click();
+	if interactive {
+		response.widget_info(|| {
+			egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, selected, &tag.name)
+		});
+	}
+	if !ui.is_rect_visible(rect) {
+		return response;
+	}
+	let hot = interactive && enabled && (response.hovered() || response.has_focus());
+	let (fill, stroke, text) = if selected {
+		(colors.accent, colors.accent, colors.accent_text)
+	} else if hot {
+		(colors.hover, colors.border, colors.text_strong)
+	} else {
+		(colors.raised, colors.border, colors.text_strong)
+	};
+	let text = if enabled {
+		text
+	} else {
+		text.gamma_multiply(0.45)
+	};
+	ui.painter().rect(
+		rect,
+		height / 2.0,
+		fill,
+		egui::Stroke::new(1.0, stroke),
+		egui::StrokeKind::Inside,
+	);
+	if response.has_focus() {
+		ui.painter().rect_stroke(
+			rect.expand(2.0),
+			height / 2.0 + 2.0,
+			egui::Stroke::new(2.0, colors.accent),
+			egui::StrokeKind::Outside,
+		);
+	}
+	let mut x = rect.left() + (height * 0.45).round();
+	if has_emoji(ui.ctx(), tag.emoji_id, tag.emoji_name.as_deref()) {
+		let size = (height * 0.6).round();
+		paint_emoji(
+			ui,
+			images,
+			demo,
+			(tag.emoji_id, tag.emoji_name.as_deref()),
+			egui::Rect::from_min_size(
+				egui::pos2(x, rect.center().y - size / 2.0),
+				egui::Vec2::splat(size),
+			),
+		);
+		x += size + 6.0;
+	}
+	let galley = ui
+		.painter()
+		.layout_no_wrap(tag.name.clone(), tag_font(ui, height), text);
+	ui.painter().galley(
+		egui::pos2(x, rect.center().y - galley.size().y / 2.0),
+		galley,
+		text,
+	);
+	response
+}
+
+/// A post's tags in the forum's order, folding extras past `limit` into "+N" like Discord.
+fn card_tags(ui: &mut egui::Ui, (images, demo): (&mut Avatars, bool), tags: &[&Tag], limit: usize) {
+	ui.horizontal(|ui| {
+		ui.spacing_mut().item_spacing.x = 6.0;
+		for tag in tags.iter().take(limit) {
+			tag_pill(
+				ui,
+				(images, demo),
+				tag,
+				false,
+				CARD_TAG_HEIGHT,
+				egui::Sense::hover(),
+			);
+		}
+		if tags.len() > limit {
+			let more = Tag {
+				id: Id(0),
+				name: format!("+{}", tags.len() - limit),
+				moderated: false,
+				emoji_id: None,
+				emoji_name: None,
+			};
+			tag_pill(
+				ui,
+				(images, demo),
+				&more,
+				false,
+				CARD_TAG_HEIGHT,
+				egui::Sense::hover(),
+			)
+			.on_hover_text(
+				tags[limit..]
+					.iter()
+					.map(|tag| tag.name.as_str())
+					.collect::<Vec<_>>()
+					.join(", "),
+			);
+		}
+	});
+}
+
+/// The composer's tag picker: applied tags plus a menu of everything the forum offers.
+fn post_tags(
+	ui: &mut egui::Ui,
+	state: &State,
+	forum: Id,
+	picked: &mut Vec<Id>,
+	images: &mut Avatars,
+) {
+	let offered = state.forum_tags(forum);
+	if offered.is_empty() {
+		return;
+	}
+	let colors = design::palette(ui);
+	let demo = state.demo;
+	let required = state.forum_requires_tag(forum);
+	picked.retain(|id| offered.iter().any(|tag| tag.id == *id));
+	ui.add_space(6.0);
+	ui.horizontal_wrapped(|ui| {
+		ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+		let mut removed = None;
+		for tag in offered.iter().filter(|tag| picked.contains(&tag.id)) {
+			if tag_pill(
+				ui,
+				(images, demo),
+				tag,
+				true,
+				CARD_TAG_HEIGHT,
+				egui::Sense::click(),
+			)
+			.on_hover_text(crate::tr_ui!(ui, "Remove tag"))
+			.clicked()
+			{
+				removed = Some(tag.id);
+			}
+		}
+		picked.retain(|id| Some(*id) != removed);
+		let full = picked.len() >= model::forum::MAX_APPLIED_TAGS;
+		let button = ui
+			.add_enabled_ui(!full, |ui| {
+				action_pill(
+					ui,
+					(Some(icons::Icon::Plus), None),
+					if picked.is_empty() {
+						crate::tr_ui!(ui, "Add tags")
+					} else {
+						crate::tr_ui!(ui, "Add tag")
+					},
+					CARD_TAG_HEIGHT,
+					false,
+				)
+			})
+			.inner;
+		let button = if full {
+			button.on_disabled_hover_text(crate::tr_ui!(ui, "A post can carry up to 5 tags"))
+		} else {
+			button
+		};
+		if required && picked.is_empty() {
+			ui.label(
+				RichText::new(crate::tr_ui!(ui, "This forum requires a tag"))
+					.size(12.0)
+					.color(colors.muted),
+			);
+		}
+		egui::Popup::menu(&button)
+			.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+			.show(|ui| {
+				ui.set_max_width(360.0);
+				ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+				ui.horizontal(|ui| {
+					ui.label(
+						design::semibold(ui, crate::tr_ui!(ui, "Select tags"), 15.0)
+							.color(colors.muted),
+					);
+					count_badge(ui, picked.len());
+					ui.label(
+						RichText::new(format!(
+							"{} {}",
+							crate::tr_ui!(ui, "Up to"),
+							model::forum::MAX_APPLIED_TAGS
+						))
+						.size(12.0)
+						.color(colors.muted),
+					);
+				});
+				ui.horizontal_wrapped(|ui| {
+					for tag in offered {
+						let selected = picked.contains(&tag.id);
+						let allowed = selected
+							|| (picked.len() < model::forum::MAX_APPLIED_TAGS
+								&& state.can_apply_tag(forum, tag));
+						let pill = ui
+							.add_enabled_ui(allowed, |ui| {
+								tag_pill(
+									ui,
+									(images, demo),
+									tag,
+									selected,
+									TAG_HEIGHT,
+									egui::Sense::click(),
+								)
+							})
+							.inner;
+						let pill = if tag.moderated && !state.can_apply_tag(forum, tag) {
+							pill.on_disabled_hover_text(crate::tr_ui!(
+								ui,
+								"Only moderators can apply this tag"
+							))
+						} else {
+							pill
+						};
+						if pill.clicked() {
+							toggle(picked, tag.id);
+						}
+					}
+				});
+			});
+	});
+}
+
 fn describe(response: &egui::Response, post: &Channel, (archived, unread): (bool, bool)) {
 	response.widget_info(|| {
 		egui::WidgetInfo::labeled(
@@ -1093,6 +1636,10 @@ fn card(
 							ui.vertical(|ui| {
 								ui.set_width(width.max(120.0));
 								ui.spacing_mut().item_spacing.y = 6.0;
+								let tags = state.post_tags(post);
+								if !tags.is_empty() {
+									card_tags(ui, (images, state.demo), &tags, CARD_TAGS);
+								}
 								title_row(ui, post, flags.1, 16.0);
 								starter_row(ui, state, post, 14.0);
 								stats_row(ui, state, images, post, flags, now);
@@ -1219,10 +1766,15 @@ fn tile(
 								ui.set_width(inner - 12.0);
 								ui.spacing_mut().item_spacing.y = 6.0;
 								// Every tile keeps a tag row so a gallery row lines up.
-								ui.allocate_exact_size(
-									egui::vec2(1.0, CARD_TAG_HEIGHT),
-									egui::Sense::hover(),
-								);
+								let tags = state.post_tags(post);
+								if tags.is_empty() {
+									ui.allocate_exact_size(
+										egui::vec2(1.0, CARD_TAG_HEIGHT),
+										egui::Sense::hover(),
+									);
+								} else {
+									card_tags(ui, (images, state.demo), &tags, 2);
+								}
 								title_row(ui, post, flags.1, 15.0);
 								starter_row(ui, state, post, 14.0);
 								stats_row(ui, state, images, post, flags, now);
@@ -1251,7 +1803,9 @@ fn posts_view(
 			.map(|post| card(ui, state, images, post, flags(post), now))
 			.collect(),
 		Layout::Gallery => {
-			let width = ui.available_width();
+			// A scroll area can remember a wider content size from an earlier frame; the
+			// visible clip is the truth, so a gallery row never spills sideways.
+			let width = ui.clip_rect().width().min(ui.available_width());
 			let columns =
 				(((width + TILE_GAP) / (GALLERY_TILE + TILE_GAP)).floor() as usize).max(1);
 			let tile_width = ((width - TILE_GAP * (columns - 1) as f32) / columns as f32).floor();
@@ -1503,6 +2057,52 @@ mod tests {
 		assert_eq!(label(at(15 * 86_400)), "15d ago");
 		assert_eq!(label(at(70 * 86_400)), "2mo ago");
 		assert_eq!(label(at(800 * 86_400)), "2y ago");
+	}
+
+	fn rightmost(shape: &egui::Shape, max_x: &mut f32) {
+		match shape {
+			egui::Shape::Mesh(mesh) => {
+				for vertex in &mesh.vertices {
+					*max_x = max_x.max(vertex.pos.x);
+				}
+			}
+			egui::Shape::Rect(rect) => *max_x = max_x.max(rect.rect.right()),
+			egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| rightmost(shape, max_x)),
+			_ => {}
+		}
+	}
+
+	#[test]
+	fn gallery_tiles_fit_the_conversation_panel() {
+		let ctx = egui::Context::default();
+		let mut view = crate::MessagingUi::default();
+		view.reading_preferences.show_members = false;
+		let mut state = test_support::forum_gallery_state();
+		let mut max_x = 0.0;
+		for frame in 0..3 {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(1024.0, 768.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					let _ = view.show(ui, &mut state);
+				},
+			);
+			max_x = 0.0;
+			for shape in &output.shapes {
+				rightmost(&shape.shape, &mut max_x);
+			}
+			output.drop_without_applying_deltas();
+			println!("frame {frame}: content reaches {max_x}");
+		}
+		assert!(
+			max_x <= 1024.0,
+			"gallery content reaches {max_x} in a 1024-wide window"
+		);
 	}
 
 	#[test]
@@ -2235,5 +2835,185 @@ mod tests {
 		let requests = images.take_requests();
 		assert_eq!(requests.len(), 6, "{requests:?}");
 		assert!(requests.iter().all(|key| key.starts_with("media:p")));
+	}
+
+	#[test]
+	fn tag_chips_render_with_emoji_and_fold_extra_tags() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		// The first fixture post carries all three offered tags: two chips and a "+1".
+		if let Some(post) = state
+			.channels
+			.iter_mut()
+			.find(|channel| channel.id == Id(27))
+		{
+			post.tags = Some(Box::new(model::forum::Tags {
+				applied: vec![Id(31), Id(32), Id(33)],
+				..Default::default()
+			}));
+		}
+		let mut forum = ForumUi::default();
+		let mut commands = Vec::new();
+		let mut scratch = Scratch::default();
+		let mut rendered = Vec::new();
+		let output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(1120.0, 900.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				let mut staged = staged(&mut scratch);
+				forum.show(
+					ui,
+					&mut state,
+					Id(26),
+					&mut commands,
+					(
+						&mut crate::scroll::Session::default(),
+						&mut staged,
+						&mut crate::avatars::Avatars::default(),
+					),
+					(
+						&mut crate::channel_menu::ChannelMenu::default(),
+						crate::shortcuts::ShortcutView::new(&Default::default(), true),
+					),
+					model::Language::English,
+				);
+			},
+		);
+		for shape in &output.shapes {
+			labels(&shape.shape, &mut rendered);
+		}
+		output.drop_without_applying_deltas();
+		assert!(
+			rendered.iter().any(|text| text == "Synthetic help"),
+			"an applied tag's chip renders: {rendered:?}"
+		);
+		assert!(rendered.iter().any(|text| text == "Synthetic ideas"));
+		assert!(
+			rendered.iter().any(|text| text == "+1"),
+			"a tile folds tags past two into +N"
+		);
+		assert!(
+			rendered.iter().any(|text| text == "All"),
+			"the filter bar offers all tags"
+		);
+	}
+
+	#[test]
+	fn the_tag_filter_narrows_cards_and_all_restores_them() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		let mut forum = ForumUi::default();
+		let mut commands = Vec::new();
+		let mut scratch = Scratch::default();
+		let mut rendered = |forum: &mut ForumUi, state: &mut client_core::State| {
+			let mut text = Vec::new();
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(1120.0, 900.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					let mut staged = staged(&mut scratch);
+					forum.show(
+						ui,
+						state,
+						Id(26),
+						&mut commands,
+						(
+							&mut crate::scroll::Session::default(),
+							&mut staged,
+							&mut crate::avatars::Avatars::default(),
+						),
+						(
+							&mut crate::channel_menu::ChannelMenu::default(),
+							crate::shortcuts::ShortcutView::new(&Default::default(), true),
+						),
+						model::Language::English,
+					);
+				},
+			);
+			for shape in &output.shapes {
+				labels(&shape.shape, &mut text);
+			}
+			output.drop_without_applying_deltas();
+			text
+		};
+		let text = rendered(&mut forum, &mut state);
+		assert!(text.iter().any(|text| text == "A synthetic forum post"));
+		assert!(
+			text.iter()
+				.any(|text| text == "Automatic model retraining on app data")
+		);
+		// Filtering by the first post's tag hides the other posts.
+		forum.tags = vec![Id(31)];
+		let text = rendered(&mut forum, &mut state);
+		assert!(text.iter().any(|text| text == "A synthetic forum post"));
+		assert!(
+			!text
+				.iter()
+				.any(|text| text == "Automatic model retraining on app data"),
+			"the tagged post alone survives the filter: {text:?}"
+		);
+		assert!(text.iter().any(|text| text.contains("Tags (1)")));
+		// Clearing the selection brings every card back.
+		forum.tags.clear();
+		let text = rendered(&mut forum, &mut state);
+		assert!(
+			text.iter()
+				.any(|text| text == "Automatic model retraining on app data")
+		);
+	}
+
+	#[test]
+	fn tag_selection_rules_toggle_limit_and_match() {
+		let mut tags = Vec::new();
+		toggle(&mut tags, Id(1));
+		toggle(&mut tags, Id(2));
+		assert_eq!(tags, vec![Id(1), Id(2)]);
+		toggle(&mut tags, Id(1));
+		assert_eq!(tags, vec![Id(2)]);
+		for id in 10..20 {
+			toggle(&mut tags, Id(id));
+		}
+		assert_eq!(tags.len(), model::forum::MAX_APPLIED_TAGS);
+		let mut post = Channel {
+			id: Id(5),
+			guild: Some(Id(1)),
+			parent_id: Some(Id(2)),
+			kind: 11,
+			name: "Synthetic".into(),
+			position: 0,
+			recipients: vec![],
+			last_message: None,
+			icon: None,
+			member_list_id: None,
+			message_count: None,
+			tags: Some(Box::new(model::forum::Tags {
+				applied: vec![Id(7), Id(8)],
+				..Default::default()
+			})),
+		};
+		assert!(carries(&post, &[], false));
+		assert!(carries(&post, &[Id(7)], false));
+		assert!(!carries(&post, &[Id(9)], false));
+		assert!(carries(&post, &[Id(7), Id(8)], true));
+		assert!(!carries(&post, &[Id(7), Id(9)], true));
+		post.tags = None;
+		assert!(!carries(&post, &[Id(7)], false));
+		// Starting a post while filtering pre-fills the picked tags.
+		let mut forum = ForumUi {
+			tags: vec![Id(7), Id(8)],
+			..Default::default()
+		};
+		forum.start_draft("Synthetic".into());
+		assert_eq!(forum.draft.unwrap().tags, vec![Id(7), Id(8)]);
 	}
 }

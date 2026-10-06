@@ -722,6 +722,15 @@ pub fn demo_state() -> State {
 }
 /// A synthetic starter preview with `count` images, mirroring the search page's field.
 fn forum_starter(post: u64, count: usize) -> model::forum::Starter {
+	forum_starter_kind(post, count, (false, false, false))
+}
+
+/// Same preview with the first image shaped as an animation, a video or a spoiler.
+fn forum_starter_kind(
+	post: u64,
+	count: usize,
+	(animated, video, spoiler): (bool, bool, bool),
+) -> model::forum::Starter {
 	let images = (0..count)
 		.map(|index| model::forum::StarterImage {
 			media: model::EmbedMedia {
@@ -735,9 +744,9 @@ fn forum_starter(post: u64, count: usize) -> model::forum::Starter {
 			},
 			id: model::Id(900_000 + post * 100 + index as u64),
 			size: 4096,
-			spoiler: false,
-			animated: false,
-			video: false,
+			spoiler: spoiler && index == 0,
+			animated: animated && index == 0,
+			video: video && index == 0,
 		})
 		.collect();
 	model::forum::Starter {
@@ -759,6 +768,90 @@ fn forum_starter(post: u64, count: usize) -> model::forum::Starter {
 		}],
 	}
 }
+/// Gallery evidence: the demo forum plus one post per mosaic shape (all synthetic).
+pub fn forum_gallery_state() -> State {
+	let mut state = demo_state();
+	let Some(template) = state
+		.channels
+		.iter()
+		.find(|channel| channel.id == Id(27))
+		.cloned()
+	else {
+		return state;
+	};
+	let add = |state: &mut State,
+	           id: u64,
+	           name: &str,
+	           tag: u64,
+	           images: usize,
+	           kind: (bool, bool, bool)| {
+		let mut post = template.clone();
+		post.id = Id(id);
+		post.name = name.into();
+		post.last_message = Some(Id(2_000_000 - id));
+		post.message_count = Some(4);
+		post.tags = Some(Box::new(model::forum::Tags {
+			applied: vec![Id(tag)],
+			..Default::default()
+		}));
+		state.channels.push(post);
+		state
+			.posts
+			.remember_preview(Id(id), forum_starter_kind(id, images, kind));
+	};
+	add(
+		&mut state,
+		44,
+		"Two screenshots side by side",
+		31,
+		2,
+		(false, false, false),
+	);
+	add(
+		&mut state,
+		45,
+		"Four images in a square",
+		32,
+		4,
+		(false, false, false),
+	);
+	add(
+		&mut state,
+		46,
+		"Nine images with a counter",
+		33,
+		9,
+		(false, false, false),
+	);
+	add(
+		&mut state,
+		47,
+		"An animated GIF",
+		31,
+		1,
+		(true, false, false),
+	);
+	add(
+		&mut state,
+		48,
+		"A video with a play badge",
+		32,
+		1,
+		(false, true, false),
+	);
+	add(
+		&mut state,
+		49,
+		"A spoiler image",
+		33,
+		1,
+		(false, false, true),
+	);
+	state.invalidate_navigation();
+	state.select(Id(26));
+	state
+}
+
 /// Notification rail evidence: synthetic incoming DMs and a guild mention, no OS delivery.
 pub fn notification_demo_state() -> State {
 	let mut state = demo_state();

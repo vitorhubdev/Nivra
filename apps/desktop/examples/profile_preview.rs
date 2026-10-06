@@ -498,7 +498,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args: Vec<_> = std::env::args().skip(1).collect();
 	let value = |prefix: &str| args.iter().find_map(|arg| arg.strip_prefix(prefix));
 	if !args.iter().any(|arg| arg == "--demo") {
-		return Err("Usage: profile_preview --demo --output=PATH.png [--page=overview|voice-call|text-preview|video|image-viewer|stickers|slash-commands|slash-command-search|slash-command-options|profile|profile-card|member-tags|dm-tags|account|appearance|chat|notifications|voice|keybinds|help|extensions|server|server-engagement|server-stickers] [--state=default|voice|video] [--command=help|weather] [--themes] [--extension=ID] [--thumbnail] [--width=1120] [--height=760] [--light] [--timeline-text] [--poll] [--poll-presence]".into());
+		return Err("Usage: profile_preview --demo --output=PATH.png [--page=overview|voice-call|text-preview|video|image-viewer|forum|stickers|slash-commands|slash-command-search|slash-command-options|profile|profile-card|member-tags|dm-tags|account|appearance|chat|notifications|voice|keybinds|help|extensions|server|server-engagement|server-stickers] [--state=default|voice|video] [--command=help|weather] [--themes] [--extension=ID] [--thumbnail] [--width=1120] [--height=760] [--light] [--timeline-text] [--poll] [--poll-presence]".into());
 	}
 	let output = PathBuf::from(value("--output=").ok_or("Missing --output=PATH.png")?);
 	let page = value("--page=").unwrap_or("profile").to_owned();
@@ -508,7 +508,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			| "voice-call"
 			| "text-preview"
 			| "video" | "image-viewer"
-			| "profile"
+			| "forum" | "profile"
 			| "stickers"
 			| "slash-commands"
 			| "slash-command-search"
@@ -581,6 +581,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				test_support::voice_demo_state()
 			} else if state_kind == "video" {
 				test_support::video_demo_state()
+			} else if page == "forum" {
+				test_support::forum_gallery_state()
 			} else {
 				test_support::demo_state()
 			};
@@ -663,7 +665,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			if page == "overview" {
 				// The wide People pane is part of the normal layout for this capture.
 				messaging.reading_preferences.show_members = true;
-			} else if matches!(page.as_str(), "text-preview" | "image-viewer" | "video") {
+			} else if matches!(
+				page.as_str(),
+				"text-preview" | "image-viewer" | "video" | "forum"
+			) {
 				// These captures have no synthetic member list; keep the timeline full width.
 				messaging.reading_preferences.show_members = false;
 			}

@@ -96,6 +96,8 @@ All captures come from the offline demo (`cargo run --locked -p nivra --features
 | <img src="docs/screenshots/image-viewer.png" alt="Image attachment viewer" width="380" /> | <img src="docs/screenshots/settings-voice.png" alt="Voice and video settings" width="380" /> | <img src="docs/screenshots/settings-notifications.png" alt="Notification settings" width="380" /> |
 | **Light theme** | **Dark theme** | **Settings — Help** |
 | <img src="docs/screenshots/light-theme.png" alt="Light theme overview" width="380" /> | <img src="docs/screenshots/dark-theme.png" alt="Dark theme overview" width="380" /> | <img src="docs/screenshots/settings-help.png" alt="Help settings with Copy error log" width="380" /> |
+| **Forum gallery** | | |
+| <img src="docs/screenshots/forum-gallery.png" alt="Forum gallery with synthetic starter mosaics, tag chips and the view menu" width="380" /> | | |
 
 ---
 

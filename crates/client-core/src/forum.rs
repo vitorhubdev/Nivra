@@ -538,6 +538,8 @@ mod tests {
 				height: 8,
 				placeholder: Vec::new(),
 			},
+			id: model::Id(700_000),
+			size: 4096,
 			spoiler: false,
 			animated: false,
 			video: false,

@@ -100,6 +100,26 @@ fn conversation_surfaces_render_translated_in_both_languages() {
 	}
 }
 
+/// The forum post list, where cards, mosaics and the view menu are painted.
+#[test]
+fn forum_surface_renders_translated_in_both_languages() {
+	for language in LANGUAGES {
+		let ctx = context(language);
+		let mut view = crate::MessagingUi {
+			language,
+			..Default::default()
+		};
+		let mut state: State = test_support::demo_state();
+		assert!(state.select(model::Id(26)).is_none());
+		let _ = crate::i18n::drain_untranslated_keys();
+		frame(&ctx, 1280.0, 820.0, |ui| {
+			view.show(ui, &mut state);
+		});
+		let missing = crate::i18n::drain_untranslated_keys();
+		assert!(missing.is_empty(), "{language:?} missing {missing:?}");
+	}
+}
+
 /// The voice stage, where call notices, participants and controls are painted.
 #[test]
 fn voice_surface_renders_translated_in_both_languages() {

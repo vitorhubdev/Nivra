@@ -4872,7 +4872,7 @@ impl MessagingUi {
 						state,
 						channel,
 						&mut commands,
-						(&mut self.scroll, &mut staged),
+						(&mut self.scroll, &mut staged, &mut self.avatars),
 						(&mut self.channel_menu, view),
 						self.language,
 					);

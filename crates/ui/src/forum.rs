@@ -1,22 +1,45 @@
 //! Forum containers: a searchable post list with Discord-style cards and one-post creation.
-use crate::{design, icons};
+use crate::{avatars::Avatars, design, icons};
 use client_core::{Command, MAX_CONTENT, State, forum::MAX_TITLE};
 use egui::RichText;
-use model::{Channel, Id, archives::Kind};
+use model::{
+	Channel, Id,
+	archives::Kind,
+	forum::{Layout, Sort, Starter, StarterImage},
+};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-enum Sort {
-	#[default]
-	Activity,
-	Created,
-}
-impl Sort {
-	fn label(self) -> &'static str {
-		match self {
+/// Edge of the starter image beside a list card.
+const PREVIEW: f32 = 72.0;
+/// Narrowest gallery tile before a row drops a column.
+const GALLERY_TILE: f32 = 300.0;
+/// Space between gallery tiles, and between the cells of one mosaic.
+const TILE_GAP: f32 = 12.0;
+const MOSAIC_GAP: f32 = 3.0;
+/// Height of the tag row every tile keeps so a gallery row lines up.
+const CARD_TAG_HEIGHT: f32 = 24.0;
+/// Share of a gallery tile's width its artwork spans; the rest holds the card text.
+const TILE_ART: f32 = 0.58;
+/// Layouts the user picked in this session, so a forum reopens the way it was left.
+const REMEMBERED_LAYOUTS: usize = 64;
+
+fn sort_label(ui: &egui::Ui, sort: Sort) -> &'static str {
+	crate::tr_ui!(
+		ui,
+		match sort {
 			Sort::Activity => "Recent activity",
 			Sort::Created => "Creation date",
 		}
-	}
+	)
+}
+
+fn layout_label(ui: &egui::Ui, layout: Layout) -> &'static str {
+	crate::tr_ui!(
+		ui,
+		match layout {
+			Layout::List => "List",
+			Layout::Gallery => "Gallery",
+		}
+	)
 }
 
 #[derive(Default)]
@@ -32,8 +55,27 @@ pub struct ForumUi {
 	forum: Option<Id>,
 	query: String,
 	sort: Sort,
+	layout: Layout,
+	/// Layouts this session changed, most recent first.
+	layouts: Vec<(Id, Layout)>,
+	/// Open starter image in the full-window viewer.
+	viewing: Option<(Id, usize)>,
 	draft: Option<Draft>,
 	emoji: crate::emoji_picker::Picker,
+}
+impl ForumUi {
+	fn remember_layout(&mut self, forum: Id, layout: Layout) {
+		self.layouts.retain(|(known, _)| *known != forum);
+		self.layouts.insert(0, (forum, layout));
+		self.layouts.truncate(REMEMBERED_LAYOUTS);
+	}
+
+	fn remembered_layout(&self, forum: Id) -> Option<Layout> {
+		self.layouts
+			.iter()
+			.find(|(known, _)| *known == forum)
+			.map(|(_, layout)| *layout)
+	}
 }
 
 /// Files chosen for the post's first message. The selection itself lives in the messaging
@@ -64,7 +106,7 @@ impl ForumUi {
 		state: &mut State,
 		forum: Id,
 		commands: &mut Vec<Command>,
-		(session, staged): (&mut crate::scroll::Session, &mut Staged<'_>),
+		(session, staged, images): (&mut crate::scroll::Session, &mut Staged<'_>, &mut Avatars),
 		(menu, view): (
 			&mut crate::channel_menu::ChannelMenu,
 			crate::shortcuts::ShortcutView<'_>,
@@ -74,6 +116,11 @@ impl ForumUi {
 		if self.forum != Some(forum) {
 			self.forum = Some(forum);
 			self.query.clear();
+			self.viewing = None;
+			// Each forum opens the way its moderators set it up; members may change it.
+			let defaults = state.forum_defaults(forum).cloned().unwrap_or_default();
+			self.sort = defaults.sort;
+			self.layout = self.remembered_layout(forum).unwrap_or(defaults.layout);
 			self.discard_draft(staged);
 		}
 		if let Some(draft) = &self.draft
@@ -114,7 +161,7 @@ impl ForumUi {
 						if self.draft.is_some() {
 							self.composer(ui, state, forum, commands, staged);
 						}
-						self.sort_menu(ui);
+						self.sort_menu(ui, forum);
 						let query = self.query.trim().to_lowercase();
 						let matches = |post: &Channel| {
 							query.is_empty() || post.name.to_lowercase().contains(&query)
@@ -160,12 +207,12 @@ impl ForumUi {
 								);
 							});
 						}
-						for post in active {
-							if archived.iter().any(|row| row.id == post.id) {
-								continue;
-							}
-							let response =
-								card(ui, state, post, (false, state.post_unread(post)), now);
+						let active: Vec<&Channel> = active
+							.into_iter()
+							.filter(|post| !archived.iter().any(|row| row.id == post.id))
+							.collect();
+						let hits = posts_view(ui, state, images, &active, self.layout, now);
+						for (post, hit) in active.iter().zip(hits) {
 							if let Some(starter) = state.post_preview(post.id)
 								&& !starter.webhook && starter.roles.is_empty()
 								&& author_lookup.len() < client_core::member_search::LIMIT
@@ -173,17 +220,20 @@ impl ForumUi {
 							{
 								author_lookup.push(starter.author_id);
 							}
-							menu.context(&response, state, post, view, language);
-							if response.clicked() {
+							menu.context(&hit.response, state, post, view, language);
+							if let Some(index) = hit.image {
+								self.viewing = Some((post.id, index));
+							} else if hit.response.clicked() {
 								open = Some(Open::Active(post.id));
 							}
 						}
 						posts_request = posts_footer(ui, state, forum);
-						for post in archived {
-							let response =
-								card(ui, state, post, (true, state.post_unread(post)), now);
-							menu.context(&response, state, post, view, language);
-							if response.clicked() {
+						let hits = posts_view(ui, state, images, &archived, self.layout, now);
+						for (post, hit) in archived.iter().zip(hits) {
+							menu.context(&hit.response, state, post, view, language);
+							if let Some(index) = hit.image {
+								self.viewing = Some((post.id, index));
+							} else if hit.response.clicked() {
 								open = Some(Open::Archived(post.id));
 							}
 						}
@@ -191,6 +241,14 @@ impl ForumUi {
 						archive_request = archive_footer(ui, state, forum, archive);
 					});
 			});
+		if self.viewing.is_some() {
+			let mut lightbox = super::attachments::DownloadUi::default();
+			let mut opening = None;
+			let keep = self.lightbox(ui, state, images, &mut lightbox, &mut opening);
+			if !keep {
+				self.viewing = None;
+			}
+		}
 		if let Some(command) = state.request_author_members(&author_lookup) {
 			commands.push(command);
 		}
@@ -285,32 +343,102 @@ impl ForumUi {
 		});
 	}
 
-	fn sort_menu(&mut self, ui: &mut egui::Ui) {
+	fn sort_menu(&mut self, ui: &mut egui::Ui, forum: Id) {
 		let colors = design::palette(ui);
-		let button = ui.add(
-			egui::Button::new(
-				design::medium(ui, format!("Sort & view · {}", self.sort.label()), 13.0)
-					.color(colors.text),
-			)
-			.fill(colors.raised)
-			.stroke(egui::Stroke::new(1.0, colors.border))
-			.corner_radius(8)
-			.min_size(egui::vec2(0.0, 30.0)),
+		let view = format!(
+			"{} · {}, {}",
+			crate::tr_ui!(ui, "Sort & view"),
+			sort_label(ui, self.sort),
+			layout_label(ui, self.layout)
 		);
+		let button = ui
+			.add(
+				egui::Button::new(design::medium(ui, view, 13.0).color(colors.text))
+					.fill(colors.raised)
+					.stroke(egui::Stroke::new(1.0, colors.border))
+					.corner_radius(8)
+					.min_size(egui::vec2(0.0, 30.0)),
+			)
+			.on_hover_text(crate::tr_ui!(ui, "Sort and layout of this post list"));
+		let mut changed = None;
 		egui::Popup::menu(&button).show(|ui| {
 			let motion = crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
 			ui.set_opacity(motion);
-			ui.set_min_width(180.0);
-			ui.label(design::eyebrow(ui, "Sort by", colors.muted));
+			ui.set_min_width(200.0);
+			ui.label(design::eyebrow(
+				ui,
+				crate::tr_ui!(ui, "Sort by"),
+				colors.muted,
+			));
 			for sort in [Sort::Activity, Sort::Created] {
-				if ui.radio(self.sort == sort, sort.label()).clicked() {
+				if ui.radio(self.sort == sort, sort_label(ui, sort)).clicked() {
 					self.sort = sort;
 				}
 			}
 			ui.separator();
-			ui.label(design::eyebrow(ui, "View", colors.muted));
-			ui.add_enabled(false, egui::Button::selectable(true, "List view"));
+			ui.label(design::eyebrow(
+				ui,
+				crate::tr_ui!(ui, "View as"),
+				colors.muted,
+			));
+			for layout in [Layout::List, Layout::Gallery] {
+				if ui
+					.radio(self.layout == layout, layout_label(ui, layout))
+					.clicked()
+				{
+					self.layout = layout;
+					changed = Some(layout);
+				}
+			}
 		});
+		if let Some(layout) = changed {
+			self.remember_layout(forum, layout);
+		}
+	}
+
+	/// Show the clicked starter image in the shared full-window viewer.
+	fn lightbox(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &State,
+		images: &mut Avatars,
+		download: &mut crate::attachments::DownloadUi,
+		opening: &mut Option<String>,
+	) -> bool {
+		let Some((post, index)) = self.viewing else {
+			return false;
+		};
+		let Some(starter) = state.post_preview(post) else {
+			return false;
+		};
+		if starter.images.is_empty() {
+			return false;
+		}
+		let attachments: Vec<model::Attachment> = starter
+			.images
+			.iter()
+			.enumerate()
+			.map(starter_attachment)
+			.collect();
+		let current = attachments[index.min(attachments.len() - 1)].id;
+		let Some(keep) = crate::attachments::viewer(
+			ui,
+			&attachments,
+			current,
+			images,
+			download,
+			opening,
+			state.demo,
+		) else {
+			return false;
+		};
+		if let Some(index) = attachments
+			.iter()
+			.position(|attachment| attachment.id == keep)
+		{
+			self.viewing = Some((post, index));
+		}
+		true
 	}
 
 	/// Drop the draft and anything staged with it; a discarded post keeps no selection.
@@ -562,123 +690,204 @@ fn tray(ui: &mut egui::Ui, staged: &mut Staged<'_>) {
 		});
 }
 
-fn card(
+/// One post's rendered card: its response plus the starter image a click opened.
+struct CardHit {
+	response: egui::Response,
+	image: Option<usize>,
+}
+
+/// A post's title; read posts stay quiet and unread ones bright, like Discord.
+fn title_row(ui: &mut egui::Ui, post: &Channel, unread: bool, size: f32) {
+	let colors = design::palette(ui);
+	ui.horizontal(|ui| {
+		ui.spacing_mut().item_spacing.x = 8.0;
+		if unread {
+			let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+			ui.painter()
+				.circle_filled(rect.center(), 4.0, colors.text_strong);
+		}
+		ui.add(
+			egui::Label::new(if unread {
+				design::semibold(ui, &post.name, size).color(colors.text_strong)
+			} else {
+				design::medium(ui, &post.name, size).color(colors.muted)
+			})
+			.truncate()
+			.selectable(false),
+		);
+	});
+}
+
+/// "Author: starter text" under the title.
+fn starter_row(ui: &mut egui::Ui, state: &State, post: &Channel, size: f32) {
+	let colors = design::palette(ui);
+	let Some(starter) = state.post_preview(post.id) else {
+		ui.label(
+			RichText::new(crate::tr_ui!(ui, "Latest message unavailable"))
+				.size(size)
+				.color(colors.muted),
+		);
+		return;
+	};
+	let excerpt = if starter.excerpt == "Spoiler content - open the post to reveal" {
+		crate::tr_ui!(ui, "Spoiler content - open the post to reveal").to_owned()
+	} else if starter.excerpt.trim().is_empty() {
+		crate::tr_ui!(ui, "Attachment or non-text message").to_owned()
+	} else {
+		starter.excerpt.clone()
+	};
+	ui.horizontal(|ui| {
+		ui.spacing_mut().item_spacing.x = 5.0;
+		let author_color = state
+			.forum_author_color(post.id, starter.author_id, starter.webhook, &starter.roles)
+			.map_or(colors.text_strong, |rgb| {
+				design::role_name_color(rgb, colors.raised, colors.text_strong)
+			});
+		ui.label(design::semibold(ui, format!("{}:", starter.author), size).color(author_color));
+		ui.add(
+			egui::Label::new(RichText::new(excerpt).size(size).color(colors.text))
+				.truncate()
+				.selectable(false),
+		);
+	});
+}
+
+/// Reaction, reply count, new badge and age along a card's bottom edge.
+fn stats_row(
 	ui: &mut egui::Ui,
 	state: &State,
+	images: &mut Avatars,
 	post: &Channel,
 	(archived, unread): (bool, bool),
 	now: time::OffsetDateTime,
-) -> egui::Response {
+) {
 	let colors = design::palette(ui);
-	let response = ui
-		.scope_builder(
-			egui::UiBuilder::new()
-				.id_salt(("post", post.id, archived))
-				.sense(egui::Sense::click()),
-			|ui| {
-				let response = ui.response();
-				design::interactive_card_frame(ui, &response)
-					.inner_margin(egui::Margin::symmetric(16, 14))
-					.show(ui, |ui| {
-						ui.set_width(ui.available_width());
-						ui.spacing_mut().item_spacing.y = 6.0;
-						// A read post keeps its title quiet; only unread ones stay bright.
-						ui.horizontal(|ui| {
-							ui.spacing_mut().item_spacing.x = 8.0;
-							if unread {
-								let (rect, _) = ui.allocate_exact_size(
-									egui::vec2(8.0, 8.0),
-									egui::Sense::hover(),
-								);
-								ui.painter()
-									.circle_filled(rect.center(), 4.0, colors.text_strong);
-							}
-							ui.add(
-								egui::Label::new(if unread {
-									design::semibold(ui, &post.name, 16.0).color(colors.text_strong)
-								} else {
-									design::medium(ui, &post.name, 16.0).color(colors.muted)
-								})
-								.truncate()
-								.selectable(false),
-							);
-						});
-						let starter = state.post_preview(post.id);
-						if let Some(starter) = starter {
-							ui.horizontal(|ui| {
-								ui.spacing_mut().item_spacing.x = 5.0;
-								let author_color = state
-									.forum_author_color(
-										post.id,
-										starter.author_id,
-										starter.webhook,
-										&starter.roles,
-									)
-									.map_or(colors.text_strong, |rgb| {
-										design::role_name_color(
-											rgb,
-											colors.raised,
-											colors.text_strong,
-										)
-									});
-								ui.label(
-									design::semibold(ui, format!("{}:", starter.author), 14.0)
-										.color(author_color),
-								);
-								ui.add(
-									egui::Label::new(
-										RichText::new(if starter.excerpt.trim().is_empty() {
-											crate::tr_ui!(ui, "Attachment or non-text message")
-										} else {
-											&starter.excerpt
-										})
-										.size(14.0)
-										.color(colors.text),
-									)
-									.truncate()
-									.selectable(false),
-								);
-							});
-						} else {
-							ui.label(
-								RichText::new(crate::tr_ui!(ui, "Latest message unavailable"))
-									.size(14.0)
-									.color(colors.muted),
-							);
-						}
-						ui.horizontal(|ui| {
-							ui.spacing_mut().item_spacing.x = 6.0;
-							if let Some(count) = post.message_count {
-								icons::inline(ui, icons::Icon::Forum, 16.0, colors.muted);
-								ui.label(
-									design::medium(ui, count.to_string(), 13.0).color(colors.text),
-								);
-							}
-							if unread {
-								ui.label(
-									design::medium(ui, crate::tr_ui!(ui, "(New)"), 13.0)
-										.color(colors.accent),
-								);
-							}
-							ui.label(RichText::new("·").color(colors.muted));
-							ui.label(
-								RichText::new(ago(post.last_message.unwrap_or(post.id), now))
-									.size(13.0)
-									.color(colors.muted),
-							);
-							if archived {
-								ui.label(RichText::new("·").color(colors.muted));
-								ui.label(
-									RichText::new(crate::tr_ui!(ui, "Archived"))
-										.size(13.0)
-										.color(colors.muted),
-								);
-							}
-						});
-					});
-			},
+	ui.horizontal(|ui| {
+		ui.spacing_mut().item_spacing.x = 6.0;
+		if is_pinned(post) {
+			icons::inline(ui, icons::Icon::Pin, 14.0, colors.muted);
+		}
+		if let Some(reaction) = state.post_reaction(post) {
+			reaction_chip(ui, images, state.demo, reaction);
+			ui.add_space(4.0);
+		}
+		if let Some(count) = post.message_count {
+			icons::inline(ui, icons::Icon::Forum, 16.0, colors.muted);
+			ui.label(design::medium(ui, count.to_string(), 13.0).color(colors.text));
+		}
+		if unread {
+			ui.label(design::medium(ui, crate::tr_ui!(ui, "(New)"), 13.0).color(colors.accent));
+		}
+		ui.label(RichText::new("·").color(colors.muted));
+		ui.label(
+			RichText::new(format!(
+				"{} {}",
+				crate::tr_ui!(ui, "Posted"),
+				ago_label(ui, post.id, now)
+			))
+			.size(13.0)
+			.color(colors.muted),
+		);
+		if archived {
+			ui.label(RichText::new("·").color(colors.muted));
+			ui.label(
+				RichText::new(crate::tr_ui!(ui, "Archived"))
+					.size(13.0)
+					.color(colors.muted),
+			);
+		}
+	});
+}
+
+/// The reaction a card shows: an emoji and its count on a quiet pill.
+fn reaction_chip(ui: &mut egui::Ui, images: &mut Avatars, demo: bool, reaction: &model::Reaction) {
+	let colors = design::palette(ui);
+	let height = 24.0;
+	let galley = ui.painter().layout_no_wrap(
+		reaction.count.to_string(),
+		egui::FontId::new(12.0, design::semibold_family(ui.ctx())),
+		if reaction.me {
+			colors.text_strong
+		} else {
+			colors.text
+		},
+	);
+	let emoji = 16.0;
+	let (rect, response) = ui.allocate_exact_size(
+		egui::vec2(8.0 + emoji + 6.0 + galley.size().x + 10.0, height),
+		egui::Sense::hover(),
+	);
+	response.widget_info(|| {
+		egui::WidgetInfo::labeled(
+			egui::Role::Label,
+			true,
+			format!("{} {}", reaction.emoji.label(), reaction.count),
 		)
-		.response;
+	});
+	if !ui.is_rect_visible(rect) {
+		return;
+	}
+	ui.painter().rect(
+		rect,
+		7,
+		if reaction.me {
+			colors.accent.gamma_multiply(0.18)
+		} else {
+			colors.sidebar
+		},
+		egui::Stroke::new(
+			1.0,
+			if reaction.me {
+				colors.accent
+			} else {
+				colors.border
+			},
+		),
+		egui::StrokeKind::Inside,
+	);
+	paint_emoji(
+		ui,
+		images,
+		demo,
+		(reaction.emoji.id, reaction.emoji.name.as_deref()),
+		egui::Rect::from_min_size(
+			egui::pos2(rect.left() + 8.0, rect.center().y - emoji / 2.0),
+			egui::Vec2::splat(emoji),
+		),
+	);
+	let color = if reaction.me {
+		colors.text_strong
+	} else {
+		colors.text
+	};
+	ui.painter().galley(
+		egui::pos2(
+			rect.left() + 8.0 + emoji + 6.0,
+			rect.center().y - galley.size().y / 2.0,
+		),
+		galley,
+		color,
+	);
+}
+
+/// Paint a custom emoji from the image cache, or a Unicode one from the Twemoji atlas.
+fn paint_emoji(
+	ui: &egui::Ui,
+	images: &mut Avatars,
+	demo: bool,
+	(id, name): (Option<Id>, Option<&str>),
+	rect: egui::Rect,
+) {
+	let image = match id {
+		Some(id) => images.custom_image(ui.ctx(), id, rect.width(), demo),
+		None => name.and_then(|name| crate::emoji::image(ui.ctx(), name, rect.width())),
+	};
+	if let Some(image) = image {
+		image.paint_at(ui, rect);
+	}
+}
+
+fn describe(response: &egui::Response, post: &Channel, (archived, unread): (bool, bool)) {
 	response.widget_info(|| {
 		egui::WidgetInfo::labeled(
 			egui::Role::Button,
@@ -693,9 +902,367 @@ fn card(
 			),
 		)
 	});
-	response
 }
 
+/// One mosaic cell's click target.
+struct MosaicCell {
+	index: usize,
+	rect: egui::Rect,
+	response: egui::Response,
+}
+
+/// Cell rects for `count` starter images inside `size`, starting at `origin`.
+fn mosaic_rects(origin: egui::Pos2, size: egui::Vec2, count: usize) -> Vec<egui::Rect> {
+	let size = egui::vec2(size.x.max(1.0), size.y.max(1.0));
+	let gap = MOSAIC_GAP;
+	let left = ((size.x - gap) * 0.5).floor();
+	let top = ((size.y - gap) * 0.5).floor();
+	match count {
+		0 => Vec::new(),
+		1 => vec![egui::Rect::from_min_size(origin, size)],
+		2 => vec![
+			egui::Rect::from_min_size(origin, egui::vec2(left, size.y)),
+			egui::Rect::from_min_size(
+				origin + egui::vec2(left + gap, 0.0),
+				egui::vec2(size.x - left - gap, size.y),
+			),
+		],
+		3 => vec![
+			egui::Rect::from_min_size(origin, egui::vec2(left, size.y)),
+			egui::Rect::from_min_size(
+				origin + egui::vec2(left + gap, 0.0),
+				egui::vec2(size.x - left - gap, top),
+			),
+			egui::Rect::from_min_size(
+				origin + egui::vec2(left + gap, top + gap),
+				egui::vec2(size.x - left - gap, size.y - top - gap),
+			),
+		],
+		_ => vec![
+			egui::Rect::from_min_size(origin, egui::vec2(left, top)),
+			egui::Rect::from_min_size(
+				origin + egui::vec2(left + gap, 0.0),
+				egui::vec2(size.x - left - gap, top),
+			),
+			egui::Rect::from_min_size(
+				origin + egui::vec2(0.0, top + gap),
+				egui::vec2(left, size.y - top - gap),
+			),
+			egui::Rect::from_min_size(
+				origin + egui::vec2(left + gap, top + gap),
+				egui::vec2(size.x - left - gap, size.y - top - gap),
+			),
+		],
+	}
+}
+
+/// Paint the starter's first images as Discord's mosaic, cropped to fill each cell.
+fn mosaic(
+	ui: &mut egui::Ui,
+	images: &mut Avatars,
+	starter: &Starter,
+	size: egui::Vec2,
+	demo: bool,
+) -> Vec<MosaicCell> {
+	let arts = &starter.images;
+	if arts.is_empty() {
+		return Vec::new();
+	}
+	let size = egui::vec2(size.x.max(1.0), size.y.max(1.0));
+	let rects = mosaic_rects(ui.cursor().min, size, arts.len());
+	let mut cells = Vec::with_capacity(arts.len());
+	for (index, rect) in rects.into_iter().enumerate() {
+		let mut cell = ui.new_child(
+			egui::UiBuilder::new()
+				.max_rect(rect)
+				.layout(egui::Layout::top_down(egui::Align::Min)),
+		);
+		let shown = images.show_media(
+			&mut cell,
+			&arts[index].media,
+			rect.size(),
+			demo,
+			crate::avatars::Surface::Tile,
+		);
+		let response = cell.interact(
+			shown.response.rect,
+			shown.response.id.with(("mosaic", index)),
+			egui::Sense::click(),
+		);
+		cells.push(MosaicCell {
+			index,
+			rect,
+			response,
+		});
+	}
+	ui.allocate_exact_size(size, egui::Sense::hover());
+	cells
+}
+
+/// Spoiler covers, a play badge for video and the "+N" counter of a folded mosaic.
+fn paint_mosaic_badges(ui: &egui::Ui, starter: &Starter, cells: &[MosaicCell]) {
+	for cell in cells {
+		let image = &starter.images[cell.index];
+		if image.spoiler {
+			ui.painter()
+				.rect_filled(cell.rect, 8, egui::Color32::from_black_alpha(232));
+			ui.painter().text(
+				cell.rect.center(),
+				egui::Align2::CENTER_CENTER,
+				crate::tr_ui!(ui, "Spoiler"),
+				egui::FontId::proportional(12.0),
+				egui::Color32::WHITE,
+			);
+		}
+		if image.video {
+			let center = cell.rect.center();
+			let radius = (cell.rect.width() * 0.18).clamp(8.0, 14.0);
+			ui.painter()
+				.circle_filled(center, radius, egui::Color32::from_black_alpha(150));
+			let side = radius * 0.75;
+			ui.painter().add(egui::Shape::convex_polygon(
+				vec![
+					center + egui::vec2(-side * 0.4, -side * 0.6),
+					center + egui::vec2(-side * 0.4, side * 0.6),
+					center + egui::vec2(side * 0.7, 0.0),
+				],
+				egui::Color32::WHITE,
+				egui::Stroke::NONE,
+			));
+		}
+		if image.animated {
+			let badge = egui::Rect::from_min_size(
+				cell.rect.left_bottom() + egui::vec2(6.0, -20.0),
+				egui::vec2(30.0, 14.0),
+			);
+			ui.painter()
+				.rect_filled(badge, 4, egui::Color32::from_black_alpha(170));
+			ui.painter().text(
+				badge.center(),
+				egui::Align2::CENTER_CENTER,
+				"GIF",
+				egui::FontId::proportional(10.0),
+				egui::Color32::WHITE,
+			);
+		}
+	}
+	let total = usize::from(starter.image_count);
+	if total > cells.len()
+		&& let Some(last) = cells.last()
+	{
+		ui.painter()
+			.rect_filled(last.rect, 8, egui::Color32::from_black_alpha(168));
+		ui.painter().text(
+			last.rect.center(),
+			egui::Align2::CENTER_CENTER,
+			format!("+{}", total - cells.len()),
+			egui::FontId::proportional(22.0),
+			egui::Color32::WHITE,
+		);
+	}
+}
+
+/// List view: one full-width card per post, with the starter's first image on the right.
+fn card(
+	ui: &mut egui::Ui,
+	state: &State,
+	images: &mut Avatars,
+	post: &Channel,
+	flags: (bool, bool),
+	now: time::OffsetDateTime,
+) -> CardHit {
+	let mut image = None;
+	let response = ui
+		.scope_builder(
+			egui::UiBuilder::new()
+				.id_salt(("post", post.id, flags.0))
+				.sense(egui::Sense::click()),
+			|ui| {
+				let response = ui.response();
+				design::interactive_card_frame(ui, &response)
+					.inner_margin(egui::Margin::symmetric(16, 14))
+					.show(ui, |ui| {
+						ui.set_width(ui.available_width());
+						let thumb = state
+							.post_preview(post.id)
+							.filter(|starter| !starter.images.is_empty());
+						ui.horizontal_top(|ui| {
+							ui.spacing_mut().item_spacing.x = 12.0;
+							let width = ui.available_width()
+								- if thumb.is_some() { PREVIEW + 12.0 } else { 0.0 };
+							ui.vertical(|ui| {
+								ui.set_width(width.max(120.0));
+								ui.spacing_mut().item_spacing.y = 6.0;
+								title_row(ui, post, flags.1, 16.0);
+								starter_row(ui, state, post, 14.0);
+								stats_row(ui, state, images, post, flags, now);
+							});
+							// Discord shows the starter's first image at the card's right edge.
+							if let Some(starter) = thumb {
+								let art = egui::Vec2::splat(PREVIEW);
+								let (rect, _) = ui.allocate_exact_size(art, egui::Sense::hover());
+								let mut cell = ui.new_child(
+									egui::UiBuilder::new()
+										.max_rect(rect)
+										.layout(egui::Layout::top_down(egui::Align::Min)),
+								);
+								let shown = images.show_media(
+									&mut cell,
+									&starter.images[0].media,
+									art,
+									state.demo,
+									crate::avatars::Surface::Tile,
+								);
+								let hit = cell.interact(
+									shown.response.rect,
+									shown.response.id.with("starter-preview"),
+									egui::Sense::click(),
+								);
+								if hit.clicked() {
+									image = Some(0);
+								}
+							}
+						});
+					});
+			},
+		)
+		.response;
+	describe(&response, post, flags);
+	CardHit { response, image }
+}
+
+/// Gallery view: a tile led by the starter mosaic, or a quiet stand-in when it has none.
+fn tile(
+	ui: &mut egui::Ui,
+	state: &State,
+	images: &mut Avatars,
+	post: &Channel,
+	flags: (bool, bool),
+	(width, now): (f32, time::OffsetDateTime),
+) -> CardHit {
+	let colors = design::palette(ui);
+	let mut image = None;
+	let response = ui
+		.scope_builder(
+			egui::UiBuilder::new()
+				.id_salt(("tile", post.id, flags.0))
+				.layout(egui::Layout::top_down(egui::Align::Min))
+				.sense(egui::Sense::click()),
+			|ui| {
+				let response = ui.response();
+				design::interactive_card_frame(ui, &response)
+					.inner_margin(egui::Margin::same(8))
+					.show(ui, |ui| {
+						let inner = width - 18.0;
+						ui.set_width(inner);
+						ui.set_max_width(inner);
+						ui.spacing_mut().item_spacing.y = 8.0;
+						let art = egui::vec2(inner, (inner * TILE_ART).round());
+						match state.post_preview(post.id) {
+							Some(starter) if !starter.images.is_empty() => {
+								let cells = mosaic(ui, images, starter, art, state.demo);
+								paint_mosaic_badges(ui, starter, &cells);
+								if let Some(cell) =
+									cells.iter().find(|cell| cell.response.clicked())
+								{
+									image = Some(cell.index);
+								}
+							}
+							_ => {
+								let (rect, _) = ui.allocate_exact_size(art, egui::Sense::hover());
+								ui.painter().rect_filled(rect, 8, colors.sidebar);
+								icons::paint(
+									ui.painter(),
+									icons::Icon::Forum,
+									egui::Rect::from_center_size(
+										rect.center(),
+										egui::Vec2::splat(36.0),
+									),
+									colors.muted.gamma_multiply(0.6),
+								);
+							}
+						}
+						egui::Frame::new()
+							.inner_margin(egui::Margin::symmetric(6, 0))
+							.show(ui, |ui| {
+								ui.set_width(inner - 12.0);
+								ui.spacing_mut().item_spacing.y = 6.0;
+								// Every tile keeps a tag row so a gallery row lines up.
+								ui.allocate_exact_size(
+									egui::vec2(1.0, CARD_TAG_HEIGHT),
+									egui::Sense::hover(),
+								);
+								title_row(ui, post, flags.1, 15.0);
+								starter_row(ui, state, post, 14.0);
+								stats_row(ui, state, images, post, flags, now);
+							});
+					});
+			},
+		)
+		.response;
+	describe(&response, post, flags);
+	CardHit { response, image }
+}
+
+/// Lay out one group of posts as list cards or gallery tiles.
+fn posts_view(
+	ui: &mut egui::Ui,
+	state: &State,
+	images: &mut Avatars,
+	posts: &[&Channel],
+	layout: Layout,
+	now: time::OffsetDateTime,
+) -> Vec<CardHit> {
+	let flags = |post: &Channel| (false, state.post_unread(post));
+	match layout {
+		Layout::List => posts
+			.iter()
+			.map(|post| card(ui, state, images, post, flags(post), now))
+			.collect(),
+		Layout::Gallery => {
+			let width = ui.available_width();
+			let columns =
+				(((width + TILE_GAP) / (GALLERY_TILE + TILE_GAP)).floor() as usize).max(1);
+			let tile_width = ((width - TILE_GAP * (columns - 1) as f32) / columns as f32).floor();
+			let mut hits = Vec::with_capacity(posts.len());
+			for row in posts.chunks(columns) {
+				ui.horizontal_top(|ui| {
+					ui.spacing_mut().item_spacing.x = TILE_GAP;
+					for post in row {
+						hits.push(tile(
+							ui,
+							state,
+							images,
+							post,
+							flags(post),
+							(tile_width, now),
+						));
+					}
+				});
+			}
+			hits
+		}
+	}
+}
+
+/// A synthetic attachment record for one starter image, so the shared viewer can show it.
+fn starter_attachment((index, image): (usize, &StarterImage)) -> model::Attachment {
+	model::Attachment {
+		id: if image.id.0 > 0 {
+			image.id
+		} else {
+			Id(u64::MAX - index as u64)
+		},
+		filename: format!("starter-{index}.png"),
+		description: None,
+		content_type: Some("image/png".into()),
+		size: image.size,
+		media: image.media.clone(),
+		spoiler: image.spoiler,
+		duration_ms: None,
+		waveform: Vec::new(),
+	}
+}
 /// Active-post status under the list; returns true when the user asks for another page.
 fn posts_footer(ui: &mut egui::Ui, state: &State, forum: Id) -> bool {
 	let colors = design::palette(ui);
@@ -818,19 +1385,34 @@ fn archive_footer(
 }
 
 // Discord snowflakes carry milliseconds since 2015-01-01; all u64 IDs fit time's range.
-fn ago(id: Id, now: time::OffsetDateTime) -> String {
+/// The post's age as `(value, unit)`; `"now"` reads as just now, the rest take "ago".
+fn ago_parts(id: Id, now: time::OffsetDateTime) -> (u64, &'static str) {
 	let created =
 		time::OffsetDateTime::from_unix_timestamp(((id.0 >> 22) / 1000) as i64 + 1_420_070_400)
 			.expect("snowflake timestamp is in range");
 	let seconds = (now - created).whole_seconds().max(0);
 	match seconds {
-		0..60 => "just now".to_owned(),
-		60..3_600 => format!("{}m ago", seconds / 60),
-		3_600..86_400 => format!("{}h ago", seconds / 3_600),
-		86_400..2_592_000 => format!("{}d ago", seconds / 86_400),
-		2_592_000..31_536_000 => format!("{}mo ago", seconds / 2_592_000),
-		_ => format!("{}y ago", seconds / 31_536_000),
+		0..60 => (0, "now"),
+		60..3_600 => ((seconds / 60) as u64, "m"),
+		3_600..86_400 => ((seconds / 3_600) as u64, "h"),
+		86_400..2_592_000 => ((seconds / 86_400) as u64, "d"),
+		2_592_000..31_536_000 => ((seconds / 2_592_000) as u64, "mo"),
+		_ => ((seconds / 31_536_000) as u64, "y"),
 	}
+}
+
+/// "2m ago" in the interface language.
+fn ago_label(ui: &egui::Ui, id: Id, now: time::OffsetDateTime) -> String {
+	let (value, unit) = ago_parts(id, now);
+	if unit == "now" {
+		return crate::tr_ui!(ui, "just now").to_owned();
+	}
+	format!("{value}{unit} {}", crate::tr_ui!(ui, "ago"))
+}
+
+/// A pinned post keeps its Discord pin badge before the title.
+fn is_pinned(post: &Channel) -> bool {
+	post.tags.as_deref().is_some_and(|tags| tags.pinned)
 }
 
 #[cfg(test)]
@@ -871,16 +1453,49 @@ mod tests {
 
 	#[test]
 	fn relative_times_round_down() {
+		let ctx = egui::Context::default();
 		let now = time::OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
 		let at = |seconds_ago: i64| {
 			Id((((1_800_000_000 - seconds_ago - 1_420_070_400) as u64) * 1000) << 22)
 		};
-		assert_eq!(ago(at(5), now), "just now");
-		assert_eq!(ago(at(125), now), "2m ago");
-		assert_eq!(ago(at(7_200), now), "2h ago");
-		assert_eq!(ago(at(15 * 86_400), now), "15d ago");
-		assert_eq!(ago(at(70 * 86_400), now), "2mo ago");
-		assert_eq!(ago(at(800 * 86_400), now), "2y ago");
+		let label = |id| {
+			let mut out = String::new();
+			let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+				out = ago_label(ui, id, now);
+			});
+			output.drop_without_applying_deltas();
+			out
+		};
+		assert_eq!(label(at(5)), "just now");
+		assert_eq!(label(at(125)), "2m ago");
+		assert_eq!(label(at(7_200)), "2h ago");
+		assert_eq!(label(at(15 * 86_400)), "15d ago");
+		assert_eq!(label(at(70 * 86_400)), "2mo ago");
+		assert_eq!(label(at(800 * 86_400)), "2y ago");
+	}
+
+	#[test]
+	fn pinned_posts_keep_their_badge() {
+		let mut post = Channel {
+			id: Id(5),
+			guild: Some(Id(1)),
+			parent_id: Some(Id(2)),
+			kind: 11,
+			name: "Synthetic".into(),
+			position: 0,
+			recipients: vec![],
+			last_message: None,
+			icon: None,
+			member_list_id: None,
+			message_count: None,
+			tags: Some(Box::new(model::forum::Tags {
+				pinned: true,
+				..Default::default()
+			})),
+		};
+		assert!(is_pinned(&post));
+		post.tags = None;
+		assert!(!is_pinned(&post));
 	}
 
 	#[test]
@@ -925,7 +1540,11 @@ mod tests {
 						state,
 						Id(26),
 						commands,
-						(&mut crate::scroll::Session::default(), &mut staged),
+						(
+							&mut crate::scroll::Session::default(),
+							&mut staged,
+							&mut crate::avatars::Avatars::default(),
+						),
 						(
 							&mut crate::channel_menu::ChannelMenu::default(),
 							crate::shortcuts::ShortcutView::new(&Default::default(), true),
@@ -998,6 +1617,7 @@ mod tests {
 					(
 						&mut crate::scroll::Session::default(),
 						&mut staged(&mut scratch),
+						&mut crate::avatars::Avatars::default(),
 					),
 					(
 						&mut crate::channel_menu::ChannelMenu::default(),
@@ -1020,6 +1640,7 @@ mod tests {
 					(
 						&mut crate::scroll::Session::default(),
 						&mut staged(&mut scratch),
+						&mut crate::avatars::Avatars::default(),
 					),
 					(
 						&mut crate::channel_menu::ChannelMenu::default(),
@@ -1040,6 +1661,7 @@ mod tests {
 					(
 						&mut crate::scroll::Session::default(),
 						&mut staged(&mut scratch),
+						&mut crate::avatars::Avatars::default(),
 					),
 					(
 						&mut crate::channel_menu::ChannelMenu::default(),
@@ -1091,6 +1713,7 @@ mod tests {
 					(
 						&mut crate::scroll::Session::default(),
 						&mut staged(&mut scratch),
+						&mut crate::avatars::Avatars::default(),
 					),
 					(
 						&mut crate::channel_menu::ChannelMenu::default(),
@@ -1130,6 +1753,7 @@ mod tests {
 					(
 						&mut crate::scroll::Session::default(),
 						&mut staged(&mut scratch),
+						&mut crate::avatars::Avatars::default(),
 					),
 					(
 						&mut crate::channel_menu::ChannelMenu::default(),
@@ -1161,6 +1785,7 @@ mod tests {
 					(
 						&mut crate::scroll::Session::default(),
 						&mut staged(&mut scratch),
+						&mut crate::avatars::Avatars::default(),
 					),
 					(
 						&mut crate::channel_menu::ChannelMenu::default(),
@@ -1213,6 +1838,7 @@ mod tests {
 					(
 						&mut crate::scroll::Session::default(),
 						&mut staged(&mut scratch),
+						&mut crate::avatars::Avatars::default(),
 					),
 					(
 						&mut crate::channel_menu::ChannelMenu::default(),
@@ -1230,5 +1856,213 @@ mod tests {
 				"Fetched posts join the list"
 			);
 		}
+	}
+
+	fn preview_image(index: usize, kind: &str) -> StarterImage {
+		StarterImage {
+			media: model::EmbedMedia {
+				url: Some(format!("https://cdn.example/{kind}-{index}.png")),
+				proxy_url: None,
+				width: 800,
+				height: 600,
+				placeholder: Vec::new(),
+			},
+			id: Id(9_000 + index as u64),
+			size: 4096,
+			spoiler: kind == "spoiler",
+			animated: kind == "gif",
+			video: kind == "video",
+		}
+	}
+
+	fn starter_with(images: Vec<StarterImage>, image_count: u16) -> Starter {
+		Starter {
+			author_id: Id(987_654_321),
+			author: "Synthetic author".into(),
+			roles: vec![],
+			webhook: false,
+			excerpt: "Synthetic starter".into(),
+			images,
+			image_count,
+			reactions: vec![model::Reaction {
+				emoji: model::ReactionEmoji {
+					id: None,
+					name: Some("🔥".into()),
+				},
+				count: 3,
+				me: false,
+				me_burst: false,
+			}],
+		}
+	}
+
+	fn labels(shape: &egui::Shape, found: &mut Vec<String>) {
+		match shape {
+			egui::Shape::Text(text) => found.push(text.galley.job.text.clone()),
+			egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| labels(shape, found)),
+			_ => {}
+		}
+	}
+
+	#[test]
+	fn mosaic_cells_cover_the_art_area_without_overlap() {
+		let origin = egui::pos2(10.0, 20.0);
+		let size = egui::vec2(300.0, 174.0);
+		let area = egui::Rect::from_min_size(origin, size);
+		for (images, cells) in [(1usize, 1usize), (2, 2), (3, 3), (4, 4), (9, 4)] {
+			let rects = mosaic_rects(origin, size, images.min(4));
+			assert_eq!(rects.len(), cells, "{images} images");
+			let covered: f32 = rects.iter().map(|rect| rect.width() * rect.height()).sum();
+			assert!(
+				covered >= area.width() * area.height() * 0.85,
+				"{images} images cover only {covered}"
+			);
+			for (index, rect) in rects.iter().enumerate() {
+				assert!(area.contains_rect(*rect), "{images} images: cell escapes");
+				assert!(rect.width() > 1.0 && rect.height() > 1.0);
+				for other in &rects[index + 1..] {
+					assert!(!rect.intersects(*other), "{images} images: cells overlap");
+				}
+			}
+		}
+		// One image fills the area; four split it in a 2x2 that reaches both far corners.
+		assert_eq!(mosaic_rects(origin, size, 1)[0], area);
+		let four = mosaic_rects(origin, size, 4);
+		assert_eq!(four[0].min, origin);
+		assert_eq!(four[3].max, area.max);
+		assert!(mosaic_rects(origin, size, 0).is_empty());
+	}
+
+	#[test]
+	fn gallery_tiles_show_the_mosaic_badges_and_counts() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		let mut forum = ForumUi::default();
+		let mut commands = Vec::new();
+		let mut scratch = Scratch::default();
+		state.posts.remember_preview(
+			Id(27),
+			starter_with(
+				vec![
+					preview_image(0, "png"),
+					preview_image(1, "gif"),
+					preview_image(2, "video"),
+					preview_image(3, "spoiler"),
+				],
+				9,
+			),
+		);
+		let mut rendered = Vec::new();
+		let output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(1120.0, 900.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				let mut staged = staged(&mut scratch);
+				forum.show(
+					ui,
+					&mut state,
+					Id(26),
+					&mut commands,
+					(
+						&mut crate::scroll::Session::default(),
+						&mut staged,
+						&mut crate::avatars::Avatars::default(),
+					),
+					(
+						&mut crate::channel_menu::ChannelMenu::default(),
+						crate::shortcuts::ShortcutView::new(&Default::default(), true),
+					),
+					model::Language::English,
+				);
+			},
+		);
+		for shape in &output.shapes {
+			labels(&shape.shape, &mut rendered);
+		}
+		output.drop_without_applying_deltas();
+		assert_eq!(
+			forum.layout,
+			Layout::Gallery,
+			"the fixture forum opens in its own layout"
+		);
+		assert!(
+			rendered.iter().any(|text| text.contains("Sort & view")),
+			"the sort and view control names the layout"
+		);
+		assert!(rendered.iter().any(|text| text == "+5"), "+N badge");
+		assert!(rendered.iter().any(|text| text == "GIF"), "GIF badge");
+		assert!(
+			rendered.iter().any(|text| text == "Spoiler"),
+			"spoiler cover"
+		);
+		assert!(
+			rendered.iter().any(|text| text == "3"),
+			"the most used reaction's count rides the card"
+		);
+		assert!(
+			rendered.iter().any(|text| text == "Synthetic author:"),
+			"the starter author replaces the latest message row"
+		);
+	}
+
+	#[test]
+	fn the_view_menu_switches_between_gallery_and_list() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		let mut forum = ForumUi::default();
+		let mut commands = Vec::new();
+		let mut scratch = Scratch::default();
+		let mut rendered = |forum: &mut ForumUi, state: &mut client_core::State| {
+			let mut text = Vec::new();
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(1120.0, 900.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					let mut staged = staged(&mut scratch);
+					forum.show(
+						ui,
+						state,
+						Id(26),
+						&mut commands,
+						(
+							&mut crate::scroll::Session::default(),
+							&mut staged,
+							&mut crate::avatars::Avatars::default(),
+						),
+						(
+							&mut crate::channel_menu::ChannelMenu::default(),
+							crate::shortcuts::ShortcutView::new(&Default::default(), true),
+						),
+						model::Language::English,
+					);
+				},
+			);
+			for shape in &output.shapes {
+				labels(&shape.shape, &mut text);
+			}
+			output.drop_without_applying_deltas();
+			text
+		};
+		let text = rendered(&mut forum, &mut state);
+		assert!(text.iter().any(|text| text.contains("Gallery")));
+		// Changing the view keeps it for this forum only, the way Discord remembers it.
+		forum.layout = Layout::List;
+		forum.remember_layout(Id(26), Layout::List);
+		let text = rendered(&mut forum, &mut state);
+		assert!(text.iter().any(|text| text.contains("List")));
+		assert!(!text.iter().any(|text| text.contains("Gallery")));
+		let defaults = state.forum_defaults(Id(26)).cloned().unwrap_or_default();
+		assert_eq!(defaults.layout, Layout::Gallery);
+		assert_eq!(forum.remembered_layout(Id(26)), Some(Layout::List));
 	}
 }

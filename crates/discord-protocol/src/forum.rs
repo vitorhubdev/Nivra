@@ -197,7 +197,7 @@ fn preview(message: crate::MessageDto) -> Option<(Id, Starter)> {
 	let message = message.into_model();
 	let mut images = Vec::with_capacity(MAX_PREVIEW_IMAGES);
 	let mut image_count = 0u16;
-	let mut push = |media: EmbedMedia, spoiler: bool, video: bool| {
+	let mut push = |media: EmbedMedia, id: Id, size: u64, spoiler: bool, video: bool| {
 		if !media.valid() || (media.url.is_none() && media.proxy_url.is_none()) {
 			return;
 		}
@@ -206,6 +206,8 @@ fn preview(message: crate::MessageDto) -> Option<(Id, Starter)> {
 			let animated = !video && animated(&media.url);
 			images.push(StarterImage {
 				media,
+				id,
+				size,
 				spoiler,
 				animated,
 				video,
@@ -214,14 +216,26 @@ fn preview(message: crate::MessageDto) -> Option<(Id, Starter)> {
 	};
 	for attachment in message.attachments {
 		if attachment.is_video() {
-			push(attachment.media, attachment.spoiler, true);
+			push(
+				attachment.media,
+				attachment.id,
+				attachment.size,
+				attachment.spoiler,
+				true,
+			);
 		} else if attachment.is_image() {
-			push(attachment.media, attachment.spoiler, false);
+			push(
+				attachment.media,
+				attachment.id,
+				attachment.size,
+				attachment.spoiler,
+				false,
+			);
 		}
 	}
 	for embed in message.embeds {
 		if let Some(media) = embed.image.or(embed.thumbnail) {
-			push(media, false, false);
+			push(media, Id(0), 0, false, false);
 		}
 	}
 	let mut reactions = message.reactions.unwrap_or_default();
@@ -272,6 +286,8 @@ struct Thread {
 struct Metadata {
 	#[serde(default)]
 	archived: bool,
+	#[serde(default)]
+	pinned: bool,
 }
 
 impl Reply {
@@ -279,14 +295,20 @@ impl Reply {
 		let invalid = "Invalid forum post page";
 		let mut threads = Vec::with_capacity(self.threads.len());
 		for thread in self.threads {
+			let metadata = thread.thread_metadata;
 			// An archived row here would duplicate the archive page and mislead the post list.
-			if thread
-				.thread_metadata
-				.is_some_and(|metadata| metadata.archived)
-			{
+			if metadata.as_ref().is_some_and(|metadata| metadata.archived) {
 				return Err(invalid);
 			}
-			threads.push(crate::threads::into_thread(thread.channel, guild).map_err(|_| invalid)?);
+			let mut channel =
+				crate::threads::into_thread(thread.channel, guild).map_err(|_| invalid)?;
+			// The pin badge rides the same optional container a post's applied tags use.
+			if metadata.as_ref().is_some_and(|metadata| metadata.pinned) {
+				let mut tags = channel.tags.take().unwrap_or_default();
+				tags.pinned = true;
+				channel.tags = Some(tags);
+			}
+			threads.push(channel);
 		}
 		let mut previews: Vec<(Id, Starter)> = Vec::new();
 		for (id, starter) in self.first_messages.into_iter().filter_map(preview) {
@@ -476,7 +498,7 @@ mod tests {
 			let body = json!({
 				"threads": [{
 					"id": "9", "guild_id": "1", "parent_id": "2", "type": 11,
-					"name": "Synthetic", "thread_metadata": {"archived": false},
+					"name": "Synthetic", "thread_metadata": {"archived": false, "pinned": true},
 					"applied_tags": ["31", "32"]
 				}],
 				"members": [],
@@ -495,10 +517,9 @@ mod tests {
 			assert_eq!(starter.author, "Synthetic");
 			assert_eq!(starter.excerpt, "A synthetic starter");
 			assert_eq!(starter.reactions.len(), 1);
-			assert_eq!(
-				page.threads[0].tags.as_deref().unwrap().applied,
-				vec![Id(31), Id(32)]
-			);
+			let tags = page.threads[0].tags.as_deref().unwrap();
+			assert_eq!(tags.applied, vec![Id(31), Id(32)]);
+			assert!(tags.pinned, "the search row's pin badge is kept");
 		}
 	}
 

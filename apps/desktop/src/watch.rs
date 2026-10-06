@@ -385,7 +385,9 @@ impl Watch {
 						| Status::Speaking(_)
 						| Status::CameraAvailable(_)
 						| Status::Ping(_)
-						| Status::TransportOnly => {
+						| Status::TransportOnly
+						| Status::Resuming { .. }
+						| Status::Closed { .. } => {
 							return Ok(());
 						}
 					};

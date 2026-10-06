@@ -574,6 +574,7 @@ impl MessagingUi {
 				.filter(|c| c.channel == channel)
 				.and_then(|c| c.error),
 			STAGE_TEXT,
+			false,
 		);
 		if !state.can_view(channel) {
 			body_ui.label(
@@ -3231,6 +3232,7 @@ impl MessagingUi {
 						&mut notice_ui,
 						state.voice.active.as_ref().and_then(|c| c.error),
 						STAGE_TEXT,
+						false,
 					);
 					let body = egui::Rect::from_min_max(
 						egui::pos2(rect.left() + STAGE_MARGIN, notice_ui.cursor().top() + 8.0),
@@ -3436,6 +3438,8 @@ impl MessagingUi {
 		};
 		let title = if state.demo && phase != Phase::Failed {
 			crate::i18n::text(self.language, "Voice preview")
+		} else if self.voice_reconnecting && phase != Phase::Connected {
+			crate::i18n::text(self.language, "Reconnecting…")
 		} else if phase == Phase::Failed {
 			crate::i18n::text(self.language, "Call failed")
 		} else if connected || !settled {
@@ -3443,7 +3447,9 @@ impl MessagingUi {
 		} else {
 			crate::i18n::text(self.language, "Connecting…")
 		};
-		let color = if phase == Phase::Failed {
+		let color = if self.voice_reconnecting && phase != Phase::Connected {
+			colors.warning
+		} else if phase == Phase::Failed {
 			colors.danger
 		} else if connected || state.demo || !settled {
 			colors.positive
@@ -3542,7 +3548,14 @@ impl MessagingUi {
 						voice_connection_tip(ui, ping, &place, language);
 					});
 				}
-				call_failure(ui, error, colors.text_strong);
+				if call_failure(
+					ui,
+					error,
+					colors.text_strong,
+					phase == Phase::Failed && !self.voice_reconnecting,
+				) {
+					self.voice_rejoin_requested = true;
+				}
 				let controls = self.controls_enabled(state);
 				let can_camera = self.voice_camera_available
 					&& state.can_camera(channel_id)
@@ -4427,18 +4440,24 @@ fn speaking_avatar(
 	}
 }
 
-fn call_failure(ui: &mut egui::Ui, error: Option<&str>, color: egui::Color32) {
-	let Some(error) = error else { return };
+/// Failure line with a copy action and, while the call sits in `Failed`, a bounded
+/// rejoin action. Returns whether the reader asked to rejoin now.
+fn call_failure(ui: &mut egui::Ui, error: Option<&str>, color: egui::Color32, retry: bool) -> bool {
+	let Some(error) = error else { return false };
 	// Runtime reasons (voice failures, decoder errors) are catalog keys when they are
 	// known, and stay in English when they are not.
 	let reason = crate::tr_str!(ui, error);
+	let mut rejoin = false;
 	ui.horizontal_top(|ui| {
 		ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-			if crate::icons::button(ui, crate::icons::Icon::Copy, 28.0, "Copy failure reason")
+			if crate::icons::button(ui, crate::icons::Icon::Copy, 28.0, "Copy failure details")
 				.clicked()
 			{
 				ui.ctx()
 					.copy_text(format!("Nivra call failed\nReason: {}", reason.as_ref()));
+			}
+			if retry && ui.button(crate::tr_ui!(ui, "Rejoin call")).clicked() {
+				rejoin = true;
 			}
 			ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
 				ui.add(
@@ -4449,6 +4468,7 @@ fn call_failure(ui: &mut egui::Ui, error: Option<&str>, color: egui::Color32) {
 			});
 		});
 	});
+	rejoin
 }
 
 fn stage_notices(ui: &mut egui::Ui, notices: &[(String, bool)]) {
@@ -4915,6 +4935,49 @@ fn device_combo(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn failure_card_offers_rejoin_only_while_retryable() {
+		use egui_kittest::kittest::Queryable as _;
+		struct Fixture {
+			retry: bool,
+			clicked: bool,
+		}
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				|ui, fixture: &mut Fixture| {
+					fixture.clicked |= call_failure(
+						ui,
+						Some("Voice session timed out (code 4009); rejoin the call"),
+						egui::Color32::RED,
+						fixture.retry,
+					);
+				},
+				Fixture {
+					retry: true,
+					clicked: false,
+				},
+			);
+		harness.run();
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Rejoin call")
+			.click();
+		harness.run();
+		assert!(
+			harness.state().clicked,
+			"the rejoin action must be reported"
+		);
+		harness.state_mut().retry = false;
+		harness.state_mut().clicked = false;
+		harness.run();
+		assert!(
+			harness
+				.query_by_role_and_label(egui::Role::Button, "Rejoin call")
+				.is_none(),
+			"an automatic retry hides the manual action"
+		);
+	}
 
 	fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
 		let mut found = Vec::new();

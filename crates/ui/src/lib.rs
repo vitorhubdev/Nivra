@@ -548,6 +548,10 @@ pub struct MessagingUi {
 	pub voice_privacy_code: Option<String>,
 	/// A non-DAVE participant removed end-to-end encryption. The call itself stays up.
 	pub voice_unencrypted: bool,
+	/// An automatic voice rejoin is in progress; the call card shows "Reconnecting…".
+	pub voice_reconnecting: bool,
+	/// The failure card asked for an immediate rejoin.
+	pub voice_rejoin_requested: bool,
 	/// Latest voice-server heartbeat round trip, when a call is connected.
 	pub voice_ping_ms: Option<u32>,
 	/// English place name for the connected voice server, translated at draw time.
@@ -617,6 +621,8 @@ pub struct MessagingUi {
 	pub copy_log_requested: bool,
 	/// Set by the Help page; the host opens the log folder.
 	pub open_logs_requested: bool,
+	/// Help page asked for a `.zip` diagnostics export on the Desktop.
+	pub export_diagnostics_requested: bool,
 	pub transparency: u8,
 	pub blur: u8,
 	pub transparent_all: bool,

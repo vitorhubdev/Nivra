@@ -1,5 +1,5 @@
 use crate::{
-	Controls, Frame, Status,
+	CloseDisposition, Controls, Frame, Status, close_disposition,
 	crypto::{Dave, Encryption, Identity, MAX_PACKET, MAX_SIGNAL, MODE},
 	diagnostics::{Signal, Video},
 	video_receive::{
@@ -31,6 +31,20 @@ use tokio_tungstenite::{
 };
 use zeroize::Zeroizing;
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// Terminal close reason per Discord's code table. The numeric code travels in
+/// [`Status::Closed`] and is logged by the app; this line is what the call panel shows.
+fn close_message(code: Option<u16>, disposition: CloseDisposition) -> &'static str {
+	match (code, disposition) {
+		(Some(4006), _) => "Voice session is no longer valid (code 4006); rejoin the call",
+		(Some(4009), _) => "Voice session timed out (code 4009); rejoin the call",
+		(Some(4008), _) => "Voice rate limited (code 4008); try again shortly",
+		(Some(4021), _) => "Voice rate limited (code 4021); try again shortly",
+		(Some(4022), _) => "Voice call was terminated by Discord (code 4022); rejoin the call",
+		(Some(4014), _) => "Disconnected from voice by Discord (code 4014); rejoin the call",
+		_ => "Discord closed the voice connection; rejoin the call",
+	}
+}
 /// Time a sole member gives the roster announcement before waiting for a peer.
 const PEER_GRACE: Duration = Duration::from_millis(500);
 
@@ -657,20 +671,31 @@ async fn run_inner(
 				metrics.finish(crate::diagnostics::Stage::Receive, start);
 			},
 			event=ws.next()=>{
-				let event=match event {
-					// A server crash preserves the voice session. Other close codes remain terminal.
-					Some(Ok(message)) if !matches!(&message, Message::Close(Some(frame)) if u16::from(frame.code)==4015)=>message,
-					_=>{
-						if encryption.is_none() || resume_attempts>=2 {return Err("Voice socket failed; rejoin the call");}
-						video.clear();video.announced=false;
-						resume_attempts+=1;resuming=true;resume_since=Some(Instant::now());capture_reset=true;
-						deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;awaiting_ack=None;heartbeat_sent=None;missed_acks=0;
-						let config=WebSocketConfig::default().max_message_size(Some(MAX_SIGNAL)).max_frame_size(Some(MAX_SIGNAL)).write_buffer_size(0).max_write_buffer_size(MAX_SIGNAL*2);
-						let (replacement,_)=timeout(Duration::from_secs(15),tokio_tungstenite::connect_async_with_config(&url,Some(config),false)).await.map_err(|_|"Voice resume timed out; rejoin the call")?.map_err(|_|"Voice resume failed; rejoin the call")?;
-						ws=replacement;
-						json_send(&mut ws,json!({"op":7,"d":{"server_id":credentials.guild.unwrap_or(credentials.channel).to_string(),"session_id":credentials.session.expose(),"token":credentials.token.expose(),"seq_ack":seq_ack}})).await?;
-						continue;
-					}
+				// 1000/1001/1006/4015 and a close without a code preserve the voice session
+				// and take the resume path; every other close frame or socket failure is
+				// delivered to the terminal close below with its code (Discord's table).
+				let resumable = match &event {
+					Some(Ok(Message::Close(frame))) => close_disposition(
+						frame.as_ref().map(|frame| u16::from(frame.code)),
+					) == CloseDisposition::Resume,
+					Some(Ok(_)) => false,
+					_ => true,
+				};
+				if resumable {
+					if encryption.is_none() || resume_attempts>=2 {return Err("Voice socket failed; rejoin the call");}
+					video.clear();video.announced=false;
+					resume_attempts+=1;resuming=true;resume_since=Some(Instant::now());capture_reset=true;
+					deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;awaiting_ack=None;heartbeat_sent=None;missed_acks=0;
+					emit(Status::Resuming{attempt:resume_attempts}).map_err(|_|"Call interface closed")?;
+					let config=WebSocketConfig::default().max_message_size(Some(MAX_SIGNAL)).max_frame_size(Some(MAX_SIGNAL)).write_buffer_size(0).max_write_buffer_size(MAX_SIGNAL*2);
+					let (replacement,_)=timeout(Duration::from_secs(15),tokio_tungstenite::connect_async_with_config(&url,Some(config),false)).await.map_err(|_|"Voice resume timed out; rejoin the call")?.map_err(|_|"Voice resume failed; rejoin the call")?;
+					ws=replacement;
+					json_send(&mut ws,json!({"op":7,"d":{"server_id":credentials.guild.unwrap_or(credentials.channel).to_string(),"session_id":credentials.session.expose(),"token":credentials.token.expose(),"seq_ack":seq_ack}})).await?;
+					continue;
+				}
+				let event = match event {
+					Some(Ok(message)) => message,
+					_ => return Err("Voice socket failed; rejoin the call"),
 				};
 				if signal_window.elapsed()>Duration::from_secs(1){signal_window=Instant::now();signal_count=0;}
 				signal_count+=1;if signal_count>256{return Err("Voice signaling exceeded the bounded processing rate");}
@@ -928,7 +953,12 @@ async fn run_inner(
 						}
 					},
 					Message::Ping(data)=>send(&mut ws,Message::Pong(data)).await?,
-					Message::Close(_)=>return Err("Discord voice connection closed; rejoin the call"),
+					Message::Close(frame)=>{
+						let code=frame.as_ref().map(|frame|u16::from(frame.code));
+						let disposition=close_disposition(code);
+						emit(Status::Closed{code,disposition}).map_err(|_|"Call interface closed")?;
+						return Err(close_message(code,disposition));
+					},
 					Message::Pong(_)=>{},
 					_=>return Err("Unsupported voice websocket frame"),
 				}
@@ -2503,7 +2533,8 @@ mod tests {
 						}
 						Status::Connecting | Status::Discovering | Status::Securing
 						| Status::TransportReady | Status::Speaking(_) | Status::CameraAvailable(_)
-						| Status::Ping(_) | Status::TransportOnly => {}
+						| Status::Ping(_) | Status::TransportOnly
+						| Status::Resuming { .. } | Status::Closed { .. } => {}
 					},
 					result = &mut captured_rx, if !captured => {
 						result.unwrap();
@@ -3115,7 +3146,8 @@ mod tests {
 						Some(
 							Status::Connecting | Status::Discovering | Status::Securing
 							| Status::TransportReady | Status::Speaking(_) | Status::CameraAvailable(_)
-							| Status::Ping(_) | Status::WaitingForPeer | Status::RemoteAudio,
+							| Status::Ping(_) | Status::WaitingForPeer | Status::RemoteAudio
+							| Status::Resuming { .. } | Status::Closed { .. },
 						) => {}
 					},
 					_ = capture_tick.tick(), if ready => {

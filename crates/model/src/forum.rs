@@ -87,6 +87,10 @@ impl Tags {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StarterImage {
 	pub media: EmbedMedia,
+	/// Attachment identity and declared size, so the mosaic can open the real attachment
+	/// in the viewer and its download menu; zero for embed artwork.
+	pub id: Id,
+	pub size: u64,
 	/// The attachment was marked as a spoiler; the card blurs it.
 	pub spoiler: bool,
 	/// An animated image such as a GIF; the card shows a badge.

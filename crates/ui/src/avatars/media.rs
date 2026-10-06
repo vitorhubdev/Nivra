@@ -220,26 +220,41 @@ pub(crate) enum Surface {
 	Inline,
 	Banner,
 	Viewer,
+	/// A mosaic cell: cropped to fill its exact rect with every corner rounded.
+	Tile,
 }
 
 impl Surface {
 	fn lane(self) -> Lane {
 		match self {
 			Self::Viewer => Lane::Viewer,
-			Self::Inline | Self::Banner => Lane::Inline,
+			Self::Inline | Self::Banner | Self::Tile => Lane::Inline,
 		}
 	}
 	fn point_limit(self) -> f32 {
 		match self {
 			Self::Viewer => 4096.0,
-			Self::Inline | Self::Banner => 512.0,
+			Self::Inline | Self::Banner | Self::Tile => 512.0,
 		}
 	}
 	fn allows_upscale(self) -> bool {
 		matches!(self, Self::Viewer)
 	}
 	fn covers(self) -> bool {
-		matches!(self, Self::Banner)
+		matches!(self, Self::Banner | Self::Tile)
+	}
+	/// Corner rounding of a painted cover image; banners round their top edge only.
+	fn corners(self, radius: u8) -> egui::CornerRadius {
+		if self == Self::Banner {
+			egui::CornerRadius {
+				nw: radius,
+				ne: radius,
+				sw: 0,
+				se: 0,
+			}
+		} else {
+			egui::CornerRadius::same(radius)
+		}
 	}
 }
 
@@ -1000,7 +1015,7 @@ impl Avatars {
 				ui,
 				texture,
 				rect,
-				radius,
+				surface.corners(radius),
 				cover,
 				Color32::WHITE,
 			)),
@@ -1027,7 +1042,7 @@ impl Avatars {
 				ui,
 				texture,
 				rect,
-				radius,
+				surface.corners(radius),
 				cover,
 				Color32::WHITE.gamma_multiply(*progress),
 			);

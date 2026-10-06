@@ -197,7 +197,7 @@ fn preview(message: crate::MessageDto) -> Option<(Id, Starter)> {
 	let message = message.into_model();
 	let mut images = Vec::with_capacity(MAX_PREVIEW_IMAGES);
 	let mut image_count = 0u16;
-	let mut push = |media: EmbedMedia, spoiler: bool, video: bool| {
+	let mut push = |media: EmbedMedia, id: Id, size: u64, spoiler: bool, video: bool| {
 		if !media.valid() || (media.url.is_none() && media.proxy_url.is_none()) {
 			return;
 		}
@@ -206,6 +206,8 @@ fn preview(message: crate::MessageDto) -> Option<(Id, Starter)> {
 			let animated = !video && animated(&media.url);
 			images.push(StarterImage {
 				media,
+				id,
+				size,
 				spoiler,
 				animated,
 				video,
@@ -214,14 +216,26 @@ fn preview(message: crate::MessageDto) -> Option<(Id, Starter)> {
 	};
 	for attachment in message.attachments {
 		if attachment.is_video() {
-			push(attachment.media, attachment.spoiler, true);
+			push(
+				attachment.media,
+				attachment.id,
+				attachment.size,
+				attachment.spoiler,
+				true,
+			);
 		} else if attachment.is_image() {
-			push(attachment.media, attachment.spoiler, false);
+			push(
+				attachment.media,
+				attachment.id,
+				attachment.size,
+				attachment.spoiler,
+				false,
+			);
 		}
 	}
 	for embed in message.embeds {
 		if let Some(media) = embed.image.or(embed.thumbnail) {
-			push(media, false, false);
+			push(media, Id(0), 0, false, false);
 		}
 	}
 	let mut reactions = message.reactions.unwrap_or_default();

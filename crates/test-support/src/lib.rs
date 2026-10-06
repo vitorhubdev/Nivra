@@ -732,6 +732,8 @@ fn forum_starter(post: u64, count: usize) -> model::forum::Starter {
 				height: 600,
 				placeholder: Vec::new(),
 			},
+			id: model::Id(900_000 + post * 100 + index as u64),
+			size: 4096,
 			spoiler: false,
 			animated: false,
 			video: false,

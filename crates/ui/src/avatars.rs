@@ -108,7 +108,7 @@ fn paint_texture(
 	ui: &egui::Ui,
 	texture: &TextureHandle,
 	rect: egui::Rect,
-	radius: u8,
+	corners: egui::CornerRadius,
 	cover: bool,
 	tint: egui::Color32,
 ) -> egui::Rect {
@@ -119,18 +119,13 @@ fn paint_texture(
 		let uv_size = rect.size() / (source * scale);
 		image
 			.uv(egui::Rect::from_center_size(egui::pos2(0.5, 0.5), uv_size))
-			.corner_radius(egui::CornerRadius {
-				nw: radius,
-				ne: radius,
-				sw: 0,
-				se: 0,
-			})
+			.corner_radius(corners)
 			.paint_at(ui, rect);
 		rect
 	} else {
 		let scale = (rect.width() / source.x).min(rect.height() / source.y);
 		let fitted = egui::Rect::from_center_size(rect.center(), source * scale);
-		image.corner_radius(radius).paint_at(ui, fitted);
+		image.corner_radius(corners).paint_at(ui, fitted);
 		fitted
 	}
 }
@@ -742,7 +737,17 @@ impl Avatars {
 		self.clock += 1;
 		entry.0 = self.clock;
 		let texture = animated_texture.as_ref().unwrap_or(&entry.1);
-		paint_texture(ui, texture, rect, radius, cover, egui::Color32::WHITE);
+		let corners = if cover {
+			egui::CornerRadius {
+				nw: radius,
+				ne: radius,
+				sw: 0,
+				se: 0,
+			}
+		} else {
+			egui::CornerRadius::same(radius)
+		};
+		paint_texture(ui, texture, rect, corners, cover, egui::Color32::WHITE);
 		true
 	}
 	pub fn show_group(

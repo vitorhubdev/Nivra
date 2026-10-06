@@ -2598,7 +2598,7 @@ impl MessagingUi {
 				.is_some_and(|call| call.phase != Phase::Failed)
 	}
 
-	pub(crate) fn queue_voice_toggle_cue(&mut self, deafen: bool, active: bool) {
+	pub fn queue_voice_toggle_cue(&mut self, deafen: bool, active: bool) {
 		let cue = match (deafen, active) {
 			(true, true) => model::notification_preferences::Sound::Deafen,
 			(true, false) => model::notification_preferences::Sound::Undeafen,
@@ -2620,7 +2620,7 @@ impl MessagingUi {
 	/// card, the call bar and the pre-call card. Returns the new raw intent and which
 	/// cues to play (`mic_cue`, `deafen_cue`). Clicking the microphone while deafened
 	/// un-deafens and unmutes; un-deafening otherwise restores the saved mic intent.
-	fn toggle_voice_intent(&mut self, deafen: bool) -> (bool, bool, bool, bool) {
+	pub fn toggle_voice_intent(&mut self, deafen: bool) -> (bool, bool, bool, bool) {
 		if deafen {
 			self.voice_deafened = !self.voice_deafened;
 			(self.voice_muted, self.voice_deafened, false, true)

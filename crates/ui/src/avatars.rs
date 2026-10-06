@@ -32,6 +32,8 @@ const TEXTURE_BYTES: usize = 64 * 1024 * 1024;
 /// Longest edge for string-keyed artwork: stickers, picker previews, banners and activity art.
 pub const EMBED_EDGE: u32 = 512;
 const REQUESTS: usize = 128;
+/// Off-screen card thumbnails one frame may queue; they load after every visible cell.
+const PREFETCHES: usize = 6;
 const RETRY: Duration = Duration::from_secs(5);
 
 struct AvatarKey {
@@ -57,6 +59,7 @@ pub(crate) struct Avatars {
 	pub revision: u64,
 	attempts: HashMap<String, (Instant, bool)>,
 	requests: Vec<String>,
+	prefetches: usize,
 	media: media::MediaLibrary,
 }
 
@@ -260,6 +263,7 @@ impl Avatars {
 	/// Drained once per frame after the UI pass.
 	pub fn take_requests(&mut self) -> Vec<String> {
 		self.media.end_frame();
+		self.prefetches = 0;
 		std::mem::take(&mut self.requests)
 	}
 	fn request(&mut self, key: String) {

@@ -1976,6 +1976,35 @@ mod tests {
 	}
 
 	#[test]
+	fn our_own_join_sounds_regardless_of_roster_order() {
+		let channel = Id(20);
+		let request = 1;
+		// Order A: our VOICE_STATE_UPDATE lands before the first roster.
+		let mut early = dm_state();
+		early.sync_call_membership(channel, request, people([Id(1)]).into_iter());
+		assert_eq!(
+			early.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![MembershipEvent::Joined {
+				channel,
+				user: Id(1)
+			}]
+		);
+		// Order B: the first roster arrives without us; our update enters as a diff
+		// and must still produce exactly one Joined cue.
+		let mut late = dm_state();
+		late.sync_call_membership(channel, request, people([Id(2)]).into_iter());
+		assert!(late.voice.membership_events.is_empty());
+		late.sync_call_membership(channel, request, people([Id(1), Id(2)]).into_iter());
+		assert_eq!(
+			late.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![MembershipEvent::Joined {
+				channel,
+				user: Id(1)
+			}]
+		);
+	}
+
+	#[test]
 	fn member_mute_toggles_announce_once_and_skip_our_own() {
 		let channel = Id(20);
 		let request = 7;

@@ -562,6 +562,8 @@ pub struct MessagingUi {
 	pub notification_cues: Vec<model::notification_preferences::Sound>,
 	/// Explicit settings preview; intentionally allowed to bypass automatic mute policy.
 	pub notification_preview: Option<model::notification_preferences::Sound>,
+	/// Sounds tab asked to play the call-cue sequence on the current output.
+	pub notification_call_sounds_test: bool,
 	pub notification_sound_status: &'static str,
 	pub notification_test_available: bool,
 	pub notification_test_requested: bool,

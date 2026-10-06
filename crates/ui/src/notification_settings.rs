@@ -84,6 +84,34 @@ mod tests {
 			for label in ["Email", "Advanced", "Friends come online"] {
 				assert!(!labels.iter().any(|(s, _)| s == label), "stale {label}");
 			}
+			// `design::label` renders an uppercase eyebrow.
+			assert!(
+				labels
+					.iter()
+					.any(|(s, _)| s.eq_ignore_ascii_case("Call sounds")),
+				"the call-sounds section must be visible"
+			);
+			let point = labels
+				.iter()
+				.find(|(text, _)| text == "Test sounds")
+				.expect("missing the call-sounds test button")
+				.1
+				.center();
+			for pressed in [true, false] {
+				render(
+					&mut view,
+					vec![
+						egui::Event::PointerMoved(point),
+						egui::Event::PointerButton {
+							pos: point,
+							button: egui::PointerButton::Primary,
+							pressed,
+							modifiers: egui::Modifiers::NONE,
+						},
+					],
+				);
+			}
+			assert!(view.notification_call_sounds_test);
 			for (label, sound) in [
 				("Outgoing Ring", Sound::OutgoingRing),
 				("Camera On", Sound::CameraOn),
@@ -315,6 +343,18 @@ impl MessagingUi {
 				if design::text_action(ui, crate::i18n::text(language, "Preview Sound")).clicked() {
 					self.notification_preview = Some(sound);
 				}
+			}
+			design::card_divider(ui);
+			design::label(ui, crate::i18n::text(language, "Call sounds"));
+			design::hint(
+				ui,
+				crate::i18n::text(
+					language,
+					"Joining, leaving, mute and unmute play even when Nivra is minimized or in the tray.",
+				),
+			);
+			if design::text_action(ui, crate::i18n::text(language, "Test sounds")).clicked() {
+				self.notification_call_sounds_test = true;
 			}
 			if !self.notification_sound_status.is_empty() {
 				design::card_divider(ui);

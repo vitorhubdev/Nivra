@@ -6525,6 +6525,19 @@ impl eframe::App for Desktop {
 			self.poll_voice(ctx);
 		}
 		self.pump_call_cues(ctx);
+		if std::mem::take(&mut self.messaging.notification_call_sounds_test) {
+			// Explicit test sequence on the current output device; join/leave are the
+			// membership route and mute/unmute reuse the local toggles.
+			for cue in [
+				model::notification_preferences::Sound::UserJoin,
+				model::notification_preferences::Sound::UserLeave,
+				model::notification_preferences::Sound::Mute,
+				model::notification_preferences::Sound::Unmute,
+			] {
+				voice::push_membership_cue(&mut self.messaging.notification_cues, cue);
+			}
+			ctx.request_repaint();
+		}
 		if self.messaging.copy_log_requested {
 			self.messaging.copy_log_requested = false;
 			ctx.copy_text(platform::diagnostics::summary());

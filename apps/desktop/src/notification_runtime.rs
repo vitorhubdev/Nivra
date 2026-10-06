@@ -394,6 +394,20 @@ mod tests {
 	}
 
 	#[test]
+	fn membership_cues_keep_sound_with_do_not_disturb_and_zero_volume() {
+		let options = Device {
+			disable_sounds: true,
+			volume: 0,
+			..Device::default()
+		};
+		// Local cues obey the preferences; call membership keeps its level so a join,
+		// leave, mute or unmute is never silent (the runtime pushes it without allows).
+		assert!(!options.allows(Sound::UserJoin));
+		assert_eq!(membership_volume(options, true), 100);
+		assert_eq!(membership_volume(options, false), 0);
+	}
+
+	#[test]
 	fn ringtone_timer_repeats_each_cue_and_stops_on_clear() {
 		let mut runtime = Runtime::default();
 		let now = Instant::now();

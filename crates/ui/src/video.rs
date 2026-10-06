@@ -329,6 +329,13 @@ impl VideoUi {
 			active = false;
 			state = VideoState::Idle;
 		}
+		// Autoplay owns the session: losing window focus (Alt-Tab without minimizing)
+		// stops the decoder and its audio instead of looping behind another app.
+		if active && self.autoplay_owned && !fullscreen && !ui.input(|input| input.focused) {
+			self.stop();
+			active = false;
+			state = VideoState::Idle;
+		}
 		// Short clips play on their own while visible, muted and in a loop. Reduce
 		// motion, a file over the caps or a manually opened player keep the poster
 		// and the play button.
@@ -1265,6 +1272,15 @@ mod tests {
 		messages: &[Message],
 		clip: Option<egui::Rect>,
 	) -> Option<VideoCommand> {
+		draw_cards_focused(ctx, video, messages, clip, true)
+	}
+	fn draw_cards_focused(
+		ctx: &egui::Context,
+		video: &mut VideoUi,
+		messages: &[Message],
+		clip: Option<egui::Rect>,
+		focused: bool,
+	) -> Option<VideoCommand> {
 		let mut command = None;
 		let output = ctx.run_ui(
 			egui::RawInput {
@@ -1272,7 +1288,7 @@ mod tests {
 					egui::Pos2::ZERO,
 					egui::vec2(436.0, 620.0),
 				)),
-				focused: true,
+				focused,
 				..Default::default()
 			},
 			|ui| {
@@ -1362,6 +1378,44 @@ mod tests {
 		video.autoplay_short_videos = true;
 		assert!(draw_cards(&ctx, &mut video, std::slice::from_ref(&short), None).is_none());
 		assert!(video.active.is_none());
+	}
+
+	#[test]
+	fn losing_window_focus_stops_an_autoplay_owned_clip() {
+		let message = short_clip_message(8, Some(4000), 1_000_000);
+		let attachment = message.attachments[0].clone();
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut video = VideoUi::default();
+		video.autoplay_short_videos = true;
+		let command = draw_cards(&ctx, &mut video, std::slice::from_ref(&message), None);
+		assert!(matches!(command, Some(VideoCommand::Play { .. })));
+		assert!(video.autoplay_owned);
+		// Alt-Tab leaves the card visible but unfocused: autoplay hands the decoder back.
+		let command = draw_cards_focused(
+			&ctx,
+			&mut video,
+			std::slice::from_ref(&message),
+			None,
+			false,
+		);
+		assert!(matches!(command, Some(VideoCommand::Stop)), "{command:?}");
+		assert!(video.active.is_none());
+		// A manually opened clip is not autoplay-owned and keeps playing unfocused.
+		video.begin(&message, &attachment, true);
+		video.command = None;
+		let command = draw_cards_focused(
+			&ctx,
+			&mut video,
+			std::slice::from_ref(&message),
+			None,
+			false,
+		);
+		assert!(
+			command.is_none(),
+			"a manual session must not stop on focus loss"
+		);
+		assert!(video.active.is_some());
 	}
 
 	#[test]

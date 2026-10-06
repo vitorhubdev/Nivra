@@ -299,6 +299,7 @@ mod tests {
 				position: 0,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			..State::default()
 		}

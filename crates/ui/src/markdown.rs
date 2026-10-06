@@ -2693,6 +2693,7 @@ mod tests {
 			message_count: None,
 			icon: None,
 			last_message: None,
+			tags: None,
 		};
 		assert_eq!(
 			discord_url(&channel, None).as_deref(),
@@ -3448,6 +3449,7 @@ mod tests {
 			member_list_id: None,
 			message_count: None,
 			icon: None,
+			tags: None,
 		})
 		.collect();
 		for id in [1, 2, 3, 4, 5] {

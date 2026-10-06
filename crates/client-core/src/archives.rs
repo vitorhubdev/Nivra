@@ -277,6 +277,7 @@ mod tests {
 			icon: None,
 			member_list_id: None,
 			message_count: None,
+			tags: None,
 		}
 	}
 	fn message(id: u64, channel: Id) -> model::Message {
@@ -556,6 +557,7 @@ mod tests {
 							position: model::Patch::Absent,
 							kind: model::Patch::Absent,
 							message_count: model::Patch::Absent,
+							tags: model::Patch::Absent,
 						},
 					}
 				} else {

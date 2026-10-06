@@ -141,6 +141,7 @@ mod tests {
 			icon: None,
 			member_list_id: None,
 			message_count: None,
+			tags: None,
 		};
 		let mut state = State {
 			user: Some(User {
@@ -398,6 +399,7 @@ mod tests {
 			icon: None,
 			member_list_id: None,
 			message_count: None,
+			tags: None,
 		};
 		let original = vec![
 			channel(10, 1, None, 0),

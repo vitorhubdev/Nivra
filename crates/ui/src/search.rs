@@ -1452,6 +1452,7 @@ mod tests {
 					message_count: None,
 					icon: None,
 					last_message: None,
+					tags: None,
 				}],
 				..State::default()
 			};
@@ -1636,6 +1637,7 @@ mod tests {
 				message_count: None,
 				icon: None,
 				last_message: None,
+				tags: None,
 			});
 			let ctx = egui::Context::default();
 			let mut view = SearchUi {

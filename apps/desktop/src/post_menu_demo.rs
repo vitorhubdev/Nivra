@@ -124,37 +124,35 @@ pub fn check() {
 		.unwrap();
 	state.demo = false;
 	state.posts.parent = Some(Id(26));
-	let Command::ForumSummaries { channels, request } =
-		state.request_post_summaries(vec![post.id]).unwrap()
-	else {
-		panic!("summary request");
+	// The starter message travels with the search page; no per-post request is made.
+	let starter = model::forum::Starter {
+		author_id: Id(987654321),
+		author: "Synthetic forum author".into(),
+		roles: vec![],
+		webhook: false,
+		excerpt: "Latest synthetic reply".into(),
+		images: vec![model::forum::StarterImage {
+			media: model::EmbedMedia {
+				url: Some("https://cdn.example/attachments/1/900/starter.png".into()),
+				proxy_url: None,
+				width: 640,
+				height: 480,
+				placeholder: Vec::new(),
+			},
+			spoiler: false,
+			animated: false,
+			video: false,
+		}],
+		image_count: 1,
+		reactions: vec![],
 	};
-	assert_eq!(channels, vec![post.id]);
-	let rows: Vec<_> = (0..3)
-		.map(|offset| {
-			serde_json::json!({
-				"id": (latest.0 - offset).to_string(), "channel_id": post.id.to_string(),
-				"author": {"id": "987654321", "username": "Synthetic"},
-				"content": "Latest synthetic reply"
-			})
-		})
-		.collect();
-	let wire = serde_json::to_vec(&rows).unwrap();
-	let summary = discord_protocol::decode::<discord_protocol::forum::Recent>(&wire)
-		.unwrap()
-		.into_summary(post.id)
-		.unwrap();
-	state.apply_forum_summaries(request, vec![(post.id, Ok(summary))]);
-	assert_eq!(state.post_new_count(&post), Some((2, true)));
-	let latest_summary = state
-		.post_summary(post.id)
-		.unwrap()
-		.latest
-		.as_ref()
-		.unwrap();
-	let author_id = latest_summary.author_id;
-	let webhook = latest_summary.webhook;
-	let author_roles = latest_summary.roles.clone();
+	state.posts.remember_preview(post.id, starter.clone());
+	let stored = state.post_preview(post.id).expect("starter preview");
+	assert_eq!(stored.author, "Synthetic forum author");
+	assert_eq!(stored.images.len(), 1);
+	let author_id = stored.author_id;
+	let webhook = stored.webhook;
+	let author_roles = stored.roles.clone();
 	assert_eq!(
 		state.forum_author_color(post.id, author_id, webhook, &author_roles),
 		None
@@ -198,57 +196,52 @@ pub fn check() {
 	state.invalidate_navigation();
 	assert!(state.request_forum_posts(Id(126), false).is_some());
 	assert!(state.request_forum_posts(Id(26), false).is_some());
-	assert!(
-		!state.needs_post_summary(post.id),
-		"forum switches reuse a fresh summary"
-	);
-	let uncached: Vec<_> = state
-		.forum_posts(Id(26))
-		.into_iter()
-		.filter(|candidate| candidate.id != post.id)
-		.take(client_core::forum::SUMMARY_BATCH)
-		.map(|candidate| candidate.id)
+	// Another post on the same page keeps its own starter without a new request.
+	state.posts.remember_preview(Id(41), starter.clone());
+	assert!(state.post_preview(Id(41)).is_some());
+	// A card folds at most four images; the rest collapse into its "+N" count.
+	let mut bounded = starter.clone();
+	assert!(bounded.valid());
+	bounded.images = (0..5)
+		.map(|index| model::forum::StarterImage {
+			media: model::EmbedMedia {
+				url: Some(format!("https://cdn.example/{index}.png")),
+				proxy_url: None,
+				width: 8,
+				height: 8,
+				placeholder: Vec::new(),
+			},
+			spoiler: false,
+			animated: false,
+			video: false,
+		})
 		.collect();
-	let batch = state.request_post_summaries(uncached).unwrap();
-	assert!(
-		matches!(&batch, Command::ForumSummaries { channels, .. } if channels.len() > 1),
-		"visible forum summaries share one concurrent batch"
-	);
-	state.command_rejected(batch);
-	assert!(
-		discord_protocol::decode::<discord_protocol::forum::Recent>(&wire)
-			.unwrap()
-			.into_summary(Id(999))
-			.is_err()
-	);
-	assert!(!state.needs_post_summary(post.id));
-	let mut bounded = model::forum::Summary {
-		messages: (0..50).map(|offset| Id(latest.0 - offset)).collect(),
-		latest: Some(model::forum::Latest {
-			id: latest,
-			channel: post.id,
-			author_id: Id(987654321),
-			author: "Synthetic".into(),
-			roles: vec![],
-			webhook: false,
-			excerpt: "Reply".into(),
-		}),
-		complete: false,
-	};
-	assert!(bounded.valid(post.id));
-	bounded.messages.push(Id(latest.0 - 50));
-	assert!(!bounded.valid(post.id));
-	let mut spoiler = rows[0].clone();
-	spoiler["content"] = serde_json::json!("||private spoiler||");
-	let summary = discord_protocol::decode::<discord_protocol::forum::Recent>(
-		&serde_json::to_vec(&vec![spoiler]).unwrap(),
+	bounded.image_count = 5;
+	assert!(!bounded.valid());
+	// A spoiler starter never leaks its text into the card.
+	let spoiler = serde_json::json!({
+		"threads": [{
+			"id": post.id.to_string(), "guild_id": "10", "parent_id": "26", "type": 11,
+			"name": "Synthetic spoiler", "thread_metadata": {"archived": false}
+		}],
+		"members": [],
+		"has_more": false,
+		"first_messages": [{
+			"id": post.id.to_string(), "channel_id": post.id.to_string(),
+			"author": {"id": "987654321", "username": "Synthetic"},
+			"content": "||private spoiler||",
+			"attachments": []
+		}]
+	});
+	let page = discord_protocol::decode::<discord_protocol::forum::Reply>(
+		&serde_json::to_vec(&spoiler).unwrap(),
 	)
 	.unwrap()
-	.into_summary(post.id)
+	.into_page(Id(26), Id(10))
 	.unwrap();
-	assert!(!summary.latest.unwrap().excerpt.contains("private spoiler"));
+	assert!(!page.previews[0].1.excerpt.contains("private spoiler"));
 	println!(
-		"Forum debug check passed: deferred startup cursors, exact unread count, scoped bounded previews, and concealed spoilers."
+		"Forum debug check passed: starter previews reused across switches, bounded mosaics and concealed spoilers."
 	);
 	state.demo = true;
 
@@ -309,8 +302,11 @@ pub fn check() {
 	};
 	frame(vec![]);
 	let (text, _) = frame(vec![]);
-	assert!(text.iter().any(|(text, _)| text == "(2 New)"));
-	assert!(text.iter().any(|(text, _)| text == "Synthetic:"));
+	assert!(text.iter().any(|(text, _)| text == "(New)"));
+	assert!(
+		text.iter()
+			.any(|(text, _)| text == "Synthetic forum author:")
+	);
 	assert!(
 		text.iter()
 			.any(|(text, _)| text == "Latest synthetic reply")

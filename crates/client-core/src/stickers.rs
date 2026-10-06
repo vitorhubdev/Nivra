@@ -192,6 +192,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			selected: Some(Id(1)),
 			auth: AuthState::Authenticated,

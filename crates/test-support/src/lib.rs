@@ -347,6 +347,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: Some("everyone".into()),
 					message_count: None,
+					tags: None,
 				},
 				Channel {
 					last_message: None,
@@ -360,6 +361,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: Some("everyone".into()),
 					message_count: None,
+					tags: None,
 				},
 				Channel {
 					last_message: None,
@@ -373,6 +375,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				},
 				Channel {
 					last_message: None,
@@ -386,6 +389,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				},
 				Channel {
 					id: Id(40),
@@ -407,6 +411,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				},
 				Channel {
 					id: Id(43),
@@ -428,6 +433,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				},
 				Channel {
 					id: Id(29),
@@ -452,6 +458,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				},
 				Channel {
 					last_message: None,
@@ -465,6 +472,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				},
 				Channel {
 					last_message: None,
@@ -478,6 +486,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				},
 				Channel {
 					id: Id(26),
@@ -491,6 +500,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				},
 				Channel {
 					id: Id(27),
@@ -504,6 +514,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: None,
 					message_count: Some(10),
+					tags: None,
 				},
 				Channel {
 					id: Id(41),
@@ -517,6 +528,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: None,
 					message_count: Some(0),
+					tags: None,
 				},
 				Channel {
 					id: Id(42),
@@ -530,6 +542,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: None,
 					message_count: Some(6),
+					tags: None,
 				},
 				Channel {
 					id: Id(28),
@@ -543,6 +556,7 @@ pub fn demo_state() -> State {
 					icon: None,
 					member_list_id: None,
 					message_count: Some(4),
+					tags: None,
 				},
 			],
 		},
@@ -566,6 +580,63 @@ pub fn demo_state() -> State {
 			replace: true,
 		})
 		.unwrap();
+	// Offline forum fixture: the tags the container offers, the tags its posts apply and the
+	// starter previews a search page would deliver, all synthetic.
+	if let Some(forum) = state
+		.channels
+		.iter_mut()
+		.find(|channel| channel.id == Id(26))
+	{
+		forum.tags = Some(Box::new(model::forum::Tags {
+			available: vec![
+				model::forum::Tag {
+					id: Id(31),
+					name: "Synthetic help".into(),
+					moderated: false,
+					emoji_id: None,
+					emoji_name: Some("🔥".into()),
+				},
+				model::forum::Tag {
+					id: Id(32),
+					name: "Synthetic ideas".into(),
+					moderated: false,
+					emoji_id: None,
+					emoji_name: None,
+				},
+				model::forum::Tag {
+					id: Id(33),
+					name: "Moderated".into(),
+					moderated: true,
+					emoji_id: Some(Id(90)),
+					emoji_name: Some("synthetic".into()),
+				},
+			],
+			applied: vec![],
+			required: false,
+			reaction: Some(model::ReactionEmoji {
+				id: None,
+				name: Some("🔥".into()),
+			}),
+			layout: model::forum::Layout::Gallery,
+			sort: model::forum::Sort::Activity,
+			match_all: false,
+		}));
+	}
+	for (post, tag, images) in [(27u64, 31u64, 3usize), (41, 32, 1), (42, 33, 0)] {
+		if let Some(channel) = state
+			.channels
+			.iter_mut()
+			.find(|channel| channel.id == Id(post))
+		{
+			channel.tags = Some(Box::new(model::forum::Tags {
+				applied: vec![Id(tag)],
+				..Default::default()
+			}));
+		}
+		state
+			.posts
+			.remember_preview(Id(post), forum_starter(post, images));
+	}
 	state.select(Id(20));
 	load_page(&mut state, None);
 	state.apply(Envelope {
@@ -648,6 +719,43 @@ pub fn demo_state() -> State {
 	state.status = "Offline fixture · no network access";
 	state
 }
+/// A synthetic starter preview with `count` images, mirroring the search page's field.
+fn forum_starter(post: u64, count: usize) -> model::forum::Starter {
+	let images = (0..count)
+		.map(|index| model::forum::StarterImage {
+			media: model::EmbedMedia {
+				url: Some(format!(
+					"https://cdn.example/attachments/1/{post}{index}/synthetic-{index}.png"
+				)),
+				proxy_url: None,
+				width: 800,
+				height: 600,
+				placeholder: Vec::new(),
+			},
+			spoiler: false,
+			animated: false,
+			video: false,
+		})
+		.collect();
+	model::forum::Starter {
+		author_id: Id(2000 + post),
+		author: format!("Synthetic author {post}"),
+		roles: vec![],
+		webhook: false,
+		excerpt: format!("Synthetic starter of post {post}"),
+		images,
+		image_count: count as u16,
+		reactions: vec![model::Reaction {
+			emoji: model::ReactionEmoji {
+				id: None,
+				name: Some("🔥".into()),
+			},
+			count: 3,
+			me: false,
+			me_burst: false,
+		}],
+	}
+}
 /// Notification rail evidence: synthetic incoming DMs and a guild mention, no OS delivery.
 pub fn notification_demo_state() -> State {
 	let mut state = demo_state();
@@ -697,6 +805,7 @@ pub fn voice_demo_state() -> State {
 		member_list_id: None,
 		message_count: None,
 		last_message: None,
+		tags: None,
 	});
 	state.voice.roster = [
 		(1, "You (synthetic)", false, false),
@@ -912,6 +1021,7 @@ pub fn seed_access_marks(state: &mut State) {
 		icon: None,
 		member_list_id: None,
 		message_count: None,
+		tags: None,
 	};
 	state.channels.extend([
 		channel(60, 4, None, 2, "ACCESS"),

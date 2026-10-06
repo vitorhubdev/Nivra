@@ -5218,6 +5218,7 @@ mod tests {
 				message_count: None,
 				icon: None,
 				last_message: Some(Id(30)),
+				tags: None,
 			}],
 			selected: Some(Id(1)),
 			..Default::default()
@@ -5452,6 +5453,7 @@ mod tests {
 				message_count: None,
 				icon: None,
 				last_message: Some(Id(20)),
+				tags: None,
 			}],
 			..Default::default()
 		};
@@ -5666,6 +5668,7 @@ mod tests {
 				icon: None,
 				// Empty/short history can retain stale service latest metadata.
 				last_message: Some(Id(latest)),
+				tags: None,
 			}];
 			state
 				.apply_read_state(client_core::read_state::Event::Snapshot {
@@ -5844,6 +5847,7 @@ mod tests {
 				message_count: None,
 				icon: None,
 				last_message: Some(Id(20)),
+				tags: None,
 			},
 			model::Channel {
 				id: Id(21),
@@ -5857,6 +5861,7 @@ mod tests {
 				message_count: None,
 				icon: None,
 				last_message: None,
+				tags: None,
 			},
 		];
 		state
@@ -5961,6 +5966,7 @@ mod tests {
 			message_count: None,
 			icon: None,
 			last_message: Some(Id(40)),
+			tags: None,
 		}];
 		state
 			.apply_read_state(client_core::read_state::Event::Snapshot {
@@ -6049,6 +6055,7 @@ mod tests {
 			message_count: None,
 			icon: None,
 			last_message: Some(Id(65)),
+			tags: None,
 		}];
 		state
 			.apply_read_state(client_core::read_state::Event::Snapshot {
@@ -6772,6 +6779,7 @@ mod tests {
 			recipients: vec![author.clone()],
 			member_list_id: None,
 			message_count: None,
+			tags: None,
 		}];
 		let mut message = text_message(1);
 		message.author = author;
@@ -8188,6 +8196,7 @@ mod tests {
 					message_count: None,
 					icon: None,
 					last_message: Some(Id(20)),
+					tags: None,
 				}],
 				..Default::default()
 			};
@@ -8309,6 +8318,7 @@ mod tests {
 				message_count: None,
 				icon: None,
 				last_message: None,
+				tags: None,
 			})
 			.collect::<Vec<_>>();
 		let permission_channels = channels
@@ -8530,6 +8540,7 @@ mod tests {
 					message_count: None,
 					icon: None,
 					last_message: Some(Id(20)),
+					tags: None,
 				}],
 				..Default::default()
 			};
@@ -8632,6 +8643,7 @@ mod tests {
 				message_count: None,
 				icon: None,
 				last_message: Some(Id(1)),
+				tags: None,
 			}],
 			..Default::default()
 		};
@@ -9827,6 +9839,7 @@ mod tests {
 			message_count: None,
 			icon: None,
 			last_message: None,
+			tags: None,
 		});
 		state.timeline.insert(message, false, false).unwrap();
 		state.timeline.insert(tail, false, false).unwrap();
@@ -9890,6 +9903,7 @@ mod tests {
 				kind: model::Patch::Absent,
 				message_count: model::Patch::Absent,
 				icon: model::Patch::Absent,
+				tags: model::Patch::Absent,
 			}),
 		});
 		assert_eq!(layout_key(state.timeline.get(Id(1)).unwrap()), message_key);
@@ -10488,6 +10502,7 @@ mod tests {
 				message_count: None,
 				icon: None,
 				last_message: (count > 0).then_some(Id(count)),
+				tags: None,
 			}],
 			..Default::default()
 		};

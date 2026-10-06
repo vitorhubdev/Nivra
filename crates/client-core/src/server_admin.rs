@@ -1147,6 +1147,7 @@ mod voice_move_tests {
 					member_list_id: None,
 					message_count: None,
 					last_message: None,
+					tags: None,
 				})
 				.collect(),
 			..Default::default()

@@ -147,10 +147,8 @@ pub enum Command {
 		content: String,
 		/// Filenames staged for the starter message, in selection order; empty sends text only.
 		attachments: Vec<String>,
-		request: u64,
-	},
-	ForumSummaries {
-		channels: Vec<Id>,
+		/// Forum tags applied to the new post, in pick order; empty when the forum has none.
+		tags: Vec<Id>,
 		request: u64,
 	},
 	ForumPosts {
@@ -468,10 +466,6 @@ pub enum Event {
 		thread: Id,
 		request: u64,
 		result: Result<Message, auth::Failure>,
-	},
-	ForumSummaries {
-		request: u64,
-		results: Vec<(Id, Result<model::forum::Summary, auth::Failure>)>,
 	},
 	ForumPosts {
 		parent: Id,
@@ -2089,16 +2083,6 @@ impl State {
 			self.apply_thread_starter(thread, request, Err(auth::Failure::Capacity));
 			return;
 		}
-		if let Command::ForumSummaries { channels, request } = command {
-			self.apply_forum_summaries(
-				request,
-				channels
-					.into_iter()
-					.map(|channel| (channel, Err(auth::Failure::Capacity)))
-					.collect(),
-			);
-			return;
-		}
 		if let Command::ForumPosts {
 			parent, request, ..
 		} = command
@@ -2386,7 +2370,7 @@ impl State {
 				self.stickers.external_allowed = false;
 			}
 			self.interrupt_stickers();
-			self.posts.clear_summaries();
+			self.posts.clear_previews();
 			self.interactions.reset();
 			// A lifecycle transition invalidates the single in-flight vote, so a lost
 			// response can never leave every poll button disabled.
@@ -2631,10 +2615,6 @@ impl State {
 				result,
 			} => {
 				self.apply_thread_starter(thread, request, result);
-				Ok(())
-			}
-			Event::ForumSummaries { request, results } => {
-				self.apply_forum_summaries(request, results);
 				Ok(())
 			}
 			Event::ForumPosts {
@@ -2977,6 +2957,11 @@ impl State {
 					}
 					if let Patch::Value(count) = patch.message_count {
 						channel.message_count = Some(count);
+					}
+					match patch.tags {
+						Patch::Value(tags) => channel.tags = Some(tags),
+						Patch::Null => channel.tags = None,
+						Patch::Absent => {}
 					}
 					if self.navigation_bytes() + self.permissions.bytes()
 						> model::account::MAX_BYTES
@@ -3716,7 +3701,7 @@ impl State {
 			}
 			self.reconcile_notifications();
 			self.prune_resident();
-			self.prune_post_summaries();
+			self.prune_post_previews();
 		}
 		if self.search.is_some() && !self.can_search() {
 			self.clear_search();
@@ -4077,16 +4062,6 @@ impl Event {
 					result.as_ref().map_or(0, model::archives::Page::bytes)
 				}
 				Self::ThreadStarter { result, .. } => result.as_ref().map_or(0, Message::bytes),
-				Self::ForumSummaries { results, .. } => {
-					results.capacity()
-						* size_of::<(Id, Result<model::forum::Summary, auth::Failure>)>()
-						+ results
-							.iter()
-							.map(|(_, result)| {
-								result.as_ref().map_or(0, model::forum::Summary::bytes)
-							})
-							.sum::<usize>()
-				}
 				Self::ForumPosts { result, .. } => {
 					result.as_ref().map_or(0, model::forum::Page::bytes)
 				}
@@ -4366,6 +4341,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			selected: Some(Id(1)),
 			auth: auth::AuthState::Authenticated,
@@ -4419,6 +4395,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			selected: Some(Id(1)),
 			auth: auth::AuthState::Authenticated,
@@ -4471,6 +4448,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			selected: Some(Id(1)),
 			auth: auth::AuthState::Authenticated,
@@ -4686,6 +4664,7 @@ mod tests {
 			icon: None,
 			member_list_id: None,
 			message_count: None,
+			tags: None,
 		}];
 		state.selected = Some(Id(20));
 		let author = state.user.clone().expect("nitro owner");
@@ -4788,6 +4767,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			selected: Some(Id(1)),
 			auth: auth::AuthState::Authenticated,
@@ -4839,6 +4819,7 @@ mod tests {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				})
 				.collect(),
 			..State::default()
@@ -5015,6 +4996,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			gateway_connected: true,
 			auth: auth::AuthState::Authenticated,
@@ -5449,6 +5431,7 @@ mod tests {
 			icon: None,
 			member_list_id: None,
 			message_count: None,
+			tags: None,
 		};
 		apply(&mut state, Event::ChannelCreated(channel.clone()));
 		apply(&mut state, Event::ChannelCreated(channel));
@@ -5464,6 +5447,8 @@ mod tests {
 				position: Patch::Value(0),
 				kind: Patch::Absent,
 				message_count: Patch::Absent,
+
+				tags: Patch::Absent,
 			}),
 		);
 		assert_eq!(state.channels[0].parent_id, None);
@@ -5483,6 +5468,8 @@ mod tests {
 				position: Patch::Absent,
 				kind: Patch::Value(4),
 				message_count: Patch::Absent,
+
+				tags: Patch::Absent,
 			}),
 		);
 		assert!(state.selected.is_none());
@@ -5505,6 +5492,7 @@ mod tests {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				}),
 			);
 		}
@@ -5580,6 +5568,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			..State::default()
 		};
@@ -5725,6 +5714,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			..State::default()
 		};
@@ -5862,6 +5852,7 @@ mod tests {
 			icon: None,
 			member_list_id: Some("known-list".into()),
 			message_count: None,
+			tags: None,
 		};
 		let mut state = State {
 			user: Some(message(1).author),
@@ -5906,6 +5897,8 @@ mod tests {
 				position: Patch::Absent,
 				kind: Patch::Absent,
 				message_count: Patch::Absent,
+
+				tags: Patch::Absent,
 			}),
 		);
 		assert_eq!(state.channels[0].name, "Renamed");
@@ -6003,6 +5996,7 @@ mod tests {
 			icon: None,
 			member_list_id: None,
 			message_count: None,
+			tags: None,
 		};
 		let guild = Guild {
 			stickers: None,
@@ -6094,6 +6088,7 @@ mod tests {
 			icon: None,
 			member_list_id: None,
 			message_count: None,
+			tags: None,
 		};
 		let user = || User {
 			primary_guild: None,
@@ -6266,6 +6261,7 @@ mod tests {
 					icon: None,
 					member_list_id: None,
 					message_count: None,
+					tags: None,
 				}],
 			},
 		);

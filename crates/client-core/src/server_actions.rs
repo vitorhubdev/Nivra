@@ -534,6 +534,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			selected: Some(Id(3)),
 			auth: AuthState::Authenticated,
@@ -823,6 +824,7 @@ mod tests {
 			icon: None,
 			member_list_id: None,
 			message_count: None,
+			tags: None,
 		});
 		current.channels.push(model::Channel {
 			id: Id(21),
@@ -836,6 +838,7 @@ mod tests {
 			icon: None,
 			member_list_id: None,
 			message_count: None,
+			tags: None,
 		});
 		current.permissions.guilds.insert(
 			Id(8),

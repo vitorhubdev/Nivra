@@ -3,15 +3,12 @@ use crate::{Command, MAX_CONTENT, MAX_NAV, State, auth::AuthState, auth::Failure
 use model::{Channel, Id, permissions as p};
 
 pub const MAX_TITLE: usize = 100;
-pub const SUMMARY_BATCH: usize = 4;
 
 /// The on-demand active-post list of one forum; the gateway only delivers joined posts.
 #[derive(Default)]
 pub struct Posts {
-	// At most 200 summaries of at most 4 KiB each across the current session.
-	summaries: std::collections::BTreeMap<Id, (Option<Id>, Option<model::forum::Summary>)>,
-	summary_request: u64,
-	summary_pending: Option<u64>,
+	// At most 200 starter previews, bounded like the posts they sit beside.
+	previews: std::collections::BTreeMap<Id, model::forum::Starter>,
 	pub parent: Option<Id>,
 	pub request: u64,
 	pub loading: bool,
@@ -22,9 +19,18 @@ pub struct Posts {
 }
 
 impl Posts {
-	pub(crate) fn clear_summaries(&mut self) {
-		self.summaries.clear();
-		self.summary_pending = None;
+	pub(crate) fn clear_previews(&mut self) {
+		self.previews.clear();
+	}
+
+	/// Remember what a post card shows of its starter; fixtures seed theirs the same way.
+	pub fn remember_preview(&mut self, post: Id, starter: model::forum::Starter) {
+		if post.0 > 0
+			&& starter.valid()
+			&& (self.previews.contains_key(&post) || self.previews.len() < model::forum::MAX_POSTS)
+		{
+			self.previews.insert(post, starter);
+		}
 	}
 }
 
@@ -38,107 +44,73 @@ pub struct Posting {
 }
 
 impl State {
-	pub(crate) fn prune_post_summaries(&mut self) {
-		let mut summaries = std::mem::take(&mut self.posts.summaries);
-		summaries.retain(|channel, _| self.can_read_history(*channel));
-		self.posts.summaries = summaries;
+	pub(crate) fn prune_post_previews(&mut self) {
+		let mut previews = std::mem::take(&mut self.posts.previews);
+		previews.retain(|post, _| self.can_view(*post));
+		self.posts.previews = previews;
 	}
 
-	pub fn post_summary(&self, channel: Id) -> Option<&model::forum::Summary> {
-		if !self.gateway_connected || !self.can_read_history(channel) {
-			return None;
-		}
-		let (latest, summary) = self.posts.summaries.get(&channel)?;
-		(*latest == self.channel(channel)?.last_message)
-			.then_some(summary.as_ref())
+	/// The starter message's card preview: images, author and reactions.
+	pub fn post_preview(&self, post: Id) -> Option<&model::forum::Starter> {
+		self.can_view(post)
+			.then(|| self.posts.previews.get(&post))
 			.flatten()
 	}
 
-	pub fn needs_post_summary(&self, channel: Id) -> bool {
-		!self.demo
-			&& self.auth == AuthState::Authenticated
-			&& self.gateway_connected
-			&& (self.posts.summaries.contains_key(&channel)
-				|| self.posts.summaries.len() < model::forum::MAX_POSTS)
-			&& self.can_read_history(channel)
-			&& self.channel(channel).is_some_and(|post| {
-				post.parent_id == self.posts.parent
-					&& self.selected == self.posts.parent
-					&& matches!(post.kind, 11 | 12)
-					&& self
-						.posts
-						.summaries
-						.get(&channel)
-						.is_none_or(|(latest, _)| *latest != post.last_message)
+	/// The reaction a post card shows: the forum's default one when used, else the most used.
+	pub fn post_reaction(&self, post: &Channel) -> Option<&model::Reaction> {
+		let reactions = &self.posts.previews.get(&post.id)?.reactions;
+		let default = post
+			.parent_id
+			.and_then(|forum| self.channel(forum))
+			.and_then(|forum| forum.tags.as_deref())
+			.and_then(|tags| tags.reaction.as_ref());
+		self.can_view(post.id)
+			.then(|| {
+				default
+					.and_then(|emoji| reactions.iter().find(|r| r.emoji.same(emoji)))
+					.or_else(|| reactions.first())
 			})
+			.flatten()
 	}
 
-	pub fn request_post_summaries(&mut self, channels: Vec<Id>) -> Option<Command> {
-		if self.posts.summary_pending.is_some()
-			|| channels.is_empty()
-			|| channels.len() > SUMMARY_BATCH
-			|| channels.iter().enumerate().any(|(i, channel)| {
-				channels[..i].contains(channel) || !self.needs_post_summary(*channel)
-			}) {
-			return None;
-		}
-		self.posts.summary_request = self.posts.summary_request.wrapping_add(1);
-		let request = self.posts.summary_request;
-		self.posts.summary_pending = Some(request);
-		for channel in &channels {
-			let latest = self.channel(*channel).and_then(|post| post.last_message);
-			// A failure stays unavailable until Refresh or new activity, without a retry loop.
-			self.posts.summaries.insert(*channel, (latest, None));
-		}
-		Some(Command::ForumSummaries { channels, request })
+	/// The forum's post defaults, for the list's initial sort, layout and tag matching.
+	pub fn forum_defaults(&self, forum: Id) -> Option<&model::forum::Tags> {
+		self.channel(forum)
+			.filter(|channel| matches!(channel.kind, 15 | 16))
+			.and_then(|channel| channel.tags.as_deref())
 	}
 
-	pub fn apply_forum_summaries(
-		&mut self,
-		request: u64,
-		results: Vec<(Id, Result<model::forum::Summary, Failure>)>,
-	) {
-		if self.posts.summary_pending != Some(request) {
-			return;
-		}
-		self.posts.summary_pending = None;
-		for (channel, result) in results {
-			let current = self.channel(channel).and_then(|post| post.last_message);
-			match result {
-				Ok(summary)
-					if summary.valid(channel)
-						&& self.can_read_history(channel)
-						&& self.gateway_connected =>
-				{
-					if let Some((latest, value)) = self.posts.summaries.get_mut(&channel)
-						&& *latest == current
-					{
-						*value = Some(summary);
-					}
-				}
-				Err(failure) if failure.ends_session() && failure != Failure::Capacity => {
-					self.fail(failure);
-					break;
-				}
-				_ => {}
-			}
-		}
+	/// Tags a forum offers, in the order its moderators arranged them.
+	pub fn forum_tags(&self, forum: Id) -> &[model::forum::Tag] {
+		self.channel(forum)
+			.filter(|channel| matches!(channel.kind, 15 | 16))
+			.and_then(|channel| channel.tags.as_deref())
+			.map_or(&[], |tags| &tags.available)
 	}
 
-	pub fn post_new_count(&self, post: &Channel) -> Option<(usize, bool)> {
-		if !self.post_unread(post) {
-			return Some((0, true));
-		}
-		let marker = self.read_marker(post.id)?;
-		let summary = self.post_summary(post.id)?;
-		let count = summary
-			.messages
+	pub fn forum_requires_tag(&self, forum: Id) -> bool {
+		self.channel(forum)
+			.and_then(|channel| channel.tags.as_deref())
+			.is_some_and(|tags| tags.required)
+	}
+
+	/// Tags applied to a post that its forum still offers, in the forum's order.
+	pub fn post_tags(&self, post: &Channel) -> Vec<&model::forum::Tag> {
+		let Some(applied) = post.tags.as_deref().map(|tags| &tags.applied) else {
+			return Vec::new();
+		};
+		post.parent_id
+			.map(|forum| self.forum_tags(forum))
+			.unwrap_or_default()
 			.iter()
-			.filter(|id| marker.is_none_or(|read| **id > read))
-			.count();
-		let exact = summary.complete
-			|| marker.is_some_and(|read| summary.messages.last().is_some_and(|id| *id <= read));
-		Some((count, exact))
+			.filter(|tag| applied.contains(&tag.id))
+			.collect()
+	}
+
+	/// Moderated tags need thread management; everyone else may apply the rest.
+	pub fn can_apply_tag(&self, forum: Id, tag: &model::forum::Tag) -> bool {
+		!tag.moderated || self.permission(forum, p::MANAGE_THREADS) == Some(true)
 	}
 
 	pub fn is_forum(&self, channel: Id) -> bool {
@@ -251,7 +223,6 @@ impl State {
 			// Keep the request counter monotonic so a late reply cannot match a fresh load.
 			self.posts = Posts {
 				request: self.posts.request,
-				summary_request: self.posts.summary_request,
 				..Posts::default()
 			};
 		}
@@ -290,14 +261,21 @@ impl State {
 			self.posts.error = Some("The service returned unexpected posts");
 			return;
 		};
+		for (post, starter) in page.previews {
+			self.posts.remember_preview(post, starter);
+		}
 		// Every returned row advances the offset, even one this state already knew.
 		let returned = page.threads.len();
 		for post in page.threads {
 			if let Some(index) = self.channel_index(post.id) {
 				let existing = &self.channels[index];
 				if existing.parent_id == Some(parent) && existing.guild == Some(guild) {
+					let tag_bytes =
+						|channel: &Channel| channel.tags.as_ref().map_or(0, |tags| tags.bytes());
 					let bytes =
-						self.navigation_bytes() - existing.name.capacity() + post.name.capacity();
+						self.navigation_bytes() - existing.name.capacity() - tag_bytes(existing)
+							+ post.name.capacity()
+							+ tag_bytes(&post);
 					if bytes + self.permissions.bytes() > model::account::MAX_BYTES {
 						self.posts.error = Some("Posts exceed the navigation budget");
 						self.posts.more = false;
@@ -307,6 +285,7 @@ impl State {
 					existing.last_message = existing.last_message.max(post.last_message);
 					existing.message_count = post.message_count.or(existing.message_count);
 					existing.name = post.name;
+					existing.tags = post.tags;
 					self.set_navigation_bytes(bytes);
 				}
 				continue;
@@ -346,16 +325,18 @@ impl State {
 	}
 
 	pub fn create_post(&mut self, parent: Id, title: &str, content: &str) -> Option<Command> {
-		self.create_post_with_attachments(parent, title, content, &[])
+		self.create_post_with_attachments(parent, title, content, &[], &[])
 	}
 
-	/// Create one post, optionally with files staged for its starter message.
+	/// Create one post, optionally with files staged for its starter message and tags applied
+	/// to the new thread.
 	pub fn create_post_with_attachments(
 		&mut self,
 		parent: Id,
 		title: &str,
 		content: &str,
 		filenames: &[&str],
+		tags: &[Id],
 	) -> Option<Command> {
 		let title = title.trim();
 		let content = content.trim();
@@ -382,6 +363,21 @@ impl State {
 			self.posting.error = Some("Attachment filename is invalid or too long");
 			return None;
 		}
+		let offered = self.forum_tags(parent);
+		if tags.len() > model::forum::MAX_APPLIED_TAGS
+			|| tags.iter().enumerate().any(|(i, id)| {
+				tags[..i].contains(id)
+					|| !offered
+						.iter()
+						.any(|tag| tag.id == *id && self.can_apply_tag(parent, tag))
+			}) {
+			self.posting.error = Some("Choose up to 5 tags this forum offers");
+			return None;
+		}
+		if tags.is_empty() && self.forum_requires_tag(parent) {
+			self.posting.error = Some("This forum requires at least one tag");
+			return None;
+		}
 		let guild = self.channel(parent)?.guild?;
 		self.posting.request = self.posting.request.wrapping_add(1);
 		self.posting.pending = Some((parent, self.posting.request));
@@ -392,6 +388,7 @@ impl State {
 			title: title.to_owned(),
 			content: content.to_owned(),
 			attachments: filenames.iter().map(|name| (*name).to_owned()).collect(),
+			tags: tags.to_vec(),
 			request: self.posting.request,
 		})
 	}
@@ -433,6 +430,7 @@ impl State {
 				return;
 			}
 			existing.message_count = post.message_count.or(existing.message_count);
+			existing.tags = post.tags.clone();
 		} else {
 			let bytes = self.navigation_bytes();
 			if self.channels.len() + self.guilds.len() >= MAX_NAV
@@ -467,6 +465,7 @@ mod tests {
 			icon: None,
 			member_list_id: None,
 			message_count: Some(3),
+			tags: None,
 		}
 	}
 	fn state() -> State {
@@ -504,6 +503,152 @@ mod tests {
 	}
 
 	#[test]
+	fn forum_pages_carry_starter_previews_and_applied_tags() {
+		let mut state = state();
+		state.channels[1].tags = Some(Box::new(model::forum::Tags {
+			available: vec![
+				model::forum::Tag {
+					id: Id(31),
+					name: "Help".into(),
+					moderated: false,
+					emoji_id: None,
+					emoji_name: Some("🔥".into()),
+				},
+				model::forum::Tag {
+					id: Id(32),
+					name: "Moderated".into(),
+					moderated: true,
+					emoji_id: None,
+					emoji_name: None,
+				},
+			],
+			required: true,
+			reaction: Some(model::ReactionEmoji {
+				id: None,
+				name: Some("🔥".into()),
+			}),
+			layout: model::forum::Layout::Gallery,
+			..Default::default()
+		}));
+		let image = |url: &str| model::forum::StarterImage {
+			media: model::EmbedMedia {
+				url: Some(url.into()),
+				proxy_url: None,
+				width: 8,
+				height: 8,
+				placeholder: Vec::new(),
+			},
+			spoiler: false,
+			animated: false,
+			video: false,
+		};
+		let starter = |image_count: u16| model::forum::Starter {
+			author_id: Id(7),
+			author: "Synthetic".into(),
+			roles: vec![],
+			webhook: false,
+			excerpt: "Starter excerpt".into(),
+			images: (0..image_count.min(4))
+				.map(|index| image(&format!("https://cdn.example/{index}.png")))
+				.collect(),
+			image_count,
+			reactions: vec![model::Reaction {
+				emoji: model::ReactionEmoji {
+					id: None,
+					name: Some("🔥".into()),
+				},
+				count: 4,
+				me: false,
+				me_burst: false,
+			}],
+		};
+		state.request_forum_posts(Id(20), false).unwrap();
+		let mut first = channel(21, Some(Id(20)), 11);
+		first.tags = Some(Box::new(model::forum::Tags {
+			applied: vec![Id(31)],
+			..Default::default()
+		}));
+		let page = model::forum::Page {
+			threads: vec![first, channel(22, Some(Id(20)), 11)],
+			more: false,
+			previews: vec![(Id(21), starter(5)), (Id(22), starter(0))],
+		};
+		state.apply_forum_posts(Id(20), state.posts.request, Ok(page));
+		let post = state.channel(Id(21)).unwrap();
+		assert_eq!(
+			state.forum_defaults(Id(20)).unwrap().layout,
+			model::forum::Layout::Gallery
+		);
+		assert_eq!(state.forum_tags(Id(20)).len(), 2);
+		assert!(state.forum_requires_tag(Id(20)));
+		assert_eq!(
+			state
+				.post_tags(post)
+				.iter()
+				.map(|tag| tag.id)
+				.collect::<Vec<_>>(),
+			vec![Id(31)]
+		);
+		assert!(state.can_apply_tag(Id(20), &state.forum_tags(Id(20))[0]));
+		// A moderated tag needs thread management; the granted owner has it, a bare state not.
+		assert!(state.can_apply_tag(Id(20), &state.forum_tags(Id(20))[1]));
+		let moderated = state.forum_tags(Id(20))[1].clone();
+		let outsider = State {
+			channels: vec![channel(20, None, 15)],
+			..State::default()
+		};
+		assert!(!outsider.can_apply_tag(Id(20), &moderated));
+		// A card folds the starter into four images and a total count for its "+N" badge.
+		let preview = state.post_preview(Id(21)).unwrap();
+		assert_eq!(preview.images.len(), 4);
+		assert_eq!(preview.image_count, 5);
+		assert_eq!(state.post_preview(Id(22)).unwrap().images.len(), 0);
+		// The forum's default reaction wins over the most used one when it is present.
+		assert_eq!(
+			state.post_reaction(post).unwrap().emoji.name.as_deref(),
+			Some("🔥")
+		);
+		assert!(state.post_preview(Id(999)).is_none());
+	}
+
+	#[test]
+	fn post_tags_are_validated_against_the_forum() {
+		let mut state = state();
+		state.channels[1].tags = Some(Box::new(model::forum::Tags {
+			available: vec![model::forum::Tag {
+				id: Id(31),
+				name: "Help".into(),
+				moderated: false,
+				emoji_id: None,
+				emoji_name: Some("🔥".into()),
+			}],
+			required: true,
+			..Default::default()
+		}));
+		assert!(
+			state
+				.create_post_with_attachments(Id(20), "Title", "Body", &[], &[Id(99)])
+				.is_none(),
+			"a tag the forum does not offer is refused"
+		);
+		assert!(state.posting.error.is_some());
+		state.posting.error = None;
+		assert!(
+			state
+				.create_post_with_attachments(Id(20), "Title", "Body", &[], &[])
+				.is_none(),
+			"a forum that requires tags refuses a bare post"
+		);
+		state.posting.error = None;
+		let Some(Command::CreatePost { tags, .. }) =
+			state.create_post_with_attachments(Id(20), "Title", "Body", &[], &[Id(31)])
+		else {
+			panic!("tagged post command expected")
+		};
+		assert_eq!(tags, vec![Id(31)]);
+	}
+
+	#[test]
 	fn forum_title_replacement_updates_budget_and_preserves_original_when_full() {
 		let mut state = state();
 		let before = state.navigation_bytes();
@@ -518,6 +663,7 @@ mod tests {
 			Ok(model::forum::Page {
 				threads: vec![post],
 				more: false,
+				previews: Vec::new(),
 			}),
 		);
 		assert_eq!(state.navigation_bytes(), expected);
@@ -539,6 +685,7 @@ mod tests {
 			Ok(model::forum::Page {
 				threads: vec![post],
 				more: true,
+				previews: Vec::new(),
 			}),
 		);
 		assert!(state.channel(Id(21)) == Some(&original));
@@ -571,6 +718,7 @@ mod tests {
 				.map(|id| channel(*id, Some(Id(20)), 11))
 				.collect(),
 			more,
+			previews: Vec::new(),
 		};
 		// A stale reply for another request is ignored.
 		state.apply_forum_posts(Id(20), request.wrapping_sub(1), Ok(page(&[30], false)));

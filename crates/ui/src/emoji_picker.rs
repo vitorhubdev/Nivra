@@ -2841,6 +2841,7 @@ mod tests {
 				message_count: None,
 				icon: None,
 				last_message: None,
+				tags: None,
 			}],
 			..State::default()
 		};

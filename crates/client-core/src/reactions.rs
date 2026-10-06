@@ -672,6 +672,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			gateway_connected: true,
 			auth: AuthState::Authenticated,
@@ -756,6 +757,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			gateway_connected: true,
 			auth: AuthState::Authenticated,
@@ -1022,6 +1024,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			gateway_connected: true,
 			auth: AuthState::Authenticated,
@@ -1310,6 +1313,7 @@ mod tests {
 				icon: None,
 				member_list_id: None,
 				message_count: None,
+				tags: None,
 			}],
 			..State::default()
 		};

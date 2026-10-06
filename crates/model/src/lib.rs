@@ -316,11 +316,14 @@ pub struct Channel {
 	pub member_list_id: Option<String>,
 	/// Thread reply count reported by the service; None for non-threads or unknown.
 	pub message_count: Option<u32>,
+	/// Forum tags offered by a forum channel, or applied to one of its posts.
+	pub tags: Option<Box<forum::Tags>>,
 }
 impl Channel {
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
 			+ self.name.capacity()
+			+ self.tags.as_ref().map_or(0, |tags| tags.bytes())
 			+ self.icon.as_ref().map_or(0, String::capacity)
 			+ self.member_list_id.as_ref().map_or(0, String::capacity)
 			+ self.recipients.capacity() * size_of::<User>()
@@ -340,6 +343,8 @@ pub struct ChannelPatch {
 	pub position: Patch<i32>,
 	pub kind: Patch<u8>,
 	pub message_count: Patch<u32>,
+	/// Channel updates carry whole objects, so present tags replace the known ones.
+	pub tags: Patch<Box<forum::Tags>>,
 }
 /// The command invocation that produced an application response message.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -60,6 +60,7 @@ impl Tray {
 		let (stop, mut stopped) = oneshot::channel();
 		let worker_events = events.clone();
 		let worker_labels = shared_labels.clone();
+		let replay_labels = shared_labels.clone();
 		let worker_handle = handle_slot.clone();
 		runtime.spawn(async move {
 			let Ok(icon) = image::load_from_memory_with_format(
@@ -103,6 +104,18 @@ impl Tray {
 				return;
 			}
 			*worker_handle.lock().await = Some(handle.clone());
+			// A language change during registration updated the shared labels but could
+			// not reach ksni yet; replay them now that the handle exists.
+			let pending = replay_labels.lock().map(|labels| labels.clone()).ok();
+			if let Some(labels) = pending {
+				let _ = handle
+					.update(move |item| {
+						if let Ok(mut current) = item.labels.lock() {
+							*current = labels;
+						}
+					})
+					.await;
+			}
 			if worker_events
 				.availability
 				.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)

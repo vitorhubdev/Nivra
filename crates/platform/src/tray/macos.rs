@@ -78,8 +78,10 @@ impl Tray {
 			events: Events::default(),
 			wake: Box::new(wake),
 		});
-		// SAFETY: NSObject init initializes this allocated NSObject subclass.
-		let target = unsafe { msg_send![super(target), init] };
+		// SAFETY: NSObject init initializes this allocated NSObject subclass. The
+		// annotation keeps `setTarget`'s `&AnyObject` coercion from narrowing the
+		// local to `AnyObject` before it is stored in `Self`.
+		let target: Retained<Target> = unsafe { msg_send![super(target), init] };
 		let menu = NSMenu::new(mtm);
 		menu.setAutoenablesItems(false);
 		let show = NSString::from_str(&labels.show);

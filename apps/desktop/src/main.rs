@@ -74,8 +74,18 @@ fn main() -> eframe::Result {
 	// Before any runtime LoadLibrary: imports and runtime loads resolve from System32 only.
 	#[cfg(windows)]
 	platform::dll::harden_search_path();
+	// Mark the real log directory before anything can log or panic, so the installed app
+	// always leaves a timestamped trail and tests never append to the user's own log.
+	platform::diagnostics::init_app_logging();
 	// A failure report from the previous run is shown once, after the window opens.
 	platform::diagnostics::install_panic_hook();
+	platform::diagnostics::info(&format!(
+		"Nivra {} starting: os={} arch={} build={}",
+		env!("CARGO_PKG_VERSION"),
+		std::env::consts::OS,
+		std::env::consts::ARCH,
+		option_env!("NIVRA_BUILD_COMMIT").unwrap_or("unknown")
+	));
 	discord_api::ensure_tls_provider();
 	// Parse locale tables before the first frame so a translated language
 	// never pays table parsing inside the render path.
@@ -799,6 +809,8 @@ struct Desktop {
 	/// Bounded text preview fetched off the render thread, drained each frame.
 	preview_done:
 		Option<std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>>>,
+	/// Set once per open preview, so "dialog visible" is logged exactly once.
+	preview_drawn_logged: bool,
 	/// Generation of the last announced download, so the toast fires once per job.
 	announced_generation: Option<u64>,
 	audio: audio::Audio,
@@ -1024,6 +1036,50 @@ fn accept_notices(settings: &mut app_settings::Settings) {
 	settings.current.notices_accepted = true;
 	settings.state.dirty = true;
 	settings.state.touched = true;
+}
+/// The text-preview worker: fetches a bounded body, decodes it and sends exactly one
+/// result. Runs on its own thread; the caller drains the receiver on later frames.
+fn start_text_preview(
+	runtime: &tokio::runtime::Handle,
+	filename: String,
+	content_type: Option<String>,
+	url: url::Url,
+	proxy: Option<url::Url>,
+	size: u64,
+) -> std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>> {
+	let runtime = runtime.clone();
+	let (send, receive) = std::sync::mpsc::sync_channel(1);
+	let format = ui::text_preview::preview_format(&filename, content_type.as_deref())
+		.unwrap_or(ui::text_preview::PreviewFormat::Plain);
+	std::thread::Builder::new()
+		.name("nivra-preview".into())
+		.spawn(move || {
+			let result = runtime.block_on(async {
+				let bytes = downloads::fetch_preview(url, proxy, size).await?;
+				let Some((text, truncated)) = ui::text_preview::decode_preview(&bytes) else {
+					platform::diagnostics::warn(&format!(
+						"text preview refused: reason=decode bytes={}",
+						bytes.len()
+					));
+					return Err("This file has no readable text");
+				};
+				platform::diagnostics::info(&format!(
+					"text preview decoded: bytes={} chars={} truncated={truncated}",
+					bytes.len(),
+					text.chars().count()
+				));
+				Ok(ui::text_preview::TextPreview {
+					filename,
+					format,
+					text,
+					truncated,
+					shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
+				})
+			});
+			let _ = send.send(result);
+		})
+		.ok();
+	receive
 }
 /// Dialogs that overlay the signed-in page: the first-run notices, the licenses screen and
 /// the text preview. Called exactly once per frame from `logic`; every dialog returns early
@@ -2057,6 +2113,7 @@ impl Desktop {
 			batch_downloads: batch_downloads::BatchDownloads::default(),
 			save_txt_done: None,
 			preview_done: None,
+			preview_drawn_logged: false,
 			announced_generation: None,
 			audio: audio::Audio::default(),
 			video: video::Video::default(),
@@ -6678,7 +6735,10 @@ impl eframe::App for Desktop {
 			}) {
 			self.preview_done = None;
 			match result {
-				Ok(preview) => self.messaging.set_preview(preview),
+				Ok(preview) => {
+					platform::diagnostics::info("text preview ready: opening dialog");
+					self.messaging.set_preview(preview);
+				}
 				Err(reason) => self.messaging.preview_failed(reason),
 			}
 		}
@@ -7231,46 +7291,41 @@ impl eframe::App for Desktop {
 					.ok();
 			}
 
-			// Inline preview: fetch a bounded text body off the render thread and
-			// hand the decoded result to the UI on a later frame.
+			// Inline preview: resolve the signed source, fetch a bounded text body off the
+			// render thread and hand the decoded result to the UI on a later frame.
 			if let Some(attachment) = self.messaging.take_preview_request()
 				&& !self.state.demo
 				&& !self.fixture_only
 			{
-				match downloads::original_url(&attachment) {
-					Some(url) => {
-						let proxy = downloads::proxy_attachment_url(&attachment);
-						let runtime = self.runtime.handle().clone();
-						let (send, receive) = std::sync::mpsc::sync_channel(1);
-						self.preview_done = Some(receive);
-						let filename = attachment.filename.clone();
-						let format = ui::text_preview::preview_format(
-							&attachment.filename,
-							attachment.content_type.as_deref(),
-						)
-						.unwrap_or(ui::text_preview::PreviewFormat::Plain);
-						let size = attachment.size;
-						std::thread::Builder::new()
-							.name("nivra-preview".into())
-							.spawn(move || {
-								let result = runtime.block_on(async {
-									let bytes = downloads::fetch_preview(url, proxy, size).await?;
-									let (text, truncated) =
-										ui::text_preview::decode_preview(&bytes)
-											.ok_or("This file has no readable text")?;
-									Ok(ui::text_preview::TextPreview {
-										filename,
-										format,
-										text,
-										truncated,
-										shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
-									})
-								});
-								let _ = send.send(result);
-							})
-							.ok();
+				let extension = attachment
+					.filename
+					.rsplit_once('.')
+					.map(|(_, extension)| extension.to_ascii_lowercase())
+					.unwrap_or_default();
+				platform::diagnostics::info(&format!(
+					"text preview clicked: ext={extension} bytes={}",
+					attachment.size
+				));
+				match downloads::preview_sources(&attachment) {
+					Some((url, proxy)) => {
+						platform::diagnostics::info(&format!(
+							"text preview fetch started: host={} proxy={}",
+							url.host_str().unwrap_or("?"),
+							proxy.is_some()
+						));
+						self.preview_done = Some(start_text_preview(
+							self.runtime.handle(),
+							attachment.filename.clone(),
+							attachment.content_type.clone(),
+							url,
+							proxy,
+							attachment.size,
+						));
 					}
-					None => self.messaging.preview_failed("Preview unavailable"),
+					None => {
+						platform::diagnostics::warn("text preview refused: reason=no-source");
+						self.messaging.preview_failed("Preview unavailable");
+					}
 				}
 			}
 
@@ -7464,6 +7519,16 @@ impl eframe::App for Desktop {
 				self.app_preferences_unread,
 				&ctx,
 			);
+			// The preview was fetched and drawn on this frame the first time the dialog is
+			// on screen; logging the transition keeps one line per open, not one per frame.
+			if self.messaging.preview_open() {
+				if !self.preview_drawn_logged {
+					self.preview_drawn_logged = true;
+					platform::diagnostics::info("text preview drawn: dialog visible");
+				}
+			} else {
+				self.preview_drawn_logged = false;
+			}
 			self.ensure_notification_shortcut();
 			if self.messaging.logout_requested {
 				self.messaging.logout_requested = false;
@@ -8115,5 +8180,321 @@ mod tests {
 			harness.query_by_label_contains(prefix).is_some(),
 			"the licenses screen must draw after the notices were accepted"
 		);
+	}
+
+	/// Local HTTP server acting as the CDN for the end-to-end preview tests. Serves
+	/// `body` to the first two requests, so a proxy retry is answered too.
+	fn serve_preview(
+		body: Vec<u8>,
+		content_type: &'static str,
+		encoding: Option<&'static str>,
+	) -> (String, std::thread::JoinHandle<()>) {
+		use std::io::{Read as _, Write as _};
+		let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+		let addr = listener.local_addr().expect("addr");
+		let handle = std::thread::spawn(move || {
+			for _ in 0..2 {
+				let Ok((mut socket, _)) = listener.accept() else {
+					return;
+				};
+				let mut request = Vec::new();
+				let mut byte = [0u8; 1];
+				while !request.ends_with(b"\r\n\r\n") && request.len() < 8192 {
+					if socket.read_exact(&mut byte).is_err() {
+						return;
+					}
+					request.push(byte[0]);
+				}
+				let mut header = format!(
+					"HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
+					body.len()
+				);
+				if let Some(encoding) = encoding {
+					header.push_str(&format!("Content-Encoding: {encoding}\r\n"));
+				}
+				header.push_str("\r\n");
+				let _ = socket.write_all(header.as_bytes());
+				let _ = socket.write_all(&body);
+			}
+		});
+		(format!("http://{addr}"), handle)
+	}
+
+	fn preview_attachment(
+		filename: &str,
+		content_type: Option<&str>,
+		size: u64,
+		url: &str,
+	) -> model::Attachment {
+		model::Attachment {
+			id: model::Id(700),
+			filename: filename.into(),
+			description: None,
+			content_type: content_type.map(str::to_owned),
+			size,
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+			media: model::EmbedMedia {
+				url: Some(url.into()),
+				..Default::default()
+			},
+		}
+	}
+
+	fn preview_message_state(attachment: model::Attachment) -> (State, model::Id) {
+		let mut state = test_support::demo_state();
+		let channel = state.selected.expect("selected channel");
+		// Keep only the synthetic card under test; the demo fixture has previewable
+		// rows of its own and the click must land on this message.
+		state.timeline.clear();
+		let mut message = test_support::message(8_000_700, channel);
+		message.attachments = vec![attachment];
+		state.apply(client_core::Envelope {
+			generation: state.generation,
+			event: client_core::Event::Message(message),
+		});
+		(state, channel)
+	}
+
+	fn preview_labels(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+		match shape {
+			egui::Shape::Text(text) => out.push((
+				text.galley.job.text.clone(),
+				text.galley.rect.translate(text.pos.to_vec2()),
+			)),
+			egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| preview_labels(shape, out)),
+			_ => {}
+		}
+	}
+
+	fn preview_timeline_frame(
+		ctx: &egui::Context,
+		view: &mut ui::MessagingUi,
+		state: &mut State,
+		events: Vec<egui::Event>,
+	) -> Vec<(String, egui::Rect)> {
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(1120.0, 900.0),
+				)),
+				events,
+				..Default::default()
+			},
+			|ui| {
+				view.show(ui, state);
+			},
+		);
+		output.textures_delta.clear();
+		let mut text = Vec::new();
+		for shape in output.shapes {
+			preview_labels(&shape.shape, &mut text);
+		}
+		text
+	}
+
+	/// Clicks the Preview button on the real timeline card and returns the queued request.
+	fn click_preview_on_timeline(
+		ctx: &egui::Context,
+		view: &mut ui::MessagingUi,
+		state: &mut State,
+	) -> model::Attachment {
+		let text = preview_timeline_frame(ctx, view, state, Vec::new());
+		let (_, rect) = text
+			.iter()
+			.find(|(label, _)| label == "Preview")
+			.expect("the text attachment must offer Preview");
+		let pos = rect.center();
+		for pressed in [true, false] {
+			preview_timeline_frame(
+				ctx,
+				view,
+				state,
+				vec![
+					egui::Event::PointerMoved(pos),
+					egui::Event::PointerButton {
+						pos,
+						button: egui::PointerButton::Primary,
+						pressed,
+						modifiers: egui::Modifiers::NONE,
+					},
+				],
+			);
+		}
+		view.take_preview_request()
+			.expect("clicking Preview must queue the attachment")
+	}
+
+	/// End to end through the real worker and frame: local HTTP server -> timeline card ->
+	/// simulated click -> fetch/decode on the worker -> frame_dialogs draws the dialog.
+	fn preview_round_trip(
+		filename: &str,
+		content_type: Option<&'static str>,
+		body: &[u8],
+		sentinel: &str,
+	) {
+		use egui_kittest::kittest::Queryable as _;
+		discord_api::ensure_tls_provider();
+		let (base, _server) =
+			serve_preview(body.to_vec(), content_type.unwrap_or("text/plain"), None);
+		let url = format!("{base}/attachments/1/700/{filename}?ex=1&is=1&hm=1");
+		let attachment = preview_attachment(filename, content_type, body.len() as u64, &url);
+		let (mut state, _) = preview_message_state(attachment);
+		let mut view = ui::MessagingUi::default();
+		let ctx = egui::Context::default();
+		let queued = click_preview_on_timeline(&ctx, &mut view, &mut state);
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.expect("preview runtime");
+		let receive = start_text_preview(
+			runtime.handle(),
+			queued.filename.clone(),
+			queued.content_type.clone(),
+			url::Url::parse(url.as_str()).expect("preview url"),
+			None,
+			queued.size,
+		);
+		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+		let preview = loop {
+			match receive.try_recv() {
+				Ok(result) => break result.expect("preview fetch"),
+				Err(std::sync::mpsc::TryRecvError::Empty)
+					if std::time::Instant::now() < deadline =>
+				{
+					std::thread::sleep(std::time::Duration::from_millis(20));
+				}
+				Err(error) => panic!("{filename}: preview worker did not answer: {error:?}"),
+			}
+		};
+		view.set_preview(preview);
+		let mut settings = loaded_settings();
+		settings.current.notices_accepted = true;
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui(|ui| {
+				frame_dialogs(&mut view, false, &mut settings, false, ui.ctx());
+			});
+		harness.run_steps(2);
+		assert!(
+			harness.query_by_label_contains(sentinel).is_some(),
+			"{filename}: the preview dialog must show the fetched body"
+		);
+	}
+
+	#[test]
+	fn preview_end_to_end_for_every_text_format() {
+		for (filename, content_type, body, sentinel) in [
+			(
+				"notes.md",
+				Some("text/markdown"),
+				b"# Synthetic\n\nPvMdBody intact\n".to_vec(),
+				"PvMdBody",
+			),
+			(
+				"notes.txt",
+				Some("text/plain"),
+				b"PvTxtBody\n".to_vec(),
+				"PvTxtBody",
+			),
+			(
+				"data.json",
+				Some("application/json"),
+				b"{\"note\":\"PvJsonBody\"}\n".to_vec(),
+				"PvJsonBody",
+			),
+			(
+				"main.rs",
+				Some("text/plain"),
+				b"fn main() { let _ = \"PvRsBody\"; }\n".to_vec(),
+				"PvRsBody",
+			),
+			(
+				"script.py",
+				None,
+				b"print('PvPyBody')\n".to_vec(),
+				"PvPyBody",
+			),
+			(
+				"session.log",
+				Some("text/plain"),
+				b"PvLogBody\n".to_vec(),
+				"PvLogBody",
+			),
+		] {
+			preview_round_trip(filename, content_type, &body, sentinel);
+		}
+	}
+
+	#[test]
+	fn preview_end_to_end_for_bom_and_line_endings() {
+		let mut bom = vec![0xEF, 0xBB, 0xBF];
+		bom.extend_from_slice(b"# Synthetic\n\nPvBomBody\n");
+		preview_round_trip("bom.md", Some("text/markdown"), &bom, "PvBomBody");
+		let crlf = b"# Synthetic\r\n\r\nPvCrlfBody \xF0\x9F\x8E\xA7\r\n";
+		preview_round_trip("crlf.md", Some("text/markdown"), crlf, "PvCrlfBody");
+		let mut utf16 = vec![0xFF, 0xFE];
+		for unit in "PvUtf16Body\n".encode_utf16() {
+			utf16.extend(unit.to_le_bytes());
+		}
+		preview_round_trip("utf16.txt", Some("text/plain"), &utf16, "PvUtf16Body");
+	}
+
+	#[test]
+	fn preview_end_to_end_through_a_proxy_only_attachment() {
+		// Payloads that carry only `proxy_url` used to show Preview and fail before any
+		// fetch because the desktop resolved only `media.url`. Route it through the real
+		// source resolver, then the same worker and frame.
+		discord_api::ensure_tls_provider();
+		let body = b"PvProxyBody\n".to_vec();
+		let (base, _server) = serve_preview(body.clone(), "text/plain", None);
+		let mut attachment = preview_attachment(
+			"proxy-only.txt",
+			Some("text/plain"),
+			body.len() as u64,
+			&format!("{base}/attachments/1/700/proxy-only.txt?ex=1&is=1&hm=1"),
+		);
+		attachment.media.proxy_url = attachment.media.url.clone();
+		attachment.media.url = None;
+		let (mut state, _) = preview_message_state(attachment.clone());
+		let mut view = ui::MessagingUi::default();
+		let ctx = egui::Context::default();
+		let queued = click_preview_on_timeline(&ctx, &mut view, &mut state);
+		let source = queued
+			.media
+			.proxy_url
+			.clone()
+			.expect("proxy-only attachment keeps its proxy url");
+		// `preview_sources` rejects loopback hosts in production; the resolver test below
+		// proves the proxy-only fallback with a Discord-shaped URL.
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.expect("preview runtime");
+		let receive = start_text_preview(
+			runtime.handle(),
+			queued.filename.clone(),
+			queued.content_type.clone(),
+			url::Url::parse(&source).expect("proxy url parse"),
+			None,
+			queued.size,
+		);
+		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+		let preview = loop {
+			match receive.try_recv() {
+				Ok(result) => break result.expect("proxy-only preview fetch"),
+				Err(std::sync::mpsc::TryRecvError::Empty)
+					if std::time::Instant::now() < deadline =>
+				{
+					std::thread::sleep(std::time::Duration::from_millis(20));
+				}
+				Err(error) => panic!("proxy-only preview worker did not answer: {error:?}"),
+			}
+		};
+		assert!(preview.text.contains("PvProxyBody"));
 	}
 }

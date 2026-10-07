@@ -39,25 +39,25 @@
 
 Stable builds are published on the [Releases page](https://github.com/vitorhubdev/Nivra/releases/latest). On Windows, download the single `.exe` and open it: there is nothing to extract. Only the assets attached to a release on that page are Nivra binaries.
 
-| System | Asset (v1.0.12 example) | Notes |
+| System | Asset (v1.0.13 example) | Notes |
 | --- | --- | --- |
-| Windows x64 | `Nivra-v1.0.12-Windows-X64.exe` | Single executable, no installer |
-| Windows ARM64 | `Nivra-v1.0.12-Windows-ARM64.exe` | Maximum noise suppression (DeepFilterNet) is unavailable and falls back to RNNoise |
-| Linux x64 | `Nivra-v1.0.12-Linux-X64.tar.gz` | Extract and run |
-| macOS Apple Silicon | `Nivra-v1.0.12-macOS-ARM64.zip` | Intel macOS is not published |
+| Windows x64 | `Nivra-v1.0.13-Windows-X64.exe` | Single executable, no installer |
+| Windows ARM64 | `Nivra-v1.0.13-Windows-ARM64.exe` | Maximum noise suppression (DeepFilterNet) is unavailable and falls back to RNNoise |
+| Linux x64 | `Nivra-v1.0.13-Linux-X64.tar.gz` | Extract and run |
+| macOS Apple Silicon | `Nivra-v1.0.13-macOS-ARM64.zip` | Intel macOS is not published |
 
 Every release also attaches a `SHA256SUMS.txt` checksum file. Verify the file you downloaded before running it:
 
 ```powershell
 # Windows (PowerShell) — compare the output with the matching line in SHA256SUMS.txt
-Get-FileHash .\Nivra-v1.0.12-Windows-X64.exe -Algorithm SHA256
+Get-FileHash .\Nivra-v1.0.13-Windows-X64.exe -Algorithm SHA256
 ```
 
 ```sh
 # Linux — checks the files that are present and ignores the rest of the manifest
 sha256sum --ignore-missing -c SHA256SUMS.txt
 # macOS — compare the printed hash with the matching line in SHA256SUMS.txt
-shasum -a 256 Nivra-v1.0.12-macOS-ARM64.zip
+shasum -a 256 Nivra-v1.0.13-macOS-ARM64.zip
 ```
 
 **Signing status differs by platform.** Windows and Linux packages are unsigned. The macOS `.app` is ad-hoc signed and not notarized (tag builds); a manual release-workflow build with Apple credentials is Developer ID-signed and notarized instead. If Gatekeeper still warns about the app you downloaded, right-click it, choose **Open**, and confirm; macOS also allows it later under System Settings → Privacy & Security. On Windows, SmartScreen may show *"Windows protected your PC"*: choose **More info** → **Run anyway**.
@@ -74,14 +74,14 @@ Nivra is built around three voice pillars, each covered by an offline, measured 
 
 These pillars are synthetic, offline tests. Live Discord interoperability and physical microphone/speaker behavior remain unverified. The [Performance](#performance) section carries the Serein reference figures; Nivra's own memory and CPU measurement is still pending.
 
-**Recently added** (1.0.9–1.0.12):
+**Recently added** (1.0.11–1.0.13):
 
-- **File previews:** text, Markdown and code previews reopen, follow Discord redirects, renew expired links and show an honest limit for oversized files; the Licenses screen opens again.
-- **Video at any resolution:** previews from 640×360 up to about 16 megapixels (e.g. 4500×3000) scale into the preview box (1920×1080 landscape, 1080×1920 portrait) without upscaling; playing a video no longer freezes the app; codecs the system cannot decode (HEVC, AV1 or VP9 without the Windows extension) do not play and the card states the real reason with Download video / Open original.
-- **Windows DLL protection:** the executable resolves its dependencies only from System32 and warns — without blocking — when system-named DLLs sit next to it.
-- **Local error log:** errors from the main paths (downloads, attachment previews, window compositing, app registration) go to a rotating, redacted log (5 files × 2 MiB); if the app panics, the next launch shows a crash report, and Settings > Help has "Copy error log" and "Open logs folder". Nothing is sent anywhere automatically; a few internal diagnostics (update handoff, tray fallback, GPU/video) still only reach the console.
-- **Motion and clarity:** one motion token set with a "Reduce motion" switch (Settings > Appearance); disabled icon buttons explain why on hover; destructive actions get one confirmation.
-- **Also in this round:** Push to Mute on mouse 4/5 (unassigned by default), the Windows tray voice-state icon, compact timeline layout, HEIC preview via Windows WIC, Discord polls, single-instance lock, and ~3% smaller Windows executables.
+- **Calls that recover and speak up:** a dropped call reconnects on its own (resume, rejoin or a terminal close code with the real reason and Copy details), mute/deafen/devices come back as they were, and join, leave, mute, unmute, deafen and drop/reconnect cues play with the window focused, unfocused, minimized or in the tray — with Settings > Notifications > Call sounds > Test sounds. The microphone icon now follows deafen.
+- **Messages and attachments:** text, Markdown and code previews reopen with renewed links and honest limits; the first Ctrl+V image sends on the first try with the real reason and Try again when rejected; short videos autoplay muted on the card; download status is translated.
+- **Forum:** a gallery with up to four prefetched thumbnails per card, 1/2/3/4+ mosaics, GIF badges, video play, covered spoilers and an image viewer, tag chips and Todos/Any/All filters, one request per page and an account-scoped disk cache that opens instantly.
+- **Windows DLL protection and a local error log:** dependencies resolve only from System32 with a non-blocking warning for planted DLLs; errors go to a rotating, redacted log (5 × 2 MiB) with a panic report and Settings > Help tools, including a diagnostics export.
+- **Smaller and translated:** executables are about 12 MB smaller on every platform (the Japanese/Chinese/Korean font now comes from the operating system); channel menus, the Chat/Layout page and the tray menu are translated to Portuguese and Spanish.
+- **Also recent:** motion tokens with a Reduce motion switch, Push to Mute on mouse 4/5, the Windows tray voice-state icon, compact timeline layout, HEIC preview, Discord polls and single-instance lock.
 
 ---
 
@@ -132,7 +132,7 @@ The script only reads process private memory and processor time. It never starts
 
 ### Prerequisites
 
-Rust **1.98.1** is pinned (see `rust-toolchain.toml`); the current workspace version is **1.0.12**. You also need the standard C/C++ toolchain, CMake and `bun` 1.4.2 for the JS test harnesses:
+Rust **1.98.1** is pinned (see `rust-toolchain.toml`); the current workspace version is **1.0.13**. You also need the standard C/C++ toolchain, CMake and `bun` 1.4.2 for the JS test harnesses:
 
 - **macOS:** Xcode command-line tools (`xcode-select --install`)
 - **Linux:** GCC/Clang, ALSA development headers, `pkg-config`, GTK 4, WebKitGTK 6.0, GStreamer, fontconfig and Vulkan drivers (see [Platform Support](docs/platform-support.md))
@@ -278,6 +278,16 @@ Report Nivra issues at [vitorhubdev/Nivra/issues](https://github.com/vitorhubdev
 ---
 
 ## What's new
+
+### 1.0.13
+
+- The call reconnects on its own (resume, rejoin up to 3 attempts, or a terminal close code with the real reason and Copy details) and restores mute, deafen and devices; the panel shows "Reconnecting…" with a Rejoin button.
+- Call cues play with the window focused, unfocused, minimized or in the tray, with a new member mute/unmute sound, member-name notifications when unfocused, and Test sounds in Settings > Notifications.
+- The microphone icon follows deafen on the account card and call panel; clicking it undeafens and unmutes.
+- Text/Markdown/code preview works again, the first pasted image sends on the first try, short videos autoplay, and Settings > Help exports a diagnostics `.zip`.
+- Forum: gallery with prefetched thumbnails and mosaics, tags and filters, one request per page and an account-scoped disk cache.
+- Channel menus, Chat/Layout and the tray menu are translated to Portuguese and Spanish.
+- Executables are about 12 MB smaller on every platform (24 MB on the Linux tarball): the Japanese/Chinese/Korean font comes from the operating system, with a one-time notice when none is installed.
 
 ### 1.0.12
 

@@ -104,7 +104,7 @@ All captures come from the offline demo (`cargo run --locked -p nivra --features
 ## Performance
 
 > [!NOTE]
-> **Reference figures from the Serein project's measurement on macOS, the codebase Nivra started from. Nivra's own measurement on Windows is pending (`scripts/measure.ps1`).**
+> **Reference figures from the Serein project's measurement on macOS, the codebase Nivra started from. Nivra's own measurement on Windows is pending (`scripts/measure.ps1`).** The original run's date, hardware and client revisions were not recorded, so treat these figures and the calculated advantages as unverified historical references rather than a reproducible benchmark; the script below measures the current Nivra build on Windows and cannot reproduce or validate the macOS values.
 
 > **Testing scenario:** browsing channels while joined in a voice channel and streaming screen at 60 FPS, on macOS.
 

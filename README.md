@@ -72,7 +72,7 @@ Nivra is built around three voice pillars, each covered by an offline, measured 
 - **Pillar 2 — calls that stay up.** Two synthetic clients exchange decoded, DAVE-encrypted audio (450/650 Hz tones, at least 60 frames per direction); a 10-second UDP blackout recovers without rejoining; switching a device during a call, 50 join/leave cycles and 20 channel switches all pass.
 - **Pillar 3 — you are told about everything.** Every voice-state update paints the right icon in one frame; join, leave, mute, unmute, deafen and call drop/reconnect cues go through ordered, identity-deduplicated queues that keep the newest bounded set when full. The cues play with the window focused, minimized or hidden in the tray, and join/leave also raise a system notification with the member name.
 
-These pillars are synthetic, offline tests. Live Discord interoperability and physical microphone/speaker behavior remain unverified. Memory and CPU claims live in [Performance](#performance); they stay unverified until the owner measures both clients in the same scenario.
+These pillars are synthetic, offline tests. Live Discord interoperability and physical microphone/speaker behavior remain unverified. The [Performance](#performance) section carries the Serein reference figures; Nivra's own memory and CPU measurement is still pending.
 
 **Recently added** (1.0.9–1.0.12):
 
@@ -104,7 +104,21 @@ All captures come from the offline demo (`cargo run --locked -p nivra --features
 ## Performance
 
 > [!NOTE]
-> **Measurement pending.** Nivra publishes no memory or CPU comparison until the owner runs the measurement below on real hardware. Treat any performance claim about Nivra as unverified until a table measured with this script is attached.
+> **Reference figures from the Serein project's measurement on macOS, the codebase Nivra started from. Nivra's own measurement on Windows is pending (`scripts/measure.ps1`).** The original run's date, hardware and client revisions were not recorded, so treat these figures and the calculated advantages as unverified historical references rather than a reproducible benchmark; the script below measures the current Nivra build on Windows and cannot reproduce or validate the macOS values.
+
+> **Testing scenario:** browsing channels while joined in a voice channel and streaming screen at 60 FPS, on macOS.
+
+| Metric | Official Discord Client (Electron) | Serein (native Rust + egui/wgpu), Nivra's predecessor | Advantage |
+|---|:---:|:---:|:---:|
+| **Memory (RAM)** | **1,178.4 MB** *(seven Discord processes: the main process, five helpers and AutoFill)* | **129.7 MB** *(single unified process)* | **~9× less memory (-89%)** |
+| **CPU Usage** | **22.8%** *(total across the shown Discord processes)* | **8.1%** | **~2.8× lower CPU (-64%)** |
+
+| Official Discord (Electron) | Serein (native Rust) |
+| :---: | :---: |
+| **RAM: ~1,178.4 MB across 7 Discord processes** | **RAM: 129.7 MB single process** |
+| <img src="docs/screenshots/perf-discord-ram.png" alt="Discord RAM usage" width="450" /> | <img src="docs/screenshots/perf-nivra-ram.png" alt="Serein RAM usage" width="450" /> |
+| **CPU: 22.8% total** | **CPU: 8.1% total** |
+| <img src="docs/screenshots/perf-discord-cpu.png" alt="Discord CPU usage" width="450" /> | <img src="docs/screenshots/perf-nivra-cpu.png" alt="Serein CPU usage" width="450" /> |
 
 [`scripts/measure.ps1`](scripts/measure.ps1) samples private memory (per-process and not double-counted across helper processes) and the average CPU of `Nivra*.exe` and `Discord.exe` for 60 seconds and prints one table per scenario. Run it with both clients open in the **same** scenario, for example idle on one text channel, then a voice call, then screen share at 60 FPS, and report each result as:
 

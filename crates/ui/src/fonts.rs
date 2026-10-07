@@ -36,6 +36,8 @@ fn is_cjk(c: char) -> bool {
 	matches!(
 		c as u32,
 		0x1100..=0x11ff
+			| 0x1aff0..=0x1afff
+			| 0x1b000..=0x1b16f
 			| 0x2e80..=0x2fdf
 			| 0x2ff0..=0x303f
 			| 0x3040..=0x30ff
@@ -632,6 +634,8 @@ mod tests {
 		assert!(is_cjk('한'), "Hangul");
 		assert!(is_cjk('\u{ff01}'), "fullwidth form");
 		assert!(is_cjk('\u{20000}'), "Han extension B");
+		assert!(is_cjk('\u{1b000}'), "Kana supplement");
+		assert!(is_cjk('\u{1b11f}'), "Kana extended-A");
 	}
 
 	#[test]

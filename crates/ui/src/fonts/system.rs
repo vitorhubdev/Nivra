@@ -101,6 +101,16 @@ const FC_LANG: [&str; 3] = ["ja", "zh", "ko"];
 /// ceiling stops a stray or planted file from allocating without bound.
 const MAX_FONT_BYTES: u64 = 128 * 1024 * 1024;
 
+/// Extensions worth reading when the fixed candidate names leave a target
+/// uncovered and the platform font directories have to be scanned.
+const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
+/// Directory scan bounds: a best-effort fallback, not a full font-manager walk.
+const MAX_SCAN_FILES: usize = 128;
+const MAX_SCAN_BYTES: u64 = 512 * 1024 * 1024;
+/// Fontconfig fallback entries kept per language.
+#[cfg(any(not(any(target_os = "windows", target_os = "macos")), test))]
+const FC_LIMIT: usize = 16;
+
 /// Adds faces from the remaining candidates that cover a target neither the
 /// script samples nor `drawn` already cover. Candidates that already
 /// contributed a face are skipped, so a later script only reads what it needs.
@@ -111,19 +121,33 @@ pub fn extend_fallbacks(loaded: &mut Vec<LoadedFont>, drawn: &[char]) {
 			targets.push(*c);
 		}
 	}
-	load_from(&candidate_paths(), &targets, loaded);
+	let mut budget = MAX_SCAN_BYTES;
+	load_from(&candidate_paths(), &targets, loaded, &mut budget);
+	// The fixed names and fontconfig may not list a user-installed face; the
+	// platform directories are scanned only when a target is still uncovered.
+	if targets
+		.iter()
+		.any(|c| !loaded.iter().any(|font| font.covers(*c)))
+	{
+		load_from(&installed_font_files(), &targets, loaded, &mut budget);
+	}
 }
 
 /// Reads each candidate once, keeping only faces that add coverage for a target
-/// the loaded set does not cover yet.
-pub(crate) fn load_from(candidates: &[PathBuf], targets: &[char], loaded: &mut Vec<LoadedFont>) {
+/// the loaded set does not cover yet. `budget` bounds the total bytes read.
+pub(crate) fn load_from(
+	candidates: &[PathBuf],
+	targets: &[char],
+	loaded: &mut Vec<LoadedFont>,
+	budget: &mut u64,
+) {
 	let mut missing: Vec<char> = targets
 		.iter()
 		.copied()
 		.filter(|c| !loaded.iter().any(|font| font.covers(*c)))
 		.collect();
 	for path in candidates {
-		if missing.is_empty() {
+		if missing.is_empty() || *budget == 0 {
 			break;
 		}
 		let stem = path
@@ -133,6 +157,12 @@ pub(crate) fn load_from(candidates: &[PathBuf], targets: &[char], loaded: &mut V
 		let prefix = format!("system:{stem}:");
 		if loaded.iter().any(|font| font.name.starts_with(&prefix)) {
 			continue;
+		}
+		if let Ok(metadata) = std::fs::metadata(path) {
+			if metadata.len() > *budget {
+				continue;
+			}
+			*budget -= metadata.len();
 		}
 		let Some(bytes) = read_candidate(path, MAX_FONT_BYTES) else {
 			continue;
@@ -234,7 +264,7 @@ fn candidate_paths() -> Vec<PathBuf> {
 	#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 	{
 		for language in FC_LANG {
-			if let Some(path) = fontconfig_match(language) {
+			for path in fontconfig_matches(language) {
 				push_unique(&mut paths, path);
 			}
 		}
@@ -243,6 +273,63 @@ fn candidate_paths() -> Vec<PathBuf> {
 		}
 	}
 	paths
+}
+
+/// Font directories scanned when the fixed names left a target uncovered.
+fn scan_roots() -> Vec<PathBuf> {
+	#[cfg(target_os = "windows")]
+	{
+		windows_roots()
+	}
+	#[cfg(target_os = "macos")]
+	{
+		let mut roots: Vec<PathBuf> = MACOS_ROOTS.iter().map(PathBuf::from).collect();
+		if let Some(home) = std::env::var_os("HOME") {
+			roots.push(PathBuf::from(home).join("Library").join("Fonts"));
+		}
+		roots
+	}
+	#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+	{
+		// Fontconfig already enumerates every installed face on Linux.
+		Vec::new()
+	}
+}
+
+/// Font files in the platform directories, sorted and bounded, for the fallback
+/// scan. User-installed faces often do not use the stock file names.
+fn installed_font_files() -> Vec<PathBuf> {
+	let mut files = Vec::new();
+	for root in scan_roots() {
+		files.extend(font_files_in(&root));
+	}
+	files.sort();
+	files.truncate(MAX_SCAN_FILES);
+	files
+}
+
+/// Font files directly inside `root`, sorted and bounded by extension.
+pub(crate) fn font_files_in(root: &Path) -> Vec<PathBuf> {
+	let Ok(entries) = std::fs::read_dir(root) else {
+		return Vec::new();
+	};
+	let mut files: Vec<PathBuf> = entries
+		.flatten()
+		.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+		.map(|entry| entry.path())
+		.filter(|path| {
+			path.extension()
+				.and_then(|extension| extension.to_str())
+				.is_some_and(|extension| {
+					FONT_EXTENSIONS
+						.iter()
+						.any(|allowed| extension.eq_ignore_ascii_case(allowed))
+				})
+		})
+		.collect();
+	files.sort();
+	files.truncate(MAX_SCAN_FILES);
+	files
 }
 
 /// Windows font directories: machine fonts first, then per-user installs.
@@ -285,20 +372,35 @@ pub(crate) fn linux_candidates_in(root: &Path) -> Vec<PathBuf> {
 		.collect()
 }
 
-/// The font fontconfig picks for a language, when fontconfig is installed.
+/// The fonts fontconfig offers for a language, best match first, when
+/// fontconfig is installed. The sorted list matters: a secondary fallback can
+/// cover a scalar the best match lacks.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn fontconfig_match(language: &str) -> Option<PathBuf> {
+fn fontconfig_matches(language: &str) -> Vec<PathBuf> {
 	let output = std::process::Command::new("fc-match")
-		.arg("--format=%{file}")
+		.arg("--sort")
+		.arg("--format=%{file}\n")
 		.arg(format!(":lang={language}"))
-		.output()
-		.ok()?;
+		.output();
+	let Ok(output) = output else {
+		return Vec::new();
+	};
 	if !output.status.success() {
-		return None;
+		return Vec::new();
 	}
-	let path = String::from_utf8(output.stdout).ok()?;
-	let path = path.trim();
-	(!path.is_empty()).then(|| PathBuf::from(path))
+	parse_fontconfig(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// One font path per non-empty line, bounded to the closest matches.
+#[cfg(any(not(any(target_os = "windows", target_os = "macos")), test))]
+fn parse_fontconfig(output: &str) -> Vec<PathBuf> {
+	output
+		.lines()
+		.map(str::trim)
+		.filter(|line| !line.is_empty())
+		.map(PathBuf::from)
+		.take(FC_LIMIT)
+		.collect()
 }
 
 fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
@@ -328,6 +430,12 @@ mod tests {
 
 	fn samples() -> Vec<char> {
 		SCRIPTS.iter().map(|script| script.sample()).collect()
+	}
+
+	/// Test seam: read candidates without exercising the byte budget.
+	fn load(candidates: &[PathBuf], targets: &[char], loaded: &mut Vec<LoadedFont>) {
+		let mut budget = MAX_SCAN_BYTES;
+		load_from(candidates, targets, loaded, &mut budget);
 	}
 
 	fn inter() -> Vec<u8> {
@@ -392,7 +500,7 @@ mod tests {
 	fn a_temp_root_without_fonts_loads_nothing() {
 		let root = scratch("empty");
 		let mut loaded = Vec::new();
-		load_from(&windows_candidates_in(&root), &samples(), &mut loaded);
+		load(&windows_candidates_in(&root), &samples(), &mut loaded);
 		assert!(loaded.is_empty());
 	}
 
@@ -407,7 +515,7 @@ mod tests {
 		let path = root.join("msyh.ttc");
 		std::fs::write(&path, &inter).expect("fake candidate");
 		let mut loaded = Vec::new();
-		load_from(&[path], &samples(), &mut loaded);
+		load(&[path], &samples(), &mut loaded);
 		assert!(
 			loaded.is_empty(),
 			"a Latin face must not be offered for CJK"
@@ -420,8 +528,41 @@ mod tests {
 		let path = root.join("msyh.ttc");
 		std::fs::write(&path, b"not a font").expect("candidate");
 		let mut loaded = Vec::new();
-		load_from(&[path, root.join("missing.ttc")], &samples(), &mut loaded);
+		load(&[path, root.join("missing.ttc")], &samples(), &mut loaded);
 		assert!(loaded.is_empty());
+	}
+
+	#[test]
+	fn fontconfig_output_keeps_each_fallback_in_order() {
+		let parsed = parse_fontconfig("/a/one.ttf\n/a/two.otf\n\n  /a/three.ttc  \n");
+		assert_eq!(
+			parsed,
+			vec![
+				PathBuf::from("/a/one.ttf"),
+				PathBuf::from("/a/two.otf"),
+				PathBuf::from("/a/three.ttc")
+			]
+		);
+		let many: String = (0..FC_LIMIT + 5).map(|i| format!("/f/{i}.ttf\n")).collect();
+		assert_eq!(parse_fontconfig(&many).len(), FC_LIMIT);
+	}
+
+	#[test]
+	fn the_directory_scan_keeps_font_files_only() {
+		let root = scratch("scan");
+		std::fs::write(root.join("one.ttf"), b"x").expect("font");
+		std::fs::write(root.join("two.OTF"), b"x").expect("font");
+		std::fs::write(root.join("three.ttc"), b"x").expect("font");
+		std::fs::write(root.join("readme.txt"), b"x").expect("non-font");
+		std::fs::create_dir(root.join("nested.ttf")).expect("directory");
+		assert_eq!(
+			font_files_in(&root),
+			vec![
+				root.join("one.ttf"),
+				root.join("three.ttc"),
+				root.join("two.OTF")
+			]
+		);
 	}
 
 	#[test]
@@ -430,11 +571,11 @@ mod tests {
 		let path = root.join("msyh.ttc");
 		std::fs::write(&path, inter_bytes()).expect("fake candidate");
 		let mut loaded = Vec::new();
-		load_from(std::slice::from_ref(&path), &['H'], &mut loaded);
+		load(std::slice::from_ref(&path), &['H'], &mut loaded);
 		assert_eq!(loaded.len(), 1);
-		load_from(std::slice::from_ref(&path), &['H', 'e'], &mut loaded);
+		load(std::slice::from_ref(&path), &['H', 'e'], &mut loaded);
 		assert_eq!(loaded.len(), 1, "a covered target reads nothing");
-		load_from(&[path], &['日'], &mut loaded);
+		load(&[path], &['日'], &mut loaded);
 		assert_eq!(loaded.len(), 1, "a loaded file is not read again");
 	}
 

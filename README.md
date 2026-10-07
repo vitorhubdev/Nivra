@@ -110,12 +110,12 @@ All captures come from the offline demo (`cargo run --locked -p nivra --features
 
 | Metric | Official Discord Client (Electron) | Serein (native Rust + egui/wgpu), Nivra's predecessor | Advantage |
 |---|:---:|:---:|:---:|
-| **Memory (RAM)** | **1,178.4 MB** *(across 7 helper processes)* | **129.7 MB** *(single unified process)* | **~9× less memory (-89%)** |
-| **CPU Usage** | **22.8%** *(Renderer + Helper processes)* | **8.1%** | **~2.8× lower CPU (-64%)** |
+| **Memory (RAM)** | **1,178.4 MB** *(seven Discord processes: the main process, five helpers and AutoFill)* | **129.7 MB** *(single unified process)* | **~9× less memory (-89%)** |
+| **CPU Usage** | **22.8%** *(total across the shown Discord processes)* | **8.1%** | **~2.8× lower CPU (-64%)** |
 
 | Official Discord (Electron) | Serein (native Rust) |
 | :---: | :---: |
-| **RAM: ~1,178.4 MB across 7 processes** | **RAM: 129.7 MB single process** |
+| **RAM: ~1,178.4 MB across 7 Discord processes** | **RAM: 129.7 MB single process** |
 | <img src="docs/screenshots/perf-discord-ram.png" alt="Discord RAM usage" width="450" /> | <img src="docs/screenshots/perf-nivra-ram.png" alt="Serein RAM usage" width="450" /> |
 | **CPU: 22.8% total** | **CPU: 8.1% total** |
 | <img src="docs/screenshots/perf-discord-cpu.png" alt="Discord CPU usage" width="450" /> | <img src="docs/screenshots/perf-nivra-cpu.png" alt="Serein CPU usage" width="450" /> |

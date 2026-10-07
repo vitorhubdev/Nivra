@@ -119,15 +119,31 @@ pub(crate) fn take_cjk_notice(ctx: &Context) -> bool {
 	false
 }
 
+/// Fonts already loaded by the probe, kept in the context so a later script can
+/// be checked against them without touching the disk again.
+const CJK_FONTS: &str = "nivra.system-cjk-fonts";
+
+fn loaded_fonts(ctx: &Context) -> Option<Arc<Vec<system::LoadedFont>>> {
+	ctx.data(|data| data.get_temp(Id::unique(CJK_FONTS)))
+}
+
+fn store_loaded_fonts(ctx: &Context, fonts: Arc<Vec<system::LoadedFont>>) {
+	ctx.data_mut(|data| data.insert_temp(Id::unique(CJK_FONTS), fonts));
+}
+
 /// Install once during application creation, before the first UI pass.
 pub fn install(ctx: &Context) {
 	ctx.set_fonts(definitions());
 	let scan = Mutex::new(CjkScan::default());
 	ctx.on_end_pass(
 		"CJK fallback",
-		std::sync::Arc::new(move |ui| {
+		Arc::new(move |ui| {
 			let ctx = ui.ctx().clone();
-			if status(&ctx).is_some() {
+			// `Notified` ends the probe; `Checking` means a worker is already on it.
+			if matches!(
+				status(&ctx),
+				Some(SystemCjk::Notified | SystemCjk::Checking)
+			) {
 				return;
 			}
 			let drawn = {
@@ -141,9 +157,7 @@ pub fn install(ctx: &Context) {
 					})
 				});
 				if needed {
-					let drawn = std::mem::take(&mut scan.drawn);
-					*scan = CjkScan::default();
-					drawn
+					std::mem::take(&mut scan.drawn)
 				} else {
 					Vec::new()
 				}
@@ -151,20 +165,26 @@ pub fn install(ctx: &Context) {
 			if drawn.is_empty() {
 				return;
 			}
-			set_status(&ctx, SystemCjk::Checking);
-			// Reading installed font files is disk work; never do it on the draw thread.
-			let worker = ctx.clone();
-			let worker_drawn = drawn.clone();
-			let spawned = std::thread::Builder::new()
-				.name("cjk-font".into())
-				.spawn(move || {
-					install_system_fonts(&worker, &worker_drawn);
-					worker.request_repaint();
-				});
-			if spawned.is_err() {
-				install_system_fonts(&ctx, &drawn);
-				ctx.request_repaint();
-			}
+			// A later script can arrive after the first probe. Checking the loaded
+			// faces is a cmap lookup, so it stays on this thread; only the first
+			// probe reads the disk, and that runs on a worker.
+			let Some(fonts) = loaded_fonts(&ctx) else {
+				set_status(&ctx, SystemCjk::Checking);
+				let worker = ctx.clone();
+				let spawned =
+					std::thread::Builder::new()
+						.name("cjk-font".into())
+						.spawn(move || {
+							install_system_fonts(&worker, &drawn);
+							worker.request_repaint();
+						});
+				if spawned.is_err() {
+					record_probe_failure(&ctx);
+				}
+				return;
+			};
+			set_status(&ctx, coverage_status(&fonts, &drawn));
+			ctx.request_repaint();
 		}),
 	);
 	crate::design::weights_installed(ctx);
@@ -172,12 +192,18 @@ pub fn install(ctx: &Context) {
 
 /// Loads the system CJK faces and records whether the drawn text is covered.
 fn install_system_fonts(ctx: &Context, drawn: &[char]) {
-	let fonts = system::load_fallbacks();
-	let status = coverage_status(&fonts, drawn);
+	let fonts = Arc::new(system::load_fallbacks());
 	if !fonts.is_empty() {
 		ctx.set_fonts(definitions_with(&fonts));
 	}
-	set_status(ctx, status);
+	set_status(ctx, coverage_status(&fonts, drawn));
+	store_loaded_fonts(ctx, fonts);
+}
+
+/// A worker could not be started: never read font files on the render thread.
+/// The one-time notice is the safe fallback on a process this constrained.
+fn record_probe_failure(ctx: &Context) {
+	set_status(ctx, SystemCjk::Missing);
 }
 
 /// `Available` when every CJK scalar that was drawn has an installed face.
@@ -493,6 +519,29 @@ mod tests {
 			SystemCjk::Missing,
 			"no installed face at all must warn"
 		);
+	}
+
+	#[test]
+	fn a_later_script_is_checked_against_the_loaded_fonts_without_touching_the_disk() {
+		let ctx = Context::default();
+		install(&ctx);
+		// Pretend the first probe found no usable face at all: the next CJK text
+		// must still be evaluated instead of being silently ignored.
+		store_loaded_fonts(&ctx, Arc::new(Vec::new()));
+		set_status(&ctx, SystemCjk::Available);
+		let output = ctx.run_ui(Default::default(), |ui| {
+			ui.label("한국어");
+		});
+		output.drop_without_applying_deltas();
+		assert_eq!(status(&ctx), Some(SystemCjk::Missing));
+	}
+
+	#[test]
+	fn a_failed_worker_records_a_failure_instead_of_reading_fonts_on_the_draw_thread() {
+		let ctx = Context::default();
+		install(&ctx);
+		record_probe_failure(&ctx);
+		assert_eq!(status(&ctx), Some(SystemCjk::Missing));
 	}
 
 	#[test]

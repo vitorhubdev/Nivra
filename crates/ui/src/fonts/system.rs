@@ -44,6 +44,7 @@ impl Script {
 pub const SCRIPTS: [Script; 3] = [Script::Japanese, Script::SimplifiedChinese, Script::Korean];
 
 /// A system face ready for egui's font definitions.
+#[derive(Clone)]
 pub struct LoadedFont {
 	/// Registry name in egui's font map, such as `system:msyh:0`.
 	pub name: String,
@@ -100,39 +101,59 @@ const FC_LANG: [&str; 3] = ["ja", "zh", "ko"];
 /// ceiling stops a stray or planted file from allocating without bound.
 const MAX_FONT_BYTES: u64 = 128 * 1024 * 1024;
 
-/// Reads the installed candidates and returns the faces worth installing.
-pub fn load_fallbacks() -> Vec<LoadedFont> {
-	load_from(&candidate_paths())
+/// Adds faces from the remaining candidates that cover a target neither the
+/// script samples nor `drawn` already cover. Candidates that already
+/// contributed a face are skipped, so a later script only reads what it needs.
+pub fn extend_fallbacks(loaded: &mut Vec<LoadedFont>, drawn: &[char]) {
+	let mut targets: Vec<char> = SCRIPTS.iter().map(|script| script.sample()).collect();
+	for c in drawn {
+		if !targets.contains(c) {
+			targets.push(*c);
+		}
+	}
+	load_from(&candidate_paths(), &targets, loaded);
 }
 
-/// Reads each candidate once, keeping only faces that add coverage.
-pub(crate) fn load_from(candidates: &[PathBuf]) -> Vec<LoadedFont> {
-	let mut loaded: Vec<LoadedFont> = Vec::new();
-	let mut missing = SCRIPTS.to_vec();
+/// Reads each candidate once, keeping only faces that add coverage for a target
+/// the loaded set does not cover yet.
+pub(crate) fn load_from(candidates: &[PathBuf], targets: &[char], loaded: &mut Vec<LoadedFont>) {
+	let mut missing: Vec<char> = targets
+		.iter()
+		.copied()
+		.filter(|c| !loaded.iter().any(|font| font.covers(*c)))
+		.collect();
 	for path in candidates {
 		if missing.is_empty() {
 			break;
 		}
+		let stem = path
+			.file_stem()
+			.and_then(|stem| stem.to_str())
+			.unwrap_or("font");
+		let prefix = format!("system:{stem}:");
+		if loaded.iter().any(|font| font.name.starts_with(&prefix)) {
+			continue;
+		}
 		let Some(bytes) = read_candidate(path, MAX_FONT_BYTES) else {
 			continue;
 		};
-		let mut faces: Vec<(u32, Vec<Script>)> = Vec::new();
-		for script in &missing {
-			let Some(index) = covering_face(&bytes, script.sample()) else {
+		let mut faces: Vec<(u32, Vec<char>)> = Vec::new();
+		for c in &missing {
+			let Some(index) = covering_face(&bytes, *c) else {
 				continue;
 			};
 			match faces.iter_mut().find(|(face, _)| *face == index) {
-				Some((_, scripts)) => scripts.push(*script),
-				None => faces.push((index, vec![*script])),
+				Some((_, chars)) => chars.push(*c),
+				None => faces.push((index, vec![*c])),
 			}
 		}
-		for (index, scripts) in faces {
+		for (index, chars) in faces {
 			let name = font_name(path, index);
 			if loaded.iter().any(|font| font.name == name) {
 				continue;
 			}
-			for script in &scripts {
-				missing.retain(|candidate| candidate != script);
+			for c in &chars {
+				missing.retain(|candidate| candidate != c);
 			}
 			loaded.push(LoadedFont {
 				name,
@@ -140,7 +161,6 @@ pub(crate) fn load_from(candidates: &[PathBuf]) -> Vec<LoadedFont> {
 			});
 		}
 	}
-	loaded
 }
 
 /// Reads a candidate within `ceiling` bytes; a file that grows past it is refused.
@@ -306,6 +326,10 @@ mod tests {
 		.expect("bundled Inter")
 	}
 
+	fn samples() -> Vec<char> {
+		SCRIPTS.iter().map(|script| script.sample()).collect()
+	}
+
 	fn inter() -> Vec<u8> {
 		inter_bytes()
 	}
@@ -367,7 +391,9 @@ mod tests {
 	#[test]
 	fn a_temp_root_without_fonts_loads_nothing() {
 		let root = scratch("empty");
-		assert!(load_from(&windows_candidates_in(&root)).is_empty());
+		let mut loaded = Vec::new();
+		load_from(&windows_candidates_in(&root), &samples(), &mut loaded);
+		assert!(loaded.is_empty());
 	}
 
 	#[test]
@@ -380,8 +406,10 @@ mod tests {
 		assert_eq!(covering_face(&inter, 'H'), Some(0), "Inter covers Latin");
 		let path = root.join("msyh.ttc");
 		std::fs::write(&path, &inter).expect("fake candidate");
+		let mut loaded = Vec::new();
+		load_from(&[path], &samples(), &mut loaded);
 		assert!(
-			load_from(&[path]).is_empty(),
+			loaded.is_empty(),
 			"a Latin face must not be offered for CJK"
 		);
 	}
@@ -391,7 +419,23 @@ mod tests {
 		let root = scratch("corrupt");
 		let path = root.join("msyh.ttc");
 		std::fs::write(&path, b"not a font").expect("candidate");
-		assert!(load_from(&[path, root.join("missing.ttc")]).is_empty());
+		let mut loaded = Vec::new();
+		load_from(&[path, root.join("missing.ttc")], &samples(), &mut loaded);
+		assert!(loaded.is_empty());
+	}
+
+	#[test]
+	fn a_drawn_scalar_extends_the_targets_and_loaded_files_are_not_reread() {
+		let root = scratch("extend");
+		let path = root.join("msyh.ttc");
+		std::fs::write(&path, inter_bytes()).expect("fake candidate");
+		let mut loaded = Vec::new();
+		load_from(std::slice::from_ref(&path), &['H'], &mut loaded);
+		assert_eq!(loaded.len(), 1);
+		load_from(std::slice::from_ref(&path), &['H', 'e'], &mut loaded);
+		assert_eq!(loaded.len(), 1, "a covered target reads nothing");
+		load_from(&[path], &['日'], &mut loaded);
+		assert_eq!(loaded.len(), 1, "a loaded file is not read again");
 	}
 
 	#[test]
@@ -427,7 +471,8 @@ mod tests {
 	#[test]
 	fn the_live_candidates_never_panic_and_name_every_face_once() {
 		// The machine may have none of these; the app still has to start and warn.
-		let fonts = load_fallbacks();
+		let mut fonts = Vec::new();
+		extend_fallbacks(&mut fonts, &[]);
 		for (index, font) in fonts.iter().enumerate() {
 			assert!(
 				fonts[..index]

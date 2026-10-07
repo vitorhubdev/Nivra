@@ -57,23 +57,17 @@ fn is_cjk(c: char) -> bool {
 #[derive(Default)]
 struct CjkScan {
 	checked: Vec<Weak<egui::text::LayoutJob>>,
-	/// Scalars carried to the first probe, before any face is loaded.
+	/// CJK scalars seen since the last probe, bounded by `DRAWN_CHARS`.
 	drawn: Vec<char>,
-	/// A drawn CJK scalar has no loaded face.
-	uncovered: bool,
 	/// More distinct scalars appeared than `drawn` can carry; coverage cannot be
 	/// certified from a partial set, so the probe stays conservative.
 	overflow: bool,
 }
 
 impl CjkScan {
-	/// Records one job and reports whether it drew CJK text. `faces` is the
-	/// cached set, so a later script is checked with a cmap lookup on this thread.
-	fn text(
-		&mut self,
-		job: &Arc<egui::text::LayoutJob>,
-		faces: Option<&[system::LoadedFont]>,
-	) -> bool {
+	/// Records one job and reports whether it drew CJK text. The scalars are
+	/// carried to the probe, which decides coverage against the loaded faces.
+	fn text(&mut self, job: &Arc<egui::text::LayoutJob>) -> bool {
 		let index = match self
 			.checked
 			.binary_search_by_key(&(Arc::as_ptr(job) as usize), |entry| {
@@ -86,15 +80,13 @@ impl CjkScan {
 		if !job.text.is_ascii() {
 			for c in job.text.chars().filter(|c| is_cjk(*c)) {
 				found = true;
-				match faces {
-					Some(faces) => {
-						if !faces.iter().any(|font| font.covers(c)) {
-							self.uncovered = true;
-						}
-					}
-					None if self.drawn.contains(&c) => {}
-					None if self.drawn.len() < DRAWN_CHARS => self.drawn.push(c),
-					None => self.overflow = true,
+				if self.drawn.contains(&c) {
+					continue;
+				}
+				if self.drawn.len() < DRAWN_CHARS {
+					self.drawn.push(c);
+				} else {
+					self.overflow = true;
 				}
 			}
 		}
@@ -114,14 +106,14 @@ impl CjkScan {
 		found
 	}
 
-	fn shape(&mut self, shape: &egui::Shape, faces: Option<&[system::LoadedFont]>) -> bool {
+	fn shape(&mut self, shape: &egui::Shape) -> bool {
 		match shape {
-			egui::Shape::Text(text) => self.text(&text.galley.job, faces),
+			egui::Shape::Text(text) => self.text(&text.galley.job),
 			egui::Shape::Vec(shapes) => {
 				// Scan every child: each job must be registered, so this cannot short-circuit.
 				let mut found = false;
 				for shape in shapes {
-					found |= self.shape(shape, faces);
+					found |= self.shape(shape);
 				}
 				found
 			}
@@ -195,14 +187,10 @@ pub fn install(ctx: &Context) {
 				let layers: Vec<_> = ctx.memory(|memory| memory.layer_ids().collect());
 				ctx.graphics(|graphics| {
 					let mut needed = false;
-					'layers: for layer in &layers {
+					for layer in &layers {
 						if let Some(list) = graphics.get(*layer) {
 							for entry in list.all_entries() {
-								needed |=
-									scan.shape(&entry.shape, fonts.as_deref().map(Vec::as_slice));
-								if scan.uncovered {
-									break 'layers;
-								}
+								needed |= scan.shape(&entry.shape);
 							}
 						}
 					}
@@ -212,61 +200,59 @@ pub fn install(ctx: &Context) {
 			if !needed {
 				return;
 			}
+			let (drawn, overflow) = {
+				let mut scan = scan.lock().expect("CJK scan");
+				(
+					std::mem::take(&mut scan.drawn),
+					std::mem::take(&mut scan.overflow),
+				)
+			};
+			if drawn.is_empty() {
+				return;
+			}
 			// A later script can arrive after the first probe. Checking the cached
-			// faces is a cmap lookup, so it stays on this thread; only the first
-			// probe reads the disk, and that runs on a worker.
-			let Some(_) = fonts else {
-				let (drawn, overflow) = {
-					let mut scan = scan.lock().expect("CJK scan");
-					(
-						std::mem::take(&mut scan.drawn),
-						std::mem::take(&mut scan.overflow),
-					)
-				};
-				if drawn.is_empty() {
-					return;
-				}
-				set_status(&ctx, SystemCjk::Checking);
-				let worker = ctx.clone();
-				let spawned =
-					std::thread::Builder::new()
-						.name("cjk-font".into())
-						.spawn(move || {
-							install_system_fonts(&worker, &drawn, overflow);
-							worker.request_repaint();
-						});
-				if spawned.is_err() {
-					record_probe_failure(&ctx);
+			// faces is a cmap lookup, so it stays on this thread; when a scalar is
+			// uncovered, the remaining candidates are read on a worker (they may
+			// still have a face for it) before anything is reported.
+			let pending: Vec<char> = match &fonts {
+				Some(fonts) => drawn
+					.iter()
+					.copied()
+					.filter(|c| !fonts.iter().any(|font| font.covers(*c)))
+					.collect(),
+				None => drawn,
+			};
+			if fonts.is_some() && pending.is_empty() && !overflow {
+				// Only a changed state needs another frame; a covered pass must settle.
+				if status(&ctx) != Some(SystemCjk::Available) {
+					set_status(&ctx, SystemCjk::Available);
+					ctx.request_repaint();
 				}
 				return;
-			};
-			let uncovered = {
-				let mut scan = scan.lock().expect("CJK scan");
-				let uncovered = scan.uncovered || scan.overflow;
-				scan.uncovered = false;
-				scan.overflow = false;
-				scan.drawn.clear();
-				uncovered
-			};
-			let new_status = if uncovered {
-				SystemCjk::Missing
-			} else {
-				SystemCjk::Available
-			};
-			// Only a changed state needs another frame; a covered pass must settle.
-			if status(&ctx) != Some(new_status) {
-				set_status(&ctx, new_status);
-				ctx.request_repaint();
+			}
+			set_status(&ctx, SystemCjk::Checking);
+			let worker = ctx.clone();
+			let spawned = std::thread::Builder::new()
+				.name("cjk-font".into())
+				.spawn(move || {
+					probe_system_fonts(&worker, &pending, overflow);
+					worker.request_repaint();
+				});
+			if spawned.is_err() {
+				record_probe_failure(&ctx);
 			}
 		}),
 	);
 	crate::design::weights_installed(ctx);
 }
 
-/// Loads the system CJK faces and records whether the drawn text is covered.
-fn install_system_fonts(ctx: &Context, drawn: &[char], overflow: bool) {
-	let fonts = Arc::new(system::load_fallbacks());
-	if !fonts.is_empty() {
+/// Loads or extends the system CJK faces for `drawn` and records coverage.
+fn probe_system_fonts(ctx: &Context, drawn: &[char], overflow: bool) {
+	let cached = loaded_fonts(ctx);
+	let mut fonts = cached.as_deref().cloned().unwrap_or_default();
+	let before = fonts.len();
+	system::extend_fallbacks(&mut fonts, drawn);
+	if fonts.len() != before {
 		ctx.set_fonts(definitions_with(&fonts));
 	}
 	let status = if overflow {
@@ -276,7 +262,7 @@ fn install_system_fonts(ctx: &Context, drawn: &[char], overflow: bool) {
 		coverage_status(&fonts, drawn)
 	};
 	set_status(ctx, status);
-	store_loaded_fonts(ctx, fonts);
+	store_loaded_fonts(ctx, Arc::new(fonts));
 }
 
 /// A worker could not be started: never read font files on the render thread.
@@ -390,14 +376,14 @@ mod tests {
 			text: "Latin — čeština العربية".into(),
 			..Default::default()
 		});
-		assert!(!scan.text(&job, None));
-		assert!(!scan.text(&job, None));
+		assert!(!scan.text(&job));
+		assert!(!scan.text(&job));
 		assert_eq!(scan.checked.len(), 1);
 		assert_eq!(Arc::strong_count(&job), 1);
 		let old = Arc::downgrade(&job);
 		Arc::make_mut(&mut job).text = "日本語 中文 한국어".into();
 		assert!(
-			scan.text(&job, None),
+			scan.text(&job),
 			"editing an already checked job must detect CJK"
 		);
 		assert!(
@@ -415,7 +401,7 @@ mod tests {
 				text: format!("Synthetic {index}"),
 				..Default::default()
 			});
-			assert!(!scan.text(&job, None));
+			assert!(!scan.text(&job));
 			assert!(scan.checked.len() <= CHECKED_JOBS);
 			assert!(
 				scan.checked.capacity()
@@ -425,7 +411,7 @@ mod tests {
 		}
 		assert!(scan.checked.iter().all(|entry| entry.upgrade().is_none()));
 		assert!(
-			scan.text(&job, None),
+			scan.text(&job),
 			"cache rollover must not suppress new CJK text"
 		);
 	}
@@ -539,7 +525,8 @@ mod tests {
 	fn system_fonts_render_cjk_when_the_os_has_them() {
 		// The real search on this machine: a face that was loaded must render its
 		// sample and a missing one must degrade to replacement glyphs, never panic.
-		let fonts = system::load_fallbacks();
+		let mut fonts = Vec::new();
+		system::extend_fallbacks(&mut fonts, &[]);
 		let ctx = Context::default();
 		ctx.set_fonts(definitions_with(&fonts));
 		let mut widths = [0.0_f32; 3];
@@ -575,7 +562,7 @@ mod tests {
 			text: "Latin 日本語 한국어".into(),
 			..Default::default()
 		});
-		assert!(scan.text(&job, None));
+		assert!(scan.text(&job));
 		assert!(scan.drawn.contains(&'日'));
 		assert!(scan.drawn.contains(&'한'));
 		assert!(!scan.drawn.contains(&'L'));
@@ -588,9 +575,9 @@ mod tests {
 			text: "日本語".into(),
 			..Default::default()
 		});
-		assert!(scan.text(&job, None), "the first pass reports the CJK job");
+		assert!(scan.text(&job), "the first pass reports the CJK job");
 		assert!(
-			!scan.text(&job, None),
+			!scan.text(&job),
 			"a registered job must not be rediscovered and repaint forever"
 		);
 		assert_eq!(scan.checked.len(), 1);
@@ -606,7 +593,7 @@ mod tests {
 			text,
 			..Default::default()
 		});
-		assert!(scan.text(&job, None));
+		assert!(scan.text(&job));
 		assert_eq!(scan.drawn.len(), DRAWN_CHARS);
 		assert!(scan.overflow, "a partial set cannot certify coverage");
 	}
@@ -621,7 +608,7 @@ mod tests {
 			text: format!("{full}{}", '\u{4e00}'),
 			..Default::default()
 		});
-		assert!(scan.text(&repeat, None));
+		assert!(scan.text(&repeat));
 		assert_eq!(scan.drawn.len(), DRAWN_CHARS);
 		assert!(!scan.overflow, "a repeated scalar is not new coverage");
 		let extra = Arc::new(egui::text::LayoutJob {
@@ -630,7 +617,7 @@ mod tests {
 				.to_string(),
 			..Default::default()
 		});
-		assert!(scan.text(&extra, None));
+		assert!(scan.text(&extra));
 		assert!(scan.overflow, "a new scalar past the cap overflows");
 	}
 
@@ -677,18 +664,38 @@ mod tests {
 	}
 
 	#[test]
-	fn a_later_script_is_checked_against_the_loaded_fonts_without_touching_the_disk() {
+	fn a_later_script_starts_another_probe_after_a_covered_pass() {
 		let ctx = Context::default();
 		install(&ctx);
 		// Pretend the first probe found no usable face at all: the next CJK text
-		// must still be evaluated instead of being silently ignored.
+		// must still be probed instead of being silently ignored.
 		store_loaded_fonts(&ctx, Arc::new(Vec::new()));
 		set_status(&ctx, SystemCjk::Available);
 		let output = ctx.run_ui(Default::default(), |ui| {
 			ui.label("한국어");
 		});
 		output.drop_without_applying_deltas();
-		assert_eq!(status(&ctx), Some(SystemCjk::Missing));
+		assert_eq!(
+			status(&ctx),
+			Some(SystemCjk::Checking),
+			"an uncovered scalar must start a new probe"
+		);
+		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+		loop {
+			ctx.run_ui(Default::default(), |_ui| {})
+				.drop_without_applying_deltas();
+			if matches!(
+				status(&ctx),
+				Some(SystemCjk::Available | SystemCjk::Missing)
+			) {
+				break;
+			}
+			assert!(
+				std::time::Instant::now() < deadline,
+				"the follow-up probe never finished"
+			);
+			std::thread::sleep(std::time::Duration::from_millis(5));
+		}
 	}
 
 	#[test]

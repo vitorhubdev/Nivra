@@ -1,5 +1,48 @@
 # Changelog
 
+## Nivra 1.0.13
+
+Esta versão fecha as rodadas 17 a 19. A chamada cai e volta sozinha quando o servidor manda, os sons da call tocam mesmo com a janela minimizada ou na bandeja, a pré-visualização de texto e a primeira imagem colada funcionam, o fórum abre em grade com miniaturas, tags e cache, a interface e a bandeja falam português e espanhol, e o executável ficou cerca de 12 MB menor em cada sistema porque a fonte de japonês, chinês e coreano agora vem do sistema operacional.
+
+### Chamadas de voz
+
+- **A call reconecta sozinha.** Quando a conexão de voz fecha, o Nivra segue a regra do Discord: sessão expirada ou servidor trocado reentra sozinho (até 3 tentativas, com espera crescente até 30 s), queda de rede retoma a sessão e um kick ou limite de taxa encerra de verdade. Durante a tentativa o painel mostra "Reconectando…", o botão Reentrar fica à mão, e ao voltar o microfone, o fone e os dispositivos ficam como estavam. Se a call terminar, a mensagem diz o código real e tem "Copiar detalhes" (#97).
+- **Sons da call sempre.** Entrada, saída, mute e desmute (seus e das outras pessoas), ensurdecer e queda/reconexão tocam com a janela em foco, atrás de outra janela, minimizada ou só na bandeja. A fila comporta uma rajada de dez entradas sem perder nenhum som, há um som novo para mute/desmute de outras pessoas (ligado por padrão) e, com a janela sem foco, entrada e saída também mostram a notificação do sistema com o nome. Em Configurações > Notificações > Sons da call, "Testar sons" toca a sequência no dispositivo escolhido (#100).
+- **Microfone ao ensurdecer.** Com o ensurdecer ligado, o ícone do microfone no cartão da conta e no painel da call mostra o corte, com a dica explicando o motivo; clicar no microfone desliga o ensurdecer e liga o microfone, como no Discord oficial, e o estado enviado ao servidor continua igual ao mostrado (#101).
+- **Exportar diagnóstico.** Configurações > Ajuda gera um `.zip` na Área de Trabalho com o log das últimas 24 h, o registro de travamentos, a versão e os dispositivos de áudio (sem segredos), e "Abrir pasta de logs" leva aos arquivos. O log da chamada agora tem data e hora locais em cada linha, registra o ciclo inteiro da conexão e o motivo real do fechamento (#97).
+
+### Mensagens, anexos e vídeo
+
+- **Pré-visualizar voltou.** Arquivos `.md`, `.txt`, `.json`, código e logs abrem a pré-visualização, venham do CDN ou do proxy, com link renovado, acentos, BOM e CRLF; arquivo grande demais ou link expirado mostram o motivo certo, em português e espanhol (#95).
+- **A primeira imagem colada envia de primeira.** Um Ctrl+V não vira mais dois envios nem falha na estreia; se o envio for recusado, o cartão vermelho mostra a causa em linguagem simples e ganha "Tentar de novo", além de "Voltar para o compositor" (#98).
+- **Vídeos curtos tocam sozinhos** no cartão, mudos por padrão (com som se a preferência estiver ligada), e pausam quando a janela perde o foco (#93).
+- **Status de download traduzido** e conferência de tamanho corrigida para imagens redimensionadas (#104).
+
+### Fórum
+
+- **Grade com miniaturas.** Os cartões de fórum mostram até quatro imagens pré-carregadas, autor, trecho e reações; a lista abre em grade com mosaico de 1, 2, 3, 4 ou mais imagens (com "+N"), selo de GIF, play de vídeo, spoiler coberto e visualizador ao clicar. O menu "Ordenar e ver" alterna os layouts, e a tela seguinte é pré-aquecida sem estourar o orçamento de memória (#105, #106).
+- **Tags e filtros.** Chips com emoji, barra de filtros com "Todos", "Qualquer" e "Todas", e seletor de tags no compositor (#107).
+- **Abre na hora e carrega mais leve.** A lista de publicações passou a vir em uma requisição por página (25 requisições a menos por fórum) e fica guardada em disco por conta, com o selo "Atualizado" quando chega a versão nova; fóruns grandes caem para um plano B com aviso discreto e uma linha no log (#103, #108, #109).
+
+### Interface e idiomas
+
+- Menus de canal, a página Chat/Layout e o menu da bandeja (abrir, minimizar, sair) agora aparecem em português e espanhol (#93, #94, #102).
+
+### Distribuição e documentação
+
+- **Executável cerca de 12 MB menor em cada sistema.** A fonte de japonês, chinês e coreano deixou de ser embutida: quando aparece texto CJK, o Nivra lê uma vez a fonte do sistema (Windows, macOS ou Linux), valida a cobertura por script e a usa; sem fonte instalada, o texto mostra o caractere de substituição e um aviso único explica o que instalar. Nada é baixado. Windows x64: 100.271.104 → 88.198.656 bytes; Windows ARM64: 66.161.664 → 54.084.608; Linux x64: 110.946.740 → 86.924.944; macOS ARM64: 53.848.936 → 41.770.019 (#111).
+- O README foi reorganizado e a tabela de desempenho voltou rotulada como referência histórica do projeto Serein (a medição do Nivra no Windows segue pendente do dono, com `scripts/measure.ps1`) (#99, #112).
+
+### English
+
+1.0.13 closes rounds 17–19. The call reconnects on its own: an expired session or a moved voice server rejoins (up to 3 attempts with a growing 5/15/30 s wait), a network drop resumes, and a kick or rate limit ends it, with a "Reconnecting…" panel, a Rejoin button, mute/deafen/devices restored, and an honest close code with Copy details (#97). Call cues — join, leave, your and other members' mute/unmute, deafen and call drop/reconnect — play with the window focused, unfocused, minimized or hidden in the tray, a burst of ten arrivals keeps ten sounds, a new member mute/unmute sound is on by default, unfocused join/leave raises a system notification with the member name, and Settings > Notifications > Call sounds has Test sounds (#100). Deafening now shows the crossed-out microphone on the account card and call panel, and clicking the microphone undeafens and unmutes like the official client (#101). Settings > Help exports a diagnostics `.zip` to the Desktop (last 24 h of log, freeze report, version and audio devices, no secrets) and opens the logs folder; the call log has local timestamps on every line and records the full connection cycle and close reason (#97).
+
+Text preview works again for `.md`, `.txt`, `.json`, code and logs from the CDN or the proxy, with renewed links, BOM and CRLF handling and translated reasons (#95). The first Ctrl+V image sends on the first try, and a rejected upload states the real reason with Try again and Back to composer (#98). Short videos autoplay on the card, muted by default (sound follows the preference) and paused when the window loses focus (#93). Download status is translated and the resized-rendition size check is fixed (#104).
+
+Forum: cards preload up to four images with author, excerpt and reactions, the list opens in a gallery with 1/2/3/4+ image mosaics, a GIF badge, video play, covered spoilers and an image viewer, with a sort/view menu and a prefetched next screen inside the memory budget (#105, #106); tag chips, a Todos/Any/All filter bar and a composer tag picker (#107); one request per page (25 fewer per forum) plus an account-scoped disk cache that opens instantly with an Updated badge, a fallback with a discreet notice and a log line for large forums (#103, #108, #109). Channel menus, the Chat/Layout page and the tray menu (show, minimize, quit) are translated to Portuguese and Spanish (#93, #94, #102).
+
+Distribution: the executable is about 12 MB smaller on every platform because the Japanese/Chinese/Korean font is no longer embedded — CJK text reads an installed system font once, validates coverage per script and uses it, with a one-time translated notice when none is installed and no download. Windows x64 100,271,104 → 88,198,656 bytes; Windows ARM64 66,161,664 → 54,084,608; Linux x64 110,946,740 → 86,924,944; macOS ARM64 53,848,936 → 41,770,019 (#111). The README was reorganized and the performance table restored as a historical Serein reference, with Nivra's own Windows measurement still pending (#99, #112).
+
 ## Nivra 1.0.12
 
 Esta versão fecha a rodada 16: corrige o que impedia de abrir a pré-visualização de texto e as Licenças, o cartão da conta que esticava, os sons da chamada com a janela minimizada ou na bandeja, e os vídeos acima de 1080p; adiciona proteção contra DLLs estranhas, log de erros sem dados sensíveis com página de Ajuda, animações padronizadas com a opção "reduzir movimento" e botões mais claros e amigáveis. O executável ficou cerca de 3% menor.

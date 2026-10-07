@@ -7507,38 +7507,41 @@ impl eframe::App for Desktop {
 
 			// Inline preview: resolve the signed source, fetch a bounded text body off the
 			// render thread and hand the decoded result to the UI on a later frame.
-			if let Some(attachment) = self.messaging.take_preview_request()
-				&& !self.state.demo
-				&& !self.fixture_only
-			{
-				let extension = attachment
-					.filename
-					.rsplit_once('.')
-					.map(|(_, extension)| extension.to_ascii_lowercase())
-					.unwrap_or_default();
-				platform::diagnostics::info(&format!(
-					"text preview clicked: ext={extension} bytes={}",
-					attachment.size
-				));
-				match downloads::preview_sources(&attachment) {
-					Some((url, proxy)) => {
-						platform::diagnostics::info(&format!(
-							"text preview fetch started: host={} proxy={}",
-							url.host_str().unwrap_or("?"),
-							proxy.is_some()
-						));
-						self.preview_done = Some(start_text_preview(
-							self.runtime.handle(),
-							attachment.filename.clone(),
-							attachment.content_type.clone(),
-							url,
-							proxy,
-							attachment.size,
-						));
-					}
-					None => {
-						platform::diagnostics::warn("text preview refused: reason=no-source");
-						self.messaging.preview_failed("Preview unavailable");
+			// A request taken without fetching (demo, fixture) clears the card's
+			// loading mark instead of leaving its spinner stuck.
+			if let Some(attachment) = self.messaging.take_preview_request() {
+				if self.state.demo || self.fixture_only {
+					self.messaging.downloads().clear_preview_pending();
+				} else {
+					let extension = attachment
+						.filename
+						.rsplit_once('.')
+						.map(|(_, extension)| extension.to_ascii_lowercase())
+						.unwrap_or_default();
+					platform::diagnostics::info(&format!(
+						"text preview clicked: ext={extension} bytes={}",
+						attachment.size
+					));
+					match downloads::preview_sources(&attachment) {
+						Some((url, proxy)) => {
+							platform::diagnostics::info(&format!(
+								"text preview fetch started: host={} proxy={}",
+								url.host_str().unwrap_or("?"),
+								proxy.is_some()
+							));
+							self.preview_done = Some(start_text_preview(
+								self.runtime.handle(),
+								attachment.filename.clone(),
+								attachment.content_type.clone(),
+								url,
+								proxy,
+								attachment.size,
+							));
+						}
+						None => {
+							platform::diagnostics::warn("text preview refused: reason=no-source");
+							self.messaging.preview_failed("Preview unavailable");
+						}
 					}
 				}
 			}

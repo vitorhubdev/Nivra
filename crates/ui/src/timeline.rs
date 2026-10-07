@@ -88,6 +88,9 @@ pub struct TimelineView {
 	pub(super) save_txt_request: Option<(String, Vec<u8>)>,
 	/// Loaded conversation export, one chunk per frame.
 	export_job: Option<crate::batch_select::ExportJob>,
+	/// Scope picked in the Export chat menu: how many of the newest loaded
+	/// messages the next export copies. None exports the whole conversation.
+	pub(super) export_scope: Option<usize>,
 	/// The open chat changed before the export had copied every message.
 	pub(super) export_cancelled: bool,
 	/// Download manager snapshot written by the desktop; rendered in the timeline.
@@ -1796,12 +1799,17 @@ impl TimelineView {
 		});
 	}
 	/// Loaded messages of the open conversation, oldest first. The timeline cap is 500.
-	pub(super) fn begin_chat_export(&mut self, state: &State, markdown: bool) {
+	pub(super) fn begin_chat_export(
+		&mut self,
+		state: &State,
+		markdown: bool,
+		limit: Option<usize>,
+	) {
 		if state.timeline.iter().next().is_none() {
 			return;
 		}
 		self.export_cancelled = false;
-		self.export_job = Some(crate::batch_select::ExportJob::open(markdown));
+		self.export_job = Some(crate::batch_select::ExportJob::open(markdown, limit));
 	}
 
 	pub(super) fn export_progress(&self) -> Option<(usize, usize)> {
@@ -1992,11 +2000,8 @@ impl TimelineView {
 					.request_repaint_after(std::time::Duration::from_millis(16));
 			}
 		}
-		let own_user = state.user.as_ref().map(|user| user.id);
-		self.batch_delete.retain(|id| {
-			state.timeline.get(*id).is_some_and(|message| {
-				Some(message.author.id) == own_user && state.can_delete(message.channel, *id)
-			})
+		crate::batch_select::retain_existing(&mut self.batch_delete, &|id| {
+			state.timeline.get(id).is_some()
 		});
 		if !self.initial_read_checked
 			&& state.freshness == model::Freshness::Fresh
@@ -4302,6 +4307,15 @@ impl TimelineView {
 				.take(crate::batch_select::MAX_DELETE)
 				.collect();
 			let deletable = deletable_ids.len();
+			// Other people's messages stay selected for copy, download and
+			// export; only delete needs one of yours.
+			let has_others = own.is_some()
+				&& self.batch_delete.iter().any(|id| {
+					state
+						.timeline
+						.get(*id)
+						.is_some_and(|message| Some(message.author.id) != own)
+				});
 
 			let mut attach_count = 0;
 			for id in &self.batch_delete {
@@ -4709,6 +4723,17 @@ impl TimelineView {
 									);
 									self.save_txt_request =
 										Some((format!("{channel_name}.html"), html.into_bytes()));
+								}
+								if let Some(hint) = crate::batch_select::mixed_selection_hint(
+									has_others,
+									deletable,
+									self.batch_delete.is_empty(),
+								) {
+									ui.label(
+										egui::RichText::new(crate::i18n::text(language, hint))
+											.size(11.0)
+											.color(colors.muted),
+									);
 								}
 							});
 						}
@@ -5164,7 +5189,7 @@ mod tests {
 	#[test]
 	fn channel_change_cancels_an_unfinished_export_and_keeps_a_copied_one() {
 		let mut view = TimelineView {
-			export_job: Some(crate::batch_select::ExportJob::open(false)),
+			export_job: Some(crate::batch_select::ExportJob::open(false, None)),
 			..TimelineView::default()
 		};
 		let carried = view.take_export_across_channel();

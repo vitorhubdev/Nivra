@@ -862,12 +862,19 @@ cached by application ID can remain stale until normal cache expiry or clear-cac
 use the existing SHA-256 disk filenames. No new cache, schema or dependency is introduced.
 ### Native font fallback (egui main experiment)
 
-Eframe `system_fonts` enumerates installed fonts on a background thread and uses
-read-only memory-mapped OS font files for missing glyphs, including native color
-emoji. No font download or font-file copy is added. Upstream fallback can wait
-for enumeration on its first missing glyph; its font/cache memory is framework
-overhead, separate from Nivra message/image budgets. OS font availability and
-emoji coverage vary by platform. Bundled text faces and Twemoji remain in use.
+Eframe `system_fonts` enumerates installed fonts on a background thread for missing glyphs,
+including native color emoji, and maps the files read-only. CJK is not left to that
+provider alone: with a non-Chinese locale it can pick a Japanese face for Han text and miss
+simplified-only codepoints, so `crates/ui/src/fonts/system.rs` searches the documented
+system locations (Windows font directories, macOS font directories, fontconfig and Noto
+paths on Linux), reads each candidate once on a worker thread and installs the faces that
+cover kana, Han and Hangul into egui's fallback families. A face only counts when its cmap
+maps the script's sample scalar, so a `.ttc` face index is chosen by coverage. Loaded faces
+stay in RAM for the process (about 33 MB on a stock Windows install) and only after CJK text
+first appears. No CJK face is bundled, downloaded or written; when none is installed the UI
+shows a one-time translated notice. The provider's font/cache memory is framework overhead,
+separate from Nivra message/image budgets. OS font availability and emoji coverage vary by
+platform. Bundled Inter, Noto Sans Arabic and Noto Sans Math faces and Twemoji remain in use.
 
 
 ### Inline audio streaming (October 2, 2026)

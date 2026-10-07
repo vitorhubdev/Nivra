@@ -64,6 +64,11 @@ impl Toasts {
 			self.items.remove(0);
 		}
 	}
+	/// Test-only view of the texts currently queued, oldest first.
+	#[cfg(test)]
+	pub(crate) fn texts(&self) -> Vec<&str> {
+		self.items.iter().map(|toast| toast.text.as_str()).collect()
+	}
 	/// Draws the live toasts stacked under the window chrome. `top` is the inset that
 	/// clears whatever the caller draws above them.
 	pub fn show(&mut self, ctx: &egui::Context, top: f32) {

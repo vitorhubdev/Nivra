@@ -1624,3 +1624,5 @@ Nothing is posted here yet; archived posts load on request. = "Nothing is posted
 This forum is large; loading another way… = "This forum is large; loading another way…"
 
 Updated = "Updated"
+
+Install a font with Japanese, Chinese or Korean support to read this text. = "Install a font with Japanese, Chinese or Korean support to read this text."

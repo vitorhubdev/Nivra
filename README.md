@@ -308,7 +308,7 @@ Nivra started from [Serein](https://github.com/ViceVerse-cz/Serein) (MIT OR Apac
 
 Nivra is distributed under the **MIT License** ([LICENSE-MIT](LICENSE-MIT)) or the **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE)), at your option.
 
-Code inherited from the project Nivra started from keeps the original copyright notice and the same MIT OR Apache-2.0 terms; the Nivra copyright line is added to [LICENSE-MIT](LICENSE-MIT) without removing the original notice. Third-party library notices, bundled font licenses (Inter, Noto Sans CJK/Arabic), and Twemoji graphics licenses are cataloged in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Code inherited from the project Nivra started from keeps the original copyright notice and the same MIT OR Apache-2.0 terms; the Nivra copyright line is added to [LICENSE-MIT](LICENSE-MIT) without removing the original notice. Third-party library notices, bundled font licenses (Inter, Noto Sans Arabic/Math; CJK text uses the system font), and Twemoji graphics licenses are cataloged in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Demo fixtures and simulated actions are excluded from normal app and CI packages.
 Build with `--features demo` and launch with `--demo` to enable them; `--demo-*`

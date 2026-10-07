@@ -1624,3 +1624,5 @@ Nothing is posted here yet; archived posts load on request. = "Nada foi publicad
 This forum is large; loading another way… = "Este fórum é grande; carregando de outro jeito…"
 
 Updated = "Atualizado"
+
+Install a font with Japanese, Chinese or Korean support to read this text. = "Instale uma fonte com suporte a japonês/chinês/coreano para ver este texto."

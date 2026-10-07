@@ -2011,9 +2011,10 @@ LTO, 31m27s with the kept configuration. Fat LTO was rejected on link cost. The
 cold `opt-level = "s"` set covers extensions, wry, reqwest, hyper, http, tower,
 keyring, notify-rust, global-hotkey, dirs, rusqlite, libsqlite3-sys, windows,
 windows-core, webview2-com and tungstenite; voice, audio, video, render, media and
-parsing crates keep `opt-level = 3`. Bundled assets are single-copy and already
-compressed (CJK font 12.03 MB `zstd -19` with lazy inflate, Twemoji atlas 5.23 MB
-`oxipng -o max`, licenses deflated to 0.43 MB). A 20% reduction would require
-removing user-visible content (the CJK font or the emoji atlas) or the x64-only
+parsing crates keep `opt-level = 3`. Bundled assets are single-copy: the Twemoji
+atlas (5.23 MB `oxipng -o max`) and the deflated license texts (0.43 MB); CJK
+text uses the operating system's font, so no CJK face is embedded (round 19
+removed the former 12.03 MB `zstd -19` archive). A 20% reduction would require
+removing user-visible content (the emoji atlas) or the x64-only
 DeepFilterNet/tract runtime (~33 MB difference versus ARM64); that remains a
 pending owner decision.

@@ -1,0 +1,51 @@
+name: size-measure
+
+# Temporary round-19 evidence workflow (system CJK font): packages `main` and
+# `feat/system-cjk-font` on the four release platforms and prints the installer
+# sizes, so the before/after table comes from CI instead of a local release
+# build. It lives on a throwaway branch and is never merged.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: size-measure-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, windows-11-arm, ubuntu-latest]
+        source: [before, after]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libvulkan-dev libasound2-dev libpulse-dev cmake python3 dpkg-dev desktop-file-utils
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ matrix.source == 'before' && 'main' || 'feat/system-cjk-font' }}
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          cache-on-failure: true
+          key: size-${{ matrix.source }}
+      - name: Package
+        run: cargo xtask package
+      - name: Measure the installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ runner.os }}" in
+            Windows) bytes="$(wc -c < dist/Nivra.exe | tr -d ' ')" ;;
+            macOS) (cd dist && zip -q -r -y "../Nivra-measure.zip" Nivra.app) && bytes="$(wc -c < Nivra-measure.zip | tr -d ' ')" ;;
+            Linux) tar -czf "Nivra-measure.tar.gz" -C dist . && bytes="$(wc -c < Nivra-measure.tar.gz | tr -d ' ')" ;;
+          esac
+          echo "| ${{ matrix.os }} | ${{ matrix.source }} | $bytes |" >> "$GITHUB_STEP_SUMMARY"
+          echo "SIZE os=${{ matrix.os }} source=${{ matrix.source }} bytes=$bytes"

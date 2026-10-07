@@ -150,11 +150,7 @@ pub(crate) fn load_from(
 		if missing.is_empty() || *budget == 0 {
 			break;
 		}
-		let stem = path
-			.file_stem()
-			.and_then(|stem| stem.to_str())
-			.unwrap_or("font");
-		let prefix = format!("system:{stem}:");
+		let prefix = format!("system:{}:", path.display());
 		if loaded.iter().any(|font| font.name.starts_with(&prefix)) {
 			continue;
 		}
@@ -238,12 +234,10 @@ fn face_count(bytes: &[u8]) -> u32 {
 }
 
 /// Registry name for one face; unique per file and index.
+/// Registry name for one face; the full path keeps two files with the same
+/// stem (a user font shadowing a system font) from colliding.
 fn font_name(path: &Path, index: u32) -> String {
-	let stem = path
-		.file_stem()
-		.and_then(|stem| stem.to_str())
-		.unwrap_or("font");
-	format!("system:{stem}:{index}")
+	format!("system:{}:{index}", path.display())
 }
 
 /// Candidate files on this platform, in search order.
@@ -313,22 +307,30 @@ pub(crate) fn font_files_in(root: &Path) -> Vec<PathBuf> {
 	let Ok(entries) = std::fs::read_dir(root) else {
 		return Vec::new();
 	};
-	let mut files: Vec<PathBuf> = entries
-		.flatten()
-		.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-		.map(|entry| entry.path())
-		.filter(|path| {
-			path.extension()
-				.and_then(|extension| extension.to_str())
-				.is_some_and(|extension| {
-					FONT_EXTENSIONS
-						.iter()
-						.any(|allowed| extension.eq_ignore_ascii_case(allowed))
-				})
-		})
-		.collect();
+	// Stop at the cap while walking the directory; the intermediate vector stays
+	// bounded even when the directory holds thousands of fonts.
+	let mut files = Vec::new();
+	for entry in entries.flatten() {
+		if files.len() == MAX_SCAN_FILES {
+			break;
+		}
+		if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+			continue;
+		}
+		let path = entry.path();
+		let is_font = path
+			.extension()
+			.and_then(|extension| extension.to_str())
+			.is_some_and(|extension| {
+				FONT_EXTENSIONS
+					.iter()
+					.any(|allowed| extension.eq_ignore_ascii_case(allowed))
+			});
+		if is_font {
+			files.push(path);
+		}
+	}
 	files.sort();
-	files.truncate(MAX_SCAN_FILES);
 	files
 }
 
@@ -372,23 +374,35 @@ pub(crate) fn linux_candidates_in(root: &Path) -> Vec<PathBuf> {
 		.collect()
 }
 
+/// Largest `fc-match` payload read before the child is stopped; the sorted
+/// database can be large and only the closest matches are used.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const FC_OUTPUT_BYTES: u64 = 64 * 1024;
+
 /// The fonts fontconfig offers for a language, best match first, when
 /// fontconfig is installed. The sorted list matters: a secondary fallback can
 /// cover a scalar the best match lacks.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn fontconfig_matches(language: &str) -> Vec<PathBuf> {
-	let output = std::process::Command::new("fc-match")
+	let Ok(mut child) = std::process::Command::new("fc-match")
 		.arg("--sort")
 		.arg("--format=%{file}\n")
 		.arg(format!(":lang={language}"))
-		.output();
-	let Ok(output) = output else {
+		.stdout(std::process::Stdio::piped())
+		.stderr(std::process::Stdio::null())
+		.spawn()
+	else {
 		return Vec::new();
 	};
-	if !output.status.success() {
-		return Vec::new();
+	let mut payload = Vec::new();
+	if let Some(stdout) = child.stdout.take() {
+		let _ = std::io::Read::take(stdout, FC_OUTPUT_BYTES).read_to_end(&mut payload);
 	}
-	parse_fontconfig(&String::from_utf8_lossy(&output.stdout))
+	// Stopping early leaves the child writing to a closed pipe; kill it so
+	// `wait` cannot deadlock on a full pipe.
+	let _ = child.kill();
+	let _ = child.wait();
+	parse_fontconfig(&String::from_utf8_lossy(&payload))
 }
 
 /// One font path per non-empty line, bounded to the closest matches.
@@ -545,6 +559,15 @@ mod tests {
 		);
 		let many: String = (0..FC_LIMIT + 5).map(|i| format!("/f/{i}.ttf\n")).collect();
 		assert_eq!(parse_fontconfig(&many).len(), FC_LIMIT);
+	}
+
+	#[test]
+	fn faces_from_different_directories_do_not_share_a_name() {
+		assert_ne!(
+			font_name(Path::new("/a/msyh.ttc"), 0),
+			font_name(Path::new("/b/msyh.ttc"), 0),
+			"a user font shadowing a system font must stay distinguishable"
+		);
 	}
 
 	#[test]

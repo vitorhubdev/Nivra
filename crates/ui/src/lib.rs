@@ -16,6 +16,8 @@ mod preview_tests {
 			text: "# Title\n\nBody text".into(),
 			truncated: false,
 			shown: text_preview::PREVIEW_WINDOW_CHARS,
+			maximized: false,
+			copied: false,
 		}
 	}
 
@@ -35,6 +37,100 @@ mod preview_tests {
 		);
 		view.close_preview();
 		assert!(view.preview.is_none());
+	}
+
+	#[test]
+	fn preview_footer_copies_and_reports_copied() {
+		use egui_kittest::kittest::Queryable as _;
+		struct Fixture {
+			view: MessagingUi,
+		}
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				|ui, fixture: &mut Fixture| {
+					fixture.view.show_preview(ui.ctx());
+				},
+				Fixture {
+					view: {
+						let mut view = MessagingUi::default();
+						view.set_preview(sample());
+						view
+					},
+				},
+			);
+		harness.run();
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Copy text")
+			.click();
+		harness.run();
+		assert!(
+			harness
+				.state()
+				.view
+				.preview
+				.as_ref()
+				.is_some_and(|preview| preview.copied),
+			"copying must flag the preview as copied"
+		);
+		// The footer now offers the Copied! confirmation instead of Copy text.
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Copied!")
+			.click();
+		harness.run();
+		assert!(
+			harness.state().view.preview.is_some(),
+			"copying must keep the preview open"
+		);
+	}
+
+	#[test]
+	fn preview_maximize_toggles_and_restores() {
+		use egui_kittest::kittest::Queryable as _;
+		struct Fixture {
+			view: MessagingUi,
+		}
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				|ui, fixture: &mut Fixture| {
+					fixture.view.show_preview(ui.ctx());
+				},
+				Fixture {
+					view: {
+						let mut view = MessagingUi::default();
+						view.set_preview(sample());
+						view
+					},
+				},
+			);
+		harness.run();
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Maximize")
+			.click();
+		harness.run();
+		assert!(
+			harness
+				.state()
+				.view
+				.preview
+				.as_ref()
+				.is_some_and(|preview| preview.maximized),
+			"maximizing must widen the preview dialog"
+		);
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Restore")
+			.click();
+		harness.run();
+		assert!(
+			harness
+				.state()
+				.view
+				.preview
+				.as_ref()
+				.is_some_and(|preview| !preview.maximized),
+			"restoring must shrink the preview dialog back"
+		);
 	}
 }
 mod archives;
@@ -3720,14 +3816,25 @@ impl MessagingUi {
 		let language = self.language;
 		let mut close = false;
 		let mut more = false;
+		let mut copy = false;
+		let mut toggle_maximized = false;
 		// Move the pending external link out so the shared borrow of `preview`
 		// cannot overlap a mutable borrow of the timeline.
 		let mut opening = self.timeline.opening.take();
 		let Some(preview) = self.preview.as_ref() else {
 			return false;
 		};
+		let maximized = preview.maximized;
+		let copied = preview.copied;
+		// A maximized preview fills the viewport (the dialog clamps to it) and
+		// grows the scroll body, so long `.md`/`.txt` files are easier to read.
+		let max_body_height = if maximized {
+			(ctx.content_rect().height() - 260.0).clamp(420.0, 1200.0)
+		} else {
+			420.0
+		};
 		crate::dialog::Dialog::new("text-preview", preview.filename.clone())
-			.width(640.0)
+			.width(if maximized { 1100.0 } else { 640.0 })
 			.show(ctx, |d| {
 				d.content(|ui| {
 					if preview.truncated {
@@ -3742,7 +3849,7 @@ impl MessagingUi {
 						ui.add_space(4.0);
 					}
 					egui::ScrollArea::vertical()
-						.max_height(420.0)
+						.max_height(max_body_height)
 						.auto_shrink([false, false])
 						.show(ui, |ui| {
 							ui.set_width(ui.available_width());
@@ -3791,6 +3898,24 @@ impl MessagingUi {
 					{
 						close = true;
 					}
+					if crate::dialog::action(
+						ui,
+						crate::i18n::text(language, if copied { "Copied!" } else { "Copy text" }),
+						crate::dialog::Action::Neutral,
+					)
+					.clicked()
+					{
+						copy = true;
+					}
+					if crate::dialog::action(
+						ui,
+						crate::i18n::text(language, if maximized { "Restore" } else { "Maximize" }),
+						crate::dialog::Action::Neutral,
+					)
+					.clicked()
+					{
+						toggle_maximized = true;
+					}
 				});
 			});
 		if opening.is_some() {
@@ -3798,6 +3923,13 @@ impl MessagingUi {
 		}
 		if more && let Some(preview) = self.preview.as_mut() {
 			preview.show_more();
+		}
+		if copy && let Some(preview) = self.preview.as_mut() {
+			ctx.copy_text(preview.text.clone());
+			preview.copied = true;
+		}
+		if toggle_maximized && let Some(preview) = self.preview.as_mut() {
+			preview.maximized = !preview.maximized;
 		}
 		if close {
 			self.preview = None;

@@ -92,11 +92,8 @@ impl CjkScan {
 							self.uncovered = true;
 						}
 					}
-					None if self.drawn.len() < DRAWN_CHARS => {
-						if !self.drawn.contains(&c) {
-							self.drawn.push(c);
-						}
-					}
+					None if self.drawn.contains(&c) => {}
+					None if self.drawn.len() < DRAWN_CHARS => self.drawn.push(c),
 					None => self.overflow = true,
 				}
 			}
@@ -397,12 +394,22 @@ mod tests {
 		assert!(!scan.text(&job, None));
 		assert_eq!(scan.checked.len(), 1);
 		assert_eq!(Arc::strong_count(&job), 1);
+		let old = Arc::downgrade(&job);
 		Arc::make_mut(&mut job).text = "日本語 中文 한국어".into();
 		assert!(
 			scan.text(&job, None),
 			"editing an already checked job must detect CJK"
 		);
-		assert!(scan.checked[0].upgrade().is_none());
+		assert!(
+			old.upgrade().is_none(),
+			"the replaced allocation must be gone"
+		);
+		assert!(
+			scan.checked
+				.iter()
+				.any(|entry| entry.ptr_eq(&Arc::downgrade(&job))),
+			"the edited job must be registered under its new identity"
+		);
 		for index in 0..CHECKED_JOBS * 2 {
 			let job = Arc::new(egui::text::LayoutJob {
 				text: format!("Synthetic {index}"),
@@ -602,6 +609,29 @@ mod tests {
 		assert!(scan.text(&job, None));
 		assert_eq!(scan.drawn.len(), DRAWN_CHARS);
 		assert!(scan.overflow, "a partial set cannot certify coverage");
+	}
+
+	#[test]
+	fn a_repeated_scalar_at_capacity_does_not_overflow() {
+		let mut scan = CjkScan::default();
+		let full: String = (0..DRAWN_CHARS)
+			.filter_map(|offset| char::from_u32(0x4e00 + offset as u32))
+			.collect();
+		let repeat = Arc::new(egui::text::LayoutJob {
+			text: format!("{full}{}", '\u{4e00}'),
+			..Default::default()
+		});
+		assert!(scan.text(&repeat, None));
+		assert_eq!(scan.drawn.len(), DRAWN_CHARS);
+		assert!(!scan.overflow, "a repeated scalar is not new coverage");
+		let extra = Arc::new(egui::text::LayoutJob {
+			text: char::from_u32(0x4e00 + DRAWN_CHARS as u32)
+				.expect("next Han scalar")
+				.to_string(),
+			..Default::default()
+		});
+		assert!(scan.text(&extra, None));
+		assert!(scan.overflow, "a new scalar past the cap overflows");
 	}
 
 	#[test]

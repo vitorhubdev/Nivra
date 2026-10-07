@@ -25,23 +25,55 @@ const _: () = assert!(
 	CHECKED_JOBS * (size_of::<egui::text::LayoutJob>() + 3 * size_of::<usize>()) <= CHECKED_BYTES
 );
 
-/// Distinct CJK scalars remembered for the one-time coverage check.
+/// Distinct CJK scalars carried to the first probe. Longer text sets `overflow`
+/// instead of dropping characters, so coverage is never certified from a
+/// partial set.
 const DRAWN_CHARS: usize = 64;
 
 /// Blocks that need a system CJK face: kana, Han, Hangul and their forms.
+/// Arabic Presentation Forms-B (U+FE70–U+FEFF) and Yi (U+A000–U+A4CF) are not CJK.
 fn is_cjk(c: char) -> bool {
-	matches!(c as u32, 0x1100..=0x11ff | 0x2e80..=0xa4cf | 0xa960..=0xa97f | 0xac00..=0xd7af | 0xd7b0..=0xd7ff | 0xf900..=0xfaff | 0xfe30..=0xffef | 0x20000..=0x323af)
+	matches!(
+		c as u32,
+		0x1100..=0x11ff
+			| 0x2e80..=0x2fdf
+			| 0x2ff0..=0x303f
+			| 0x3040..=0x30ff
+			| 0x3100..=0x318f
+			| 0x3190..=0x31ff
+			| 0x3200..=0x33ff
+			| 0x3400..=0x4dbf
+			| 0x4e00..=0x9fff
+			| 0xa960..=0xa97f
+			| 0xac00..=0xd7af
+			| 0xd7b0..=0xd7ff
+			| 0xf900..=0xfaff
+			| 0xfe30..=0xfe6f
+			| 0xff00..=0xffef
+			| 0x20000..=0x323af
+	)
 }
 
 #[derive(Default)]
 struct CjkScan {
 	checked: Vec<Weak<egui::text::LayoutJob>>,
-	/// CJK scalars seen in drawn text, so the probe only reports what was shown.
+	/// Scalars carried to the first probe, before any face is loaded.
 	drawn: Vec<char>,
+	/// A drawn CJK scalar has no loaded face.
+	uncovered: bool,
+	/// More distinct scalars appeared than `drawn` can carry; coverage cannot be
+	/// certified from a partial set, so the probe stays conservative.
+	overflow: bool,
 }
 
 impl CjkScan {
-	fn text(&mut self, job: &Arc<egui::text::LayoutJob>) -> bool {
+	/// Records one job and reports whether it drew CJK text. `faces` is the
+	/// cached set, so a later script is checked with a cmap lookup on this thread.
+	fn text(
+		&mut self,
+		job: &Arc<egui::text::LayoutJob>,
+		faces: Option<&[system::LoadedFont]>,
+	) -> bool {
 		let index = match self
 			.checked
 			.binary_search_by_key(&(Arc::as_ptr(job) as usize), |entry| {
@@ -50,20 +82,27 @@ impl CjkScan {
 			Ok(_) => return false,
 			Err(index) => index,
 		};
+		let mut found = false;
 		if !job.text.is_ascii() {
-			let mut found = false;
 			for c in job.text.chars().filter(|c| is_cjk(*c)) {
 				found = true;
-				if self.drawn.len() < DRAWN_CHARS && !self.drawn.contains(&c) {
-					self.drawn.push(c);
+				match faces {
+					Some(faces) => {
+						if !faces.iter().any(|font| font.covers(c)) {
+							self.uncovered = true;
+						}
+					}
+					None if self.drawn.len() < DRAWN_CHARS => {
+						if !self.drawn.contains(&c) {
+							self.drawn.push(c);
+						}
+					}
+					None => self.overflow = true,
 				}
 			}
-			if found {
-				return true;
-			}
 		}
-		// Keep allocation identities alive so allocator address reuse cannot hide new text.
-		// Arc::make_mut also dissociates these weak references before editing a job.
+		// Register the job before returning: a covered CJK job must not be
+		// rediscovered on every later pass, or the UI repaints forever.
 		if self.checked.capacity() == 0 {
 			self.checked.reserve_exact(CHECKED_JOBS);
 		}
@@ -75,13 +114,20 @@ impl CjkScan {
 			index
 		};
 		self.checked.insert(index, Arc::downgrade(job));
-		false
+		found
 	}
 
-	fn shape(&mut self, shape: &egui::Shape) -> bool {
+	fn shape(&mut self, shape: &egui::Shape, faces: Option<&[system::LoadedFont]>) -> bool {
 		match shape {
-			egui::Shape::Text(text) => self.text(&text.galley.job),
-			egui::Shape::Vec(shapes) => shapes.iter().any(|shape| self.shape(shape)),
+			egui::Shape::Text(text) => self.text(&text.galley.job, faces),
+			egui::Shape::Vec(shapes) => {
+				// Scan every child: each job must be registered, so this cannot short-circuit.
+				let mut found = false;
+				for shape in shapes {
+					found |= self.shape(shape, faces);
+				}
+				found
+			}
 			_ => false,
 		}
 	}
@@ -146,36 +192,50 @@ pub fn install(ctx: &Context) {
 			) {
 				return;
 			}
-			let drawn = {
+			let fonts = loaded_fonts(&ctx);
+			let needed = {
 				let mut scan = scan.lock().expect("CJK scan");
 				let layers: Vec<_> = ctx.memory(|memory| memory.layer_ids().collect());
-				let needed = ctx.graphics(|graphics| {
-					layers.iter().any(|layer| {
-						graphics.get(*layer).is_some_and(|list| {
-							list.all_entries().any(|entry| scan.shape(&entry.shape))
-						})
-					})
-				});
-				if needed {
-					std::mem::take(&mut scan.drawn)
-				} else {
-					Vec::new()
-				}
+				ctx.graphics(|graphics| {
+					let mut needed = false;
+					'layers: for layer in &layers {
+						if let Some(list) = graphics.get(*layer) {
+							for entry in list.all_entries() {
+								needed |=
+									scan.shape(&entry.shape, fonts.as_deref().map(Vec::as_slice));
+								if scan.uncovered {
+									break 'layers;
+								}
+							}
+						}
+					}
+					needed
+				})
 			};
-			if drawn.is_empty() {
+			if !needed {
 				return;
 			}
-			// A later script can arrive after the first probe. Checking the loaded
+			// A later script can arrive after the first probe. Checking the cached
 			// faces is a cmap lookup, so it stays on this thread; only the first
 			// probe reads the disk, and that runs on a worker.
-			let Some(fonts) = loaded_fonts(&ctx) else {
+			let Some(_) = fonts else {
+				let (drawn, overflow) = {
+					let mut scan = scan.lock().expect("CJK scan");
+					(
+						std::mem::take(&mut scan.drawn),
+						std::mem::take(&mut scan.overflow),
+					)
+				};
+				if drawn.is_empty() {
+					return;
+				}
 				set_status(&ctx, SystemCjk::Checking);
 				let worker = ctx.clone();
 				let spawned =
 					std::thread::Builder::new()
 						.name("cjk-font".into())
 						.spawn(move || {
-							install_system_fonts(&worker, &drawn);
+							install_system_fonts(&worker, &drawn, overflow);
 							worker.request_repaint();
 						});
 				if spawned.is_err() {
@@ -183,20 +243,42 @@ pub fn install(ctx: &Context) {
 				}
 				return;
 			};
-			set_status(&ctx, coverage_status(&fonts, &drawn));
-			ctx.request_repaint();
+			let uncovered = {
+				let mut scan = scan.lock().expect("CJK scan");
+				let uncovered = scan.uncovered || scan.overflow;
+				scan.uncovered = false;
+				scan.overflow = false;
+				scan.drawn.clear();
+				uncovered
+			};
+			let new_status = if uncovered {
+				SystemCjk::Missing
+			} else {
+				SystemCjk::Available
+			};
+			// Only a changed state needs another frame; a covered pass must settle.
+			if status(&ctx) != Some(new_status) {
+				set_status(&ctx, new_status);
+				ctx.request_repaint();
+			}
 		}),
 	);
 	crate::design::weights_installed(ctx);
 }
 
 /// Loads the system CJK faces and records whether the drawn text is covered.
-fn install_system_fonts(ctx: &Context, drawn: &[char]) {
+fn install_system_fonts(ctx: &Context, drawn: &[char], overflow: bool) {
 	let fonts = Arc::new(system::load_fallbacks());
 	if !fonts.is_empty() {
 		ctx.set_fonts(definitions_with(&fonts));
 	}
-	set_status(ctx, coverage_status(&fonts, drawn));
+	let status = if overflow {
+		// A partial scalar set cannot certify coverage.
+		SystemCjk::Missing
+	} else {
+		coverage_status(&fonts, drawn)
+	};
+	set_status(ctx, status);
 	store_loaded_fonts(ctx, fonts);
 }
 
@@ -311,13 +393,13 @@ mod tests {
 			text: "Latin — čeština العربية".into(),
 			..Default::default()
 		});
-		assert!(!scan.text(&job));
-		assert!(!scan.text(&job));
+		assert!(!scan.text(&job, None));
+		assert!(!scan.text(&job, None));
 		assert_eq!(scan.checked.len(), 1);
 		assert_eq!(Arc::strong_count(&job), 1);
 		Arc::make_mut(&mut job).text = "日本語 中文 한국어".into();
 		assert!(
-			scan.text(&job),
+			scan.text(&job, None),
 			"editing an already checked job must detect CJK"
 		);
 		assert!(scan.checked[0].upgrade().is_none());
@@ -326,7 +408,7 @@ mod tests {
 				text: format!("Synthetic {index}"),
 				..Default::default()
 			});
-			assert!(!scan.text(&job));
+			assert!(!scan.text(&job, None));
 			assert!(scan.checked.len() <= CHECKED_JOBS);
 			assert!(
 				scan.checked.capacity()
@@ -336,7 +418,7 @@ mod tests {
 		}
 		assert!(scan.checked.iter().all(|entry| entry.upgrade().is_none()));
 		assert!(
-			scan.text(&job),
+			scan.text(&job, None),
 			"cache rollover must not suppress new CJK text"
 		);
 	}
@@ -486,10 +568,53 @@ mod tests {
 			text: "Latin 日本語 한국어".into(),
 			..Default::default()
 		});
-		assert!(scan.text(&job));
+		assert!(scan.text(&job, None));
 		assert!(scan.drawn.contains(&'日'));
 		assert!(scan.drawn.contains(&'한'));
 		assert!(!scan.drawn.contains(&'L'));
+	}
+
+	#[test]
+	fn a_covered_cjk_job_is_registered_and_not_rescanned() {
+		let mut scan = CjkScan::default();
+		let job = Arc::new(egui::text::LayoutJob {
+			text: "日本語".into(),
+			..Default::default()
+		});
+		assert!(scan.text(&job, None), "the first pass reports the CJK job");
+		assert!(
+			!scan.text(&job, None),
+			"a registered job must not be rediscovered and repaint forever"
+		);
+		assert_eq!(scan.checked.len(), 1);
+	}
+
+	#[test]
+	fn more_scalars_than_the_probe_carries_set_overflow_instead_of_dropping_them() {
+		let mut scan = CjkScan::default();
+		let text: String = (0..DRAWN_CHARS + 1)
+			.filter_map(|offset| char::from_u32(0x4e00 + offset as u32))
+			.collect();
+		let job = Arc::new(egui::text::LayoutJob {
+			text,
+			..Default::default()
+		});
+		assert!(scan.text(&job, None));
+		assert_eq!(scan.drawn.len(), DRAWN_CHARS);
+		assert!(scan.overflow, "a partial set cannot certify coverage");
+	}
+
+	#[test]
+	fn arabic_presentation_forms_and_yi_are_not_cjk() {
+		assert!(!is_cjk('\u{fe70}'), "Arabic Presentation Forms-B");
+		assert!(!is_cjk('\u{feff}'), "zero-width no-break space");
+		assert!(!is_cjk('\u{a000}'), "Yi syllable");
+		assert!(!is_cjk('\u{a4cf}'), "Yi radical");
+		assert!(is_cjk('あ'), "kana");
+		assert!(is_cjk('语'), "Han");
+		assert!(is_cjk('한'), "Hangul");
+		assert!(is_cjk('\u{ff01}'), "fullwidth form");
+		assert!(is_cjk('\u{20000}'), "Han extension B");
 	}
 
 	#[test]

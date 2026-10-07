@@ -39,25 +39,25 @@
 
 Stable builds are published on the [Releases page](https://github.com/vitorhubdev/Nivra/releases/latest). On Windows, download the single `.exe` and open it: there is nothing to extract. Only the assets attached to a release on that page are Nivra binaries.
 
-| System | Asset (v1.0.12 example) | Notes |
+| System | Asset (v1.0.13 example) | Notes |
 | --- | --- | --- |
-| Windows x64 | `Nivra-v1.0.12-Windows-X64.exe` | Single executable, no installer |
-| Windows ARM64 | `Nivra-v1.0.12-Windows-ARM64.exe` | Maximum noise suppression (DeepFilterNet) is unavailable and falls back to RNNoise |
-| Linux x64 | `Nivra-v1.0.12-Linux-X64.tar.gz` | Extract and run |
-| macOS Apple Silicon | `Nivra-v1.0.12-macOS-ARM64.zip` | Intel macOS is not published |
+| Windows x64 | `Nivra-v1.0.13-Windows-X64.exe` | Single executable, no installer |
+| Windows ARM64 | `Nivra-v1.0.13-Windows-ARM64.exe` | Maximum noise suppression (DeepFilterNet) is unavailable and falls back to RNNoise |
+| Linux x64 | `Nivra-v1.0.13-Linux-X64.tar.gz` | Extract and run |
+| macOS Apple Silicon | `Nivra-v1.0.13-macOS-ARM64.zip` | Intel macOS is not published |
 
 Every release also attaches a `SHA256SUMS.txt` checksum file. Verify the file you downloaded before running it:
 
 ```powershell
 # Windows (PowerShell) — compare the output with the matching line in SHA256SUMS.txt
-Get-FileHash .\Nivra-v1.0.12-Windows-X64.exe -Algorithm SHA256
+Get-FileHash .\Nivra-v1.0.13-Windows-X64.exe -Algorithm SHA256
 ```
 
 ```sh
 # Linux — checks the files that are present and ignores the rest of the manifest
 sha256sum --ignore-missing -c SHA256SUMS.txt
 # macOS — compare the printed hash with the matching line in SHA256SUMS.txt
-shasum -a 256 Nivra-v1.0.12-macOS-ARM64.zip
+shasum -a 256 Nivra-v1.0.13-macOS-ARM64.zip
 ```
 
 **Signing status differs by platform.** Windows and Linux packages are unsigned. The macOS `.app` is ad-hoc signed and not notarized (tag builds); a manual release-workflow build with Apple credentials is Developer ID-signed and notarized instead. If Gatekeeper still warns about the app you downloaded, right-click it, choose **Open**, and confirm; macOS also allows it later under System Settings → Privacy & Security. On Windows, SmartScreen may show *"Windows protected your PC"*: choose **More info** → **Run anyway**.
@@ -132,7 +132,7 @@ The script only reads process private memory and processor time. It never starts
 
 ### Prerequisites
 
-Rust **1.98.1** is pinned (see `rust-toolchain.toml`); the current workspace version is **1.0.12**. You also need the standard C/C++ toolchain, CMake and `bun` 1.4.2 for the JS test harnesses:
+Rust **1.98.1** is pinned (see `rust-toolchain.toml`); the current workspace version is **1.0.13**. You also need the standard C/C++ toolchain, CMake and `bun` 1.4.2 for the JS test harnesses:
 
 - **macOS:** Xcode command-line tools (`xcode-select --install`)
 - **Linux:** GCC/Clang, ALSA development headers, `pkg-config`, GTK 4, WebKitGTK 6.0, GStreamer, fontconfig and Vulkan drivers (see [Platform Support](docs/platform-support.md))

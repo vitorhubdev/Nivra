@@ -1,5 +1,5 @@
-//! Offline tray-icon proof: renders the four call badges composited by
-//! `platform::tray::status_icon` (idle/connected/muted/deafened). Synthetic
+//! Offline tray-icon proof: renders the five call badges composited by
+//! `platform::tray::status_icon` (idle/connecting/connected/muted/deafened). Synthetic
 //! evidence for the tray voice-state function; the OS tray itself cannot be
 //! captured headlessly.
 //! Usage: tray_preview --demo --output-dir=PATH
@@ -15,6 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let png = include_bytes!("../../../packaging/windows/nivra.png");
 	for voice in [
 		platform::tray::Voice::Idle,
+		platform::tray::Voice::Connecting,
 		platform::tray::Voice::Connected,
 		platform::tray::Voice::Muted,
 		platform::tray::Voice::Deafened,

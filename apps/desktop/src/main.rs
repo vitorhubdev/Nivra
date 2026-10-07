@@ -2922,9 +2922,15 @@ impl Desktop {
 			return;
 		};
 		let voice = match self.state.voice.active.as_ref() {
-			Some(call) if matches!(call.phase, Phase::Connected | Phase::Waiting) => {
+			Some(call) => {
+				let live = !matches!(call.phase, Phase::Failed);
+				let joining = !matches!(
+					call.phase,
+					Phase::Connected | Phase::Waiting | Phase::Failed
+				);
 				platform::tray::call_voice(
-					true,
+					live,
+					joining,
 					call.muted || call.server_muted,
 					call.deafened || call.server_deafened,
 				)
@@ -2944,6 +2950,7 @@ impl Desktop {
 		let mut tooltip = "Nivra".to_owned();
 		if let Some(call) = match voice {
 			Voice::Idle => None,
+			Voice::Connecting => Some(t("Connecting…")),
 			Voice::Connected => Some(t("In a call")),
 			Voice::Muted => Some(t("In a call · microphone muted")),
 			Voice::Deafened => Some(t("In a call · deafened")),

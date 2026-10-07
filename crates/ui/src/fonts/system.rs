@@ -17,6 +17,7 @@
 //! against a temporary root instead of the machine's real font directory.
 
 use egui::FontData;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -95,25 +96,26 @@ pub(crate) const LINUX: &[&str] = &[
 #[cfg(any(not(any(target_os = "windows", target_os = "macos")), test))]
 const FC_LANG: [&str; 3] = ["ja", "zh", "ko"];
 
-/// Reads the installed candidates and returns the faces worth installing plus
-/// the scripts still uncovered. Empty fonts and missing scripts together mean a
-/// minimal system: replacement glyphs and a one-time notice.
-pub fn load_fallbacks() -> (Vec<LoadedFont>, Vec<Script>) {
+/// Largest candidate file read into memory. Real CJK faces are 10–30 MB; the
+/// ceiling stops a stray or planted file from allocating without bound.
+const MAX_FONT_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Reads the installed candidates and returns the faces worth installing.
+pub fn load_fallbacks() -> Vec<LoadedFont> {
 	load_from(&candidate_paths())
 }
 
 /// Reads each candidate once, keeping only faces that add coverage.
-pub(crate) fn load_from(candidates: &[PathBuf]) -> (Vec<LoadedFont>, Vec<Script>) {
+pub(crate) fn load_from(candidates: &[PathBuf]) -> Vec<LoadedFont> {
 	let mut loaded: Vec<LoadedFont> = Vec::new();
 	let mut missing = SCRIPTS.to_vec();
 	for path in candidates {
 		if missing.is_empty() {
 			break;
 		}
-		let Ok(bytes) = std::fs::read(path) else {
+		let Some(bytes) = read_candidate(path, MAX_FONT_BYTES) else {
 			continue;
 		};
-		let bytes: Arc<Vec<u8>> = Arc::new(bytes);
 		let mut faces: Vec<(u32, Vec<Script>)> = Vec::new();
 		for script in &missing {
 			let Some(index) = covering_face(&bytes, script.sample()) else {
@@ -138,25 +140,44 @@ pub(crate) fn load_from(candidates: &[PathBuf]) -> (Vec<LoadedFont>, Vec<Script>
 			});
 		}
 	}
-	(loaded, missing)
+	loaded
+}
+
+/// Reads a candidate within `ceiling` bytes; a file that grows past it is refused.
+fn read_candidate(path: &Path, ceiling: u64) -> Option<Arc<Vec<u8>>> {
+	let file = std::fs::File::open(path).ok()?;
+	if !file.metadata().ok()?.is_file() || file.metadata().ok()?.len() > ceiling {
+		return None;
+	}
+	let mut bytes = Vec::new();
+	std::io::Read::take(file, ceiling + 1)
+		.read_to_end(&mut bytes)
+		.ok()?;
+	if bytes.len() as u64 > ceiling || bytes.len() < 12 {
+		return None;
+	}
+	Some(Arc::new(bytes))
+}
+
+impl LoadedFont {
+	/// Does this exact face map `c` to a real glyph?
+	pub fn covers(&self, c: char) -> bool {
+		face_covers(self.data.bytes(), self.data.index, c)
+	}
 }
 
 /// The first face in `bytes` that maps `sample` to a real glyph.
 fn covering_face(bytes: &[u8], sample: char) -> Option<u32> {
+	(0..face_count(bytes)).find(|index| face_covers(bytes, *index, sample))
+}
+
+/// Does one face of `bytes` map `sample` to a real glyph?
+fn face_covers(bytes: &[u8], index: u32, sample: char) -> bool {
 	use skrifa::MetadataProvider as _;
-	for index in 0..face_count(bytes) {
-		let Ok(font) = skrifa::FontRef::from_index(bytes, index) else {
-			continue;
-		};
-		if font
-			.charmap()
-			.map(sample)
-			.is_some_and(|glyph| glyph != skrifa::GlyphId::NOTDEF)
-		{
-			return Some(index);
-		}
-	}
-	None
+	skrifa::FontRef::from_index(bytes, index)
+		.ok()
+		.and_then(|font| font.charmap().map(sample))
+		.is_some_and(|glyph| glyph != skrifa::GlyphId::NOTDEF)
 }
 
 /// Faces in a file: `.ttc`/`.otc` collections start with a `ttcf` header.
@@ -277,12 +298,16 @@ mod tests {
 		root
 	}
 
-	fn inter() -> Vec<u8> {
+	fn inter_bytes() -> Vec<u8> {
 		std::fs::read(concat!(
 			env!("CARGO_MANIFEST_DIR"),
 			"/../../assets/fonts/Inter-Regular.ttf"
 		))
 		.expect("bundled Inter")
+	}
+
+	fn inter() -> Vec<u8> {
+		inter_bytes()
 	}
 
 	#[test]
@@ -340,11 +365,9 @@ mod tests {
 	}
 
 	#[test]
-	fn a_temp_root_without_fonts_loads_nothing_and_reports_every_script_missing() {
+	fn a_temp_root_without_fonts_loads_nothing() {
 		let root = scratch("empty");
-		let (fonts, missing) = load_from(&windows_candidates_in(&root));
-		assert!(fonts.is_empty());
-		assert_eq!(missing, SCRIPTS.to_vec());
+		assert!(load_from(&windows_candidates_in(&root)).is_empty());
 	}
 
 	#[test]
@@ -357,9 +380,10 @@ mod tests {
 		assert_eq!(covering_face(&inter, 'H'), Some(0), "Inter covers Latin");
 		let path = root.join("msyh.ttc");
 		std::fs::write(&path, &inter).expect("fake candidate");
-		let (fonts, missing) = load_from(&[path]);
-		assert!(fonts.is_empty(), "a Latin face must not be offered for CJK");
-		assert_eq!(missing, SCRIPTS.to_vec());
+		assert!(
+			load_from(&[path]).is_empty(),
+			"a Latin face must not be offered for CJK"
+		);
 	}
 
 	#[test]
@@ -367,9 +391,25 @@ mod tests {
 		let root = scratch("corrupt");
 		let path = root.join("msyh.ttc");
 		std::fs::write(&path, b"not a font").expect("candidate");
-		let (fonts, missing) = load_from(&[path, root.join("missing.ttc")]);
-		assert!(fonts.is_empty());
-		assert_eq!(missing, SCRIPTS.to_vec());
+		assert!(load_from(&[path, root.join("missing.ttc")]).is_empty());
+	}
+
+	#[test]
+	fn a_candidate_over_the_byte_ceiling_is_refused_without_reading_it() {
+		let root = scratch("ceiling");
+		let path = root.join("huge.ttc");
+		let file = std::fs::File::create(&path).expect("candidate");
+		file.set_len(9).expect("sparse size");
+		assert!(
+			read_candidate(&path, 8).is_none(),
+			"9 bytes over an 8-byte cap"
+		);
+		assert!(read_candidate(&path, 9).is_none(), "too short for a header");
+		assert!(read_candidate(&root.join("missing.ttc"), 8).is_none());
+		let inter = root.join("inter.ttf");
+		std::fs::write(&inter, inter_bytes()).expect("real face");
+		let loaded = read_candidate(&inter, MAX_FONT_BYTES).expect("real face within the cap");
+		assert_eq!(loaded.len(), inter_bytes().len());
 	}
 
 	#[test]
@@ -387,8 +427,7 @@ mod tests {
 	#[test]
 	fn the_live_candidates_never_panic_and_name_every_face_once() {
 		// The machine may have none of these; the app still has to start and warn.
-		let (fonts, missing) = load_fallbacks();
-		assert!(missing.len() <= SCRIPTS.len());
+		let fonts = load_fallbacks();
 		for (index, font) in fonts.iter().enumerate() {
 			assert!(
 				fonts[..index]
@@ -399,5 +438,17 @@ mod tests {
 			);
 			assert!(font.name.starts_with("system:"));
 		}
+	}
+
+	#[test]
+	fn a_loaded_face_reports_the_scalars_it_maps() {
+		let font = LoadedFont {
+			name: "system:inter:0".into(),
+			data: FontData::from_owned(inter_bytes()),
+		};
+		assert!(font.covers('H'));
+		assert!(!font.covers('あ'));
+		assert!(!font.covers('语'));
+		assert!(!font.covers('한'));
 	}
 }

@@ -25,9 +25,19 @@ const _: () = assert!(
 	CHECKED_JOBS * (size_of::<egui::text::LayoutJob>() + 3 * size_of::<usize>()) <= CHECKED_BYTES
 );
 
+/// Distinct CJK scalars remembered for the one-time coverage check.
+const DRAWN_CHARS: usize = 64;
+
+/// Blocks that need a system CJK face: kana, Han, Hangul and their forms.
+fn is_cjk(c: char) -> bool {
+	matches!(c as u32, 0x1100..=0x11ff | 0x2e80..=0xa4cf | 0xa960..=0xa97f | 0xac00..=0xd7af | 0xd7b0..=0xd7ff | 0xf900..=0xfaff | 0xfe30..=0xffef | 0x20000..=0x323af)
+}
+
 #[derive(Default)]
 struct CjkScan {
 	checked: Vec<Weak<egui::text::LayoutJob>>,
+	/// CJK scalars seen in drawn text, so the probe only reports what was shown.
+	drawn: Vec<char>,
 }
 
 impl CjkScan {
@@ -40,8 +50,17 @@ impl CjkScan {
 			Ok(_) => return false,
 			Err(index) => index,
 		};
-		if !job.text.is_ascii() && job.text.chars().any(|c| matches!(c as u32, 0x1100..=0x11ff | 0x2e80..=0xa4cf | 0xa960..=0xa97f | 0xac00..=0xd7af | 0xd7b0..=0xd7ff | 0xf900..=0xfaff | 0xfe30..=0xffef | 0x20000..=0x323af)) {
-			return true;
+		if !job.text.is_ascii() {
+			let mut found = false;
+			for c in job.text.chars().filter(|c| is_cjk(*c)) {
+				found = true;
+				if self.drawn.len() < DRAWN_CHARS && !self.drawn.contains(&c) {
+					self.drawn.push(c);
+				}
+			}
+			if found {
+				return true;
+			}
 		}
 		// Keep allocation identities alive so allocator address reuse cannot hide new text.
 		// Arc::make_mut also dissociates these weak references before editing a job.
@@ -111,7 +130,7 @@ pub fn install(ctx: &Context) {
 			if status(&ctx).is_some() {
 				return;
 			}
-			let needed = {
+			let drawn = {
 				let mut scan = scan.lock().expect("CJK scan");
 				let layers: Vec<_> = ctx.memory(|memory| memory.layer_ids().collect());
 				let needed = ctx.graphics(|graphics| {
@@ -122,24 +141,28 @@ pub fn install(ctx: &Context) {
 					})
 				});
 				if needed {
+					let drawn = std::mem::take(&mut scan.drawn);
 					*scan = CjkScan::default();
+					drawn
+				} else {
+					Vec::new()
 				}
-				needed
 			};
-			if !needed {
+			if drawn.is_empty() {
 				return;
 			}
 			set_status(&ctx, SystemCjk::Checking);
 			// Reading installed font files is disk work; never do it on the draw thread.
 			let worker = ctx.clone();
+			let worker_drawn = drawn.clone();
 			let spawned = std::thread::Builder::new()
 				.name("cjk-font".into())
 				.spawn(move || {
-					install_system_fonts(&worker);
+					install_system_fonts(&worker, &worker_drawn);
 					worker.request_repaint();
 				});
 			if spawned.is_err() {
-				install_system_fonts(&ctx);
+				install_system_fonts(&ctx, &drawn);
 				ctx.request_repaint();
 			}
 		}),
@@ -147,18 +170,28 @@ pub fn install(ctx: &Context) {
 	crate::design::weights_installed(ctx);
 }
 
-/// Loads the system CJK faces and records whether every script is covered.
-fn install_system_fonts(ctx: &Context) {
-	let (fonts, missing) = system::load_fallbacks();
+/// Loads the system CJK faces and records whether the drawn text is covered.
+fn install_system_fonts(ctx: &Context, drawn: &[char]) {
+	let fonts = system::load_fallbacks();
+	let status = coverage_status(&fonts, drawn);
 	if !fonts.is_empty() {
 		ctx.set_fonts(definitions_with(&fonts));
 	}
-	let status = if missing.is_empty() {
+	set_status(ctx, status);
+}
+
+/// `Available` when every CJK scalar that was drawn has an installed face.
+/// A machine with only a Japanese face must not warn about Korean text it never
+/// showed; the notice follows the text that actually reached the screen.
+fn coverage_status(fonts: &[system::LoadedFont], drawn: &[char]) -> SystemCjk {
+	if drawn
+		.iter()
+		.all(|c| fonts.iter().any(|font| font.covers(*c)))
+	{
 		SystemCjk::Available
 	} else {
 		SystemCjk::Missing
-	};
-	set_status(ctx, status);
+	}
 }
 
 fn latin(data: &'static [u8]) -> FontData {
@@ -389,9 +422,9 @@ mod tests {
 
 	#[test]
 	fn system_fonts_render_cjk_when_the_os_has_them() {
-		// The real search on this machine: covered scripts must have a glyph and
-		// uncovered ones must degrade to replacement glyphs, never a panic.
-		let (fonts, missing) = system::load_fallbacks();
+		// The real search on this machine: a face that was loaded must render its
+		// sample and a missing one must degrade to replacement glyphs, never panic.
+		let fonts = system::load_fallbacks();
 		let ctx = Context::default();
 		ctx.set_fonts(definitions_with(&fonts));
 		let mut widths = [0.0_f32; 3];
@@ -405,18 +438,61 @@ mod tests {
 		});
 		output.drop_without_applying_deltas();
 		for (index, script) in system::SCRIPTS.into_iter().enumerate() {
-			if missing.contains(&script) {
-				assert_eq!(
-					widths[index], 0.0,
-					"{script:?} reported missing but a glyph was found: {widths:?}"
-				);
-			} else {
+			let covered = fonts.iter().any(|font| font.covers(script.sample()));
+			if covered {
 				assert!(
 					widths[index] > 0.0,
-					"{script:?} reported covered but no glyph: {widths:?}"
+					"{script:?} loaded but no glyph: {widths:?}"
+				);
+			} else {
+				assert_eq!(
+					widths[index], 0.0,
+					"{script:?} not loaded but a glyph was found: {widths:?}"
 				);
 			}
 		}
+	}
+
+	#[test]
+	fn the_scan_remembers_the_cjk_scalars_that_were_drawn() {
+		let mut scan = CjkScan::default();
+		let job = Arc::new(egui::text::LayoutJob {
+			text: "Latin 日本語 한국어".into(),
+			..Default::default()
+		});
+		assert!(scan.text(&job));
+		assert!(scan.drawn.contains(&'日'));
+		assert!(scan.drawn.contains(&'한'));
+		assert!(!scan.drawn.contains(&'L'));
+	}
+
+	#[test]
+	fn only_the_drawn_scripts_decide_whether_to_warn() {
+		let inter = system::LoadedFont {
+			name: "system:inter:0".into(),
+			data: FontData::from_owned(
+				std::fs::read(concat!(
+					env!("CARGO_MANIFEST_DIR"),
+					"/../../assets/fonts/Inter-Regular.ttf"
+				))
+				.expect("bundled Inter"),
+			),
+		};
+		assert_eq!(
+			coverage_status(std::slice::from_ref(&inter), &['H']),
+			SystemCjk::Available,
+			"a face that covers the drawn text must not warn"
+		);
+		assert_eq!(
+			coverage_status(&[inter], &['日']),
+			SystemCjk::Missing,
+			"a drawn Han scalar without a face must warn"
+		);
+		assert_eq!(
+			coverage_status(&[], &['日']),
+			SystemCjk::Missing,
+			"no installed face at all must warn"
+		);
 	}
 
 	#[test]

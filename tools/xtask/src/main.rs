@@ -387,7 +387,6 @@ fn package() -> Result<(), String> {
 		)
 		.map_err(|e| e.to_string())?;
 		for file in [
-			"NotoSansCJK-LICENSE.txt",
 			"NotoSansArabic-OFL.txt",
 			"NotoSansMath-OFL.txt",
 			"Inter-OFL.txt",

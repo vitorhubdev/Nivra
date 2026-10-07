@@ -1,12 +1,17 @@
-//! Bundled OFL fallback faces. Eframe separately provides native system-font fallback.
-use egui::{Context, FontData, FontDefinitions, FontFamily};
+//! Bundled OFL fallback faces. CJK comes from the operating system.
+//!
+//! Inter leads proportional text and two heavier faces provide Discord-style
+//! emphasis (egui has no synthetic bold); Noto Sans Arabic and Noto Sans Math
+//! stay embedded because no stock desktop ships them everywhere. Japanese,
+//! Chinese and Korean text no longer embeds a face: a worker reads the
+//! installed system fonts once (see [`system`]), installs the faces that cover
+//! kana, Han and Hangul into egui's fallback families, and warns once when no
+//! such font is installed.
+use egui::{Context, FontData, FontDefinitions, FontFamily, Id};
 use std::sync::{Arc, Mutex, Weak};
 
-/// Noto Sans CJK JP is a quarter of the executable uncompressed (16.4 MB). It ships as a
-/// `zstd -19` archive (12.0 MB) and is inflated in memory the first time CJK text is
-/// drawn; Latin-only sessions never pay for the decode.
-const CJK_ZSTD: &[u8] = include_bytes!("../../../assets/fonts/NotoSansCJKjp-Regular.otf.zst");
-const CJK_BYTES: usize = 16_467_736;
+mod system;
+
 const ARABIC: &[u8] = include_bytes!("../../../assets/fonts/NotoSansArabic.ttf");
 const MATH: &[u8] = include_bytes!("../../../assets/fonts/NotoSansMath-Regular.otf");
 const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
@@ -63,49 +68,97 @@ impl CjkScan {
 	}
 }
 
+/// State of the one-time CJK probe, stored per egui context so it dies with it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SystemCjk {
+	/// A CJK glyph was drawn; the installed fonts are being checked off-thread.
+	Checking,
+	/// An installed font covers every script; nothing to report.
+	Available,
+	/// CJK text was drawn but at least one script has no installed font.
+	Missing,
+	/// The notice was shown; it must not repeat in this window.
+	Notified,
+}
+
+const CJK_STATUS: &str = "nivra.system-cjk";
+
+fn status(ctx: &Context) -> Option<SystemCjk> {
+	ctx.data(|data| data.get_temp(Id::unique(CJK_STATUS)))
+}
+
+pub(crate) fn set_status(ctx: &Context, value: SystemCjk) {
+	ctx.data_mut(|data| data.insert_temp(Id::unique(CJK_STATUS), value));
+}
+
+/// True once per context, when CJK text was drawn with no installed font behind it.
+pub(crate) fn take_cjk_notice(ctx: &Context) -> bool {
+	if status(ctx) == Some(SystemCjk::Missing) {
+		set_status(ctx, SystemCjk::Notified);
+		return true;
+	}
+	false
+}
+
 /// Install once during application creation, before the first UI pass.
 pub fn install(ctx: &Context) {
-	ctx.set_fonts(definitions(false));
-	let installed = std::sync::atomic::AtomicBool::new(false);
+	ctx.set_fonts(definitions());
 	let scan = Mutex::new(CjkScan::default());
 	ctx.on_end_pass(
 		"CJK fallback",
 		std::sync::Arc::new(move |ui| {
-			// Also true while the decode thread runs, so the scan stops after the first hit.
-			if installed.load(std::sync::atomic::Ordering::Relaxed) {
+			let ctx = ui.ctx().clone();
+			if status(&ctx).is_some() {
 				return;
 			}
-			let mut scan = scan.lock().expect("CJK scan");
-			let ctx = ui.ctx();
-			let layers: Vec<_> = ctx.memory(|memory| memory.layer_ids().collect());
-			let needed = ctx.graphics(|graphics| {
-				layers.iter().any(|layer| {
-					graphics.get(*layer).is_some_and(|list| {
-						list.all_entries().any(|entry| scan.shape(&entry.shape))
+			let needed = {
+				let mut scan = scan.lock().expect("CJK scan");
+				let layers: Vec<_> = ctx.memory(|memory| memory.layer_ids().collect());
+				let needed = ctx.graphics(|graphics| {
+					layers.iter().any(|layer| {
+						graphics.get(*layer).is_some_and(|list| {
+							list.all_entries().any(|entry| scan.shape(&entry.shape))
+						})
 					})
-				})
-			});
-			if needed {
-				*scan = CjkScan::default();
-				installed.store(true, std::sync::atomic::Ordering::Relaxed);
-				// Inflating 16 MB and reparsing the font set takes tens of milliseconds; keep
-				// it off the UI thread and accept one pass of fallback glyphs.
-				let worker = ctx.clone();
-				let spawned =
-					std::thread::Builder::new()
-						.name("cjk-font".into())
-						.spawn(move || {
-							worker.set_fonts(definitions(true));
-							worker.request_repaint();
-						});
-				if spawned.is_err() {
-					ctx.set_fonts(definitions(true));
-					ctx.request_repaint();
+				});
+				if needed {
+					*scan = CjkScan::default();
 				}
+				needed
+			};
+			if !needed {
+				return;
+			}
+			set_status(&ctx, SystemCjk::Checking);
+			// Reading installed font files is disk work; never do it on the draw thread.
+			let worker = ctx.clone();
+			let spawned = std::thread::Builder::new()
+				.name("cjk-font".into())
+				.spawn(move || {
+					install_system_fonts(&worker);
+					worker.request_repaint();
+				});
+			if spawned.is_err() {
+				install_system_fonts(&ctx);
+				ctx.request_repaint();
 			}
 		}),
 	);
 	crate::design::weights_installed(ctx);
+}
+
+/// Loads the system CJK faces and records whether every script is covered.
+fn install_system_fonts(ctx: &Context) {
+	let (fonts, missing) = system::load_fallbacks();
+	if !fonts.is_empty() {
+		ctx.set_fonts(definitions_with(&fonts));
+	}
+	let status = if missing.is_empty() {
+		SystemCjk::Available
+	} else {
+		SystemCjk::Missing
+	};
+	set_status(ctx, status);
 }
 
 fn latin(data: &'static [u8]) -> FontData {
@@ -115,23 +168,30 @@ fn latin(data: &'static [u8]) -> FontData {
 	font
 }
 
-#[cfg(test)]
-std::thread_local! {
-	static CJK_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+/// The bundled faces plus the system CJK faces that were found.
+fn definitions_with(fallbacks: &[system::LoadedFont]) -> FontDefinitions {
+	let mut definitions = definitions();
+	for font in fallbacks {
+		definitions
+			.font_data
+			.insert(font.name.clone(), font.data.clone().into());
+		for family in [
+			FontFamily::Proportional,
+			FontFamily::Monospace,
+			FontFamily::Name(crate::design::MEDIUM.into()),
+			FontFamily::Name(crate::design::SEMIBOLD.into()),
+		] {
+			definitions
+				.families
+				.entry(family)
+				.or_default()
+				.push(font.name.clone());
+		}
+	}
+	definitions
 }
 
-/// The bundled archive always inflates; a corrupt asset is a build defect, not a runtime path.
-fn cjk() -> Vec<u8> {
-	#[cfg(test)]
-	CJK_DECODES.with(|count| count.set(count.get() + 1));
-	let mut font = Vec::with_capacity(CJK_BYTES);
-	ruzstd::decoding::FrameDecoder::new()
-		.decode_all_to_vec(CJK_ZSTD, &mut font)
-		.expect("bundled CJK font archive");
-	font
-}
-
-fn definitions(with_cjk: bool) -> FontDefinitions {
+fn definitions() -> FontDefinitions {
 	let mut definitions = FontDefinitions::default();
 	// Inter leads proportional text; two heavier faces provide Discord-style emphasis
 	// (egui has no synthetic bold). Each weight family falls back to egui's defaults.
@@ -158,13 +218,10 @@ fn definitions(with_cjk: bool) -> FontDefinitions {
 		list.insert(0, name.into());
 		list.extend(defaults.iter().cloned());
 	}
-	for (name, data) in with_cjk
-		.then(|| ("Noto Sans CJK JP", FontData::from_owned(cjk())))
-		.into_iter()
-		.chain([
-			("Noto Sans Arabic", FontData::from_static(ARABIC)),
-			("Noto Sans Math", FontData::from_static(MATH)),
-		]) {
+	for (name, data) in [
+		("Noto Sans Arabic", FontData::from_static(ARABIC)),
+		("Noto Sans Math", FontData::from_static(MATH)),
+	] {
 		definitions.font_data.insert(name.into(), data.into());
 		for family in [
 			FontFamily::Proportional,
@@ -179,8 +236,6 @@ fn definitions(with_cjk: bool) -> FontDefinitions {
 				.push(name.into());
 		}
 	}
-	// ponytail: one Japanese CJK face bounds asset cost; add regional Han faces
-	// when locale-specific glyph forms are implemented and measured.
 	definitions
 }
 
@@ -228,80 +283,87 @@ mod tests {
 	}
 
 	#[test]
-	fn cjk_arriving_after_settled_latin_frames_installs_the_fallback() {
+	fn cjk_text_starts_the_system_font_probe() {
 		let ctx = Context::default();
 		install(&ctx);
 		for _ in 0..3 {
 			ctx.run_ui(Default::default(), |ui| {
 				ui.label("Synthetic Latin text");
-				assert!(!ui.fonts(|fonts| {
-					fonts
-						.definitions()
-						.font_data
-						.contains_key("Noto Sans CJK JP")
-				}));
 			})
 			.drop_without_applying_deltas();
+			assert!(status(&ctx).is_none(), "no CJK text, no probe");
 		}
 		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 		loop {
-			let mut installed = false;
 			ctx.run_ui(Default::default(), |ui| {
 				ui.label("日本語");
-				installed = ui.fonts(|fonts| {
-					fonts
-						.definitions()
-						.font_data
-						.contains_key("Noto Sans CJK JP")
-				});
 			})
 			.drop_without_applying_deltas();
-			if installed {
+			if matches!(
+				status(&ctx),
+				Some(SystemCjk::Available | SystemCjk::Missing)
+			) {
 				break;
 			}
 			assert!(
 				std::time::Instant::now() < deadline,
-				"CJK worker did not install its fallback"
+				"the system font probe never finished"
 			);
 			std::thread::sleep(std::time::Duration::from_millis(5));
 		}
 	}
 
 	#[test]
-	fn startup_does_not_decode_cjk_but_on_demand_definitions_do() {
-		let before = CJK_DECODES.get();
-		install(&Context::default());
-		assert_eq!(CJK_DECODES.get(), before);
-		let base = definitions(false);
-		assert!(!base.font_data.contains_key("Noto Sans CJK JP"));
-		let full = definitions(true);
-		assert_eq!(CJK_DECODES.get(), before + 1);
-		assert_eq!(full.font_data.len(), base.font_data.len() + 1);
-		assert_eq!(full.font_data["Noto Sans CJK JP"].bytes().len(), CJK_BYTES);
-		for (family, names) in &base.families {
-			assert!(!names.iter().any(|name| name == "Noto Sans CJK JP"));
-			let without_cjk: Vec<_> = full.families[family]
-				.iter()
-				.filter(|name| *name != "Noto Sans CJK JP")
-				.cloned()
-				.collect();
-			assert_eq!(*names, without_cjk);
+	fn a_missing_system_font_is_noticed_once_per_context() {
+		let ctx = Context::default();
+		install(&ctx);
+		assert!(!take_cjk_notice(&ctx));
+		assert_eq!(status(&ctx), None);
+		set_status(&ctx, SystemCjk::Missing);
+		assert!(take_cjk_notice(&ctx));
+		assert_eq!(status(&ctx), Some(SystemCjk::Notified));
+		assert!(!take_cjk_notice(&ctx));
+	}
+
+	#[test]
+	fn definitions_keep_inter_arabic_and_math_but_embed_no_cjk_face() {
+		let definitions = definitions();
+		for name in ["Inter", "Inter Medium", "Inter SemiBold"] {
+			assert!(definitions.font_data.contains_key(name), "{name} missing");
+		}
+		assert!(definitions.font_data.contains_key("Noto Sans Arabic"));
+		assert!(definitions.font_data.contains_key("Noto Sans Math"));
+		for family in [
+			FontFamily::Proportional,
+			FontFamily::Monospace,
+			FontFamily::Name(crate::design::MEDIUM.into()),
+			FontFamily::Name(crate::design::SEMIBOLD.into()),
+		] {
+			for name in &definitions.families[&family] {
+				let data = &definitions.font_data[name];
+				let font = skrifa::FontRef::from_index(data.bytes(), data.index)
+					.expect("valid bundled font");
+				for c in "日本語かなカナ中文汉字繁體한국어".chars() {
+					assert!(
+						font.charmap()
+							.map(c)
+							.is_none_or(|id| id == skrifa::GlyphId::NOTDEF),
+						"{name} claims CJK scalar {c:?}; those come from the system"
+					);
+				}
+			}
 		}
 	}
 
 	#[test]
-	fn bundled_fallbacks_cover_multilingual_text_with_a_fixed_asset_budget() {
-		// The CJK face counts at its embedded (compressed) size.
+	fn bundled_fallbacks_cover_non_cjk_multilingual_text() {
+		let total =
+			ARABIC.len() + MATH.len() + INTER.len() + INTER_MEDIUM.len() + INTER_SEMIBOLD.len();
 		assert!(
-			CJK_ZSTD.len()
-				+ ARABIC.len()
-				+ MATH.len() + INTER.len()
-				+ INTER_MEDIUM.len()
-				+ INTER_SEMIBOLD.len()
-				<= 16 * 1024 * 1024
+			total <= 4 * 1024 * 1024,
+			"bundled faces grew: {total} bytes"
 		);
-		assert_eq!(cjk().len(), CJK_BYTES);
-		let definitions = definitions(true);
+		let definitions = definitions();
 		for family in [FontFamily::Proportional, FontFamily::Monospace] {
 			let faces: Vec<_> = definitions.families[&family]
 				.iter()
@@ -311,8 +373,7 @@ mod tests {
 						.expect("valid bundled font")
 				})
 				.collect();
-			for c in
-				"Hello, 日本語かなカナ 中文汉字繁體 한국어 العربية مَرْحَبًا 𝖘𝖓𝖎𝖎𝖝. é e\u{301}".chars()
+			for c in "Hello, العربية مَرْحَبًا 𝖘𝖓𝖎𝖎𝖝. é e\u{301}".chars()
 			{
 				assert!(
 					faces.iter().any(|face| {
@@ -324,23 +385,38 @@ mod tests {
 				);
 			}
 		}
+	}
+
+	#[test]
+	fn system_fonts_render_cjk_when_the_os_has_them() {
+		// The real search on this machine: covered scripts must have a glyph and
+		// uncovered ones must degrade to replacement glyphs, never a panic.
+		let (fonts, missing) = system::load_fallbacks();
 		let ctx = Context::default();
-		ctx.set_fonts(definitions.clone());
+		ctx.set_fonts(definitions_with(&fonts));
+		let mut widths = [0.0_f32; 3];
 		let output = ctx.run_ui(Default::default(), |ui| {
 			ui.fonts_mut(|fonts| {
-				for family in [FontFamily::Proportional, FontFamily::Monospace] {
-					let font = FontId::new(14.0, family);
-					// egui 0.36.2 has_glyph incorrectly returns false for all
-					// primary-face glyphs. Check every scalar through its font
-					// parser above, then check the actual fallback path here.
-					for c in "日本語かなカナ中文汉字繁體한국어العربية𝖘𝖓𝖎𝖎𝖝".chars()
-					{
-						assert!(fonts.has_glyph(&font, c), "missing glyph: {c} ({c:?})");
-					}
+				let font = FontId::proportional(14.0);
+				for (index, script) in system::SCRIPTS.into_iter().enumerate() {
+					widths[index] = fonts.glyph_width(&font, script.sample());
 				}
 			});
 		});
 		output.drop_without_applying_deltas();
+		for (index, script) in system::SCRIPTS.into_iter().enumerate() {
+			if missing.contains(&script) {
+				assert_eq!(
+					widths[index], 0.0,
+					"{script:?} reported missing but a glyph was found: {widths:?}"
+				);
+			} else {
+				assert!(
+					widths[index] > 0.0,
+					"{script:?} reported covered but no glyph: {widths:?}"
+				);
+			}
+		}
 	}
 
 	#[test]
@@ -370,7 +446,7 @@ mod tests {
 				.color_transfer_function,
 			egui::epaint::FontColorTransferFunction::Gamma(0.5)
 		);
-		let tweaks = definitions(false)
+		let tweaks = definitions()
 			.font_data
 			.iter()
 			.filter(|(name, _)| name.starts_with("Inter"))

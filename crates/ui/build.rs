@@ -19,11 +19,6 @@ const FILES: &[(&str, &str, &str)] = &[
 		"sounds",
 	),
 	(
-		"assets/fonts/NotoSansCJK-LICENSE.txt",
-		"licenses/NotoSansCJK-LICENSE.txt",
-		"fonts",
-	),
-	(
 		"assets/fonts/NotoSansArabic-OFL.txt",
 		"licenses/NotoSansArabic-OFL.txt",
 		"fonts",

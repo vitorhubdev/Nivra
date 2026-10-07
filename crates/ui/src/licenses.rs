@@ -291,10 +291,6 @@ mod tests {
 	const SINGLES: &[(&str, &str)] = &[
 		("assets/sounds/README.md", "licenses/notification-sounds.md"),
 		(
-			"assets/fonts/NotoSansCJK-LICENSE.txt",
-			"licenses/NotoSansCJK-LICENSE.txt",
-		),
-		(
 			"assets/fonts/NotoSansArabic-OFL.txt",
 			"licenses/NotoSansArabic-OFL.txt",
 		),

@@ -4157,6 +4157,15 @@ impl MessagingUi {
 		crate::anim::set_reduce_motion(ui.ctx(), self.reduce_motion);
 		crate::i18n::store_interface_language(ui.ctx(), self.language);
 		crate::scroll::apply_preferences(ui.ctx(), self.reading_preferences);
+		if fonts::take_cjk_notice(ui.ctx()) {
+			self.toasts.push(
+				design::Level::Warning,
+				crate::i18n::text(
+					self.language,
+					"Install a font with Japanese, Chinese or Korean support to read this text.",
+				),
+			);
+		}
 		if let Some(status) = state.take_user_action_status() {
 			self.toasts.push(design::Level::Error, status);
 		}
@@ -6126,6 +6135,41 @@ mod composer_tests {
 					}
 				}
 			}
+		}
+	}
+
+	#[test]
+	fn a_missing_cjk_system_font_is_explained_once_by_a_toast() {
+		const NOTICE: &str =
+			"Install a font with Japanese, Chinese or Korean support to read this text.";
+		for language in [model::Language::PortugueseBrazil, model::Language::Spanish] {
+			let ctx = egui::Context::default();
+			fonts::install(&ctx);
+			design::apply(&ctx);
+			fonts::set_status(&ctx, fonts::SystemCjk::Missing);
+			let mut state = edit_state();
+			let mut view = MessagingUi {
+				language,
+				..Default::default()
+			};
+			for _ in 0..2 {
+				let output = ctx.run_ui(
+					egui::RawInput {
+						screen_rect: Some(egui::Rect::from_min_size(
+							egui::Pos2::ZERO,
+							egui::vec2(1100.0, 800.0),
+						)),
+						..Default::default()
+					},
+					|ui| {
+						let _ = view.show(ui, &mut state);
+					},
+				);
+				output.drop_without_applying_deltas();
+			}
+			let translated = crate::i18n::text(language, NOTICE);
+			assert_ne!(translated, NOTICE, "{language:?} still in English");
+			assert_eq!(view.toasts.texts(), vec![translated], "{language:?}");
 		}
 	}
 

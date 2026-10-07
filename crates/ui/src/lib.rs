@@ -1083,11 +1083,13 @@ impl MessagingUi {
 	}
 	/// Desktop bridge: the bounded body was fetched and decoded; show it.
 	pub fn set_preview(&mut self, preview: text_preview::TextPreview) {
+		self.timeline.download.clear_preview_pending();
 		self.preview = Some(preview);
 	}
 	/// Report a preview failure through the shared toast channel, in the interface
 	/// language when the catalog knows the reason.
 	pub fn preview_failed(&mut self, reason: &str) {
+		self.timeline.download.clear_preview_pending();
 		let message = crate::i18n::text_str(self.language, reason).into_owned();
 		self.toasts.push(design::Level::Error, message);
 	}

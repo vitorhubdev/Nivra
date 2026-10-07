@@ -851,6 +851,8 @@ struct Desktop {
 	cache: Option<cache::Cache>,
 	cache_pending: usize,
 	cache_clears: cache::HistoryClears,
+	/// Forums whose cached list was already requested this session, so a reopen uses RAM.
+	forum_cache_loaded: std::collections::BTreeSet<model::Id>,
 	cache_error: bool,
 	cache_status: &'static str,
 	appearance: egui::ThemePreference,
@@ -2245,6 +2247,7 @@ impl Desktop {
 			cache,
 			cache_pending,
 			cache_clears: Default::default(),
+			forum_cache_loaded: Default::default(),
 			cache_error: false,
 			cache_status: "Loading local appearance…",
 			appearance: egui::ThemePreference::System,
@@ -2458,6 +2461,7 @@ impl Desktop {
 		let old_account = self.state.user.as_ref().filter(|_| !was_demo).map(|u| u.id);
 		self.switching = None;
 		self.roster_pending = false;
+		self.forum_cache_loaded.clear();
 		self.state.logout();
 		if intent.forgets()
 			&& let (Some(cache), Some(account)) = (&self.cache, old_account)
@@ -2674,6 +2678,30 @@ impl Desktop {
 		} else {
 			false
 		}
+	}
+	/// Queue the cached list for the open forum once per session.
+	fn queue_forum_cache(&mut self) {
+		let Some(forum) = self
+			.state
+			.selected
+			.filter(|forum| self.state.is_forum(*forum))
+		else {
+			return;
+		};
+		if self.forum_cache_loaded.insert(forum) {
+			self.queue_cache(cache::Operation::LoadForumPage { forum });
+		}
+	}
+	/// Refresh the on-disk snapshot of the open forum after a fresh page.
+	fn save_forum_cache(&mut self, forum: model::Id) {
+		if self.state.selected != Some(forum) || !self.state.is_forum(forum) {
+			return;
+		}
+		let page = self.state.cached_forum_page(forum);
+		if page.posts.is_empty() {
+			return;
+		}
+		self.queue_cache(cache::Operation::SaveForumPage { forum, page });
 	}
 	fn queue_cache_for(&mut self, account: model::Id, operation: cache::Operation) -> bool {
 		if self.state.demo || self.fixture_only {
@@ -5479,6 +5507,7 @@ impl Desktop {
 		}
 	}
 	fn poll(&mut self, ctx: &egui::Context) {
+		self.queue_forum_cache();
 		let mut cached = Vec::new();
 		let mut presence_cache_stopped = false;
 		if let Some(cache) = &self.cache {
@@ -5636,6 +5665,19 @@ impl Desktop {
 					}
 					continue;
 				}
+				cache::Outcome::ForumPage { forum, result } => match result {
+					Ok(Some(page)) => {
+						self.state.apply_forum_cache(*forum, page.clone());
+					}
+					Ok(None) => {}
+					Err(error) => {
+						platform::diagnostics::warn(&format!("forum cache read failed: {error:?}"));
+					}
+				},
+				cache::Outcome::ForumPageSaved(Err(error)) => {
+					platform::diagnostics::warn(&format!("forum cache write failed: {error:?}"));
+				}
+				cache::Outcome::ForumPageSaved(Ok(())) => {}
 				cache::Outcome::AccountPresences(result) => {
 					self.presence_load_pending = false;
 					if let Ok(rows) = result {
@@ -5669,6 +5711,8 @@ impl Desktop {
 				continue;
 			}
 			match outcome {
+				// Already applied in the reference pass above.
+				cache::Outcome::ForumPage { .. } | cache::Outcome::ForumPageSaved(_) => {}
 				cache::Outcome::ChannelPreferences(result) => {
 					self.messaging.channel_preferences_load_pending = false;
 					self.messaging.channel_preferences_reload = false;
@@ -5989,9 +6033,20 @@ impl Desktop {
 			{
 				self.extensions.access_changed(&mut self.messaging);
 			}
+			let refreshed_forum = match &event.event {
+				Event::ForumPosts {
+					parent,
+					result: Ok(_),
+					..
+				} => Some(*parent),
+				_ => None,
+			};
 			self.state.apply(event);
 			if let Some((forum, report)) = self.state.take_fallback_log() {
 				platform::diagnostics::warn(&report.log_line(forum));
+			}
+			if let Some(forum) = refreshed_forum {
+				self.save_forum_cache(forum);
 			}
 			if gateway_disconnected && self.app_settings.current.voice_auto_rejoin_short_disconnect
 			{

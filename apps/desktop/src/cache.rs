@@ -70,6 +70,13 @@ pub enum Operation {
 	SaveGifFavorites(Vec<model::Gif>),
 	LoadChannelPreferences,
 	SaveChannelPreferences(model::ChannelPreferences),
+	LoadForumPage {
+		forum: Id,
+	},
+	SaveForumPage {
+		forum: Id,
+		page: model::forum::CachedPage,
+	},
 	LoadAccountPresences,
 	SaveAccountPresence(model::OwnPresence),
 	LoadAccounts,
@@ -120,6 +127,12 @@ pub enum Outcome {
 	GifFavorites(Vec<model::Gif>),
 	ChannelPreferences(Result<model::ChannelPreferences, StoreError>),
 	ChannelPreferencesSaved(Result<(), StoreError>),
+	/// One forum's cached card list, or `None` when missing or expired.
+	ForumPage {
+		forum: Id,
+		result: Result<Option<model::forum::CachedPage>, StoreError>,
+	},
+	ForumPageSaved(Result<(), StoreError>),
 	AccountPresences(Result<std::collections::BTreeMap<model::Id, model::OwnPresence>, StoreError>),
 	AccountPresenceSaved(Result<(), StoreError>),
 	/// The whole switcher roster, plus any accounts pruned to keep it bounded. Pruning is
@@ -236,6 +249,9 @@ impl Cache {
 		if matches!(&operation, Operation::SaveChannelPreferences(value) if !value.is_valid()) {
 			return false;
 		}
+		if matches!(&operation, Operation::SaveForumPage { page, .. } if !page.valid()) {
+			return false;
+		}
 		let payload = match &operation {
 			Operation::SaveChannel { messages, .. } | Operation::SaveChanges { messages, .. } => {
 				if messages.len() > 500
@@ -271,6 +287,7 @@ impl Cache {
 						.sum::<usize>()
 			}
 			Operation::SaveThemeVariant(value) => value.as_ref().map_or(0, String::capacity),
+			Operation::SaveForumPage { page, .. } => cached_page_bytes(page),
 			Operation::SaveAccount(account) => {
 				if !account.is_valid() {
 					return false;
@@ -334,6 +351,11 @@ impl Cache {
 						favorites.iter().map(model::Gif::bytes).sum::<usize>()
 							+ favorites.capacity() * size_of::<model::Gif>()
 					}
+					Outcome::ForumPage { result, .. } => result
+						.as_ref()
+						.ok()
+						.and_then(|page| page.as_ref())
+						.map_or(0, cached_page_bytes),
 					Outcome::Accounts { roster, pruned } => {
 						roster.as_ref().map_or(0, |accounts| {
 							accounts
@@ -362,6 +384,38 @@ impl Cache {
 	}
 }
 
+/// Rough in-memory size of a cached page, for the storage budget only.
+fn cached_page_bytes(page: &model::forum::CachedPage) -> usize {
+	page.posts.capacity() * size_of::<model::forum::CachedPost>()
+		+ page
+			.posts
+			.iter()
+			.map(|post| {
+				post.name.capacity()
+					+ post.applied.capacity() * size_of::<Id>()
+					+ post.starter.as_ref().map_or(0, |starter| {
+						starter.author.capacity()
+							+ starter.excerpt.capacity()
+							+ starter.roles.capacity() * size_of::<Id>()
+							+ starter.images.capacity() * size_of::<model::forum::CachedImage>()
+							+ starter
+								.images
+								.iter()
+								.map(|image| image.media.bytes() + 64)
+								.sum::<usize>() + starter.reactions.capacity()
+							* size_of::<model::Reaction>()
+							+ starter
+								.reactions
+								.iter()
+								.map(|reaction| {
+									reaction.emoji.name.as_ref().map_or(0, String::capacity)
+								})
+								.sum::<usize>()
+					})
+			})
+			.sum::<usize>()
+}
+
 fn execute(
 	store: &mut Result<LocalStore, StoreError>,
 	history: &HistorySafety,
@@ -380,6 +434,21 @@ fn execute(
 		Operation::SaveChannelPreferences(value) => {
 			return Outcome::ChannelPreferencesSaved(match store {
 				Ok(store) => store.save_channel_preferences(account, value),
+				Err(error) => Err(*error),
+			});
+		}
+		Operation::LoadForumPage { forum } => {
+			return Outcome::ForumPage {
+				forum: *forum,
+				result: match store {
+					Ok(store) => store.forum_page(account, *forum),
+					Err(error) => Err(*error),
+				},
+			};
+		}
+		Operation::SaveForumPage { forum, page } => {
+			return Outcome::ForumPageSaved(match store {
+				Ok(store) => store.save_forum_page(account, *forum, page),
 				Err(error) => Err(*error),
 			});
 		}
@@ -548,7 +617,9 @@ fn execute(
 		| Operation::LoadMinimizeToTray
 		| Operation::SaveMinimizeToTray(_)
 		| Operation::LoadAccountPresences
-		| Operation::SaveAccountPresence(_) => unreachable!(),
+		| Operation::SaveAccountPresence(_)
+		| Operation::LoadForumPage { .. }
+		| Operation::SaveForumPage { .. } => unreachable!(),
 	};
 	let result = match store {
 		Ok(store) => match operation {
@@ -568,7 +639,9 @@ fn execute(
 			| Operation::LoadMinimizeToTray
 			| Operation::SaveMinimizeToTray(_)
 			| Operation::LoadAccountPresences
-			| Operation::SaveAccountPresence(_) => {
+			| Operation::SaveAccountPresence(_)
+			| Operation::LoadForumPage { .. }
+			| Operation::SaveForumPage { .. } => {
 				unreachable!()
 			}
 			Operation::LoadAppearance => store
@@ -715,6 +788,55 @@ pub fn debug_voice_preferences_check() {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn a_forum_snapshot_is_admitted_only_when_valid() {
+		let (send, commands) = mpsc::sync_channel(16);
+		let (_, receive) = mpsc::sync_channel(16);
+		let cache = Cache {
+			send,
+			receive,
+			budget: Arc::new(Budget::default()),
+			history: Arc::new(HistorySafety::default()),
+		};
+		let page = model::forum::CachedPage::from_posts([{
+			let post = model::Channel {
+				id: Id(21),
+				guild: Some(Id(1)),
+				parent_id: Some(Id(20)),
+				kind: 11,
+				name: "Synthetic".into(),
+				position: 0,
+				recipients: vec![],
+				last_message: Some(Id(500)),
+				icon: None,
+				member_list_id: None,
+				message_count: Some(3),
+				tags: None,
+			};
+			(post, None)
+		}]);
+		assert!(cache.queue(
+			7,
+			Id(1),
+			Operation::SaveForumPage {
+				forum: Id(20),
+				page: page.clone(),
+			}
+		));
+		assert!(commands.try_recv().is_ok());
+		// A snapshot with a repeated post id is refused before it reaches the worker.
+		let mut invalid = page;
+		invalid.posts.push(invalid.posts[0].clone());
+		assert!(!cache.queue(
+			7,
+			Id(1),
+			Operation::SaveForumPage {
+				forum: Id(20),
+				page: invalid,
+			}
+		));
+	}
 
 	#[test]
 	fn shortcut_restore_waits_for_queue_space_without_losing_or_duplicating_the_request() {

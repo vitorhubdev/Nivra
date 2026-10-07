@@ -852,7 +852,7 @@ struct CardHit {
 }
 
 /// A post's title; read posts stay quiet and unread ones bright, like Discord.
-fn title_row(ui: &mut egui::Ui, post: &Channel, unread: bool, size: f32) {
+fn title_row(ui: &mut egui::Ui, post: &Channel, unread: bool, changed: bool, size: f32) {
 	let colors = design::palette(ui);
 	ui.horizontal(|ui| {
 		ui.spacing_mut().item_spacing.x = 8.0;
@@ -870,6 +870,10 @@ fn title_row(ui: &mut egui::Ui, post: &Channel, unread: bool, size: f32) {
 			.truncate()
 			.selectable(false),
 		);
+		// A background refresh marked this card as changed since the cached snapshot.
+		if changed {
+			ui.label(design::medium(ui, crate::tr_ui!(ui, "Updated"), 11.0).color(colors.accent));
+		}
 	});
 }
 
@@ -1640,7 +1644,7 @@ fn card(
 								if !tags.is_empty() {
 									card_tags(ui, (images, state.demo), &tags, CARD_TAGS);
 								}
-								title_row(ui, post, flags.1, 16.0);
+								title_row(ui, post, flags.1, state.post_changed(post.id), 16.0);
 								starter_row(ui, state, post, 14.0);
 								stats_row(ui, state, images, post, flags, now);
 							});
@@ -1775,7 +1779,7 @@ fn tile(
 								} else {
 									card_tags(ui, (images, state.demo), &tags, 2);
 								}
-								title_row(ui, post, flags.1, 15.0);
+								title_row(ui, post, flags.1, state.post_changed(post.id), 15.0);
 								starter_row(ui, state, post, 14.0);
 								stats_row(ui, state, images, post, flags, now);
 							});
@@ -2113,6 +2117,97 @@ mod tests {
 		assert!(
 			max_x <= 1024.0,
 			"gallery content reaches {max_x} in a 1024-wide window"
+		);
+	}
+
+	#[test]
+	fn a_refreshed_card_shows_the_updated_marker() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		state.gateway_connected = true;
+		state.auth = client_core::auth::AuthState::Authenticated;
+		assert!(state.select(Id(26)).is_none());
+		state.request_forum_posts(Id(26), false).unwrap();
+		// Seed from a cache where every post has an older last activity.
+		let cached = model::forum::CachedPage::from_posts(
+			state
+				.forum_posts(Id(26))
+				.into_iter()
+				.map(|post| {
+					let mut post = post.clone();
+					let starter = state.post_preview(post.id).cloned();
+					post.last_message = Some(Id(1));
+					(post, starter)
+				})
+				.collect::<Vec<_>>(),
+		);
+		assert!(state.apply_forum_cache(Id(26), cached));
+		// The fresh page advances one post and leaves the others as they were.
+		let threads: Vec<Channel> = state
+			.forum_posts(Id(26))
+			.into_iter()
+			.map(|post| {
+				let mut post = post.clone();
+				post.last_message = if post.id == Id(27) {
+					Some(Id(999))
+				} else {
+					Some(Id(1))
+				};
+				post
+			})
+			.collect();
+		state.apply_forum_posts(
+			Id(26),
+			state.posts.request,
+			Ok(model::forum::Page {
+				threads,
+				more: false,
+				previews: Vec::new(),
+				fallback: None,
+			}),
+		);
+		assert!(state.post_changed(Id(27)));
+		assert!(!state.post_changed(Id(41)));
+		let mut forum = ForumUi::default();
+		let mut commands = Vec::new();
+		let mut scratch = Scratch::default();
+		let mut rendered = Vec::new();
+		let output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(1120.0, 900.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				let mut staged = staged(&mut scratch);
+				forum.show(
+					ui,
+					&mut state,
+					Id(26),
+					&mut commands,
+					(
+						&mut crate::scroll::Session::default(),
+						&mut staged,
+						&mut crate::avatars::Avatars::default(),
+					),
+					(
+						&mut crate::channel_menu::ChannelMenu::default(),
+						crate::shortcuts::ShortcutView::new(&Default::default(), true),
+					),
+					model::Language::English,
+				);
+			},
+		);
+		for shape in &output.shapes {
+			labels(&shape.shape, &mut rendered);
+		}
+		output.drop_without_applying_deltas();
+		assert!(
+			rendered.iter().any(|text| text == "Updated"),
+			"a changed card carries the marker: {rendered:?}"
 		);
 	}
 

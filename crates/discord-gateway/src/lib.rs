@@ -307,6 +307,13 @@ fn validate_member_ranges(ranges: &[[usize; 2]]) -> bool {
 			return false;
 		}
 	}
+	// The mirror below only represents one contiguous span: a gapped pair
+	// would silently cover the gap and drop the second window.
+	if let [[_, first_end], [second_start, _]] = ranges
+		&& second_start > &(first_end + 1)
+	{
+		return false;
+	}
 	true
 }
 
@@ -612,6 +619,9 @@ impl ActiveMembers {
 		})
 	}
 	fn retarget_ranges(&mut self, ranges: Vec<[usize; 2]>) {
+		if !validate_member_ranges(&ranges) {
+			return;
+		}
 		let (new_start, new_len) = subscription_span(&ranges);
 		let new_len = new_len.min(200);
 		let new_end = new_start + new_len.saturating_sub(1);
@@ -1542,7 +1552,10 @@ async fn run_inner(
 						if same_identity && next.ranges == active.subscription.ranges {
 							continue;
 						}
-						if same_identity && next.ranges != active.subscription.ranges {
+						if same_identity
+						&& next.ranges != active.subscription.ranges
+						&& validate_member_ranges(&next.ranges)
+					{
 							active.retarget_ranges(next.ranges.clone());
 							active.subscription.channel = next.channel;
 							active.subscription.request = next.request;
@@ -2168,6 +2181,19 @@ fn notification_preferences(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn member_ranges_reject_empty_gapped_and_oversized_windows() {
+		assert!(validate_member_ranges(&[[0, 99]]));
+		assert!(validate_member_ranges(&[[0, 99], [100, 199]]));
+		assert!(!validate_member_ranges(&[]), "empty ranges panic span");
+		assert!(
+			!validate_member_ranges(&[[0, 99], [200, 299]]),
+			"gapped pair cannot map to one span"
+		);
+		assert!(!validate_member_ranges(&[[0, 100]]), "window over 100");
+		assert!(!validate_member_ranges(&[[50, 149]]), "unaligned window");
+		assert!(!validate_member_ranges(&[[0, 99], [100, 199], [200, 299]]));
+	}
 	#[test]
 	fn notification_settings_forward_explicit_mention_suppression() {
 		let setting = decode::<discord_protocol::notifications::Setting>(br#"{"guild_id":"1","muted":false,"message_notifications":1,"channel_overrides":[{"channel_id":"3","muted":true,"mute_config":{"end_time":"2020-01-01T00:00:00Z"}}],"suppress_everyone":false,"suppress_roles":true}"#).unwrap();

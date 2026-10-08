@@ -118,11 +118,13 @@ struct CachedUsers {
 /// timeline scan and quadratic dedup per frame.
 pub fn known_users_cached(ctx: &egui::Context, state: &State, channel: Id) -> Vec<User> {
 	let id = egui::Id::unique("mention-users-cache");
-	if let Some(cached) = ctx.data(|data| data.get_temp::<CachedUsers>(id)).filter(|cached| {
-		cached.generation == state.generation
-			&& cached.revision == state.revision
-			&& cached.channel == channel
-	}) {
+	if let Some(cached) = ctx
+		.data(|data| data.get_temp::<CachedUsers>(id))
+		.filter(|cached| {
+			cached.generation == state.generation
+				&& cached.revision == state.revision
+				&& cached.channel == channel
+		}) {
 		return cached.users;
 	}
 	let users = known_users(state, channel);

@@ -973,9 +973,7 @@ impl ClientState {
 			}
 		});
 		*bytes = bytes.saturating_sub(removed);
-		if self.voice.roster.len() >= MAX_ROSTER
-			|| *bytes + entry.bytes() > MAX_ROSTER_BYTES
-		{
+		if self.voice.roster.len() >= MAX_ROSTER || *bytes + entry.bytes() > MAX_ROSTER_BYTES {
 			self.disconnect_voice("Voice roster exceeds safe capacity; reconnect to refresh");
 			self.status = "Voice roster exceeds safe capacity; reconnect to refresh";
 			return false;
@@ -2272,25 +2270,16 @@ mod tests {
 			});
 		};
 		progress(&mut state, Phase::Connected);
-		assert_eq!(
-			state.voice.active.as_ref().unwrap().phase,
-			Phase::Connected
-		);
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Connected);
 		// A duplicated setup phase arriving late must not regress the call.
 		progress(&mut state, Phase::Connecting);
 		progress(&mut state, Phase::Securing);
-		assert_eq!(
-			state.voice.active.as_ref().unwrap().phase,
-			Phase::Connected
-		);
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Connected);
 		// Live transitions between Connected and Waiting still flow.
 		progress(&mut state, Phase::Waiting);
 		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Waiting);
 		progress(&mut state, Phase::Connected);
-		assert_eq!(
-			state.voice.active.as_ref().unwrap().phase,
-			Phase::Connected
-		);
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Connected);
 	}
 
 	#[test]

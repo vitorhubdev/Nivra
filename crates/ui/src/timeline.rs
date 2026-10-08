@@ -4006,7 +4006,13 @@ impl TimelineView {
 					ui.ctx().request_discard("Pending message height settled");
 					ui.ctx().request_repaint();
 				}
-				self.pending_heights.insert(pending.nonce.clone(), measured);
+				if self
+					.pending_heights
+					.get(&pending.nonce)
+					.is_none_or(|known| (*known - measured).abs() > f32::EPSILON)
+				{
+					self.pending_heights.insert(pending.nonce.clone(), measured);
+				}
 			}
 			// Only the end of the conversation has extra space; it scrolls with the messages.
 			ui.add_space(end_padding);

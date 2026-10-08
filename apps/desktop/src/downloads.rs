@@ -637,10 +637,25 @@ impl Drop for Partial<'_> {
 /// stay on the same host or move between Discord's own HTTPS hosts; anything
 /// else keeps the original refusal. A 403/404 from the signed link retries once
 /// through the media proxy URL before giving up with the specific cause.
+/// Test-only convenience wrapper; production passes a live cancel flag.
+#[allow(
+	dead_code,
+	reason = "used only by tests; production uses fetch_preview_cancelled"
+)]
 pub(crate) async fn fetch_preview(
 	original: url::Url,
 	proxy: Option<url::Url>,
 	expected: u64,
+) -> Result<Vec<u8>, &'static str> {
+	let idle = std::sync::atomic::AtomicBool::new(false);
+	fetch_preview_cancelled(original, proxy, expected, &idle).await
+}
+
+pub(crate) async fn fetch_preview_cancelled(
+	original: url::Url,
+	proxy: Option<url::Url>,
+	expected: u64,
+	cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<Vec<u8>, &'static str> {
 	let limit = ui::text_preview::MAX_PREVIEW_BYTES;
 	if expected == 0 || expected > limit {
@@ -649,22 +664,15 @@ pub(crate) async fn fetch_preview(
 		));
 		return Err("File is too large to preview");
 	}
-	let client = reqwest::Client::builder()
-		.no_proxy()
-		.redirect(reqwest::redirect::Policy::none())
-		.connect_timeout(Duration::from_secs(15))
-		.read_timeout(Duration::from_secs(30))
-		.timeout(Duration::from_secs(60))
-		.build()
-		.map_err(|_| {
-			platform::diagnostics::warn("text preview refused: reason=client");
-			"Preview unavailable"
-		})?;
+	let Some(client) = preview_client() else {
+		platform::diagnostics::warn("text preview refused: reason=client");
+		return Err("Preview unavailable");
+	};
 	let mut bases = vec![original];
 	bases.extend(proxy);
 	let mut failure = "Preview unavailable; reload the conversation";
 	for base in &bases {
-		match fetch_preview_url(&client, base.clone(), expected, limit, 0).await {
+		match fetch_preview_url(client, base.clone(), expected, limit, 0, cancelled).await {
 			Ok(bytes) => {
 				platform::diagnostics::info(&format!(
 					"text preview fetched: bytes={} host={}",
@@ -681,6 +689,9 @@ pub(crate) async fn fetch_preview(
 				failure = reason;
 				break;
 			}
+			Err(PreviewError::Cancelled) => {
+				return Err("Preview superseded");
+			}
 		}
 	}
 	platform::diagnostics::warn(&format!(
@@ -695,6 +706,26 @@ enum PreviewError {
 	Expired,
 	/// Anything else: report the specific cause, no further attempts.
 	Refused(&'static str),
+	/// Superseded by a newer preview click: the worker's result is dropped.
+	Cancelled,
+}
+
+/// One connection pool for every text preview instead of a fresh client
+/// (and TLS setup) per click.
+static PREVIEW_CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
+fn preview_client() -> Option<&'static reqwest::Client> {
+	PREVIEW_CLIENT
+		.get_or_init(|| {
+			reqwest::Client::builder()
+				.no_proxy()
+				.redirect(reqwest::redirect::Policy::none())
+				.connect_timeout(Duration::from_secs(15))
+				.read_timeout(Duration::from_secs(30))
+				.timeout(Duration::from_secs(60))
+				.build()
+				.ok()
+		})
+		.as_ref()
 }
 
 /// Redirects stay on the same host or move between Discord's HTTPS hosts, so a
@@ -717,7 +748,12 @@ async fn fetch_preview_url(
 	expected: u64,
 	limit: u64,
 	depth: usize,
+	cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<Vec<u8>, PreviewError> {
+	use std::sync::atomic::Ordering;
+	if cancelled.load(Ordering::Acquire) {
+		return Err(PreviewError::Cancelled);
+	}
 	let response = client
 		.get(url.clone())
 		.header(reqwest::header::ACCEPT_ENCODING, "identity")
@@ -760,7 +796,15 @@ async fn fetch_preview_url(
 			));
 			return Err(PreviewError::Refused("Preview redirect leaves Discord"));
 		}
-		return Box::pin(fetch_preview_url(client, to, expected, limit, depth + 1)).await;
+		return Box::pin(fetch_preview_url(
+			client,
+			to,
+			expected,
+			limit,
+			depth + 1,
+			cancelled,
+		))
+		.await;
 	}
 	if status == reqwest::StatusCode::FORBIDDEN
 		|| status == reqwest::StatusCode::NOT_FOUND
@@ -805,6 +849,9 @@ async fn fetch_preview_url(
 		));
 		PreviewError::Refused("Preview transfer interrupted")
 	})? {
+		if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+			return Err(PreviewError::Cancelled);
+		}
 		if bytes.len() as u64 + chunk.len() as u64 > limit {
 			platform::diagnostics::warn(&format!(
 				"text preview refused: host={} reason=stream-cap limit={limit}",

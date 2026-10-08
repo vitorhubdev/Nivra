@@ -809,6 +809,8 @@ struct Desktop {
 	/// Bounded text preview fetched off the render thread, drained each frame.
 	preview_done:
 		Option<std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>>>,
+	/// Cancels the in-flight preview fetch when a newer preview is requested.
+	preview_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 	/// Diagnostics archive being written by its worker; polled once per frame.
 	export_done: Option<std::sync::mpsc::Receiver<Result<std::path::PathBuf, &'static str>>>,
 	/// Set once per open preview, so "dialog visible" is logged exactly once.
@@ -1122,6 +1124,7 @@ fn start_text_preview(
 	url: url::Url,
 	proxy: Option<url::Url>,
 	size: u64,
+	cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>> {
 	let runtime = runtime.clone();
 	let (send, receive) = std::sync::mpsc::sync_channel(1);
@@ -1131,7 +1134,8 @@ fn start_text_preview(
 		.name("nivra-preview".into())
 		.spawn(move || {
 			let result = runtime.block_on(async {
-				let bytes = downloads::fetch_preview(url, proxy, size).await?;
+				let bytes =
+					downloads::fetch_preview_cancelled(url, proxy, size, &cancelled).await?;
 				let Some((text, truncated)) = ui::text_preview::decode_preview(&bytes) else {
 					platform::diagnostics::warn(&format!(
 						"text preview refused: reason=decode bytes={}",
@@ -2195,6 +2199,7 @@ impl Desktop {
 			batch_downloads: batch_downloads::BatchDownloads::default(),
 			save_txt_done: None,
 			preview_done: None,
+			preview_cancel: None,
 			export_done: None,
 			preview_drawn_logged: false,
 			announced_generation: None,
@@ -7527,6 +7532,13 @@ impl eframe::App for Desktop {
 							url.host_str().unwrap_or("?"),
 							proxy.is_some()
 						));
+						// A newer click supersedes the previous fetch; the old
+						// worker observes the flag and stops instead of running
+						// to completion.
+						let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+						if let Some(previous) = self.preview_cancel.replace(cancel.clone()) {
+							previous.store(true, std::sync::atomic::Ordering::Release);
+						}
 						self.preview_done = Some(start_text_preview(
 							self.runtime.handle(),
 							attachment.filename.clone(),
@@ -7534,6 +7546,7 @@ impl eframe::App for Desktop {
 							url,
 							proxy,
 							attachment.size,
+							cancel,
 						));
 					}
 					None => {
@@ -8606,6 +8619,7 @@ mod tests {
 			url::Url::parse(url.as_str()).expect("preview url"),
 			None,
 			queued.size,
+			std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
 		);
 		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 		let preview = loop {
@@ -8731,6 +8745,7 @@ mod tests {
 			url::Url::parse(&source).expect("proxy url parse"),
 			None,
 			queued.size,
+			std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
 		);
 		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 		let preview = loop {

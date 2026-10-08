@@ -100,9 +100,14 @@ impl SearchPage {
 						+ h.attachments.capacity() * size_of::<crate::Attachment>()
 						+ h.attachments
 							.iter()
-							.map(crate::Attachment::bytes)
+							.map(|attachment| {
+								attachment.bytes().saturating_sub(size_of::<crate::Attachment>())
+							})
 							.sum::<usize>() + h.embeds.capacity() * size_of::<crate::Embed>()
-						+ h.embeds.iter().map(crate::Embed::bytes).sum::<usize>()
+						+ h.embeds
+							.iter()
+							.map(|embed| embed.bytes().saturating_sub(size_of::<crate::Embed>()))
+							.sum::<usize>()
 				})
 				.sum::<usize>()
 	}

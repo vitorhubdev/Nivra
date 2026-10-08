@@ -2202,7 +2202,10 @@ mod tests {
 		// Out-of-range values bypassing CHECKs are quarantined, not normalized.
 		// (CHECKs are bypassed here to simulate a database modified outside
 		// the client, e.g. a legacy schema or external tooling.)
-		store.0.execute_batch("PRAGMA ignore_check_constraints=ON;").unwrap();
+		store
+			.0
+			.execute_batch("PRAGMA ignore_check_constraints=ON;")
+			.unwrap();
 		store
 			.0
 			.execute(
@@ -2211,7 +2214,10 @@ mod tests {
 				[],
 			)
 			.unwrap();
-		store.0.execute_batch("PRAGMA ignore_check_constraints=OFF;").unwrap();
+		store
+			.0
+			.execute_batch("PRAGMA ignore_check_constraints=OFF;")
+			.unwrap();
 		let listed = store.accounts().unwrap();
 		// The damaged row is newest, so an unfiltered LIMIT would have dropped a real account.
 		assert_eq!(listed.len(), model::MAX_SAVED_ACCOUNTS);

@@ -721,6 +721,7 @@ fn row_key(
 	previous: Option<&Message>,
 	boundary: Option<Id>,
 	state: &State,
+	index: Option<&crate::mentions::MentionIndex<'_>>,
 ) -> u64 {
 	let mut key = DefaultHasher::new();
 	layout_key(message).hash(&mut key);
@@ -729,7 +730,7 @@ fn row_key(
 		.is_none_or(|previous| timestamp(previous.id).date() != timestamp(message.id).date())
 		.hash(&mut key);
 	(boundary == Some(message.id)).hash(&mut key);
-	crate::mentions::presentation_fingerprint(state, message).hash(&mut key);
+	crate::mentions::presentation_fingerprint(state, message, index).hash(&mut key);
 	key.finish()
 }
 fn row_height_key(
@@ -738,8 +739,9 @@ fn row_height_key(
 	boundary: Option<Id>,
 	state: &State,
 	deleted: bool,
+	index: Option<&crate::mentions::MentionIndex<'_>>,
 ) -> u64 {
-	row_key(message, previous, boundary, state) ^ u64::from(deleted)
+	row_key(message, previous, boundary, state, index) ^ u64::from(deleted)
 }
 fn divider(ui: &mut egui::Ui, label: String, unread: bool) {
 	let colors = crate::design::palette(ui);
@@ -2091,12 +2093,24 @@ impl TimelineView {
 		if self.revision != state.revision {
 			// Member/presence and other unrelated updates must not restore the scroll
 			// anchor or reintroduce estimates for already settled message geometry.
+			// One mention index per pass: resolving an unresolved `<@id>` otherwise
+			// scans every member slot and the whole timeline per row.
 			let mut fingerprint = DefaultHasher::new();
 			let mut previous = None;
+			let index = self
+				.channel
+				.map(|channel| crate::mentions::MentionIndex::build(state, channel));
 			for message in starter.into_iter().chain(display_rows(state)) {
 				let deleted = state.timeline.is_deleted(message.id);
 				message.id.hash(&mut fingerprint);
-				row_key(message, previous, self.unread_boundary, state).hash(&mut fingerprint);
+				row_key(
+					message,
+					previous,
+					self.unread_boundary,
+					state,
+					index.as_ref(),
+				)
+				.hash(&mut fingerprint);
 				deleted.hash(&mut fingerprint);
 				previous = Some(message);
 			}
@@ -2160,7 +2174,7 @@ impl TimelineView {
 				.map(|m| {
 					let prior = previous;
 					let deleted = state.timeline.is_deleted(m.id);
-					let key = row_height_key(m, prior, self.unread_boundary, state, deleted);
+					let key = row_height_key(m, prior, self.unread_boundary, state, deleted, None);
 					previous = Some(m);
 					let lines = m
 						.content
@@ -2608,6 +2622,7 @@ impl TimelineView {
 							self.unread_boundary,
 							state,
 							state.timeline.is_deleted(id),
+							None,
 						),
 						response.rect.height(),
 					));
@@ -2649,8 +2664,14 @@ impl TimelineView {
 					&& state.interactions.pending.is_none()
 					&& let Some(&(key, height)) = self.heights.get(&id)
 					&& key
-						== row_height_key(message, previous, self.unread_boundary, state, deleted)
-				{
+						== row_height_key(
+							message,
+							previous,
+							self.unread_boundary,
+							state,
+							deleted,
+							None,
+						) {
 					ui.add_space(height);
 					// Keep one result per row: visible height updates below zip by index.
 					measurements.push((id, key, height));
@@ -3955,7 +3976,14 @@ impl TimelineView {
 				});
 				measurements.push((
 					id,
-					row_height_key(message, previous, self.unread_boundary, state, deleted),
+					row_height_key(
+						message,
+						previous,
+						self.unread_boundary,
+						state,
+						deleted,
+						None,
+					),
 					response.response.rect.height(),
 				));
 			}
@@ -7233,8 +7261,8 @@ mod tests {
 		assert!(!grouped(Some(&first), &next, Some(next.id)));
 		let idle = State::default();
 		assert_ne!(
-			row_key(&next, Some(&first), None, &idle),
-			row_key(&next, None, None, &idle)
+			row_key(&next, Some(&first), None, &idle, None),
+			row_key(&next, None, None, &idle, None)
 		);
 		next.reply_to = Some(first.id);
 		assert!(!grouped(Some(&first), &next, None));
@@ -8769,6 +8797,7 @@ mod tests {
 			None,
 			view.unread_boundary,
 			&state,
+			None,
 		);
 		view.heights.insert(Id(1), (key, 76.0));
 		view.following = false;
@@ -10036,7 +10065,7 @@ mod tests {
 		assert!(view.revealed.is_empty());
 		assert_eq!(
 			view.heights[&Id(1)].0,
-			row_key(state.timeline.get(Id(1)).unwrap(), None, None, &state)
+			row_key(state.timeline.get(Id(1)).unwrap(), None, None, &state, None)
 		);
 		assert!(
 			view.heights[&Id(1)].1 < 210.0,

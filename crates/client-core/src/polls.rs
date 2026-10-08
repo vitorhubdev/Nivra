@@ -134,7 +134,7 @@ impl State {
 				add,
 			} => {
 				if answer_id == 0 || user.0 == 0 {
-					return Err("Invalid poll vote delta");
+					return Ok(());
 				}
 				let own = self.user.as_ref().is_some_and(|me| me.id == user);
 				// The REST response and the Gateway dispatch travel independently: an
@@ -162,7 +162,21 @@ impl State {
 						return Ok(());
 					}
 				}
-				self.update_poll(channel, message, |poll| toggle(poll, answer_id, add, own))?;
+				if let Err(error) =
+					self.update_poll(channel, message, |poll| toggle(poll, answer_id, add, own))
+				{
+					// Votes for answers the loaded card does not know (a card
+					// racing its own results) are dropped; anything else is a
+					// real timeline inconsistency and still surfaces.
+					let known = self
+						.timeline
+						.get(message)
+						.and_then(|message| message.poll.as_ref())
+						.is_some_and(|poll| poll.answer(answer_id).is_some());
+					if known {
+						return Err(error);
+					}
+				}
 			}
 			Event::Written {
 				channel,
@@ -642,5 +656,18 @@ mod tests {
 		closed.finalized = true;
 		state.timeline.set_poll(Id(50), Some(closed)).unwrap();
 		assert!(state.prepare_poll_vote(Id(50), 1).is_none());
+		// A delta for an unknown answer is dropped, never surfaced: the
+		// timeline stays intact instead of clearing through apply errors.
+		let rows: Vec<_> = state.timeline.row_ids().collect();
+		state
+			.apply_polls(Event::Delta {
+				channel: Id(10),
+				message: Id(50),
+				answer_id: 99,
+				user: Id(3),
+				add: true,
+			})
+			.unwrap();
+		assert_eq!(state.timeline.row_ids().collect::<Vec<_>>(), rows);
 	}
 }

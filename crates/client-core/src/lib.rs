@@ -3455,28 +3455,28 @@ impl State {
 				Ok(())
 			}
 			Event::DeleteBulk { channel, ids } => {
-				if ids.len() <= 100 {
+				// Oversized batches cannot apply surgically; drop them instead
+				// of surfacing an error that would clear the whole timeline.
+				if ids.len() > 100 {
+					Ok(())
+				} else {
 					for id in &ids {
 						self.read_state.activity.delete(channel, *id);
 					}
-				}
-				if let Some(channel) = self
-					.channels
-					.iter_mut()
-					.find(|c| c.id == channel && c.last_message.is_some_and(|id| ids.contains(&id)))
-					&& let Some(id) = channel.last_message.take()
-				{
-					self.read_state.activity.observe_latest(channel.id, id);
-				}
-				if ids.len() > 100 {
-					Err("Bulk deletion exceeds safe capacity")
-				} else if self.selected == Some(channel) {
-					if self.reply_target().is_some_and(|id| ids.contains(&id)) {
-						self.reply = None;
+					if let Some(channel) = self.channels.iter_mut().find(|c| {
+						c.id == channel && c.last_message.is_some_and(|id| ids.contains(&id))
+					}) && let Some(id) = channel.last_message.take()
+					{
+						self.read_state.activity.observe_latest(channel.id, id);
 					}
-					ids.into_iter().try_for_each(|id| self.timeline.delete(id))
-				} else {
-					Ok(())
+					if self.selected == Some(channel) {
+						if self.reply_target().is_some_and(|id| ids.contains(&id)) {
+							self.reply = None;
+						}
+						ids.into_iter().try_for_each(|id| self.timeline.delete(id))
+					} else {
+						Ok(())
+					}
 				}
 			}
 			Event::SendResult { nonce, result } => {
@@ -5621,6 +5621,18 @@ mod tests {
 				ids,
 			},
 		);
+		// An oversized batch is dropped without touching the timeline.
+		let rows: Vec<_> = state.timeline.row_ids().collect();
+		let freshness = state.freshness;
+		apply(
+			&mut state,
+			Event::DeleteBulk {
+				channel: Id(1),
+				ids: (1..150).map(Id).collect(),
+			},
+		);
+		assert_eq!(state.timeline.row_ids().collect::<Vec<_>>(), rows);
+		assert_eq!(state.freshness, freshness);
 		apply(
 			&mut state,
 			Event::DeleteBulk {

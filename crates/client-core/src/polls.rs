@@ -162,9 +162,9 @@ impl State {
 						return Ok(());
 					}
 				}
-				if let Err(error) = self.update_poll(channel, message, |poll| {
-					toggle(poll, answer_id, add, own)
-				}) {
+				if let Err(error) =
+					self.update_poll(channel, message, |poll| toggle(poll, answer_id, add, own))
+				{
 					// Votes for answers the loaded card does not know (a card
 					// racing its own results) are dropped; anything else is a
 					// real timeline inconsistency and still surfaces.

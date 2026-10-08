@@ -3455,13 +3455,9 @@ impl State {
 					for id in &ids {
 						self.read_state.activity.delete(channel, *id);
 					}
-					if let Some(channel) = self
-						.channels
-						.iter_mut()
-						.find(|c| {
-							c.id == channel && c.last_message.is_some_and(|id| ids.contains(&id))
-						})
-						&& let Some(id) = channel.last_message.take()
+					if let Some(channel) = self.channels.iter_mut().find(|c| {
+						c.id == channel && c.last_message.is_some_and(|id| ids.contains(&id))
+					}) && let Some(id) = channel.last_message.take()
 					{
 						self.read_state.activity.observe_latest(channel.id, id);
 					}

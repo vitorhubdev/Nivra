@@ -108,9 +108,22 @@ pub fn info(message: &str) {
 	append(Level::Info, message);
 }
 
+/// Caps a log line at MAX_LINE_BYTES without splitting a multibyte character.
+/// Byte truncation panics on a split character, so logging must never do it.
+fn truncate_line(mut line: String) -> String {
+	if line.len() > MAX_LINE_BYTES {
+		let mut end = MAX_LINE_BYTES;
+		while !line.is_char_boundary(end) {
+			end -= 1;
+		}
+		line.truncate(end);
+		line.push('\n');
+	}
+	line
+}
+
 /// Writes one redacted line, rotating the file first when it reached its bound.
-pub fn append(level: Level, message: &str) {
-	let _guard = WRITE_LOCK
+pub fn append(level: Level, message: &str) {	let _guard = WRITE_LOCK
 		.lock()
 		.unwrap_or_else(|poison| poison.into_inner());
 	let dir = log_dir();
@@ -120,10 +133,7 @@ pub fn append(level: Level, message: &str) {
 		rotate(&dir);
 	}
 	let mut line = format!("{} {} {}\n", timestamp(), level.label(), redact(message));
-	if line.len() > MAX_LINE_BYTES {
-		line.truncate(MAX_LINE_BYTES);
-		line.push('\n');
-	}
+	line = truncate_line(line);
 	if let Ok(mut file) = std::fs::OpenOptions::new()
 		.create(true)
 		.append(true)
@@ -425,12 +435,16 @@ fn mask_value(line: &str, key: &str) -> String {
 fn mask_emails(line: &str) -> String {
 	let bytes = line.as_bytes();
 	let mut result = String::with_capacity(line.len());
+	let mut cursor = 0;
 	let mut index = 0;
 	while index < bytes.len() {
 		if bytes[index] == b'@' {
 			// Walk back over the local part and forward over the domain.
 			let mut start = index;
-			while start > 0 && !bytes[start - 1].is_ascii_whitespace() && bytes[start - 1] != b'<' {
+			while start > 0
+				&& !bytes[start - 1].is_ascii_whitespace()
+				&& bytes[start - 1] != b'<'
+			{
 				start -= 1;
 			}
 			let mut end = index + 1;
@@ -440,17 +454,29 @@ fn mask_emails(line: &str) -> String {
 			{
 				end += 1;
 			}
+			// The byte walks can stop inside a multibyte character; snap the
+			// span edges to whole characters so every slice below is safe.
+			while !line.is_char_boundary(start) {
+				start += 1;
+			}
+			while !line.is_char_boundary(end) {
+				end -= 1;
+			}
 			if end > index + 1 && line[index + 1..end].contains('.') {
-				result.truncate(start);
+				// Flush in line coordinates: the result buffer shrinks with
+				// every replacement, so its length must never be reused as a
+				// line offset.
+				result.push_str(&line[cursor..start]);
 				result.push_str("<email>");
+				cursor = end;
 				index = end;
 				continue;
 			}
 		}
 		let character = line[index..].chars().next().expect("index in range");
-		result.push(character);
 		index += character.len_utf8();
 	}
+	result.push_str(&line[cursor..]);
 	result
 }
 
@@ -499,12 +525,32 @@ mod tests {
 			"https://cdn.discordapp.com/a.png?ex=<redacted>&is=<redacted>&hm=<redacted>"
 		);
 		assert_eq!(redact("mail me at user@example.com"), "mail me at <email>");
+		assert_eq!(
+			redact("cc a@example.com and b@example.org done"),
+			"cc <email> and <email> done"
+		);
+		assert_eq!(
+			redact("mail usuário@example.com hoje"),
+			"mail <email> hoje"
+		);
 		assert_eq!(redact("id 123456789012345678"), "id <id>");
 		// Ordinary prose and short numbers survive.
 		assert_eq!(
 			redact("downloaded 3 files in 120 ms"),
 			"downloaded 3 files in 120 ms"
 		);
+	}
+
+	#[test]
+	fn truncation_never_splits_a_multibyte_character() {
+		// The emoji straddles the byte budget; a naive cut would panic.
+		let message = "x".repeat(MAX_LINE_BYTES - "INFO ".len() - 2) + "📯 tail";
+		let line = truncate_line(format!("INFO {message}\n"));
+		assert!(line.len() <= MAX_LINE_BYTES + 1);
+		assert!(line.ends_with('\n'));
+		assert!(!line.contains('📯'), "split emoji must be dropped, not cut");
+		// Short lines pass through untouched.
+		assert_eq!(truncate_line("INFO ok\n".into()), "INFO ok\n");
 	}
 
 	/// Child process for the panic-hook test: panics after installing the hook.

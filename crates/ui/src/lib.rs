@@ -609,6 +609,8 @@ pub struct MessagingUi {
 	pub transparency_blur: bool,
 	/// IRC-style single-line headers: time gutter instead of avatars, tight rows.
 	pub compact_timeline: bool,
+	/// Convert ASCII emoticons (`:)`) into emoji on send, like Discord.
+	pub emoticon_conversion: bool,
 	/// The owner asked for reduced motion: every animation settles in one frame.
 	pub reduce_motion: bool,
 	/// Last channel drawn, so a real switch can cross-fade instead of the first open.
@@ -4959,6 +4961,7 @@ impl MessagingUi {
 						design::paint_chat_background(ui, ui.available_rect_before_wrap());
 						self.timeline.hide_media_links = self.reading_preferences.hide_media_links;
 						self.timeline.compact_timeline = self.compact_timeline;
+						state.emoticon_conversion = self.emoticon_conversion;
 						self.timeline.instant_scrolling =
 							!self.reading_preferences.smooth_scrolling;
 						self.timeline.extension_actions = self.extensions.message_actions();

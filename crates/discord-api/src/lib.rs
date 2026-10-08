@@ -1124,9 +1124,10 @@ impl DiscordApi {
 				content,
 				nonce,
 				reply,
+				silent,
 			} => {
 				let result = self
-					.send_message(channel, &content, &nonce, reply, None, sticker)
+					.send_message(channel, &content, &nonce, reply, None, sticker, silent)
 					.await;
 				Event::SendResult { nonce, result }
 			}
@@ -1381,6 +1382,7 @@ impl DiscordApi {
 			}
 		}
 	}
+	#[allow(clippy::too_many_arguments)] // one message write path; silent rides with the content it flags.
 	async fn send_message(
 		&self,
 		channel: model::Id,
@@ -1389,6 +1391,7 @@ impl DiscordApi {
 		reply: Option<Reply>,
 		attachment: Option<Vec<serde_json::Value>>,
 		sticker: Option<model::Id>,
+		silent: bool,
 	) -> Result<model::Message, Failure> {
 		if (content.trim().is_empty() && attachment.is_none() && sticker.is_none())
 			|| content.chars().count() > client_core::MAX_CONTENT_NITRO
@@ -1399,6 +1402,10 @@ impl DiscordApi {
 			return Err(Failure::Protocol);
 		}
 		let mut body = serde_json::json!({"content":content,"nonce":nonce,"allowed_mentions":allowed_mentions(content, reply)});
+		if silent {
+			// SUPPRESS_NOTIFICATIONS: a leading `@silent ` stripped by the caller.
+			body["flags"] = serde_json::json!(1 << 12);
+		}
 		if let Some(sticker) = sticker {
 			body["sticker_ids"] = serde_json::json!([sticker]);
 		}
@@ -1538,7 +1545,7 @@ mod tests {
 		.unwrap();
 		let long = "x".repeat(4500);
 		let result = api
-			.send_message(model::Id(1), &long, "nonce", None, None, None)
+			.send_message(model::Id(1), &long, "nonce", None, None, None, false)
 			.await;
 		assert!(matches!(result, Err(Failure::Capacity)));
 		assert!(!Failure::Capacity.ends_session());
@@ -2388,8 +2395,48 @@ mod tests {
                 let body=r#"{"id":"100","channel_id":"2","author":{"id":"1","username":"Synthetic"},"content":"","nonce":"local","sticker_items":[{"id":"9","name":"Wave","format_type":1}]}"#;
                 socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
             });
-            let result=api.execute(Command::Send{channel:model::Id(2),content:String::new(),nonce:"local".into(),reply:Some(Reply::to(model::Id(50))),sticker:Some(model::Id(9))}).await;
+            let result=api.execute(Command::Send{channel:model::Id(2),content:String::new(),nonce:"local".into(),reply:Some(Reply::to(model::Id(50))),sticker:Some(model::Id(9)),silent:false}).await;
             assert!(matches!(result,Event::SendResult{result:Ok(message),..} if message.sticker_items.len()==1));
+            server.await.unwrap();
+        }).await.unwrap();
+	}
+	#[tokio::test]
+	async fn silent_send_sets_suppress_notifications_flag() {
+		crate::ensure_tls_provider();
+		tokio::time::timeout(Duration::from_secs(5), async {
+            let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut api=DiscordApi::new(Arc::new(SessionSecret::from_owner_input("SYNTHETIC_SILENT_TOKEN".into()).unwrap())).unwrap();
+            api.base=format!("http://{}",listener.local_addr().unwrap());
+            let server=tokio::spawn(async move {
+                for silent in [false, true] {
+                    let (mut socket,_)=listener.accept().await.unwrap();
+                    let mut request=Vec::new();
+                    loop {
+                        let mut bytes=[0;1024];let n=socket.read(&mut bytes).await.unwrap();assert!(n>0);request.extend_from_slice(&bytes[..n]);assert!(request.len()<4096);
+                        if let Some(end)=request.windows(4).position(|w|w==b"\r\n\r\n") {
+                            let headers=String::from_utf8_lossy(&request[..end]);
+                            let length:usize=headers.lines().find_map(|line|line.to_ascii_lowercase().strip_prefix("content-length: ").map(str::to_owned)).unwrap().parse().unwrap();
+                            if request.len()>=end+4+length {
+                                assert!(headers.starts_with("POST /channels/2/messages HTTP/1.1"));
+                                let body:serde_json::Value=serde_json::from_slice(&request[end+4..]).unwrap();
+                                assert_eq!(body["content"],"quiet please");
+                                if silent {
+                                    assert_eq!(body["flags"],serde_json::json!(1 << 12));
+                                } else {
+                                    assert!(body.get("flags").is_none());
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    let body=r#"{"id":"100","channel_id":"2","author":{"id":"1","username":"Synthetic"},"content":"quiet please","nonce":"local"}"#;
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+                }
+            });
+            for silent in [false, true] {
+                let result=api.execute(Command::Send{channel:model::Id(2),content:"quiet please".into(),nonce:"local".into(),reply:None,sticker:None,silent}).await;
+                assert!(matches!(result,Event::SendResult{result:Ok(_),..}));
+            }
             server.await.unwrap();
         }).await.unwrap();
 	}
@@ -2446,6 +2493,7 @@ mod tests {
 						content: "Synthetic reply".into(),
 						nonce: "local".into(),
 						reply: Some(Reply::to(model::Id(50))),
+						silent: false,
 					})
 					.await
 				else {
@@ -2558,6 +2606,7 @@ mod tests {
 				content: "Synthetic local test".into(),
 				nonce: "local".into(),
 				reply: None,
+				silent: false,
 			}),
 		)
 		.await

@@ -242,6 +242,8 @@ pub enum Command {
 		content: String,
 		nonce: String,
 		reply: Option<Reply>,
+		/// Leading `@silent ` was stripped: send with SUPPRESS_NOTIFICATIONS.
+		silent: bool,
 	},
 	Edit {
 		request: u64,
@@ -609,6 +611,8 @@ pub struct Pending {
 	pub confirmed: Option<Id>,
 	/// Reply target retained so a rejected send can be retried unchanged.
 	pub reply: Option<Reply>,
+	/// Leading `@silent ` was stripped: resends keep SUPPRESS_NOTIFICATIONS.
+	pub silent: bool,
 	/// Why the transport rejected this send, shown in plain language on the card.
 	pub reason: Option<&'static str>,
 }
@@ -725,6 +729,8 @@ pub struct State {
 	pub drafts: BTreeMap<Id, String>,
 	pub pending: Vec<Pending>,
 	pub reply: Option<Reply>,
+	/// Owner enabled automatic emoticon conversion: `:)` sends as 🙂.
+	pub emoticon_conversion: bool,
 	pub send_sequence: u64,
 	pub request: u64,
 	pub history_before: Option<Id>,
@@ -972,6 +978,7 @@ impl Default for State {
 			drafts: BTreeMap::new(),
 			pending: vec![],
 			reply: None,
+			emoticon_conversion: false,
 			send_sequence: 0,
 			request: 0,
 			history_before: None,
@@ -1004,6 +1011,89 @@ impl State {
 		(target.disconnected_at.elapsed() <= AutoRejoinCall::WINDOW).then_some(target)
 	}
 }
+/// ASCII emoticon → emoji pairs converted on send when the owner enabled
+/// automatic conversion, like Discord. Longest first so `:-)` wins over `:)`.
+const EMOTICONS: &[(&str, char)] = &[
+	(":-)", '🙂'),
+	(":-(", '🙁'),
+	(";-)", '😉'),
+	(":-P", '😛'),
+	(":-p", '😛'),
+	(":'(", '😢'),
+	(":)", '🙂'),
+	(":(", '🙁'),
+	(":D", '😄'),
+	(":d", '😄'),
+	(";)", '😉'),
+	(":P", '😛'),
+	(":p", '😛'),
+	(":O", '😮'),
+	(":o", '😮'),
+	(":/", '😕'),
+	(":|", '😐'),
+	("XD", '😆'),
+];
+
+/// Turns ASCII emoticons into emoji, skipping fenced code blocks and inline
+/// code spans. A match needs a start/whitespace boundary before it and a
+/// whitespace/punctuation boundary after it, so `http://` never converts.
+pub fn convert_emoticons(text: &str) -> String {
+	let mut out = String::with_capacity(text.len());
+	for (fence, segment) in text.split("```").enumerate() {
+		if fence % 2 == 1 {
+			out.push_str("```");
+			out.push_str(segment);
+			continue;
+		}
+		if fence > 0 {
+			out.push_str("```");
+		}
+		for (span, part) in segment.split('`').enumerate() {
+			if span % 2 == 1 {
+				out.push('`');
+				out.push_str(part);
+				continue;
+			}
+			if span > 0 {
+				out.push('`');
+			}
+			out.push_str(&convert_emoticon_span(part));
+		}
+	}
+	out
+}
+
+fn convert_emoticon_span(text: &str) -> String {
+	let mut matches: Vec<(usize, usize, char)> = Vec::new();
+	for (mark, emoji) in EMOTICONS {
+		for (index, _) in text.match_indices(mark) {
+			let before = text[..index].chars().next_back();
+			let after = text[index + mark.len()..].chars().next();
+			let preceded = before.is_none_or(|c| c.is_whitespace());
+			let followed = after.is_none_or(|c| {
+				c.is_whitespace()
+					|| matches!(c, '.' | ',' | '!' | '?' | ';' | ':' | ')' | ']' | '}')
+			});
+			if preceded && followed {
+				matches.push((index, index + mark.len(), *emoji));
+			}
+		}
+	}
+	matches.sort();
+	let mut out = String::with_capacity(text.len());
+	let mut cursor = 0;
+	for (start, end, emoji) in matches {
+		if start < cursor {
+			continue;
+		}
+		out.push_str(&text[cursor..start]);
+		out.push(emoji);
+		cursor = end;
+	}
+	out.push_str(&text[cursor..]);
+	out
+}
+
 /// Channels the conversation pane can present: text, voice, and forum containers.
 fn navigable(channel: &Channel) -> bool {
 	channel.supports_text()
@@ -1861,7 +1951,16 @@ impl State {
 			self.status = "Send exceeds the session input budget";
 			return None;
 		}
-		let content = content.to_owned();
+		let mut content = content.to_owned();
+		if self.emoticon_conversion {
+			content = convert_emoticons(&content);
+		}
+		// A leading `@silent ` sends without notifications, like Discord: strip
+		// the marker so it never renders, and flag the send instead.
+		let (content, silent) = match content.strip_prefix("@silent ") {
+			Some(rest) if !rest.trim().is_empty() => (rest.trim_start().to_owned(), true),
+			_ => (content, false),
+		};
 		self.send_sequence += 1;
 		let epoch = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
@@ -1882,6 +1981,7 @@ impl State {
 			delivery: Delivery::Sending,
 			confirmed: None,
 			reply,
+			silent,
 			reason: None,
 		});
 		if sticker.is_none() && !preserve_draft {
@@ -1894,6 +1994,7 @@ impl State {
 			content,
 			nonce,
 			reply,
+			silent,
 		})
 	}
 	/// Re-issues a rejected send with its original nonce. The transport only marks a
@@ -1912,6 +2013,7 @@ impl State {
 			content: pending.content.clone(),
 			nonce: pending.nonce.clone(),
 			reply: pending.reply,
+			silent: pending.silent,
 		})
 	}
 	/// Reports a command the transport could not accept as a bounded outcome error.
@@ -4604,6 +4706,7 @@ mod tests {
 			content: "hello".into(),
 			nonce: nonce.clone(),
 			reply: None,
+			silent: false,
 		});
 		assert_eq!(state.auth, auth::AuthState::Authenticated);
 		assert!(!auth::Failure::Capacity.ends_session());
@@ -4787,6 +4890,73 @@ mod tests {
 		assert_eq!(content, "Hello");
 		assert!(state.pending[0].attachments.is_empty());
 		assert!(!state.drafts.contains_key(&Id(1)));
+	}
+
+	#[test]
+	fn silent_prefix_sends_without_notifications() {
+		let mut state = dm_state();
+		state.drafts.insert(Id(1), "@silent hello there".into());
+		let Command::Send {
+			content, silent, ..
+		} = state.prepare_send().unwrap()
+		else {
+			panic!()
+		};
+		assert_eq!(content, "hello there");
+		assert!(silent);
+		assert!(state.pending[0].silent);
+		// The stripped marker must not echo: pending and command agree.
+		assert_eq!(state.pending[0].content, "hello there");
+
+		// A bare marker with no message is an ordinary send, not a silent one.
+		let mut state = dm_state();
+		state.drafts.insert(Id(1), "@silent ".into());
+		let Command::Send {
+			content, silent, ..
+		} = state.prepare_send().unwrap()
+		else {
+			panic!()
+		};
+		assert_eq!(content, "@silent ");
+		assert!(!silent);
+	}
+
+	#[test]
+	fn emoticon_conversion_respects_boundaries_and_code() {
+		assert_eq!(convert_emoticons("hello :)"), "hello 🙂");
+		assert_eq!(convert_emoticons(":) hey :D"), "🙂 hey 😄");
+		assert_eq!(convert_emoticons(":-) beats :)"), "🙂 beats 🙂");
+		// No boundary, no conversion: URLs and mid-word text stay literal.
+		assert_eq!(convert_emoticons("http://x/y"), "http://x/y");
+		assert_eq!(convert_emoticons("a:)b"), "a:)b");
+		// Code stays literal, prose converts.
+		assert_eq!(
+			convert_emoticons("say :) but `not :)` here"),
+			"say 🙂 but `not :)` here"
+		);
+		assert_eq!(
+			convert_emoticons("```\n:) code\n``` after ;)"),
+			"```\n:) code\n``` after 😉"
+		);
+	}
+
+	#[test]
+	fn emoticon_conversion_applies_on_send_only_when_enabled() {
+		let mut state = dm_state();
+		state.drafts.insert(Id(1), "hey :)".into());
+		let Command::Send { content, .. } = state.prepare_send().unwrap() else {
+			panic!()
+		};
+		assert_eq!(content, "hey :)");
+
+		let mut state = dm_state();
+		state.emoticon_conversion = true;
+		state.drafts.insert(Id(1), "hey :)".into());
+		let Command::Send { content, .. } = state.prepare_send().unwrap() else {
+			panic!()
+		};
+		assert_eq!(content, "hey 🙂");
+		assert_eq!(state.pending[0].content, "hey 🙂");
 	}
 	use super::*;
 

@@ -5534,6 +5534,7 @@ mod tests {
 			confirmed: None,
 			reason: None,
 			reply: None,
+			silent: false,
 		});
 		let mut rendered = Vec::new();
 		for compact in [false, true] {
@@ -6253,6 +6254,7 @@ mod tests {
 				confirmed: None,
 				reason: None,
 				reply: None,
+				silent: false,
 			})
 			.collect();
 		let mut view = TimelineView {

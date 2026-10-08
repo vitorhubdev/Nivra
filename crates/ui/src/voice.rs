@@ -1554,6 +1554,7 @@ impl MessagingUi {
 		if let Some(started) = switch.confirmed_at {
 			if state.voice.active.is_some() {
 				self.voice_switch = None;
+				state.status = "Call switch cancelled: another call is already active.";
 			} else if state.voice.departed == Some(switch.from) && self.voice_switch_ready {
 				let switch = self.voice_switch.take().expect("pending switch");
 				let (muted, deafened) = switch
@@ -6669,7 +6670,7 @@ mod tests {
 					.voice
 					.roster
 					.iter()
-					.filter(|entry| entry.channel == Id(25) || entry.channel == Id(26))
+					.filter(|entry| entry.channel == Id(25) || entry.channel == Id(30))
 				{
 					fixture
 						.view
@@ -6713,7 +6714,7 @@ mod tests {
 		harness
 			.state_mut()
 			.state
-			.apply_voice(voice_state(Some(Id(26)), 2, false, false, false));
+			.apply_voice(voice_state(Some(Id(30)), 2, false, false, false));
 		harness.step();
 		assert_eq!(harness.query_all_by_label("Robin").count(), 3);
 	}

@@ -223,6 +223,8 @@ pub enum StoreError {
 	Incompatible,
 	Full,
 	Corrupt,
+	/// The request itself was malformed; nothing was stored.
+	Invalid,
 }
 type Result<T> = std::result::Result<T, StoreError>;
 impl From<rusqlite::Error> for StoreError {
@@ -645,7 +647,7 @@ impl LocalStore {
 		let domain = domain.trim().to_ascii_lowercase();
 		let domain = domain.strip_prefix("www.").unwrap_or(&domain);
 		if domain.is_empty() || domain.len() > 255 {
-			return Ok(());
+			return Err(StoreError::Invalid);
 		}
 		let count: u32 = self
 			.0
@@ -1455,8 +1457,8 @@ impl LocalStore {
 			)?;
 		}
 		let (count, bytes): (i64, i64) = transaction.query_row(
-			"SELECT count(*),coalesce(sum(length(CAST(content AS BLOB))),0) FROM drafts",
-			[],
+			"SELECT count(*),coalesce(sum(length(CAST(content AS BLOB))),0) FROM drafts WHERE account=?1",
+			[account.to_string()],
 			|r| Ok((r.get(0)?, r.get(1)?)),
 		)?;
 		if count > 64 || bytes > 2 * 1024 * 1024 {
@@ -1593,14 +1595,23 @@ impl LocalStore {
 		let mut damaged = Vec::new();
 		while let Some(row) = rows.next()? {
 			let stored: String = row.get(0)?;
+			let raw_discriminator = row.get::<_, i64>(4)?;
+			let raw_token = row.get::<_, i64>(5)?;
+			// Rows modified outside the client bypass CHECKs; out-of-range
+			// values are quarantined as damaged instead of being normalized
+			// into a seemingly valid account.
+			if !(0..=9999).contains(&raw_discriminator) || ![0, 1].contains(&raw_token) {
+				damaged.push(stored);
+				continue;
+			}
 			let account = row.get::<_, String>(0)?.parse::<Id>().ok().map(|id| {
 				Ok::<_, rusqlite::Error>(model::SavedAccount {
 					id,
 					name: row.get(1)?,
 					display: row.get(2)?,
 					avatar: row.get(3)?,
-					discriminator: row.get::<_, i64>(4)?.clamp(0, 9999) as u16,
-					has_token: row.get::<_, i64>(5)? == 1,
+					discriminator: raw_discriminator as u16,
+					has_token: raw_token == 1,
 				})
 			});
 			match account {
@@ -2188,14 +2199,41 @@ mod tests {
 				[],
 			)
 			.unwrap();
+		// Out-of-range values bypassing CHECKs are quarantined, not normalized.
+		// (CHECKs are bypassed here to simulate a database modified outside
+		// the client, e.g. a legacy schema or external tooling.)
+		store
+			.0
+			.execute_batch("PRAGMA ignore_check_constraints=ON;")
+			.unwrap();
+		store
+			.0
+			.execute(
+				"INSERT INTO accounts(account,name,display,avatar,discriminator,touched,has_token)
+                 VALUES('999','tampered',NULL,NULL,99999,unixepoch('subsec')*1000+5001,2)",
+				[],
+			)
+			.unwrap();
+		store
+			.0
+			.execute_batch("PRAGMA ignore_check_constraints=OFF;")
+			.unwrap();
 		let listed = store.accounts().unwrap();
 		// The damaged row is newest, so an unfiltered LIMIT would have dropped a real account.
 		assert_eq!(listed.len(), model::MAX_SAVED_ACCOUNTS);
 		assert!(listed.iter().all(|account| account.id != Id(0)));
+		assert!(
+			listed.iter().all(|account| account.id != Id(999)),
+			"tampered row is quarantined, not normalized"
+		);
 		for id in 2..=(model::MAX_SAVED_ACCOUNTS as u64 + 1) {
 			assert!(listed.iter().any(|account| account.id == Id(id)), "{id}");
 		}
-		assert!(store.save_account(&entry(2)).unwrap().is_empty());
+		assert_eq!(
+			store.save_account(&entry(2)).unwrap(),
+			vec![Id(999)],
+			"the quarantined row is pruned on save"
+		);
 		let damaged: i64 = store
 			.0
 			.query_row(
@@ -2842,6 +2880,14 @@ mod tests {
 		store.add_allowed_domain("x.com").unwrap();
 		store.add_allowed_domain("WWW.GITHUB.COM").unwrap();
 		store.add_allowed_domain("x.com").unwrap(); // duplicate
+		assert!(matches!(
+			store.add_allowed_domain(""),
+			Err(StoreError::Invalid)
+		));
+		assert!(matches!(
+			store.add_allowed_domain(&"x".repeat(256)),
+			Err(StoreError::Invalid)
+		));
 
 		let domains = store.allowed_domains().unwrap();
 		assert_eq!(domains, vec!["github.com".to_string(), "x.com".to_string()]);
@@ -3657,11 +3703,17 @@ mod tests {
 				.save_draft(Id(3), Id(channel), "other synthetic draft")
 				.unwrap();
 		}
+		// Draft budgets are per account: a full account never starves another.
+		store.save_draft(Id(1), Id(21), "own draft").unwrap();
+		assert_eq!(store.load_drafts(Id(1)).unwrap().len(), 2);
+		for channel in 22..=83 {
+			store.save_draft(Id(1), Id(channel), "own draft").unwrap();
+		}
 		assert_eq!(
-			store.save_draft(Id(1), Id(21), "over capacity"),
+			store.save_draft(Id(1), Id(84), "over capacity"),
 			Err(StoreError::Capacity)
 		);
-		assert_eq!(store.load_drafts(Id(1)).unwrap().len(), 1);
+		assert_eq!(store.load_drafts(Id(1)).unwrap().len(), 64);
 		assert_eq!(
 			store.load_drafts(Id(1)).unwrap()[&Id(20)],
 			"synthetic draft"

@@ -13,10 +13,14 @@ impl InstanceLock {
 	/// Try to acquire the single-instance lock.
 	/// Returns `Ok(Some(InstanceLock))` if this is the only active instance.
 	/// Returns `Ok(None)` if another active instance already holds the lock.
-	/// Returns `Err(...)` if the lock path cannot be accessed.
+	/// Returns `Err(...)` if the lock path cannot be accessed, including when
+	/// no base directory exists at all (never misreported as already-running).
 	pub fn acquire() -> std::io::Result<Option<Self>> {
 		let Some(data_dir) = dirs::data_local_dir() else {
-			return Ok(None);
+			return Err(std::io::Error::new(
+				std::io::ErrorKind::NotFound,
+				"no local data directory for the instance lock",
+			));
 		};
 		let root = data_dir.join("nivra");
 		std::fs::create_dir_all(&root)?;

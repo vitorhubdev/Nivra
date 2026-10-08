@@ -1811,16 +1811,23 @@ impl MessagingUi {
 										colors.sidebar,
 									);
 								}
+								let role = if online {
+									guild.and_then(|guild| state.member_roles(guild, member).1)
+								} else {
+									None
+								};
+								let background = if response.hovered() || response.has_focus() {
+									colors.hover
+								} else {
+									colors.sidebar
+								};
+								let role_gradient = role.and_then(|role| {
+									role.gradient().map(|(primary, secondary)| {
+										(primary, secondary, background)
+									})
+								});
 								let text_color = if online {
-									let role_color = guild.and_then(|guild| {
-										state.member_roles(guild, member).1.map(|role| role.color)
-									});
-									let background = if response.hovered() || response.has_focus() {
-										colors.hover
-									} else {
-										colors.sidebar
-									};
-									role_color.map_or(colors.text, |rgb| {
+									role.map(|role| role.color).map_or(colors.text, |rgb| {
 										design::role_name_color(rgb, background, colors.text)
 									})
 								} else {
@@ -1836,15 +1843,33 @@ impl MessagingUi {
 											let trailing =
 												profiles::server_tag_width(ui, server_tag)
 													+ if server_tag.is_some() { 5.0 } else { 0.0 };
-											account_badge::name(
-												ui,
-												&member.user,
-												name,
-												15.0,
-												text_color,
-												egui::Sense::hover(),
-												trailing,
-											);
+											if let Some((primary, secondary, background)) =
+												role_gradient
+											{
+												account_badge::gradient_name(
+													ui,
+													account_badge::GradientName {
+														user: &member.user,
+														name,
+														size: 15.0,
+														primary,
+														secondary,
+														background,
+														sense: egui::Sense::hover(),
+														trailing,
+													},
+												);
+											} else {
+												account_badge::name(
+													ui,
+													&member.user,
+													name,
+													15.0,
+													text_color,
+													egui::Sense::hover(),
+													trailing,
+												);
+											}
 											if let Some(tag) = server_tag {
 												profiles::server_tag(
 													ui,
@@ -8238,6 +8263,7 @@ mod composer_tests {
 					bits: 0,
 					name: "Founders".into(),
 					color: 0xe78284,
+					secondary: None,
 					position: 1,
 					hoist: true,
 				}]),

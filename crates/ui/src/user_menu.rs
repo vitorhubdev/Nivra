@@ -705,6 +705,7 @@ mod tests {
 			bits,
 			name: format!("role{id}"),
 			color: 0,
+			secondary: None,
 			position,
 			hoist: false,
 		};

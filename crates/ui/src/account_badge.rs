@@ -3,6 +3,69 @@ use crate::design;
 use egui::{Color32, Response, Sense, Ui, vec2};
 use model::User;
 
+/// Gradient variant of [`name`]: the username ramps across the role's two
+/// gradient stops, like Discord. Same layout, badge and sense; `background`
+/// is the row behind the name for contrast checks.
+pub(super) struct GradientName<'a> {
+	pub user: &'a User,
+	pub name: &'a str,
+	pub size: f32,
+	pub primary: u32,
+	pub secondary: u32,
+	pub background: Color32,
+	pub sense: Sense,
+	pub trailing: f32,
+}
+
+pub(super) fn gradient_name(ui: &mut Ui, name: GradientName<'_>) -> Response {
+	let colors = design::palette(ui);
+	let badge = name.user.account_label().map(|text| {
+		ui.painter().layout_no_wrap(
+			text.into(),
+			egui::FontId::proportional(10.0),
+			colors.accent_text,
+		)
+	});
+	let reserve = badge.as_ref().map_or(0.0, |text| {
+		text.size().x + 8.0 + ui.spacing().item_spacing.x
+	});
+	let width = (ui.available_width() - reserve - name.trailing).max(0.0);
+	let job = design::role_gradient_job(
+		ui,
+		name.name,
+		name.primary,
+		name.secondary,
+		name.background,
+		colors.text,
+		name.size,
+	);
+	let response = ui
+		.scope(|ui| {
+			ui.set_max_width(width);
+			ui.add(
+				egui::Label::new(job)
+					.truncate()
+					.selectable(false)
+					.sense(name.sense),
+			)
+		})
+		.inner;
+	if let Some(text) = badge {
+		let (rect, badge) = ui.allocate_exact_size(vec2(text.size().x + 8.0, 16.0), Sense::hover());
+		ui.painter().rect_filled(rect, 3, colors.accent);
+		ui.painter()
+			.galley(rect.center() - text.size() * 0.5, text, colors.accent_text);
+		let description = match name.user.account_label() {
+			Some("BOT") => "Bot account",
+			Some("APP") => "Application-generated message",
+			_ => "Webhook author",
+		};
+		badge.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, description));
+		badge.on_hover_text(description);
+	}
+	response
+}
+
 pub(super) fn name(
 	ui: &mut Ui,
 	user: &User,

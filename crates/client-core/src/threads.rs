@@ -197,6 +197,7 @@ mod tests {
 						roles: Some(vec![model::permissions::Role {
 							name: String::new(),
 							color: 0,
+							secondary: None,
 							position: 0,
 							hoist: false,
 							id: guild.id,

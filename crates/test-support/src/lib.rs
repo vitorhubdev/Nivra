@@ -1135,6 +1135,7 @@ pub fn seed_access_marks(state: &mut State) {
 				bits: 0,
 				name: "Contributors".into(),
 				color: 0,
+				secondary: None,
 				position: 1,
 				hoist: false,
 			});
@@ -1236,6 +1237,7 @@ pub fn chat_demo_state() -> State {
 				name: "Synthetic colored role".into(),
 				bits: 0,
 				color: 0x68ada4,
+				secondary: None,
 				position: 1,
 				hoist: false,
 			},
@@ -1385,6 +1387,7 @@ pub fn permission_snapshot(state: &State) -> model::permissions::Snapshot {
 				roles: Some(vec![p::Role {
 					name: String::new(),
 					color: 0,
+					secondary: None,
 					position: 0,
 					hoist: false,
 					id: guild.id,

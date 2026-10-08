@@ -1368,6 +1368,7 @@ mod tests {
 					roles: Some(vec![p::Role {
 						name: String::new(),
 						color: 0,
+						secondary: None,
 						position: 0,
 						hoist: false,
 						id: Id(10),
@@ -1483,6 +1484,7 @@ mod tests {
 						bits: p::VIEW_CHANNEL | p::CONNECT,
 						name: String::new(),
 						color: 0,
+						secondary: None,
 						position: 0,
 						hoist: false,
 					}]),

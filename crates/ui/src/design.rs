@@ -1540,6 +1540,47 @@ pub fn presence_dot(ui: &egui::Ui, rect: egui::Rect, color: Color32, ring: Color
 	ui.painter().circle_filled(center, radius, color);
 }
 
+/// Username painted as a primary→secondary gradient, like Discord role
+/// gradients. Each end is contrast-checked against the background first, and
+/// the ramp runs per character so it reads at any name length.
+pub fn role_gradient_job(
+	ui: &egui::Ui,
+	name: &str,
+	primary: u32,
+	secondary: u32,
+	background: egui::Color32,
+	fallback: egui::Color32,
+	size: f32,
+) -> egui::text::LayoutJob {
+	let from = role_name_color(primary, background, fallback);
+	let to = role_name_color(secondary, background, fallback);
+	let font_id = egui::FontId::new(size, medium_family(ui.ctx()));
+	let chars: Vec<char> = name.chars().collect();
+	let mut job = egui::text::LayoutJob::default();
+	for (index, character) in chars.iter().enumerate() {
+		let t = if chars.len() <= 1 {
+			0.0
+		} else {
+			index as f32 / (chars.len() - 1) as f32
+		};
+		let mix = |a: u8, b: u8| (f32::from(a) * (1.0 - t) + f32::from(b) * t) as u8;
+		job.append(
+			&character.to_string(),
+			0.0,
+			egui::text::TextFormat {
+				font_id: font_id.clone(),
+				color: egui::Color32::from_rgb(
+					mix(from.r(), to.r()),
+					mix(from.g(), to.g()),
+					mix(from.b(), to.b()),
+				),
+				..Default::default()
+			},
+		);
+	}
+	job
+}
+
 /// Preserve role hue where readable, otherwise move toward the theme's text color.
 pub fn role_name_color(rgb: u32, background: Color32, fallback: Color32) -> Color32 {
 	let role = Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8);
@@ -1831,6 +1872,29 @@ mod tests {
 				}
 			}
 		}
+	}
+	#[test]
+	fn role_gradient_job_ramps_one_section_per_character() {
+		let ctx = egui::Context::default();
+		apply(&ctx);
+		let mut output = ctx.run_ui(Default::default(), |ui| {
+			let job = role_gradient_job(
+				ui,
+				"AB",
+				0xff0000,
+				0x0000ff,
+				egui::Color32::BLACK,
+				egui::Color32::WHITE,
+				14.0,
+			);
+			assert_eq!(job.sections.len(), 2);
+			let [first, last] = job.sections.as_slice() else {
+				panic!()
+			};
+			assert_ne!(first.format.color, last.format.color);
+			assert_ne!(first.byte_range, last.byte_range);
+		});
+		output.textures_delta.clear();
 	}
 	#[test]
 	fn opaque_presets_keep_readable_text_and_keys_round_trip() {

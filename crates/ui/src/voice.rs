@@ -687,9 +687,13 @@ impl MessagingUi {
 	}
 
 	/// True once any stage tile carries video, so the direct-message stage can grow.
-	pub(super) fn stage_shows_video(&self, state: &State, channel: Id) -> bool {
-		let entries = stage_participants(state, channel);
-		self.stage_tiles(state, channel, &entries)
+	pub(super) fn stage_shows_video(
+		&self,
+		state: &State,
+		channel: Id,
+		entries: &[RosterEntry],
+	) -> bool {
+		self.stage_tiles(state, channel, entries)
 			.iter()
 			.any(|tile| self.tile_has_video(state, channel, tile))
 	}
@@ -3253,11 +3257,15 @@ impl MessagingUi {
 			.filter(|call| call.guild.is_none() && Some(call.channel) == selected)
 			.map(|call| call.channel)
 		{
-			let height = if self.stage_shows_video(state, channel) || state.is_group_dm(channel) {
-				(ui.available_height() * 0.74).clamp(320.0, 900.0)
-			} else {
-				(ui.available_height() * 0.42).clamp(240.0, 340.0)
-			};
+			// One roster pass per frame: the entries feed the height check,
+			// the notices and the tiles below.
+			let entries = stage_participants(state, channel);
+			let height =
+				if self.stage_shows_video(state, channel, &entries) || state.is_group_dm(channel) {
+					(ui.available_height() * 0.74).clamp(320.0, 900.0)
+				} else {
+					(ui.available_height() * 0.42).clamp(240.0, 340.0)
+				};
 			egui::Panel::top("dm-call")
 				.resizable(false)
 				.exact_size(height)
@@ -3290,13 +3298,7 @@ impl MessagingUi {
 							.max_rect(body)
 							.layout(egui::Layout::top_down(egui::Align::Min)),
 					);
-					self.participant_tiles(
-						&mut body_ui,
-						state,
-						channel,
-						&stage_participants(state, channel),
-						true,
-					);
+					self.participant_tiles(&mut body_ui, state, channel, &entries, true);
 					let bar = egui::Rect::from_min_max(
 						egui::pos2(rect.left(), rect.bottom() - CONTROL_HEIGHT - STAGE_MARGIN),
 						egui::pos2(rect.right(), rect.bottom() - STAGE_MARGIN),

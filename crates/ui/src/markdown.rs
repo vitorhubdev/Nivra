@@ -1486,8 +1486,10 @@ impl Formatted {
 					if let Some(id) = spans[start].1.mention {
 						reserve(ui);
 						let colors = crate::design::palette(ui);
-						let user = crate::mentions::find_user(id, render.users, render.source);
-						let label = crate::mentions::mention_label(id, render.users, render.source);
+						let user =
+							crate::mentions::find_user(id, render.users, render.source, None);
+						let label =
+							crate::mentions::mention_label(id, render.users, render.source, None);
 						let response = ui
 							.add(egui::Link::new(
 								egui::RichText::new(&label)
@@ -2150,7 +2152,7 @@ impl Formatted {
 			}
 			let (display, format) = if let Some(id) = style.mention {
 				(
-					crate::mentions::mention_label(id, users, source),
+					crate::mentions::mention_label(id, users, source, None),
 					pill.clone(),
 				)
 			} else if let Some(id) = style.role {

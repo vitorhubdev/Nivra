@@ -193,6 +193,50 @@ pub struct MentionSource<'a> {
 	pub channel: Id,
 }
 
+/// Per-pass mention lookup. `find_user`'s deep fallbacks scan every member slot
+/// and then the whole timeline for one unresolved id, which turns a full
+/// timeline fingerprint into quadratic work. Built once per pass, the same
+/// answers come from hash lookups; first occurrence wins, exactly like the
+/// scanned paths it replaces.
+pub struct MentionIndex<'a> {
+	channel: Id,
+	members: std::collections::HashMap<Id, &'a model::Member>,
+	users: std::collections::HashMap<Id, &'a User>,
+}
+impl<'a> MentionIndex<'a> {
+	pub fn build(state: &'a State, channel: Id) -> Self {
+		let mut members = std::collections::HashMap::new();
+		if let Some(list) = state
+			.members
+			.as_ref()
+			.filter(|list| list.channel == channel)
+		{
+			for slot in list.slots.iter().flatten() {
+				if let model::MemberSlot::Person(member) = slot {
+					members.entry(member.user.id).or_insert(member);
+				}
+			}
+		}
+		let mut users = std::collections::HashMap::new();
+		for message in state.timeline.iter().filter(|m| m.channel == channel) {
+			users.entry(message.author.id).or_insert(&message.author);
+			for user in &message.mentions {
+				users.entry(user.id).or_insert(user);
+			}
+		}
+		Self {
+			channel,
+			members,
+			users,
+		}
+	}
+	/// Only a pass for the same channel may answer, so a stale index can never
+	/// substitute another channel's membership.
+	fn for_channel(&self, channel: Id) -> Option<&Self> {
+		(self.channel == channel).then_some(self)
+	}
+}
+
 fn member(state: &State, channel: Id, id: Id) -> Option<&model::Member> {
 	state
 		.members
@@ -214,12 +258,14 @@ pub fn find_user<'a>(
 	id: Id,
 	mentions: &'a [User],
 	source: Option<&MentionSource<'a>>,
+	index: Option<&MentionIndex<'a>>,
 ) -> Option<&'a User> {
 	if let Some(user) = mentions.iter().find(|user| user.id == id) {
 		return Some(user);
 	}
 	let source = source?;
 	let state = source.state;
+	let index = index.and_then(|index| index.for_channel(source.channel));
 	if state.user.as_ref().is_some_and(|user| user.id == id) {
 		return state.user.as_ref();
 	}
@@ -231,7 +277,10 @@ pub fn find_user<'a>(
 	{
 		return Some(user);
 	}
-	if let Some(member) = member(state, source.channel, id) {
+	let member = index
+		.and_then(|index| index.members.get(&id).copied())
+		.or_else(|| member(state, source.channel, id));
+	if let Some(member) = member {
 		return Some(&member.user);
 	}
 	if let Some(request) = &state.member_search[0].request
@@ -243,6 +292,9 @@ pub fn find_user<'a>(
 			.find(|member| member.user.id == id)
 	{
 		return Some(&member.user);
+	}
+	if let Some(index) = index {
+		return index.users.get(&id).copied();
 	}
 	state.timeline.iter().find_map(|message| {
 		if message.channel != source.channel {
@@ -256,15 +308,23 @@ pub fn find_user<'a>(
 	})
 }
 
-pub fn mention_label(id: Id, mentions: &[User], source: Option<&MentionSource<'_>>) -> String {
+pub fn mention_label(
+	id: Id,
+	mentions: &[User],
+	source: Option<&MentionSource<'_>>,
+	index: Option<&MentionIndex<'_>>,
+) -> String {
 	if let Some(source) = source
-		&& let Some(nick) = member(source.state, source.channel, id)
+		&& let Some(nick) = index
+			.and_then(|index| index.for_channel(source.channel))
+			.and_then(|index| index.members.get(&id).copied())
+			.or_else(|| member(source.state, source.channel, id))
 			.and_then(|member| member.nick.as_deref())
 			.filter(|nick| !nick.is_empty())
 	{
 		return format!("@{nick}");
 	}
-	match find_user(id, mentions, source) {
+	match find_user(id, mentions, source, index) {
 		Some(user) => format!(
 			"@{}",
 			source.map_or(user.name.as_str(), |s| s.state.user_display_name(user))
@@ -273,7 +333,48 @@ pub fn mention_label(id: Id, mentions: &[User], source: Option<&MentionSource<'_
 	}
 }
 
-pub fn presentation_fingerprint(state: &State, message: &model::Message) -> u64 {
+/// Hashes exactly what the visible label carries, without building the label.
+/// The fingerprint only has to change when the rendered text would, so hashing
+/// the resolved pieces skips one `String` per mention on a hot path.
+fn hash_user_mention(
+	hasher: &mut std::collections::hash_map::DefaultHasher,
+	id: Id,
+	mentions: &[User],
+	source: Option<&MentionSource<'_>>,
+	index: Option<&MentionIndex<'_>>,
+) {
+	// Same precedence as `mention_label`: nick, then resolved name, then the id.
+	if let Some(source) = source
+		&& let Some(nick) = index
+			.and_then(|index| index.for_channel(source.channel))
+			.and_then(|index| index.members.get(&id).copied())
+			.or_else(|| member(source.state, source.channel, id))
+			.and_then(|member| member.nick.as_deref())
+			.filter(|nick| !nick.is_empty())
+	{
+		b"nick".hash(hasher);
+		nick.hash(hasher);
+		return;
+	}
+	match find_user(id, mentions, source, index) {
+		Some(user) => {
+			b"user".hash(hasher);
+			source
+				.map_or(user.name.as_str(), |s| s.state.user_display_name(user))
+				.hash(hasher);
+		}
+		None => {
+			b"id".hash(hasher);
+			id.hash(hasher);
+		}
+	}
+}
+
+pub fn presentation_fingerprint(
+	state: &State,
+	message: &model::Message,
+	index: Option<&MentionIndex<'_>>,
+) -> u64 {
 	let mut hasher = std::collections::hash_map::DefaultHasher::new();
 	let source = MentionSource {
 		state,
@@ -288,27 +389,34 @@ pub fn presentation_fingerprint(state: &State, message: &model::Message) -> u64 
 		};
 		rest = &rest[start..];
 		if let Some((id, len)) = model::user_mention_prefix(rest) {
-			mention_label(id, &message.mentions, Some(&source)).hash(&mut hasher);
+			hash_user_mention(&mut hasher, id, &message.mentions, Some(&source), index);
 			rest = &rest[len..];
 		} else if let Some((id, len)) = model::role_mention_prefix(rest) {
-			let name = roles
-				.iter()
-				.find(|role| role.id == id)
-				.map_or_else(|| format!("unknown-role ({id})"), |role| role.name.clone());
-			format!("@{name}").hash(&mut hasher);
+			match roles.iter().find(|role| role.id == id) {
+				Some(role) => {
+					b"role".hash(&mut hasher);
+					role.name.as_str().hash(&mut hasher);
+				}
+				None => {
+					b"unknown-role".hash(&mut hasher);
+					id.hash(&mut hasher);
+				}
+			}
 			rest = &rest[len..];
 		} else if let Some((id, len)) = model::channel_mention_prefix(rest) {
-			let label = match state.channels.iter().find(|channel| channel.id == id) {
+			match state.channels.iter().find(|channel| channel.id == id) {
 				Some(channel)
 					if channel.guild.is_some()
 						&& matches!(channel.kind, 0 | 5 | 10..=12 | 15 | 16) =>
 				{
-					format!("#{}", channel.name)
+					b"channel".hash(&mut hasher);
+					channel.name.as_str().hash(&mut hasher);
 				}
-				Some(_) => String::new(),
-				None => "#unknown-channel".into(),
-			};
-			label.hash(&mut hasher);
+				_ => {
+					// Renders as nothing or as the unknown placeholder.
+					channel_placeholder(&mut hasher, state.channel(id).is_some(), id);
+				}
+			}
 			rest = &rest[len..];
 		} else {
 			let skip = rest.chars().next().map_or(1, char::len_utf8);
@@ -318,6 +426,20 @@ pub fn presentation_fingerprint(state: &State, message: &model::Message) -> u64 
 		seen += 1;
 	}
 	hasher.finish()
+}
+
+/// The two non-link channel outcomes differ from each other and from the rest.
+fn channel_placeholder(
+	hasher: &mut std::collections::hash_map::DefaultHasher,
+	known: bool,
+	id: Id,
+) {
+	if known {
+		b"channel-unavailable".hash(hasher);
+	} else {
+		b"channel-unknown".hash(hasher);
+		id.hash(hasher);
+	}
 }
 
 fn query(draft: &str, cursor: usize) -> Option<(Range<usize>, &str, Kind)> {
@@ -489,6 +611,7 @@ impl Menu {
 							user.id,
 							std::slice::from_ref(user),
 							Some(&MentionSource { state, channel }),
+							None,
 						);
 						let name = label.strip_prefix('@').unwrap_or(&label);
 						rank(&query, name, user.id)
@@ -1445,7 +1568,7 @@ pub fn debug_role_mentions_check(state: &mut State) {
 			embeds_suppressed: false,
 		};
 		for nickname in ["Private name", "Changed name", ""] {
-			let before = presentation_fingerprint(&names, &message);
+			let before = presentation_fingerprint(&names, &message, None);
 			names.apply(client_core::Envelope {
 				generation: names.generation,
 				event: client_core::Event::UserAction(client_core::user_actions::Event::Nickname {
@@ -1458,7 +1581,7 @@ pub fn debug_role_mentions_check(state: &mut State) {
 			} else {
 				nickname
 			};
-			assert_ne!(presentation_fingerprint(&names, &message), before);
+			assert_ne!(presentation_fingerprint(&names, &message, None), before);
 			assert_eq!(
 				mention_label(
 					user.id,
@@ -1466,7 +1589,8 @@ pub fn debug_role_mentions_check(state: &mut State) {
 					Some(&MentionSource {
 						state: &names,
 						channel
-					})
+					}),
+					None,
 				),
 				format!("@{expected}")
 			);
@@ -1713,5 +1837,70 @@ pub fn debug_role_mentions_check(state: &mut State) {
 	if let Some(dm) = state.channels.iter().find(|c| c.guild.is_none()) {
 		menu.refresh(state, dm.id, "@Role", Some(5), &[]);
 		assert!(menu.candidates.is_empty(), "roles must not leak into DMs");
+	}
+}
+
+#[test]
+fn mention_index_answers_exactly_like_the_scanning_path() {
+	let state = test_support::demo_state();
+	let channel = state
+		.timeline
+		.iter()
+		.next()
+		.map_or(Id(20), |message| message.channel);
+	let index = MentionIndex::build(&state, channel);
+	// An author, a mention-only user, a member-only id and one that resolves nowhere.
+	for id in [Id(1), Id(2), Id(3), Id(4), Id(999_999)] {
+		assert_eq!(
+			mention_label(
+				id,
+				&[],
+				Some(&MentionSource {
+					state: &state,
+					channel
+				}),
+				None
+			),
+			mention_label(
+				id,
+				&[],
+				Some(&MentionSource {
+					state: &state,
+					channel
+				}),
+				Some(&index)
+			),
+			"label for {id:?}"
+		);
+	}
+	// A foreign index may never substitute another channel's membership.
+	let other = MentionIndex::build(&state, Id(999_999));
+	assert_eq!(
+		mention_label(
+			Id(2),
+			&[],
+			Some(&MentionSource {
+				state: &state,
+				channel
+			}),
+			Some(&other)
+		),
+		mention_label(
+			Id(2),
+			&[],
+			Some(&MentionSource {
+				state: &state,
+				channel
+			}),
+			None
+		)
+	);
+	for message in state.timeline.iter() {
+		assert_eq!(
+			presentation_fingerprint(&state, message, None),
+			presentation_fingerprint(&state, message, Some(&index)),
+			"fingerprint for {:?}",
+			message.id
+		);
 	}
 }

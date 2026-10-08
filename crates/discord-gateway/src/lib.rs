@@ -942,6 +942,53 @@ impl ActiveMembers {
 	}
 }
 
+/// Surfaces a voice command that never reached signaling: the packet builder
+/// rejected it or the websocket send timed out. Without this the popped
+/// command vanishes while gateway state already moved on (a Join sets active
+/// before the send), wedging the call intent with no user feedback.
+fn voice_send_failure(
+	command: client_core::voice::Command,
+	emit: &impl Fn(Event) -> Result<(), Failure>,
+) -> Result<(), Failure> {
+	match command {
+		client_core::voice::Command::Join {
+			channel, request, ..
+		} => emit(Event::Voice(client_core::voice::Event::Failed {
+			channel,
+			request,
+			message: "Previous call is still leaving, or the channel is unavailable; wait for departure or reconnect",
+		}))?,
+		client_core::voice::Command::StartStream {
+			channel,
+			request,
+			stream_request,
+		} => emit(Event::Voice(client_core::voice::Event::Stream {
+			channel,
+			request,
+			stream_request,
+			event: client_core::screen::Event::Failed(
+				"A screen share is already active, stopping, or the call is unavailable",
+			),
+		}))?,
+		client_core::voice::Command::WatchStream {
+			channel,
+			request,
+			stream_request,
+			streamer,
+		} => emit(Event::Voice(client_core::voice::Event::Watch {
+			channel,
+			request,
+			stream_request,
+			streamer,
+			event: client_core::screen::Event::Failed(
+				"Another stream is already being watched, or the call is unavailable",
+			),
+		}))?,
+		_ => {}
+	}
+	Ok(())
+}
+
 async fn dispatch_voice_command(
 	command: client_core::voice::Command,
 	calls: &mut voice::Calls,
@@ -1012,42 +1059,7 @@ async fn dispatch_voice_command(
 			if let Some(event) = calls.take_replaced_departure() {
 				emit(event)?;
 			}
-			match command {
-				client_core::voice::Command::Join {
-					channel, request, ..
-				} => emit(Event::Voice(client_core::voice::Event::Failed {
-					channel,
-					request,
-					message: "Previous call is still leaving, or the channel is unavailable; wait for departure or reconnect",
-				}))?,
-				client_core::voice::Command::StartStream {
-					channel,
-					request,
-					stream_request,
-				} => emit(Event::Voice(client_core::voice::Event::Stream {
-					channel,
-					request,
-					stream_request,
-					event: client_core::screen::Event::Failed(
-						"A screen share is already active, stopping, or the call is unavailable",
-					),
-				}))?,
-				client_core::voice::Command::WatchStream {
-					channel,
-					request,
-					stream_request,
-					streamer,
-				} => emit(Event::Voice(client_core::voice::Event::Watch {
-					channel,
-					request,
-					stream_request,
-					streamer,
-					event: client_core::screen::Event::Failed(
-						"Another stream is already being watched, or the call is unavailable",
-					),
-				}))?,
-				_ => {}
-			}
+			voice_send_failure(command, emit)?;
 			return Ok(false);
 		}
 	};
@@ -1070,6 +1082,7 @@ async fn dispatch_voice_command(
 			timeout(Duration::from_secs(5), socket.send(packet)).await,
 			Ok(Ok(()))
 		) {
+		voice_send_failure(command, emit)?;
 		return Ok(true);
 	}
 	if let Some(packet) = packet
@@ -1077,6 +1090,7 @@ async fn dispatch_voice_command(
 			timeout(Duration::from_secs(5), socket.send(packet)).await,
 			Ok(Ok(()))
 		) {
+		voice_send_failure(command, emit)?;
 		return Ok(true);
 	}
 	Ok(false)

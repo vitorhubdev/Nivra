@@ -507,7 +507,10 @@ impl Connection {
                 }
                 Ok::<(),Failure>(())
             }.await;
-            if let Err(f)=result { if !matches!(f, Failure::Capacity | Failure::CapacityAt(_)) { let _=finished.send(Some(f)); } wake.request_repaint(); }
+            // Every terminal failure is signaled, including capacity: main
+            // handles Capacity/CapacityAt distinctly (no auto-reconnect) and
+            // must still tear down the dead task instead of stranding it.
+            if let Err(f)=result { let _=finished.send(Some(f)); wake.request_repaint(); }
         });
 		Self {
 			commands,

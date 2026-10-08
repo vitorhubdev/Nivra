@@ -309,10 +309,10 @@ fn validate_member_ranges(ranges: &[[usize; 2]]) -> bool {
 	}
 	// The mirror below only represents one contiguous span: a gapped pair
 	// would silently cover the gap and drop the second window.
-	if let [[_, first_end], [second_start, _]] = ranges {
-		if *second_start > *first_end + 1 {
-			return false;
-		}
+	if let [[_, first_end], [second_start, _]] = ranges
+		&& second_start > &(first_end + 1)
+	{
+		return false;
 	}
 	true
 }

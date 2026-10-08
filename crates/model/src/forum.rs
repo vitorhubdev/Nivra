@@ -145,6 +145,11 @@ impl Starter {
 				.map(|image| EmbedMedia::bytes(&image.media))
 				.sum::<usize>()
 			+ crate::reactions::reaction_bytes(&self.reactions)
+			+ self
+				.reactions
+				.capacity()
+				.saturating_sub(self.reactions.len())
+				* size_of::<Reaction>()
 	}
 	pub fn valid(&self) -> bool {
 		self.author_id.0 > 0
@@ -226,7 +231,8 @@ impl Page {
 	pub fn bytes(&self) -> usize {
 		self.threads.capacity().saturating_sub(self.threads.len()) * size_of::<Channel>()
 			+ self.threads.iter().map(Channel::bytes).sum::<usize>()
-			+ self.previews.capacity() * size_of::<Id>()
+			+ self.previews.capacity().saturating_sub(self.previews.len())
+				* size_of::<(Id, Starter)>()
 			+ self
 				.previews
 				.iter()

@@ -62,6 +62,41 @@ pub const MAX_WIRE: usize = 4 * 1024 * 1024;
 /// A normal account's READY carries every joined server's channels, roles, emojis and settings,
 /// and legitimately exceeds the per-event/REST bound. Retained projections keep their own limits.
 pub const MAX_GATEWAY_WIRE: usize = 64 * 1024 * 1024;
+/// Inbound text is cut far above the hardest service limit (4000 chars), so a
+/// hostile payload cannot stuff megabytes into one rendered message.
+pub(crate) const MAX_MESSAGE_CHARS: usize = 8192;
+/// Client correlation ids are snowflakes or UUIDs; anything longer is anomalous.
+pub(crate) const MAX_NONCE_CHARS: usize = 128;
+/// The service caps channel names at 100 characters.
+pub(crate) const MAX_CHANNEL_NAME_CHARS: usize = 100;
+/// Service limits sit far below: 500 channels and 250 roles per server. These
+/// caps only bound serde-time allocation before validation runs.
+pub(crate) const MAX_GUILD_CHANNELS: usize = 1024;
+pub(crate) const MAX_GUILD_ROLES: usize = 1024;
+pub(crate) const MAX_GUILD_VOICE_STATES: usize = 4096;
+pub(crate) const MAX_GUILD_MEMBERS: usize = 4096;
+macro_rules! bounded_vec {
+	($name:ident, $cap:expr) => {
+		fn $name<'de, D: serde::Deserializer<'de>, T: serde::Deserialize<'de>>(
+			d: D,
+		) -> Result<Vec<T>, D::Error> {
+			Ok(crate::permissions::List::<T, $cap>::deserialize(d)?.0)
+		}
+	};
+}
+bounded_vec!(guild_channels, MAX_GUILD_CHANNELS);
+bounded_vec!(guild_roles, MAX_GUILD_ROLES);
+bounded_vec!(guild_voice_states, MAX_GUILD_VOICE_STATES);
+bounded_vec!(guild_members, MAX_GUILD_MEMBERS);
+/// Cuts text to a char budget only when it exceeds it; byte length at or
+/// under the budget implies the char count fits, so short text is untouched.
+fn truncate_chars(text: String, max_chars: usize) -> String {
+	if text.len() <= max_chars || text.chars().count() <= max_chars {
+		text
+	} else {
+		text.chars().take(max_chars).collect()
+	}
+}
 #[derive(Debug, thiserror::Error)]
 #[error("Unsupported or oversized Discord payload")]
 pub struct DecodeError;
@@ -233,13 +268,16 @@ impl ChannelDto {
 			guild: self.guild_id,
 			parent_id: self.parent_id,
 			position: self.position,
-			name: self.name.unwrap_or_else(|| {
-				recipients
-					.iter()
-					.map(|u| u.name.as_str())
-					.collect::<Vec<_>>()
-					.join(", ")
-			}),
+			name: self
+				.name
+				.map(|name| truncate_chars(name, MAX_CHANNEL_NAME_CHARS))
+				.unwrap_or_else(|| {
+					recipients
+						.iter()
+						.map(|u| u.name.as_str())
+						.collect::<Vec<_>>()
+						.join(", ")
+				}),
 			kind: self.kind,
 			recipients,
 			member_list_id: None,
@@ -503,15 +541,15 @@ pub struct GuildDto {
 	pub premium_tier: u8,
 	#[serde(default)]
 	pub name: String,
-	#[serde(default)]
+	#[serde(default, deserialize_with = "guild_channels")]
 	pub channels: Vec<ChannelDto>,
 	#[serde(default, deserialize_with = "threads::list")]
 	pub threads: Vec<ChannelDto>,
-	#[serde(default)]
+	#[serde(default, deserialize_with = "guild_roles")]
 	pub roles: Vec<RoleDto>,
-	#[serde(default)]
+	#[serde(default, deserialize_with = "guild_voice_states")]
 	pub voice_states: Vec<VoiceStateDto>,
-	#[serde(default)]
+	#[serde(default, deserialize_with = "guild_members")]
 	pub members: Vec<VoiceMemberDto>,
 }
 #[derive(Deserialize)]
@@ -954,7 +992,7 @@ impl MessageDto {
 			id: self.id,
 			channel: self.channel_id,
 			author,
-			content: self.content,
+			content: truncate_chars(self.content, MAX_MESSAGE_CHARS),
 			author_nick: self.member.as_ref().and_then(|member| {
 				member
 					.nick
@@ -975,7 +1013,7 @@ impl MessageDto {
 			edited_at: self.edited_timestamp.map(|t| t.0),
 			revision: 0,
 			nonce: self.nonce.map(|n| match n {
-				Nonce::Text(s) => s,
+				Nonce::Text(s) => truncate_chars(s, MAX_NONCE_CHARS),
 				Nonce::Number(n) => n.to_string(),
 			}),
 			kind: self.kind,
@@ -1151,6 +1189,25 @@ pub struct ErrorBody {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn inbound_text_is_cut_far_above_service_limits() {
+		let wire = serde_json::json!({"id":"100","channel_id":"2","author":{"id":"3","username":"Synthetic"},"content":"x".repeat(MAX_MESSAGE_CHARS + 1),"nonce":"y".repeat(MAX_NONCE_CHARS + 1)});
+		let message = decode::<MessageDto>(&serde_json::to_vec(&wire).unwrap())
+			.unwrap()
+			.into_model();
+		assert_eq!(message.content.chars().count(), MAX_MESSAGE_CHARS);
+		assert_eq!(
+			message.nonce.as_deref().map(|nonce| nonce.chars().count()),
+			Some(MAX_NONCE_CHARS)
+		);
+		let long: ChannelDto =
+			decode(format!(r#"{{"id":"1","type":0,"name":"{}"}}"#, "x".repeat(101)).as_bytes())
+				.unwrap();
+		assert_eq!(
+			long.into_model().name.chars().count(),
+			MAX_CHANNEL_NAME_CHARS
+		);
+	}
 	#[test]
 	fn webhook_authors_require_explicit_message_metadata() {
 		let mut wire = serde_json::json!({"id":"100","channel_id":"2","author":{"id":"3","username":"Synthetic webhook","bot":true},"content":"webhook"});

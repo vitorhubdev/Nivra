@@ -12,7 +12,7 @@ impl ReactionEmoji {
 	pub fn valid(&self) -> bool {
 		self.name.as_ref().is_none_or(|name| {
 			!name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control)
-		}) && (self.id.is_some() || self.name.is_some())
+		}) && (self.id.is_some_and(|id| id.0 != 0) || self.name.is_some())
 	}
 	pub fn label(&self) -> String {
 		match (self.id, self.name.as_deref()) {
@@ -38,6 +38,7 @@ pub struct Reaction {
 	#[serde(default)]
 	pub me_burst: bool,
 }
+/// Element bytes of the used entries only; callers add their own capacity slack.
 pub fn reaction_bytes(reactions: &[Reaction]) -> usize {
 	std::mem::size_of_val(reactions)
 		+ reactions

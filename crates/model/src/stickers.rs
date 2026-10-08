@@ -68,6 +68,7 @@ impl Sticker {
 			&& self.name.len() <= 120
 			&& self.description.len() <= 4096
 			&& self.tags.len() <= 1024
+			&& matches!(self.format_type, 1..=4)
 			&& self.guild_id.is_none_or(|id| id.0 != 0)
 			&& self.pack_id.is_none_or(|id| id.0 != 0)
 	}

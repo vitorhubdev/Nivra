@@ -18,6 +18,7 @@ mod interactions;
 mod messaging_permissions;
 mod profile_edit;
 pub mod rpc;
+mod scheduled_events;
 mod server_actions;
 mod server_admin;
 mod server_audit_log;
@@ -839,6 +840,19 @@ impl DiscordApi {
 				result: self.gifs(query.as_deref()).await,
 			},
 			Command::CancelGifs => Event::Failure(Failure::Protocol),
+			Command::ScheduledEvents(command) => {
+				use client_core::scheduled_events::{Command as S, Event as E};
+				Event::ScheduledEvents(match command {
+					S::List { guild, request } => {
+						let result = self.scheduled_events(guild).await;
+						E::Listed {
+							guild,
+							request,
+							result,
+						}
+					}
+				})
+			}
 			Command::MarkRead {
 				channel,
 				message,

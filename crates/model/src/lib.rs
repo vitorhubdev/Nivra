@@ -46,6 +46,11 @@ mod reactions;
 pub use reactions::*;
 mod polls;
 pub use polls::*;
+mod scheduled_events;
+pub use scheduled_events::{
+	ENTITY_EXTERNAL, ENTITY_STAGE, ENTITY_VOICE, MAX_EVENTS, STATUS_ACTIVE, STATUS_SCHEDULED,
+	ScheduledEvent, valid_event,
+};
 mod search;
 pub use gifs::*;
 pub use search::*;

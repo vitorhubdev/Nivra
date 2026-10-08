@@ -31,6 +31,7 @@ mod replies;
 pub use replies::{Reply, ReplyDeletions};
 pub mod group_actions;
 pub mod resident;
+pub mod scheduled_events;
 pub mod screen;
 pub mod search;
 pub mod server_actions;
@@ -202,6 +203,7 @@ pub enum Command {
 	},
 	Reactions(reactions::Command),
 	Polls(polls::Command),
+	ScheduledEvents(scheduled_events::Command),
 	Profile {
 		user: Id,
 		guild: Option<Id>,
@@ -485,6 +487,7 @@ pub enum Event {
 	NotificationPreferences(notifications::Event),
 	Reactions(reactions::Event),
 	Polls(polls::Event),
+	ScheduledEvents(scheduled_events::Event),
 	Profile {
 		user: Id,
 		guild: Option<Id>,
@@ -679,6 +682,7 @@ pub struct State {
 	pub notification_preferences: notifications::Preferences,
 	pub reactions: reactions::Reactions,
 	pub polls: polls::Polls,
+	pub events: scheduled_events::Events,
 	pub profile: Option<profile::ProfileView>,
 	pub profile_request: u64,
 	pub profile_cache: profile::ProfileCache,
@@ -936,6 +940,7 @@ impl Default for State {
 			notification_preferences: notifications::Preferences::default(),
 			reactions: reactions::Reactions::default(),
 			polls: polls::Polls::default(),
+			events: scheduled_events::Events::default(),
 			profile: None,
 			profile_request: 0,
 			profile_cache: Default::default(),
@@ -2107,6 +2112,16 @@ impl State {
 			self.apply_gifs(request, Err(auth::Failure::Capacity));
 			return;
 		}
+		if let Command::ScheduledEvents(command) = command {
+			use scheduled_events::{Command as S, Event as E};
+			let S::List { guild, request } = command;
+			let _ = self.apply_scheduled_events(E::Listed {
+				guild,
+				request,
+				result: Err(auth::Failure::Capacity),
+			});
+			return;
+		}
 		if let Command::Edit {
 			channel,
 			message,
@@ -2719,6 +2734,7 @@ impl State {
 			}
 			Event::Reactions(event) => self.apply_reactions(event),
 			Event::Polls(event) => self.apply_polls(event),
+			Event::ScheduledEvents(event) => self.apply_scheduled_events(event),
 			Event::InviteChallenge { request, challenge } => {
 				self.apply_invite_challenge(request, *challenge);
 				Ok(())

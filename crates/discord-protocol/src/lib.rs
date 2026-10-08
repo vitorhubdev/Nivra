@@ -26,6 +26,7 @@ pub mod read_state;
 pub mod ready;
 pub mod relationships;
 pub mod rpc;
+pub mod scheduled_events;
 pub mod search;
 pub mod server_admin;
 pub mod server_audit_log;

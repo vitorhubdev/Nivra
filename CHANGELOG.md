@@ -1,5 +1,63 @@
 # Changelog
 
+## Nivra 1.0.14
+
+Esta versão é uma auditoria completa do código: 48 achados levantados e tratados, dos quais os graves eram falhas que podiam **derrubar o aplicativo** ou **apagar a conversa na tela**. Nada de recurso novo — o objetivo é o que já existia parar de falhar.
+
+### Travamentos
+
+- **O relatório de erro não derruba mais o aplicativo.** A linha do log era cortada por bytes; um corte no meio de um caractere acentuado ou emoji fazia o próprio tratamento de pânico entrar em pânico — e aí o erro não era gravado. O corte agora respeita o limite do caractere.
+- **A redação de segredos não vaza e não quebra.** O borrão de e-mails usava o tamanho da linha original para recortar o texto já encurtado, então o **segundo** endereço da mesma linha ficava visível no log; em linha com acento o recorte podia quebrar. Corrigido.
+- **Sincronizar a lista de membros não derruba a conexão.** Uma faixa de membros inválida chegava até o cálculo do intervalo e quebrava o processo. Agora é validada na entrada e no redirecionamento.
+
+### A conversa não some mais
+
+- **Enquete com voto desconhecido.** Um único voto para uma resposta que não estava no cartão carregado era tratado como estado corrompido e limpava a conversa inteira. Agora esse voto é ignorado.
+- **Exclusão em massa fora do limite.** Um lote com mais de 100 mensagens apagadas aplicava efeitos na tela e **depois** se declarava inválido, caindo na mesma limpeza. Agora o lote é descartado antes de qualquer efeito.
+
+### Chamadas e conexão
+
+- **Comando de voz perdido deixava a chamada presa.** Se o envio falhasse no meio, o pedido era descartado sem aviso — e como o estado já tinha sido marcado, tentar entrar de novo respondia "chamada já ativa". Agora a falha é reportada e o estado não fica cunhado.
+- **Limite de taxa (429) com resposta inválida** deixava de ser tratado como limite e o pedido seguinte saía sem esperar. Agora usa uma espera padrão.
+- **Falha de capacidade** encerrava a tarefa de conexão sem avisar ninguém, deixando a janela em "carregando" para sempre. Agora o aplicativo sabe e mostra o motivo.
+- **Busca e perfil não morrem mais junto com a voz.** Uma oscilação de rede na chamada abortava silenciosamente uma busca ou um perfil em andamento, que ficavam carregando indefinidamente. O mesmo valia para paginar o histórico. Corrigido.
+- **Pré-visualização de anexo** deixava o download antigo rodando até o fim depois de você abrir outro. Agora o anterior é cancelado, e o cliente HTTP é reaproveitado.
+
+### Estado e interface
+
+- **Cargos e permissões** deixavam de ser aprendidos quando o servidor ainda não tinha mandado a lista de cargos ou o membro, e a decisão de permissão ficava desatualizada.
+- **Rascunhos:** o teto de `/msg` podia ser furado, e o limite era global em vez de por conta — uma conta cheia bloqueava as outras.
+- **Trocar de chamada** era cancelado em silêncio; agora diz por quê. E uma fase de conexão atrasada não faz mais a chamada "regredir" na tela.
+- **Canais de palco (stage)** entram como ouvinte, sem microfone nem câmera, como no Discord.
+- **Canais de voz** aparecem com o rótulo correto, e a lista de participantes deixou de ser recalculada duas vezes por quadro.
+
+### Robustez de dados e plataforma
+
+- **Texto e nomes vindos do servidor ganharam teto**, junto com as listas de canais, cargos e membros — antes uma resposta hostil podia ocupar memória sem limite.
+- **Contabilidade de bytes** de fórum, busca e reações estava subestimando ou contando em dobro; validadores de enquete, figurinha, emoji e avatar aceitavam lixo.
+- **Banco local:** linhas de conta danificadas passam a ser isoladas em vez de "consertadas" silenciosamente; domínio inválido passa a ser recusado de verdade; a evicção do cache de fórum deixou de ser aleatória dentro do mesmo segundo.
+- **Migração de dados** confere se os caminhos são diretórios, a varredura de DLL do sistema não diz mais "limpo" quando não conseguiu ler a pasta, e a exportação de log tem teto de tamanho.
+- **Layout da conversa** deixou de refazer a resolução de menções de todas as linhas a cada mudança de estado (era O(n²) por causa de uma varredura da conversa inteira por menção não resolvida): cerca de **-36% no custo por linha** nesse caminho.
+
+### Limites conhecidos
+
+- Os pacotes não têm assinatura digital.
+- Interoperabilidade ao vivo com o Discord e comportamento de microfone/alto-falante continuam **não verificados**: a verificação é sintética e offline.
+
+### English
+
+1.0.14 is a full code audit: 48 findings raised and handled, no new features. The severe ones were failures that could **take the application down** or **wipe the conversation on screen**. The crash-report writer no longer panics while trimming an over-long log line (it cut by bytes, so an accented or emoji character on the boundary panicked the panic handler itself, and the report was lost), and the secret redactor no longer uses the original line length to cut the already-shortened buffer — the second e-mail address on a line used to stay visible in the log. An invalid member-list subscription no longer reaches the span arithmetic that killed the process; it is validated on entry and on retarget.
+
+The timeline is no longer cleared by malformed service input: a vote for a poll answer that is not in the loaded card, and a bulk delete above the local limit (which applied its screen effects and only then declared itself invalid), both used to be treated as corrupt state and dropped the whole resident window.
+
+Calls and connection: a voice command lost to a send timeout used to be discarded silently after the call state had already been stamped, so rejoining answered "call already active" — the failure is now reported and the state is not wedged; a 429 with a malformed body is still a rate limit instead of skipping the cooldown; a capacity failure now reaches the application instead of leaving a dead connection task and a window stuck loading; and a voice reconnect no longer silently aborts an in-flight search, profile fetch or history page, which left those panes loading forever.
+
+Interface and data: roles and member roles are learned even when a snapshot arrives without the role list or without the member, and a stage channel joins as a muted listener without camera, as in the official client. The `/msg` draft cap can no longer be bypassed and is enforced per account, switching calls reports why it was cancelled, a stale setup phase no longer regresses a live call, and the voice roster snapshot is accumulated in one pass instead of quadratic. Inbound text, nonces and channel names, plus guild channel, role, voice-state and member lists, are bounded before they are retained; forum, search and reaction byte accounting was undercounting or double counting; poll, sticker, emoji and avatar validators accepted invalid values. Local storage rows damaged outside the client are quarantined instead of silently normalized, an invalid allowed domain is rejected, forum-cache eviction is deterministic within one second, data-directory migration verifies directories, a DLL scan that cannot read its directory no longer reports the machine as clean, and the log export is capped.
+
+Performance: the timeline layout fingerprint stopped resolving every row's mentions by scanning the whole conversation for each unresolved `<@id>` — a measured O(rows × timeline) pass per state change, about **−36% per row** on that path, recorded in `docs/performance.md`. Components measured as noise (the twice-per-row date conversion, the per-frame row-height sum and the gateway member-mirror clone) were left alone rather than traded for scroll-extent or atomicity correctness.
+
+Known limits: the packages are unsigned, and live Discord interoperability plus physical microphone/speaker behaviour remain **unverified** — verification is synthetic and offline.
+
 ## Nivra 1.0.13
 
 Esta versão fecha as rodadas 17 a 19. A chamada cai e volta sozinha quando o servidor manda, os sons da call tocam mesmo com a janela minimizada ou na bandeja, a pré-visualização de texto e a primeira imagem colada funcionam, o fórum abre em grade com miniaturas, tags e cache, a interface e a bandeja falam português e espanhol, e o executável ficou cerca de 12 MB menor em cada sistema porque a fonte de japonês, chinês e coreano agora vem do sistema operacional.

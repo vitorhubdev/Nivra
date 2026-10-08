@@ -86,11 +86,11 @@ fn decode_base64(data: &str) -> Result<Vec<u8>, ()> {
 		}
 	}
 	let bytes = data.as_bytes();
-	if bytes.len() % 4 != 0 {
+	if !bytes.len().is_multiple_of(4) {
 		return Err(());
 	}
 	let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-	for chunk in bytes.chunks_exact(4) {
+	for chunk in bytes.as_chunks::<4>().0 {
 		let pad = chunk.iter().rev().take_while(|b| **b == b'=').count();
 		if pad > 2 {
 			return Err(());

@@ -38,8 +38,9 @@ pub struct Reaction {
 	#[serde(default)]
 	pub me_burst: bool,
 }
+/// Element bytes of the used entries only; callers add their own capacity slack.
 pub fn reaction_bytes(reactions: &[Reaction]) -> usize {
-	reactions.len() * std::mem::size_of::<Reaction>()
+	std::mem::size_of_val(reactions)
 		+ reactions
 			.iter()
 			.map(|r| r.emoji.name.as_ref().map_or(0, String::capacity))

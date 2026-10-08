@@ -1005,6 +1005,27 @@ impl State {
 	}
 }
 /// Channels the conversation pane can present: text, voice, and forum containers.
+/// The member-list windows a viewport asks for. The gateway mirrors one
+/// contiguous span and rejects gapped or empty pairs, so a viewport far from
+/// the first window pairs the window *before* the last one instead of leaving
+/// a gap. This is the only producer of member ranges.
+fn member_range_pair(first: usize, last: usize) -> Vec<[usize; 2]> {
+	let chunk = |i: usize| -> [usize; 2] {
+		let start = (i / 100) * 100;
+		[start, start + 99]
+	};
+	let mut ranges = vec![chunk(first)];
+	let last_chunk = chunk(last);
+	if last_chunk != ranges[0] {
+		if last_chunk[0] > ranges[0][1].saturating_add(1) {
+			let start = last_chunk[0] - 100;
+			ranges = vec![[start, start + 99], last_chunk];
+		} else {
+			ranges.push(last_chunk);
+		}
+	}
+	ranges
+}
 fn navigable(channel: &Channel) -> bool {
 	channel.supports_text()
 		|| channel.kind == 2
@@ -1505,20 +1526,7 @@ impl State {
 		};
 		let first = first.min(max_idx);
 		let last = last.min(max_idx).max(first);
-		let chunk = |i: usize| -> [usize; 2] {
-			let start = (i / 100) * 100;
-			[start, start + 99]
-		};
-		let mut ranges = vec![chunk(first)];
-		let last_chunk = chunk(last);
-		if last_chunk != ranges[0] {
-			if last_chunk[0] > ranges[0][1].saturating_add(1) {
-				let start = last_chunk[0] - 100;
-				ranges = vec![[start, start + 99], last_chunk];
-			} else {
-				ranges.push(last_chunk);
-			}
-		}
+		let ranges = member_range_pair(first, last);
 		let unchanged = ranges == list.ranges;
 		if unchanged {
 			self.member_chunks.look_at(first, &ranges);
@@ -6408,5 +6416,46 @@ mod tests {
 			disconnected_at: std::time::Instant::now() - std::time::Duration::from_secs(16),
 		});
 		assert!(state.take_auto_rejoin_if_recent().is_none());
+	}
+
+	#[test]
+	fn member_range_pairs_are_adjacent_and_never_gapped() {
+		// The gateway mirrors one contiguous span and rejects empty, gapped,
+		// unaligned or oversized pairs, so every pair this producer can emit
+		// has to satisfy exactly that shape.
+		assert_eq!(member_range_pair(0, 10), vec![[0, 99]]);
+		assert_eq!(member_range_pair(0, 150), vec![[0, 99], [100, 199]]);
+		assert_eq!(member_range_pair(99, 100), vec![[0, 99], [100, 199]]);
+		// A distant viewport pairs the window before the last one, not a gap.
+		assert_eq!(member_range_pair(0, 450), vec![[300, 399], [400, 499]]);
+		assert_eq!(member_range_pair(99, 500), vec![[400, 499], [500, 599]]);
+		for (first, last) in [
+			(0, 0),
+			(5, 99),
+			(0, 199),
+			(0, 1_000),
+			(250, 9_999),
+			(99, 100),
+			(4_999, 5_000),
+		] {
+			let ranges = member_range_pair(first, last);
+			assert!(
+				(1..=2).contains(&ranges.len()),
+				"({first},{last}) -> {ranges:?}"
+			);
+			for window in ranges.windows(2) {
+				assert_eq!(
+					window[1][0],
+					window[0][1] + 1,
+					"({first},{last}) left a gap: {ranges:?}"
+				);
+			}
+			for &[start, end] in &ranges {
+				assert!(
+					start <= end && end - start == 99 && start % 100 == 0,
+					"({first},{last}) -> {ranges:?}"
+				);
+			}
+		}
 	}
 }

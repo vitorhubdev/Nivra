@@ -85,7 +85,7 @@ fn policy() -> Result<(), String> {
 /// device-listing code that shows the choices) silently play on the wrong device.
 fn output_device_policy() -> Result<(), String> {
 	let mut offenders = Vec::new();
-	for entry in walk_rs(std::path::Path::new(".")) {
+	for entry in walk_rs(std::path::Path::new("."))? {
 		let text = std::fs::read_to_string(&entry).map_err(|e| e.to_string())?;
 		if !text.contains("default_output_device()") {
 			continue;
@@ -110,11 +110,11 @@ fn output_device_policy() -> Result<(), String> {
 	println!("Policy check passed: one audio output resolver.");
 	Ok(())
 }
-fn walk_rs(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+fn walk_rs(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
 	let mut files = Vec::new();
 	let entries = std::fs::read_dir(dir)
-		.map(|entries| entries.collect::<Vec<_>>())
-		.unwrap_or_default();
+		.map_err(|error| format!("cannot scan {}: {error}", dir.display()))?
+		.map(|entries| entries.collect::<Vec<_>>());
 	for entry in entries {
 		let Ok(entry) = entry else { continue };
 		let path = entry.path();
@@ -123,12 +123,12 @@ fn walk_rs(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 			if name == "target" || name.starts_with('.') {
 				continue;
 			}
-			files.extend(walk_rs(&path));
+			files.extend(walk_rs(&path)?);
 		} else if path.extension().is_some_and(|extension| extension == "rs") {
 			files.push(path);
 		}
 	}
-	files
+	Ok(files)
 }
 fn licenses() -> Result<(), String> {
 	let version = Command::new("cargo-deny")

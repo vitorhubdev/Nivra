@@ -78,7 +78,7 @@ impl LocalStore {
 		)?;
 		transaction.execute(
 			"DELETE FROM forum_pages WHERE account=?1 AND forum NOT IN (
-				SELECT forum FROM forum_pages WHERE account=?1 ORDER BY fetched_at DESC LIMIT ?2
+				SELECT forum FROM forum_pages WHERE account=?1 ORDER BY fetched_at DESC, rowid DESC LIMIT ?2
 			 )",
 			params![account, MAX_FORUMS as i64],
 		)?;

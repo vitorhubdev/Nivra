@@ -226,14 +226,20 @@ fn log_last_24h_in(dir: &Path) -> String {
 	for index in 1..MAX_FILES {
 		files.push(dir.join(format!("nivra.{index}.log")));
 	}
+	// The export is a diagnostic excerpt, not an archive: cap it well below
+	// a full rotation set so a loaded disk cannot balloon the caller.
+	const MAX_EXPORT_BYTES: usize = 1024 * 1024;
 	let mut out = String::new();
-	for file in files {
+	'files: for file in files {
 		let Ok(text) = std::fs::read_to_string(&file) else {
 			continue;
 		};
 		for line in text.lines() {
 			let stamped = line.len() >= 19 && line.as_bytes().get(4) == Some(&b'-');
 			if !stamped || line >= cutoff.as_str() {
+				if out.len() + line.len() + 1 > MAX_EXPORT_BYTES {
+					break 'files;
+				}
 				out.push_str(line);
 				out.push('\n');
 			}

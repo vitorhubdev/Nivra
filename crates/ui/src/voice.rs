@@ -1620,11 +1620,16 @@ impl MessagingUi {
 	) -> egui::Response {
 		let unavailable = self.call_unavailable(state, channel);
 		let incoming = state.voice.incoming == Some(channel);
-		let guild = state
+		let kind = state
 			.channels
 			.iter()
-			.any(|c| c.id == channel && c.kind == 2);
-		let label = if video {
+			.find(|c| c.id == channel)
+			.map(|c| c.kind);
+		let guild = kind == Some(2);
+		let stage = kind == Some(13);
+		let label = if stage {
+			"Join Stage"
+		} else if video {
 			if guild {
 				"Join Video"
 			} else if incoming {
@@ -1645,6 +1650,8 @@ impl MessagingUi {
 		};
 		let hint = unavailable.unwrap_or(if video {
 			"Join the call and enable your selected camera as soon as voice is connected."
+		} else if stage {
+			"Join the audience. Speaking is unavailable without a speaker flow yet."
 		} else if state.can_speak(channel) {
 			"Join audio. Your microphone starts after the call is secured."
 		} else {
@@ -6509,6 +6516,67 @@ mod tests {
 		messaging.clear();
 		assert_eq!(messaging.voice_gain.input_percent, 100);
 		assert_eq!(messaging.voice_gain.output_percent, 100);
+	}
+
+	#[test]
+	fn stage_channel_button_joins_muted_audience() {
+		use egui_kittest::kittest::Queryable as _;
+		struct Fixture {
+			view: MessagingUi,
+			state: State,
+			commands: Vec<Command>,
+		}
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		state
+			.channels
+			.iter_mut()
+			.find(|c| c.id == Id(25))
+			.expect("demo guild voice channel")
+			.kind = 13;
+		let fixture = Fixture {
+			view: MessagingUi {
+				voice_available: true,
+				..Default::default()
+			},
+			state,
+			commands: Vec::new(),
+		};
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				|ui, fixture: &mut Fixture| {
+					fixture.view.call_button(
+						ui,
+						&mut fixture.state,
+						Id(25),
+						&mut fixture.commands,
+						false,
+					);
+				},
+				fixture,
+			);
+		harness.run();
+		assert!(harness.query_by_label("Join Stage").is_some());
+		harness.get_by_label("Join Stage").click();
+		harness.run();
+		assert!(matches!(
+			harness.state().commands.as_slice(),
+			[Command::Voice(client_core::voice::Command::Join {
+				channel: Id(25),
+				..
+			})]
+		));
+		assert!(
+			harness
+				.state()
+				.state
+				.voice
+				.active
+				.as_ref()
+				.is_some_and(|call| call.channel == Id(25) && call.muted),
+			"stage audience joins muted"
+		);
 	}
 
 	#[test]

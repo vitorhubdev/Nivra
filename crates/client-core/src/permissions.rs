@@ -684,7 +684,11 @@ impl State {
 		self.can_send(channel) && self.permission(channel, p::ATTACH_FILES) == Some(true)
 	}
 	pub fn can_speak(&self, channel: Id) -> bool {
-		self.permission(channel, p::VIEW_CHANNEL | p::CONNECT | p::SPEAK) == Some(true)
+		// Stage audiences listen only until a speaker flow exists.
+		!self
+			.channel(channel)
+			.is_some_and(|c| c.guild.is_some() && c.kind == 13)
+			&& self.permission(channel, p::VIEW_CHANNEL | p::CONNECT | p::SPEAK) == Some(true)
 	}
 	pub fn can_stream(&self, channel: Id) -> bool {
 		self.can_call(channel)

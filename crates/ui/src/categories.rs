@@ -484,7 +484,7 @@ fn kind_label(kind: u8) -> &'static str {
 		3 => "Group direct message",
 		5 => "Announcement channel",
 		10..=12 => "Thread",
-		13 => "Stage channel · not implemented",
+		13 => "Stage channel",
 		14 => "Directory · not implemented",
 		15 => "Forum · loaded posts",
 		16 => "Media · loaded posts",
@@ -664,7 +664,9 @@ impl MessagingUi {
 			let mut rows = Vec::with_capacity(channel_rows.len() + state.voice.roster.len());
 			for row in channel_rows {
 				let channel = match &row {
-					Row::Channel(channel, _, _) if channel.kind == 2 => Some(channel.id),
+					Row::Channel(channel, _, _) if matches!(channel.kind, 2 | 13) => {
+						Some(channel.id)
+					}
 					_ => None,
 				};
 				rows.push(row);
@@ -829,7 +831,7 @@ impl MessagingUi {
 								&& !nested && !state.channel_action_pending()
 								&& state.can_manage_channel(channel.id);
 							let active = state.selected == Some(channel.id);
-							if channel.kind == 2 {
+							if matches!(channel.kind, 2 | 13) {
 								let response = ui
 									.push_id(slot, |ui| {
 										self.voice_channel_button(
@@ -2323,7 +2325,7 @@ mod tests {
 				emojis: None,
 				premium_tier: 0,
 			}],
-			channels: vec![channel(9, 13, 0, None)],
+			channels: vec![channel(9, 14, 0, None)],
 			demo: true,
 			..State::default()
 		};

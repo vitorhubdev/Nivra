@@ -4558,7 +4558,7 @@ impl MessagingUi {
 		let selected_voice = state
 			.selected
 			.and_then(|id| state.channel(id))
-			.is_some_and(|c| c.kind == 2);
+			.is_some_and(|c| matches!(c.kind, 2 | 13));
 		let selected_forum = state.selected.is_some_and(|id| state.is_forum(id));
 		if let Some(id) = state.posting.created.take()
 			&& let Some(command) = state.select(id)

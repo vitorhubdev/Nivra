@@ -513,6 +513,8 @@ pub struct MessagingUi {
 	pub voice_chat_open: bool,
 	/// Tile click to start (`Some(user)`) or stop (`None`) watching, applied by the stage.
 	watch_request: Option<Option<Id>>,
+	/// Ring one DM participant again (or stop), applied as a voice command next frame.
+	ring_request: Option<(Id, u64, Id, bool)>,
 	pub voice_inputs: Vec<(String, String)>,
 	pub voice_outputs: Vec<(String, String)>,
 	pub voice_input: Option<String>,

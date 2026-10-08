@@ -2343,6 +2343,13 @@ impl State {
 				voice::Command::Sync { .. } => {
 					self.status = "Call status could not refresh; reopen the DM to retry"
 				}
+				voice::Command::RingRecipient {
+					channel, request, ..
+				} => self.apply_voice(voice::Event::RingFailed {
+					channel,
+					request,
+					message: "Recipient ringing was not sent; the work queue is full",
+				}),
 				voice::Command::Join {
 					channel, request, ..
 				}
@@ -3143,6 +3150,11 @@ impl State {
 					for (id, participants) in &mut self.voice.dm_participants {
 						if *id == channel {
 							participants.retain(|p| p.user != user);
+						}
+					}
+					for (id, ringing) in &mut self.voice.dm_ringing {
+						if *id == channel {
+							ringing.retain(|id| *id != user);
 						}
 					}
 					if let Some(call) = &mut self.voice.active

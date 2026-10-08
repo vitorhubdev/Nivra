@@ -2220,6 +2220,97 @@ impl MessagingUi {
 		trigger.ctx.data_mut(|data| data.insert_temp(id, open));
 	}
 
+	/// Guild soundboard: browse the server's sounds and play one to this call.
+	/// The list loads on first open; failures offer an explicit retry.
+	fn soundboard_popup(
+		&mut self,
+		trigger: &egui::Response,
+		state: &mut State,
+		guild: Id,
+		channel: Id,
+		commands: &mut Vec<Command>,
+	) {
+		let id = trigger.id.with("soundboard-open");
+		let mut open = trigger
+			.ctx
+			.data_mut(|data| *data.get_temp_mut_or_default::<bool>(id));
+		if trigger.clicked() {
+			open = !open;
+			if open && let Some(command) = state.request_sounds(guild) {
+				commands.push(command);
+			}
+		}
+		let close_behavior = if egui::Popup::is_any_open(&trigger.ctx) {
+			egui::PopupCloseBehavior::IgnoreClicks
+		} else {
+			egui::PopupCloseBehavior::CloseOnClickOutside
+		};
+		egui::Popup::menu(trigger)
+			.open_bool(&mut open)
+			.style(|_: &mut egui::Style| {})
+			.width(320.0)
+			.close_behavior(close_behavior)
+			.show(|ui| {
+				let motion = crate::anim::popup_alpha(ui.ctx(), ui.scope_id().with("menu-motion"));
+				ui.set_opacity(motion);
+				ui.set_width(288.0);
+				ui.spacing_mut().item_spacing.y = 8.0;
+				let language = self.language;
+				let t = |english: &'static str| crate::i18n::text(language, english);
+				ui.label(crate::design::semibold(ui, t("Soundboard"), 18.0));
+				if state.soundboard.loading(guild) {
+					ui.horizontal(|ui| {
+						ui.spinner();
+						ui.label(t("Loading sounds…"));
+					});
+				} else if let Some(error) = state.soundboard.error() {
+					ui.label(error);
+					if ui.button(t("Retry")).clicked()
+						&& let Some(command) = state.request_sounds(guild)
+					{
+						commands.push(command);
+					}
+				} else {
+					let sounds = state.soundboard.sounds(guild);
+					if sounds.is_empty() {
+						ui.label(t("No sounds in this server yet"));
+					} else {
+						let playing = state.soundboard.playing();
+						let sounds: Vec<_> = sounds
+							.iter()
+							.filter(|sound| sound.available)
+							.map(|sound| {
+								(
+									sound.id,
+									sound
+										.emoji
+										.as_ref()
+										.and_then(|emoji| emoji.character())
+										.unwrap_or("♪")
+										.to_owned(),
+									sound.name.clone(),
+								)
+							})
+							.collect();
+						ui.horizontal_wrapped(|ui| {
+							ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+							for (id, face, name) in sounds {
+								ui.add_enabled_ui(!playing, |ui| {
+									if ui.button(format!("{face} {name}")).clicked()
+										&& let Some(command) = state.play_sound(channel, id)
+									{
+										commands.push(command);
+										ui.close();
+									}
+								});
+							}
+						});
+					}
+				}
+			});
+		trigger.ctx.data_mut(|data| data.insert_temp(id, open));
+	}
+
 	fn voice_audio_controls(&mut self, ui: &mut egui::Ui) {
 		design::hint(
 			ui,
@@ -2893,6 +2984,20 @@ impl MessagingUi {
 				);
 				self.camera_settings_popup(&camera_settings, state.demo);
 				self.screen_share_control(ui, state);
+				if let Some(guild) = state.channel(channel).and_then(|c| c.guild)
+					&& !state.demo && matches!(phase, Phase::Connected | Phase::Waiting)
+				{
+					let sounds = control(
+						ui,
+						crate::icons::Icon::Soundboard,
+						48.0,
+						true,
+						STAGE_TEXT,
+						t("Soundboard"),
+						t("Play server sounds to this call"),
+					);
+					self.soundboard_popup(&sounds, state, guild, channel, commands);
+				}
 				if focused {
 					let shown = self.voice_focus_participants;
 					if control(

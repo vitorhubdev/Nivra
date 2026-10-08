@@ -123,7 +123,8 @@ fn truncate_line(mut line: String) -> String {
 }
 
 /// Writes one redacted line, rotating the file first when it reached its bound.
-pub fn append(level: Level, message: &str) {	let _guard = WRITE_LOCK
+pub fn append(level: Level, message: &str) {
+	let _guard = WRITE_LOCK
 		.lock()
 		.unwrap_or_else(|poison| poison.into_inner());
 	let dir = log_dir();
@@ -441,10 +442,7 @@ fn mask_emails(line: &str) -> String {
 		if bytes[index] == b'@' {
 			// Walk back over the local part and forward over the domain.
 			let mut start = index;
-			while start > 0
-				&& !bytes[start - 1].is_ascii_whitespace()
-				&& bytes[start - 1] != b'<'
-			{
+			while start > 0 && !bytes[start - 1].is_ascii_whitespace() && bytes[start - 1] != b'<' {
 				start -= 1;
 			}
 			let mut end = index + 1;
@@ -529,10 +527,7 @@ mod tests {
 			redact("cc a@example.com and b@example.org done"),
 			"cc <email> and <email> done"
 		);
-		assert_eq!(
-			redact("mail usuário@example.com hoje"),
-			"mail <email> hoje"
-		);
+		assert_eq!(redact("mail usuário@example.com hoje"), "mail <email> hoje");
 		assert_eq!(redact("id 123456789012345678"), "id <id>");
 		// Ordinary prose and short numbers survive.
 		assert_eq!(

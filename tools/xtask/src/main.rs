@@ -112,9 +112,12 @@ fn output_device_policy() -> Result<(), String> {
 }
 fn walk_rs(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
 	let mut files = Vec::new();
+	// Collect the directory's entries (each a `Result`) after propagating the
+	// open error, so one unreadable subdirectory fails the walk instead of
+	// silently passing the policy check.
 	let entries = std::fs::read_dir(dir)
 		.map_err(|error| format!("cannot scan {}: {error}", dir.display()))?
-		.map(|entries| entries.collect::<Vec<_>>());
+		.collect::<Vec<_>>();
 	for entry in entries {
 		let Ok(entry) = entry else { continue };
 		let path = entry.path();

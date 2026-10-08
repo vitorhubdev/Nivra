@@ -394,11 +394,17 @@ impl ClientState {
 		) == Some(true)
 			&& self.channels.iter().any(|c| {
 				c.id == channel
-					&& ((c.guild.is_some() && c.kind == 2)
+					&& ((c.guild.is_some() && matches!(c.kind, 2 | 13))
 						|| (c.guild.is_none()
 							&& ((c.kind == 1 && c.recipients.len() == 1)
 								|| (c.kind == 3 && c.recipients.len() < MAX_PARTICIPANTS))))
 			})
+	}
+	/// Stage channels join as audience only: the service suppresses everyone
+	/// until a speaker flow exists, so listening never publishes.
+	pub fn is_stage(&self, channel: Id) -> bool {
+		self.channel(channel)
+			.is_some_and(|c| c.guild.is_some() && c.kind == 13)
 	}
 	fn dm_call_participant(&self, channel: Id, user: Id) -> bool {
 		self.channel(channel).is_some_and(|c| {
@@ -409,7 +415,9 @@ impl ClientState {
 		})
 	}
 	pub fn can_camera(&self, channel: Id) -> bool {
-		self.can_call(channel) && self.permission(channel, model::permissions::STREAM) == Some(true)
+		!self.is_stage(channel)
+			&& self.can_call(channel)
+			&& self.permission(channel, model::permissions::STREAM) == Some(true)
 	}
 	pub fn start_call(&mut self, channel: Id, ring: bool) -> Option<crate::Command> {
 		self.start_call_with_mute(channel, ring, false, false)
@@ -459,7 +467,7 @@ impl ClientState {
 			.find(|p| self.user.as_ref().is_some_and(|u| u.id == p.user));
 		let server_muted = own.is_some_and(|p| p.server_muted);
 		let server_deafened = own.is_some_and(|p| p.server_deafened);
-		let muted = muted || !self.can_speak(channel);
+		let muted = muted || self.is_stage(channel) || !self.can_speak(channel);
 		self.voice.sequence = self.voice.sequence.wrapping_add(1);
 		let request = self.voice.sequence;
 		self.voice.outgoing = ring.then_some((channel, request, false));
@@ -804,9 +812,9 @@ impl ClientState {
 				{
 					self.voice.follow = channel
 						.filter(|id| {
-							self.channel(*id)
-								.is_some_and(|channel| channel.guild == guild && channel.kind == 2)
-								&& self.has_voice_access(*id)
+							self.channel(*id).is_some_and(|channel| {
+								channel.guild == guild && matches!(channel.kind, 2 | 13)
+							}) && self.has_voice_access(*id)
 						})
 						.map(|channel| VoiceFollow {
 							channel,
@@ -832,7 +840,7 @@ impl ClientState {
 						.filter(|id| {
 							call_guild.is_some()
 								&& self.channel(*id).is_some_and(|channel| {
-									channel.guild == call_guild && channel.kind == 2
+									channel.guild == call_guild && matches!(channel.kind, 2 | 13)
 								}) && self.has_voice_access(*id)
 						})
 						.map(|channel| VoiceFollow {
@@ -932,11 +940,9 @@ impl ClientState {
 	}
 	fn update_roster(&mut self, entry: RosterEntry) -> bool {
 		if !self.can_view(entry.channel)
-			|| !self
-				.channels
-				.iter()
-				.any(|c| c.id == entry.channel && c.guild == Some(entry.guild) && c.kind == 2)
-		{
+			|| !self.channels.iter().any(|c| {
+				c.id == entry.channel && c.guild == Some(entry.guild) && matches!(c.kind, 2 | 13)
+			}) {
 			return true;
 		}
 		self.voice
@@ -1176,6 +1182,87 @@ mod tests {
 	use super::*;
 	use crate::{Envelope, Event as CoreEvent};
 	use model::{Channel, User};
+	#[test]
+	fn stage_channels_join_as_muted_audience_without_speaking_or_camera() {
+		let mut state = ClientState {
+			auth: AuthState::Authenticated,
+			gateway_connected: true,
+			user: Some(User {
+				primary_guild: None,
+				id: Id(1),
+				name: "Owner".into(),
+				avatar: None,
+				webhook: false,
+				kind: Default::default(),
+				discriminator: 0,
+			}),
+			guilds: vec![model::Guild {
+				stickers: None,
+				id: Id(10),
+				name: "Synthetic".into(),
+				icon: None,
+				emojis: None,
+				premium_tier: 0,
+			}],
+			channels: [(20, 2), (21, 13)]
+				.into_iter()
+				.map(|(id, kind)| Channel {
+					id: Id(id),
+					guild: Some(Id(10)),
+					kind,
+					name: "Room".into(),
+					last_message: None,
+					parent_id: None,
+					position: 0,
+					recipients: vec![],
+					icon: None,
+					member_list_id: None,
+					message_count: None,
+					tags: None,
+				})
+				.collect(),
+			..ClientState::default()
+		};
+		crate::tests::grant_permissions(&mut state);
+		assert!(state.can_call(Id(20)));
+		assert!(state.can_call(Id(21)));
+		assert!(state.is_stage(Id(21)));
+		assert!(!state.is_stage(Id(20)));
+		// The audience cannot speak or publish, even with the permissions.
+		assert!(state.can_speak(Id(20)));
+		assert!(!state.can_speak(Id(21)));
+		assert!(!state.can_camera(Id(21)));
+		// Roster and join work for the stage channel.
+		let entry = RosterEntry {
+			guild: Id(10),
+			channel: Id(21),
+			participant: Participant {
+				user: Id(2),
+				muted: false,
+				deafened: false,
+				server_muted: false,
+				server_deafened: false,
+				video: false,
+				streaming: false,
+			},
+			member: None,
+		};
+		state.apply_voice(Event::Snapshot {
+			guild: Some(Id(10)),
+			partial: false,
+			participants: vec![entry],
+		});
+		assert_eq!(state.voice.roster.len(), 1);
+		let command = state.start_call(Id(21), false).unwrap();
+		assert!(matches!(
+			command,
+			crate::Command::Voice(Command::Join { ring: false, .. })
+		));
+		let call = state.voice.active.as_ref().unwrap();
+		assert_eq!(call.channel, Id(21));
+		assert!(call.muted, "stage audience joins muted");
+		assert_eq!(call.participants.len(), 1);
+	}
 	#[test]
 	fn guild_roster_moves_mutes_limits_and_selection_never_join_implicitly() {
 		let mut state = ClientState {

@@ -40,6 +40,10 @@ pub struct Connection {
 	pub activity_sharing_request: mpsc::Sender<bool>,
 	pub reconnect_skip: Arc<Notify>,
 	typing_channel: Arc<AtomicU64>,
+	/// Automatic send recovery wakes one reconnect attempt per outage, so rapid
+	/// sends cannot repeatedly abandon a dial already in progress. Manual
+	/// recovery (skip) stays explicit and uncoalesced.
+	send_recovery_pending: std::cell::Cell<bool>,
 	task: JoinHandle<()>,
 }
 impl Drop for Connection {
@@ -56,6 +60,16 @@ impl Drop for AbortTask {
 impl Connection {
 	pub fn skip_gateway_reconnect(&self) {
 		self.reconnect_skip.notify_one();
+	}
+	/// A send issued while the gateway is down asks for one immediate reconnect
+	/// attempt; further sends coalesce until READY/RESUMED clears the flag.
+	pub fn recover_send(&self) {
+		if !self.send_recovery_pending.replace(true) {
+			self.skip_gateway_reconnect();
+		}
+	}
+	pub fn gateway_recovered(&self) {
+		self.send_recovery_pending.set(false);
 	}
 
 	pub fn set_typing_channel(&self, channel: Option<model::Id>) {
@@ -528,6 +542,7 @@ impl Connection {
 			activity_sharing_request,
 			reconnect_skip,
 			typing_channel,
+			send_recovery_pending: std::cell::Cell::new(false),
 			task,
 		}
 	}

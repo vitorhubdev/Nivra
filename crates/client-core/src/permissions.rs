@@ -451,6 +451,20 @@ impl State {
 			.unwrap_or(message.author_roles.as_slice());
 		self.display_roles(guild, roles).1.map(|role| role.color)
 	}
+	/// Gradient stops for a message author whose display role carries a
+	/// two-stop gradient; `None` renders the solid `message_author_color`.
+	pub fn message_author_gradient(&self, message: &model::Message) -> Option<(u32, u32)> {
+		if message.author.webhook {
+			return None;
+		}
+		let guild = self.channel(message.channel)?.guild?;
+		let roles = self
+			.live_author_roles(guild, message.channel, message.author.id)
+			.unwrap_or(message.author_roles.as_slice());
+		self.display_roles(guild, roles)
+			.1
+			.and_then(|role| role.gradient())
+	}
 	pub fn forum_author_color(
 		&self,
 		channel: Id,
@@ -467,6 +481,27 @@ impl State {
 			.and_then(|selected| self.live_author_roles(guild, selected, author))
 			.unwrap_or(roles);
 		self.display_roles(guild, roles).1.map(|role| role.color)
+	}
+	/// Gradient stops for a forum post author; `None` renders the solid
+	/// `forum_author_color`.
+	pub fn forum_author_gradient(
+		&self,
+		channel: Id,
+		author: Id,
+		webhook: bool,
+		roles: &[Id],
+	) -> Option<(u32, u32)> {
+		if webhook {
+			return None;
+		}
+		let guild = self.channel(channel)?.guild?;
+		let roles = self
+			.selected
+			.and_then(|selected| self.live_author_roles(guild, selected, author))
+			.unwrap_or(roles);
+		self.display_roles(guild, roles)
+			.1
+			.and_then(|role| role.gradient())
 	}
 	fn live_author_roles(&self, guild: Id, channel: Id, user: Id) -> Option<&[Id]> {
 		let member = self
@@ -979,6 +1014,7 @@ mod tests {
 			roles: Some(vec![p::Role {
 				name: String::new(),
 				color: 0,
+				secondary: None,
 				position: 0,
 				hoist: false,
 				id: Id(1),

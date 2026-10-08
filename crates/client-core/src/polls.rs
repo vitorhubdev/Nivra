@@ -477,6 +477,7 @@ mod tests {
 					roles: Some(vec![p::Role {
 						name: String::new(),
 						color: 0,
+						secondary: None,
 						position: 0,
 						hoist: false,
 						id: Id(1),

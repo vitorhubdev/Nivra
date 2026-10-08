@@ -112,6 +112,7 @@ mod tests {
 					name: "@everyone".into(),
 					bits: VIEW_AUDIT_LOG,
 					color: 0,
+					secondary: None,
 					position: 0,
 					hoist: false,
 				}]),

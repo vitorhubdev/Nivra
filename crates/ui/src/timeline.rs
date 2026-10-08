@@ -570,15 +570,33 @@ fn starter_row(
 								.map_or(colors.text_strong, |rgb| {
 									crate::design::role_name_color(rgb, colors.chat, colors.text)
 								});
-							crate::account_badge::name(
-								ui,
-								&message.author,
-								state.message_author_name(message),
-								15.5,
-								color,
-								egui::Sense::hover(),
-								0.0,
-							);
+							if let Some((primary, secondary)) =
+								state.message_author_gradient(message)
+							{
+								crate::account_badge::gradient_name(
+									ui,
+									crate::account_badge::GradientName {
+										user: &message.author,
+										name: state.message_author_name(message),
+										size: 15.5,
+										primary,
+										secondary,
+										background: colors.chat,
+										sense: egui::Sense::hover(),
+										trailing: 0.0,
+									},
+								);
+							} else {
+								crate::account_badge::name(
+									ui,
+									&message.author,
+									state.message_author_name(message),
+									15.5,
+									color,
+									egui::Sense::hover(),
+									0.0,
+								);
+							}
 							let time = timestamp(message.id);
 							ui.label(
 								RichText::new(format!("{:02}:{:02}", time.hour(), time.minute()))
@@ -2948,15 +2966,36 @@ impl TimelineView {
 															colors.text_strong,
 														)
 													});
-												let author = crate::account_badge::name(
-													ui,
-													&message.author,
-													state.message_author_name(message),
-													15.5,
-													name_color,
-													egui::Sense::click(),
-													48.0,
-												)
+												let name_gradient =
+													state.message_author_gradient(message);
+												let author = if let Some((primary, secondary)) =
+													name_gradient
+												{
+													crate::account_badge::gradient_name(
+														ui,
+														crate::account_badge::GradientName {
+															user: &message.author,
+															name: state
+																.message_author_name(message),
+															size: 15.5,
+															primary,
+															secondary,
+															background: colors.chat,
+															sense: egui::Sense::click(),
+															trailing: 48.0,
+														},
+													)
+												} else {
+													crate::account_badge::name(
+														ui,
+														&message.author,
+														state.message_author_name(message),
+														15.5,
+														name_color,
+														egui::Sense::click(),
+														48.0,
+													)
+												}
 												.on_hover_cursor(egui::CursorIcon::PointingHand);
 												if avatar_hot || author.hovered() {
 													ui.painter().hline(
@@ -5534,6 +5573,7 @@ mod tests {
 			confirmed: None,
 			reason: None,
 			reply: None,
+			silent: false,
 		});
 		let mut rendered = Vec::new();
 		for compact in [false, true] {
@@ -6253,6 +6293,7 @@ mod tests {
 				confirmed: None,
 				reason: None,
 				reply: None,
+				silent: false,
 			})
 			.collect();
 		let mut view = TimelineView {
@@ -8372,6 +8413,7 @@ mod tests {
 							id: Id(id),
 							name: String::new(),
 							color: 0,
+							secondary: None,
 							position: 0,
 							hoist: false,
 							bits: p::VIEW_CHANNEL | p::READ_MESSAGE_HISTORY,

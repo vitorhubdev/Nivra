@@ -182,6 +182,7 @@ enum Destination {
 	Send {
 		nonce: String,
 		reply: Option<client_core::Reply>,
+		silent: bool,
 	},
 	Post {
 		guild: model::Id,
@@ -269,7 +270,16 @@ impl DiscordApi {
 				nonce,
 				reply,
 				sticker: None,
-			} => (channel, content, Destination::Send { nonce, reply }),
+				silent,
+			} => (
+				channel,
+				content,
+				Destination::Send {
+					nonce,
+					reply,
+					silent,
+				},
+			),
 			// A forum post is one request: its files are staged before the thread exists.
 			Command::CreatePost {
 				parent,
@@ -361,11 +371,15 @@ impl DiscordApi {
 					result,
 				})
 			}
-			Destination::Send { nonce, reply } => {
+			Destination::Send {
+				nonce,
+				reply,
+				silent,
+			} => {
 				let result = tokio::select! {
 					biased;
 					_ = cancelled(&mut cancel) => Err(Failure::Ambiguous),
-					result = self.send_message(channel, &content, &nonce, reply, Some(attachment), None) => result,
+					result = self.send_message(channel, &content, &nonce, reply, Some(attachment), None, silent) => result,
 				};
 				progress.send_replace(status(&result));
 				Event::SendResult { nonce, result }
@@ -745,6 +759,7 @@ mod tests {
 			content: String::new(),
 			nonce: "synthetic-upload".into(),
 			reply: Some(Reply::to(model::Id(2))),
+			silent: false,
 		}
 	}
 	async fn request(socket: &mut TcpStream) -> (String, Vec<u8>) {

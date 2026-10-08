@@ -243,6 +243,7 @@ mod tests {
 					name: "@everyone".into(),
 					bits,
 					color: 0,
+					secondary: None,
 					position: 0,
 					hoist: false,
 				}]),

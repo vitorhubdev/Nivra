@@ -151,6 +151,7 @@ pub(crate) enum Pick {
 enum GifAction {
 	Toggle(model::Gif),
 	Send(String),
+	Retry(Option<String>),
 }
 
 enum GifMode {
@@ -1481,6 +1482,11 @@ impl Picker {
 				state.toggle_gif_favorite(&gif);
 			}
 			Some(GifAction::Send(url)) => selected = Some(Pick::Send(url)),
+			Some(GifAction::Retry(query)) => {
+				if let Some(command) = state.request_gifs(query.as_deref()) {
+					commands.push(command);
+				}
+			}
 			None => {}
 		}
 		// Click anywhere outside the popout (except the triggers) dismisses it.
@@ -1604,6 +1610,11 @@ impl Picker {
 							}
 							Some(view) if view.error.is_some() => {
 								status_row(ui, colors, false, view.error.unwrap_or_default());
+								ui.vertical_centered(|ui| {
+									if ui.button(crate::tr_ui!(ui, "Retry GIF search")).clicked() {
+										action = Some(GifAction::Retry(query.clone()));
+									}
+								});
 							}
 							Some(view) => {
 								let gifs = view

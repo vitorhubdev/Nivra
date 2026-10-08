@@ -513,6 +513,8 @@ pub struct MessagingUi {
 	pub voice_chat_open: bool,
 	/// Tile click to start (`Some(user)`) or stop (`None`) watching, applied by the stage.
 	watch_request: Option<Option<Id>>,
+	/// Ring one DM participant again (or stop), applied as a voice command next frame.
+	ring_request: Option<(Id, u64, Id, bool)>,
 	pub voice_inputs: Vec<(String, String)>,
 	pub voice_outputs: Vec<(String, String)>,
 	pub voice_input: Option<String>,
@@ -609,6 +611,8 @@ pub struct MessagingUi {
 	pub transparency_blur: bool,
 	/// IRC-style single-line headers: time gutter instead of avatars, tight rows.
 	pub compact_timeline: bool,
+	/// Convert ASCII emoticons (`:)`) into emoji on send, like Discord.
+	pub emoticon_conversion: bool,
 	/// The owner asked for reduced motion: every animation settles in one frame.
 	pub reduce_motion: bool,
 	/// Last channel drawn, so a real switch can cross-fade instead of the first open.
@@ -1809,16 +1813,23 @@ impl MessagingUi {
 										colors.sidebar,
 									);
 								}
+								let role = if online {
+									guild.and_then(|guild| state.member_roles(guild, member).1)
+								} else {
+									None
+								};
+								let background = if response.hovered() || response.has_focus() {
+									colors.hover
+								} else {
+									colors.sidebar
+								};
+								let role_gradient = role.and_then(|role| {
+									role.gradient().map(|(primary, secondary)| {
+										(primary, secondary, background)
+									})
+								});
 								let text_color = if online {
-									let role_color = guild.and_then(|guild| {
-										state.member_roles(guild, member).1.map(|role| role.color)
-									});
-									let background = if response.hovered() || response.has_focus() {
-										colors.hover
-									} else {
-										colors.sidebar
-									};
-									role_color.map_or(colors.text, |rgb| {
+									role.map(|role| role.color).map_or(colors.text, |rgb| {
 										design::role_name_color(rgb, background, colors.text)
 									})
 								} else {
@@ -1834,15 +1845,33 @@ impl MessagingUi {
 											let trailing =
 												profiles::server_tag_width(ui, server_tag)
 													+ if server_tag.is_some() { 5.0 } else { 0.0 };
-											account_badge::name(
-												ui,
-												&member.user,
-												name,
-												15.0,
-												text_color,
-												egui::Sense::hover(),
-												trailing,
-											);
+											if let Some((primary, secondary, background)) =
+												role_gradient
+											{
+												account_badge::gradient_name(
+													ui,
+													account_badge::GradientName {
+														user: &member.user,
+														name,
+														size: 15.0,
+														primary,
+														secondary,
+														background,
+														sense: egui::Sense::hover(),
+														trailing,
+													},
+												);
+											} else {
+												account_badge::name(
+													ui,
+													&member.user,
+													name,
+													15.0,
+													text_color,
+													egui::Sense::hover(),
+													trailing,
+												);
+											}
 											if let Some(tag) = server_tag {
 												profiles::server_tag(
 													ui,
@@ -4959,6 +4988,7 @@ impl MessagingUi {
 						design::paint_chat_background(ui, ui.available_rect_before_wrap());
 						self.timeline.hide_media_links = self.reading_preferences.hide_media_links;
 						self.timeline.compact_timeline = self.compact_timeline;
+						state.emoticon_conversion = self.emoticon_conversion;
 						self.timeline.instant_scrolling =
 							!self.reading_preferences.smooth_scrolling;
 						self.timeline.extension_actions = self.extensions.message_actions();
@@ -8235,6 +8265,7 @@ mod composer_tests {
 					bits: 0,
 					name: "Founders".into(),
 					color: 0xe78284,
+					secondary: None,
 					position: 1,
 					hoist: true,
 				}]),

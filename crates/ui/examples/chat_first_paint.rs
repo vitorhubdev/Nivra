@@ -234,6 +234,7 @@ fn main() {
 				id: Id(50),
 				name: "Build alerts".into(),
 				color: 0xE91E63,
+				secondary: None,
 				position: 1,
 				hoist: false,
 				bits: 0,

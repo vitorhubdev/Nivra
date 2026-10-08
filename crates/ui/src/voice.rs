@@ -173,6 +173,51 @@ impl MessagingUi {
 		values[index] = (user.0, volume);
 	}
 
+	/// Dispatches a queued per-recipient ring action after revalidating it
+	/// against the live call; stale requests (answered, left, taken over) drop.
+	fn apply_ring_request(&mut self, state: &State, commands: &mut Vec<Command>) {
+		if let Some((channel, request, recipient, stop)) = self.ring_request.take()
+			&& let Some(command) = state.ring_recipient(channel, request, recipient, stop)
+		{
+			commands.push(command);
+		}
+	}
+
+	/// Per-recipient ring controls for a DM call member that has not joined:
+	/// ring again while the service reports them ringing, stop while ringing.
+	fn ring_row(&mut self, ui: &mut egui::Ui, state: &State, entry: &RosterEntry) {
+		let Some(call) = state.voice.active.as_ref().filter(|call| {
+			call.channel == entry.channel
+				&& call.guild.is_none()
+				&& matches!(call.phase, Phase::Connected | Phase::Waiting)
+		}) else {
+			return;
+		};
+		let user = entry.participant.user;
+		if call.participants.iter().any(|p| p.user == user) {
+			return;
+		}
+		let language = self.language;
+		let t = |english: &'static str| crate::i18n::text(language, english);
+		if state.voice.ringing(entry.channel).contains(&user) {
+			ui.label(t("Ringing…"));
+			if ui.button(t("Stop ringing")).clicked() {
+				self.ring_request = Some((entry.channel, call.request, user, true));
+			}
+		} else if state.voice.has_ringing_state(entry.channel) {
+			if ui.button(t("Ring again")).clicked() {
+				self.ring_request = Some((entry.channel, call.request, user, false));
+			}
+		} else {
+			ui.label(
+				egui::RichText::new(t("Not in call"))
+					.small()
+					.color(crate::design::palette(ui).muted),
+			);
+		}
+		ui.separator();
+	}
+
 	fn voice_participant_menu(
 		&mut self,
 		response: &egui::Response,
@@ -189,6 +234,7 @@ impl MessagingUi {
 				let language = self.language;
 				let t = |english: &'static str| crate::i18n::text(language, english);
 				if state.user.as_ref().is_some_and(|own| own.id.0 != id) {
+					self.ring_row(ui, state, entry);
 					let muted = self.voice_user_locally_muted(entry.participant.user);
 					if ui
 						.button(if muted { "Unmute" } else { "Mute" })
@@ -1536,6 +1582,7 @@ impl MessagingUi {
 		state: &mut State,
 		commands: &mut Vec<Command>,
 	) {
+		self.apply_ring_request(state, commands);
 		self.follow_moved_call(state, commands);
 		let Some(switch) = &self.voice_switch else {
 			return;

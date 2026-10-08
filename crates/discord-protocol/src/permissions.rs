@@ -95,15 +95,22 @@ pub(crate) struct Role {
 struct RoleColors {
 	#[serde(default)]
 	primary_color: Option<u32>,
+	#[serde(default)]
+	secondary_color: Option<u32>,
 }
 impl Role {
 	pub(crate) fn checked(self) -> Result<p::Role, DecodeError> {
 		nonzero(self.id)?;
 		let color = self
 			.colors
+			.as_ref()
 			.and_then(|colors| colors.primary_color)
 			.unwrap_or(self.color);
-		if color > 0xff_ffff {
+		let secondary = self
+			.colors
+			.as_ref()
+			.and_then(|colors| colors.secondary_color);
+		if color > 0xff_ffff || secondary.is_some_and(|color| color > 0xff_ffff) {
 			return Err(DecodeError);
 		}
 		Ok(p::Role {
@@ -116,6 +123,7 @@ impl Role {
 				.take(100)
 				.collect(),
 			color,
+			secondary,
 			position: self.position,
 			hoist: self.hoist,
 		})
@@ -642,6 +650,19 @@ mod tests {
 		assert!(updated.bytes() >= size_of::<p::Role>() + 200);
 		let (_, uncolored) = super::role(br#"{"guild_id":"1","role":{"id":"2","permissions":"0","color":1122867,"colors":{"primary_color":0}}}"#).unwrap();
 		assert_eq!(uncolored.color, 0);
+		assert_eq!(uncolored.secondary, None);
+		let (_, gradient) = super::role(br#"{"guild_id":"1","role":{"id":"3","permissions":"0","color":1122867,"colors":{"primary_color":4478310,"secondary_color":1193046}}}"#).unwrap();
+		assert_eq!(
+			(gradient.color, gradient.secondary),
+			(0x445566, Some(0x123456))
+		);
+		assert!(
+			super::role(
+				br#"{"guild_id":"1","role":{"id":"2","permissions":"0","color":1122867,"colors":{"primary_color":0,"secondary_color":16777216}}}"#
+			)
+			.is_err(),
+			"an out-of-range gradient end rejects the role"
+		);
 		assert!(
 			super::role(
 				br#"{"guild_id":"1","role":{"id":"2","permissions":"0","color":16777216}}"#

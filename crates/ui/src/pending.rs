@@ -545,6 +545,7 @@ mod tests {
 						confirmed: None,
 						reason: Some("File upload incomplete; no message was sent"),
 						reply: None,
+						silent: false,
 					},
 					retry: None,
 				},
@@ -599,6 +600,7 @@ mod tests {
 			confirmed: None,
 			reason: None,
 			reply: None,
+			silent: false,
 		};
 		let mut upload = Upload {
 			nonce: pending.nonce.clone(),

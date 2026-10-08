@@ -231,10 +231,7 @@ impl Page {
 	pub fn bytes(&self) -> usize {
 		self.threads.capacity().saturating_sub(self.threads.len()) * size_of::<Channel>()
 			+ self.threads.iter().map(Channel::bytes).sum::<usize>()
-			+ self
-				.previews
-				.capacity()
-				.saturating_sub(self.previews.len())
+			+ self.previews.capacity().saturating_sub(self.previews.len())
 				* size_of::<(Id, Starter)>()
 			+ self
 				.previews

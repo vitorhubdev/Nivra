@@ -1200,11 +1200,13 @@ mod tests {
 			message.nonce.as_deref().map(|nonce| nonce.chars().count()),
 			Some(MAX_NONCE_CHARS)
 		);
-		let long: ChannelDto = decode(
-			format!(r#"{{"id":"1","type":0,"name":"{}"}}"#, "x".repeat(101)).as_bytes(),
-		)
-		.unwrap();
-		assert_eq!(long.into_model().name.chars().count(), MAX_CHANNEL_NAME_CHARS);
+		let long: ChannelDto =
+			decode(format!(r#"{{"id":"1","type":0,"name":"{}"}}"#, "x".repeat(101)).as_bytes())
+				.unwrap();
+		assert_eq!(
+			long.into_model().name.chars().count(),
+			MAX_CHANNEL_NAME_CHARS
+		);
 	}
 	#[test]
 	fn webhook_authors_require_explicit_message_metadata() {

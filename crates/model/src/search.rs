@@ -101,7 +101,9 @@ impl SearchPage {
 						+ h.attachments
 							.iter()
 							.map(|attachment| {
-								attachment.bytes().saturating_sub(size_of::<crate::Attachment>())
+								attachment
+									.bytes()
+									.saturating_sub(size_of::<crate::Attachment>())
 							})
 							.sum::<usize>() + h.embeds.capacity() * size_of::<crate::Embed>()
 						+ h.embeds

@@ -131,7 +131,10 @@ mod edit_tests {
 		assert_eq!(decode_base64("TWFu").unwrap(), b"Man");
 		assert_eq!(decode_base64("TWE=").unwrap(), b"Ma");
 		assert_eq!(decode_base64("TQ==").unwrap(), b"M");
-		assert!(decode_base64("TWF").is_err(), "length must be a multiple of 4");
+		assert!(
+			decode_base64("TWF").is_err(),
+			"length must be a multiple of 4"
+		);
 		assert!(decode_base64("T===").is_err(), "at most two pads");
 		assert!(decode_base64("T!WF").is_err(), "bad alphabet");
 		assert!(decode_base64("TW=F").is_err(), "pad only at the end");

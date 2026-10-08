@@ -104,6 +104,44 @@ pub fn known_roles(state: &State, channel: Id) -> &[model::permissions::Role] {
 		.and_then(|guild| state.guild_roles(guild))
 		.unwrap_or(&[])
 }
+#[derive(Clone)]
+struct CachedUsers {
+	generation: u64,
+	revision: u64,
+	channel: Id,
+	users: Vec<User>,
+}
+
+/// Memoized mention candidates for hot paint paths (composer, pending rows,
+/// search hits). Every input comes from session state, so generation +
+/// revision + channel is a complete cache key; a hit avoids the full
+/// timeline scan and quadratic dedup per frame.
+pub fn known_users_cached(ctx: &egui::Context, state: &State, channel: Id) -> Vec<User> {
+	let id = egui::Id::unique("mention-users-cache");
+	if let Some(cached) = ctx
+		.data(|data| data.get_temp::<CachedUsers>(id))
+		.filter(|cached| {
+			cached.generation == state.generation
+				&& cached.revision == state.revision
+				&& cached.channel == channel
+		}) {
+		return cached.users;
+	}
+	let users = known_users(state, channel);
+	ctx.data_mut(|data| {
+		data.insert_temp(
+			id,
+			CachedUsers {
+				generation: state.generation,
+				revision: state.revision,
+				channel,
+				users: users.clone(),
+			},
+		);
+	});
+	users
+}
+
 pub fn known_users(state: &State, channel: Id) -> Vec<User> {
 	let mut users = Vec::new();
 	let mut add = |user: &User| {

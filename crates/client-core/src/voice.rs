@@ -60,6 +60,20 @@ pub enum Phase {
 	Failed,
 }
 impl Phase {
+	/// Setup order; Connected and Waiting share a rank because a live call
+	/// moves between them as peers come and go.
+	fn rank(self) -> u8 {
+		match self {
+			Self::Connecting => 0,
+			Self::ConnectingTransport => 1,
+			Self::Discovering => 2,
+			Self::OpeningAudio => 3,
+			Self::Ringing => 4,
+			Self::Securing => 5,
+			Self::Connected | Self::Waiting => 6,
+			Self::Failed => 7,
+		}
+	}
 	pub fn label(self) -> &'static str {
 		match self {
 			Self::ConnectingTransport => "Connecting to voice server...",
@@ -612,11 +626,14 @@ impl ClientState {
 						.roster
 						.retain(|r| Some(r.guild) != guild && guild.is_some());
 				}
+				// One pass over the roster per snapshot, not per entry: the
+				// running total keeps bulk admission linear.
+				let mut bytes: usize = self.voice.roster.iter().map(RosterEntry::bytes).sum();
 				for entry in participants {
 					if guild.is_some_and(|guild| entry.guild != guild) {
 						continue;
 					}
-					if !self.update_roster(entry) {
+					if !self.update_roster(entry, &mut bytes) {
 						break;
 					}
 				}
@@ -762,12 +779,17 @@ impl ClientState {
 						.roster
 						.retain(|r| r.guild != guild || r.participant.user != user);
 					if let Some(channel) = channel {
-						self.update_roster(RosterEntry {
-							guild,
-							channel,
-							participant,
-							member: member.map(|member| *member).or(previous),
-						});
+						let mut bytes: usize =
+							self.voice.roster.iter().map(RosterEntry::bytes).sum();
+						self.update_roster(
+							RosterEntry {
+								guild,
+								channel,
+								participant,
+								member: member.map(|member| *member).or(previous),
+							},
+							&mut bytes,
+						);
 					}
 				}
 				if guild.is_none() {
@@ -891,6 +913,8 @@ impl ClientState {
 					&& call.channel == channel
 					&& call.request == request
 					&& call.phase != Phase::Failed
+					// Late or duplicated setup phases must not regress a live call.
+					&& phase.rank() >= call.phase.rank()
 				{
 					call.phase = phase;
 					if matches!(phase, Phase::Connected | Phase::Failed) {
@@ -930,7 +954,7 @@ impl ClientState {
 			| Event::Watch { .. } => {} // The desktop consumes negotiation material; core never retains it.
 		}
 	}
-	fn update_roster(&mut self, entry: RosterEntry) -> bool {
+	fn update_roster(&mut self, entry: RosterEntry, bytes: &mut usize) -> bool {
 		if !self.can_view(entry.channel)
 			|| !self
 				.channels
@@ -939,23 +963,22 @@ impl ClientState {
 		{
 			return true;
 		}
-		self.voice
-			.roster
-			.retain(|r| r.guild != entry.guild || r.participant.user != entry.participant.user);
-		if self.voice.roster.len() >= MAX_ROSTER
-			|| self
-				.voice
-				.roster
-				.iter()
-				.map(RosterEntry::bytes)
-				.sum::<usize>()
-				+ entry.bytes()
-				> MAX_ROSTER_BYTES
-		{
+		let mut removed = 0;
+		self.voice.roster.retain(|r| {
+			if r.guild == entry.guild && r.participant.user == entry.participant.user {
+				removed += r.bytes();
+				false
+			} else {
+				true
+			}
+		});
+		*bytes = bytes.saturating_sub(removed);
+		if self.voice.roster.len() >= MAX_ROSTER || *bytes + entry.bytes() > MAX_ROSTER_BYTES {
 			self.disconnect_voice("Voice roster exceeds safe capacity; reconnect to refresh");
 			self.status = "Voice roster exceeds safe capacity; reconnect to refresh";
 			return false;
 		}
+		*bytes += entry.bytes();
 		self.voice.roster.push(entry);
 		true
 	}
@@ -2232,6 +2255,31 @@ mod tests {
 			service_ring(&mut state, &[Id(3)]);
 			assert_eq!(state.outgoing_ring(), None, "{end} must consume the intent");
 		}
+	}
+
+	#[test]
+	fn progress_ignores_stale_setup_phases_but_keeps_live_transitions() {
+		let mut state = dm_state();
+		state.start_call(Id(2), false).unwrap();
+		let request = state.voice.active.as_ref().unwrap().request;
+		let progress = |state: &mut ClientState, phase: Phase| {
+			state.apply_voice(Event::Progress {
+				channel: Id(2),
+				request,
+				phase,
+			});
+		};
+		progress(&mut state, Phase::Connected);
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Connected);
+		// A duplicated setup phase arriving late must not regress the call.
+		progress(&mut state, Phase::Connecting);
+		progress(&mut state, Phase::Securing);
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Connected);
+		// Live transitions between Connected and Waiting still flow.
+		progress(&mut state, Phase::Waiting);
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Waiting);
+		progress(&mut state, Phase::Connected);
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Connected);
 	}
 
 	#[test]

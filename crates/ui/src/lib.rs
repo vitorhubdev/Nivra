@@ -3183,7 +3183,7 @@ impl MessagingUi {
 			None
 		};
 		let mention_users = if mention_enabled || composer_content.contains("<@") {
-			mentions::known_users(state, channel)
+			mentions::known_users_cached(ctx, state, channel)
 		} else {
 			Vec::new()
 		};

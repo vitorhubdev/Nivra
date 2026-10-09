@@ -187,6 +187,13 @@ impl Connection {
                 let mut profile:Option<AbortTask>=None;
                 let mut invite:Option<AbortTask>=None;
                 let mut search:Option<AbortTask>=None;
+                // Archives share the search route family but never its abort slot:
+                // a new search, pins lookup or history must not cancel an
+                // in-flight archive page and wedge its spinner with no event.
+                let mut archives:Option<AbortTask>=None;
+                // Forum pages share the writes route family but never its queue:
+                // the first paint must not wait behind sends, edits or deletes.
+                let mut forum:Option<AbortTask>=None;
                 let mut gifs:Option<AbortTask>=None;
                 let mut application_commands:Option<AbortTask>=None;
                 let mut sticker_packs:Option<AbortTask>=None;
@@ -296,12 +303,36 @@ impl Connection {
                                 })));
                                 continue;
                             }
-                            if matches!(command,Command::Search{..}|Command::Pins{..}|Command::Archives{..}) {
+                            if matches!(command,Command::Search{..}|Command::Pins{..}) {
                                 drop(search.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
                                 search=Some(AbortTask(tokio::spawn(async move {
                                     let event=api.execute(command).await;
-                                    let failure=match &event {Event::Search{result:Err(f),..}|Event::Archives{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
+                                    let failure=match &event {Event::Search{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
+                                    let error=emit(event).err().or(failure);
+                                    if let Some(error)=error {api.stop();let _=finished.send(Some(error));}
+                                    wake.request_repaint();
+                                })));
+                                continue;
+                            }
+                            if matches!(command,Command::Archives{..}) {
+                                drop(archives.take());
+                                let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
+                                archives=Some(AbortTask(tokio::spawn(async move {
+                                    let event=api.execute(command).await;
+                                    let failure=match &event {Event::Archives{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
+                                    let error=emit(event).err().or(failure);
+                                    if let Some(error)=error {api.stop();let _=finished.send(Some(error));}
+                                    wake.request_repaint();
+                                })));
+                                continue;
+                            }
+                            if matches!(command,Command::ForumPosts{..}) {
+                                drop(forum.take());
+                                let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
+                                forum=Some(AbortTask(tokio::spawn(async move {
+                                    let event=api.execute(command).await;
+                                    let failure=match &event {Event::ForumPosts{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
                                     let error=emit(event).err().or(failure);
                                     if let Some(error)=error {api.stop();let _=finished.send(Some(error));}
                                     wake.request_repaint();

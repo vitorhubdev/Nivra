@@ -286,20 +286,32 @@ impl DiscordApi {
 		{
 			return Err(Failure::Protocol);
 		}
-		let _permit = self
-			.requests
-			.acquire()
-			.await
-			.map_err(|_| Failure::Network)?;
-		// Four permits bound concurrent REST work. A slow profile body must not hold the
-		// cooldown mutex and delay a message write; only service rate admission is shared.
-		loop {
-			let next = *self.cooldown.lock().await;
-			sleep_until(next).await;
-			if Instant::now() >= *self.cooldown.lock().await {
-				break;
+		// Four permits bound concurrent REST work, but the service cooldown is
+		// shared: wait it out BEFORE taking a permit, so one rate-limited route
+		// parks in sleep instead of pinning 1 of the 4 pool slots for the whole
+		// backoff and delaying unrelated routes behind it. The permit is only
+		// held for the send itself; if the cooldown moved while waiting for a
+		// permit, release it and wait again.
+		let _permit = loop {
+			loop {
+				let next = *self.cooldown.lock().await;
+				sleep_until(next).await;
+				if Instant::now() >= *self.cooldown.lock().await {
+					break;
+				}
 			}
-		}
+			if self.stopped() {
+				return Err(Failure::Expired);
+			}
+			let permit = self
+				.requests
+				.acquire()
+				.await
+				.map_err(|_| Failure::Network)?;
+			if Instant::now() >= *self.cooldown.lock().await {
+				break permit;
+			}
+		};
 		if self.stopped() {
 			return Err(Failure::Expired);
 		}
@@ -2697,6 +2709,62 @@ mod tests {
 		}
 		assert!(safe_delay(Some(f64::NAN)).is_err());
 		assert!(safe_delay(Some(-1.0)).is_err());
+	}
+	#[tokio::test]
+	async fn cooldown_wait_holds_no_rest_permit() {
+		crate::ensure_tls_provider();
+		tokio::time::timeout(Duration::from_secs(10), async {
+			let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+			let mut api = DiscordApi::new(Arc::new(
+				SessionSecret::from_owner_input("SYNTHETIC_COOLDOWN_TOKEN".into()).unwrap(),
+			))
+			.unwrap();
+			api.base = format!("http://{}", listener.local_addr().unwrap());
+			let server = tokio::spawn(async move {
+				let (mut socket, _) = listener.accept().await.unwrap();
+				let mut request = Vec::new();
+				loop {
+					let mut buffer = [0; 1024];
+					let n = socket.read(&mut buffer).await.unwrap();
+					assert!(n > 0);
+					request.extend_from_slice(&buffer[..n]);
+					if request.windows(4).any(|w| w == b"\r\n\r\n") {
+						break;
+					}
+				}
+				let body = r#"{"url":"wss://synthetic"}"#;
+				socket
+					.write_all(
+						format!(
+							"HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+							body.len()
+						)
+						.as_bytes(),
+					)
+					.await
+					.unwrap();
+			});
+			// Push the shared cooldown into the future: the request below must
+			// sleep through it without holding any of the 4 REST permits, so an
+			// unrelated route can still send while this one waits.
+			*api.cooldown.lock().await = Instant::now() + Duration::from_millis(1500);
+			let api = Arc::new(api);
+			let waiting = tokio::spawn({
+				let api = api.clone();
+				async move { api.gateway_url().await }
+			});
+			tokio::time::sleep(Duration::from_millis(300)).await;
+			assert_eq!(
+				api.requests.available_permits(),
+				4,
+				"cooldown sleep must not pin a REST permit"
+			);
+			assert!(waiting.await.unwrap().is_ok());
+			server.await.unwrap();
+			assert_eq!(api.requests.available_permits(), 4);
+		})
+		.await
+		.unwrap();
 	}
 }
 

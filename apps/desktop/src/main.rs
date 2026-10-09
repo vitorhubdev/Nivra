@@ -3344,6 +3344,15 @@ impl Desktop {
 	}
 	/// Dispatches one queued command to the demo or live transport.
 	fn command(&mut self, command: Command) {
+		// A send issued while the gateway is down asks for one immediate
+		// reconnect attempt instead of waiting out the backoff.
+		if !self.state.gateway_connected
+			&& self.state.auth == AuthState::Authenticated
+			&& matches!(command, Command::Send { .. })
+			&& let Some(connection) = &self.connection
+		{
+			connection.recover_send();
+		}
 		if matches!(&command, Command::Interaction(client_core::interactions::Request {data:client_core::interactions::Data::Modal{components,..},..}) if interaction_uploads::has_files(components))
 		{
 			self.interaction_upload(command);
@@ -5953,6 +5962,11 @@ impl Desktop {
 			let voice_failure = self.voice.observe(&self.state, &mut event.event);
 			let ready = event.event.ready_navigation().is_some();
 			let resumed = matches!(event.event, Event::Resumed);
+			if (ready || resumed)
+				&& let Some(connection) = &self.connection
+			{
+				connection.gateway_recovered();
+			}
 			let gateway_disconnected = matches!(event.event, Event::Disconnected);
 			let confirmed_channel = confirmed_recovery_channel(&self.state, &event.event);
 			let deleted_shortcut = match &event.event {

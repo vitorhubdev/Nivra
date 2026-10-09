@@ -204,6 +204,10 @@ impl Audio {
 				let mut next_default_check = Instant::now();
 				let mut default_follow_grace = DefaultFollowGrace::default();
 				let mut next_input_retry = Instant::now() + Duration::from_secs(2);
+				// One audio host for the worker's lifetime: recreating it per
+				// poll reconnects backends like PulseAudio and resets them.
+				// It is only rebuilt after a failed open below.
+				let mut host = cpal::default_host();
 				'audio: while !worker_gate.stopped.load(Ordering::Acquire) {
 					let revision = worker_gate.revision.load(Ordering::Acquire);
 					let current = selected.borrow_and_update().clone();
@@ -228,7 +232,7 @@ impl Audio {
 					{
 						next_default_check = Instant::now() + Duration::from_secs(1);
 						let now = Instant::now();
-						match active.migrate_endpoints(&current) {
+						match active.migrate_endpoints(&host, &current) {
 							EndpointsMigration::None => default_follow_grace.reset(),
 							EndpointsMigration::Immediate => {
 								default_follow_grace.reset();
@@ -275,6 +279,7 @@ impl Audio {
 					}
 					if streams.is_none() {
 						match Streams::open_with_fallback(
+							&host,
 							&current,
 							worker_gate.clone(),
 							revision,
@@ -303,6 +308,9 @@ impl Audio {
 										recovery_since = Some(now);
 									}
 									if !recovery_window_elapsed(recovery_since, now) {
+										// The cached host may be dead; rebuild it before
+										// retrying so one bad backend cannot wedge opens.
+										host = cpal::default_host();
 										std::thread::park_timeout(RECOVERY_DELAY);
 										continue;
 									}
@@ -354,7 +362,6 @@ impl Audio {
 						&& Instant::now() >= next_input_retry
 					{
 						next_input_retry = Instant::now() + Duration::from_secs(2);
-						let host = cpal::default_host();
 						if active.try_reopen_input(&host, &current, &worker_gate, revision) {
 							emit(Ok(()));
 						}
@@ -594,6 +601,7 @@ struct Streams {
 }
 impl Streams {
 	fn open_with_fallback(
+		host: &cpal::Host,
 		settings: &Devices,
 		gate: Arc<Gate>,
 		revision: u64,
@@ -616,7 +624,7 @@ impl Streams {
 				continue;
 			}
 			attempted.push(candidate.clone());
-			match Self::open(&candidate, gate.clone(), revision) {
+			match Self::open(host, &candidate, gate.clone(), revision) {
 				Ok(streams) => return Ok(streams),
 				Err(error) => last_error = error,
 			}
@@ -629,8 +637,7 @@ impl Streams {
 		}
 		Err(last_error)
 	}
-	fn host_endpoints(settings: &Devices) -> HostEndpoints {
-		let host = cpal::default_host();
+	fn host_endpoints(host: &cpal::Host, settings: &Devices) -> HostEndpoints {
 		let id = |device: Option<cpal::Device>| {
 			device.and_then(|d| d.id().ok()).map(|id| id.to_string())
 		};
@@ -646,32 +653,37 @@ impl Streams {
 			selected_output: selected(settings.output.as_ref()),
 		}
 	}
-	fn migrate_endpoints(&self, settings: &Devices) -> EndpointsMigration {
+	fn migrate_endpoints(&self, host: &cpal::Host, settings: &Devices) -> EndpointsMigration {
 		endpoints_migration(
 			settings,
 			&OpenedEndpoints {
 				input: self.input_id.clone(),
 				output: self.output_id.clone(),
 			},
-			&Self::host_endpoints(settings),
+			&Self::host_endpoints(host, settings),
 		)
 	}
-	fn open(settings: &Devices, gate: Arc<Gate>, revision: u64) -> Result<Self, &'static str> {
+	fn open(
+		host: &cpal::Host,
+		settings: &Devices,
+		gate: Arc<Gate>,
+		revision: u64,
+	) -> Result<Self, &'static str> {
 		if gate.stopped.load(Ordering::Acquire)
 			|| !gate.ready.load(Ordering::Acquire)
 			|| gate.revision.load(Ordering::Acquire) != revision
 		{
 			return Err("Call changed before audio devices could open");
 		}
-		let host = cpal::default_host();
-		let output = choose(&host, settings.output.as_deref(), false)?;
+		let output = choose(host, settings.output.as_deref(), false)?;
 		let output_id = output.id().ok().map(|id| id.to_string());
 		let output_config = config(&output, false)?;
+		let output_stream_config = pulse_output_config(host.id(), output_config.config());
 		let (output_write, output_read) = rtrb::RingBuffer::new(8);
 		let (reference_write, reference_read) = rtrb::RingBuffer::new(8);
 		let render = Playback::new(output_config.sample_rate(), output_read, reference_write);
 		let (input_stream, input_read, input_id) = if gate.input_enabled.load(Ordering::Acquire) {
-			match open_input_stream(&host, settings, &gate, revision) {
+			match open_input_stream(host, settings, &gate, revision) {
 				Ok((stream, read, id)) => (Some(stream), read, id),
 				Err(_) => {
 					gate.input_failed_revision
@@ -685,28 +697,28 @@ impl Streams {
 		let output_stream = match output_config.sample_format() {
 			cpal::SampleFormat::F32 => output_stream::<f32>(
 				&output,
-				&output_config.config(),
+				&output_stream_config,
 				render,
 				gate.clone(),
 				revision,
 			),
 			cpal::SampleFormat::I16 => output_stream::<i16>(
 				&output,
-				&output_config.config(),
+				&output_stream_config,
 				render,
 				gate.clone(),
 				revision,
 			),
 			cpal::SampleFormat::I32 => output_stream::<i32>(
 				&output,
-				&output_config.config(),
+				&output_stream_config,
 				render,
 				gate.clone(),
 				revision,
 			),
 			cpal::SampleFormat::U16 => output_stream::<u16>(
 				&output,
-				&output_config.config(),
+				&output_stream_config,
 				render,
 				gate.clone(),
 				revision,
@@ -874,6 +886,20 @@ fn supported_format(format: cpal::SampleFormat) -> bool {
 			| cpal::SampleFormat::I32
 			| cpal::SampleFormat::U16
 	)
+}
+/// PulseAudio server-default playback fragments (~2 s) delay call audio behind
+/// the mixer, like desktop media playback before its own bound. 40 ms periods
+/// keep voice live; other hosts keep the device default.
+fn pulse_output_config(host: cpal::HostId, config: cpal::StreamConfig) -> cpal::StreamConfig {
+	#[cfg(target_os = "linux")]
+	if host == cpal::HostId::PulseAudio {
+		return cpal::StreamConfig {
+			buffer_size: cpal::BufferSize::Fixed(config.sample_rate / 25),
+			..config
+		};
+	}
+	let _ = host;
+	config
 }
 fn is_fatal_error(error: &cpal::Error) -> bool {
 	!matches!(
@@ -1396,6 +1422,28 @@ mod tests {
 		playback.render(&mut rendered, 1, &audio.gate);
 		assert!(captured.pop().is_err());
 		assert_eq!(rendered, [0.0; 2]);
+	}
+
+	#[test]
+	fn call_output_buffer_is_bounded_on_pulseaudio_only() {
+		// default_host() opens nothing: safe in device-free tests.
+		let host = cpal::default_host();
+		let plain = cpal::StreamConfig {
+			channels: 2,
+			sample_rate: 48_000,
+			buffer_size: cpal::BufferSize::Default,
+		};
+		let out = pulse_output_config(host.id(), plain);
+		#[cfg(target_os = "linux")]
+		if host.id() == cpal::HostId::PulseAudio {
+			assert_eq!(
+				out.buffer_size,
+				cpal::BufferSize::Fixed(48_000 / 25),
+				"~2 s server fragments would delay call audio behind the mixer"
+			);
+			return;
+		}
+		assert_eq!(out.buffer_size, cpal::BufferSize::Default);
 	}
 
 	#[test]

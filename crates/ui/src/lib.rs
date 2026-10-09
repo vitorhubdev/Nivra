@@ -2530,18 +2530,46 @@ impl MessagingUi {
 								ui.menu_button(
 									crate::i18n::text(self.language, "Export chat"),
 									|ui| {
+										// Scope first: picking one keeps the menu open so
+										// the format below starts the export in one more click.
+										let scope = self.timeline.export_scope;
+										for (label, limit) in [
+											("Last 50 messages", Some(50)),
+											("Last 100 messages", Some(100)),
+											("Last 200 messages", Some(200)),
+											("Whole loaded conversation", None),
+										] {
+											if ui
+												.selectable_label(
+													scope == limit,
+													crate::i18n::text(self.language, label),
+												)
+												.clicked()
+											{
+												self.timeline.export_scope = limit;
+											}
+										}
+										ui.separator();
 										if ui
 											.button(crate::i18n::text(self.language, "Save .txt"))
 											.clicked()
 										{
-											self.timeline.begin_chat_export(state, false);
+											self.timeline.begin_chat_export(
+												state,
+												false,
+												self.timeline.export_scope,
+											);
 											ui.close();
 										}
 										if ui
 											.button(crate::i18n::text(self.language, "Save .md"))
 											.clicked()
 										{
-											self.timeline.begin_chat_export(state, true);
+											self.timeline.begin_chat_export(
+												state,
+												true,
+												self.timeline.export_scope,
+											);
 											ui.close();
 										}
 									},

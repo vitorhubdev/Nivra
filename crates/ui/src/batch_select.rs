@@ -197,6 +197,8 @@ pub struct ExportJob {
 	out: String,
 	/// Next index in the open timeline. None once every loaded message is copied.
 	capture_at: Option<usize>,
+	/// Scope cap from the Export chat menu. None exports the whole loaded conversation.
+	limit: Option<usize>,
 }
 
 impl ExportJob {
@@ -211,11 +213,13 @@ impl ExportJob {
 			markdown,
 			out: String::new(),
 			capture_at: None,
+			limit: None,
 		}
 	}
 
 	/// Copies the open timeline one chunk at a time. Nothing is cloned here.
-	pub fn open(markdown: bool) -> Self {
+	/// `limit` caps how many of the newest loaded messages are exported.
+	pub fn open(markdown: bool, limit: Option<usize>) -> Self {
 		Self {
 			rest: Vec::new(),
 			done: 0,
@@ -223,6 +227,7 @@ impl ExportJob {
 			markdown,
 			out: String::new(),
 			capture_at: Some(0),
+			limit,
 		}
 	}
 
@@ -235,10 +240,16 @@ impl ExportJob {
 	}
 
 	/// Stores one copied chunk. `more` means the timeline still has later messages.
+	/// Rows past the scope `limit` are dropped and capture ends there.
 	pub fn store_captured(&mut self, rows: Vec<TxtMessage>, more: bool) {
+		let mut rows = rows;
+		if let Some(limit) = self.limit {
+			rows.truncate(limit.saturating_sub(self.total));
+		}
 		let added = rows.len();
 		self.total += added;
 		self.rest.extend(rows);
+		let more = more && self.limit.is_none_or(|limit| self.total < limit);
 		self.capture_at = more.then_some(self.capture_index() + added);
 	}
 
@@ -380,6 +391,28 @@ pub fn select_all_visible(ordered: &[Id], selected: &mut BTreeSet<Id>) -> usize 
 		}
 	}
 	added
+}
+
+/// Drops ids that no longer exist. Author and permission never evict: the
+/// floating bar enables each action from the live selection instead, so other
+/// people's messages stay selected for copy, download and export while delete
+/// still needs at least one message of your own.
+pub fn retain_existing(selected: &mut BTreeSet<Id>, exists: &dyn Fn(Id) -> bool) {
+	selected.retain(|id| exists(*id));
+}
+
+/// Hint key under the bar when the selection holds other people's messages but
+/// none of yours is deletable: copy, download and export still apply.
+pub fn mixed_selection_hint(
+	has_others: bool,
+	deletable_count: usize,
+	empty: bool,
+) -> Option<&'static str> {
+	if !empty && has_others && deletable_count == 0 {
+		Some("Only your messages can be deleted here")
+	} else {
+		None
+	}
 }
 
 /// Hold a fully-faded row invisible until the server echoes the delete.
@@ -1068,7 +1101,7 @@ mod tests {
 		assert_eq!(job.progress(), (40, 41));
 		assert!(job.step());
 		assert_eq!(job.take(), expected);
-		let mut open = ExportJob::open(false);
+		let mut open = ExportJob::open(false, None);
 		assert!(open.capturing());
 		assert_eq!(open.capture_index(), 0);
 		open.store_captured(
@@ -1087,6 +1120,57 @@ mod tests {
 		assert_eq!(open.capture_index(), ExportJob::CHUNK);
 		open.store_captured(Vec::new(), false);
 		assert!(!open.capturing());
+	}
+
+	#[test]
+	fn export_scope_caps_the_captured_conversation() {
+		let row = |index: usize| TxtMessage {
+			author: "A".into(),
+			when: "12:00".into(),
+			text: format!("c{index}"),
+			attachments: vec![],
+			links: vec![],
+		};
+		let mut scoped = ExportJob::open(false, Some(10));
+		scoped.store_captured((0..ExportJob::CHUNK).map(row).collect(), true);
+		assert_eq!(scoped.progress(), (0, 10));
+		assert!(
+			!scoped.capturing(),
+			"capture must stop once the scope cap is reached"
+		);
+		while !scoped.step() {}
+		assert_eq!(scoped.take().lines().count(), 10);
+
+		let mut whole = ExportJob::open(false, None);
+		whole.store_captured((0..ExportJob::CHUNK).map(row).collect(), true);
+		assert!(whole.capturing());
+		assert_eq!(whole.progress(), (0, ExportJob::CHUNK));
+	}
+
+	#[test]
+	fn selection_keeps_other_authors_and_names_the_delete_hint() {
+		let mut selected = [Id(1), Id(2)].into_iter().collect::<BTreeSet<_>>();
+		crate::batch_select::retain_existing(&mut selected, &|id| id != Id(9));
+		assert!(selected.contains(&Id(1)) && selected.contains(&Id(2)));
+		crate::batch_select::retain_existing(&mut selected, &|id| id != Id(2));
+		assert_eq!(selected.iter().copied().collect::<Vec<_>>(), vec![Id(1)]);
+		assert_eq!(
+			crate::batch_select::mixed_selection_hint(true, 0, false),
+			Some("Only your messages can be deleted here")
+		);
+		assert_eq!(
+			crate::batch_select::mixed_selection_hint(true, 1, false),
+			None,
+			"one message of yours is enough for Delete mine"
+		);
+		assert_eq!(
+			crate::batch_select::mixed_selection_hint(false, 0, false),
+			None
+		);
+		assert_eq!(
+			crate::batch_select::mixed_selection_hint(true, 0, true),
+			None
+		);
 	}
 
 	#[test]

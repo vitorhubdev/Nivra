@@ -4796,6 +4796,48 @@ mod tests {
 		assert!(state.pending[0].attachments.is_empty());
 		assert!(!state.drafts.contains_key(&Id(1)));
 	}
+
+	#[test]
+	fn poll_creation_validates_before_queuing() {
+		let answers = ["One".to_owned(), "Two".to_owned()];
+		let mut state = dm_state();
+		let Command::Polls(polls::Command::Create {
+			question,
+			answers: sent,
+			duration_hours,
+			multiselect,
+			..
+		}) = state
+			.prepare_poll_create("Pick?", &answers, 24, false)
+			.unwrap()
+		else {
+			panic!()
+		};
+		assert_eq!(question, "Pick?");
+		assert_eq!(sent, answers);
+		assert_eq!(duration_hours, 24);
+		assert!(!multiselect);
+		assert!(state.polls.busy());
+		// A second create while one is in flight is refused.
+		assert!(
+			state
+				.prepare_poll_create("Other?", &answers, 24, false)
+				.is_none()
+		);
+		// Shape violations never queue.
+		let mut state = dm_state();
+		assert!(state.prepare_poll_create("", &answers, 24, false).is_none());
+		assert!(
+			state
+				.prepare_poll_create("Pick?", &["Only".to_owned()], 24, false)
+				.is_none()
+		);
+		assert!(
+			state
+				.prepare_poll_create("Pick?", &answers, 99, false)
+				.is_none()
+		);
+	}
 	use super::*;
 
 	#[test]

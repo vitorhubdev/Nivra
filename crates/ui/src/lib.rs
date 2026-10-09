@@ -313,6 +313,7 @@ fn lazy_offline_rows(groups: &[(String, u64)]) -> Option<(usize, usize)> {
 #[derive(Default)]
 pub struct MessagingUi {
 	forwarding: forwarding::ForwardDialog,
+	poll_dialog: polls::CreateDialog,
 	pub image_sharing_enabled: bool,
 	pub image_share_requested: Option<model::ImageShare>,
 	pub interaction_file_request: Option<String>,
@@ -5291,6 +5292,7 @@ impl MessagingUi {
 		}
 		self.forwarding
 			.show(&ctx, state, &mut self.avatars, &mut commands);
+		self.poll_dialog.show(&ctx, state, &mut commands);
 
 		if let Some((message, custom_id, values)) = self.timeline.component_action.take()
 			&& let Some(command) = state.prepare_component(message, &custom_id, values)

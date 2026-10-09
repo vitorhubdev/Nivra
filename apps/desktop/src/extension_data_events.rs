@@ -382,6 +382,11 @@ fn message_details_changed(state: &State, event: &Event) -> bool {
 				| Written {
 					channel, message, ..
 				} => loaded(*channel, *message),
+				Created {
+					channel, result, ..
+				} => result
+					.as_ref()
+					.is_ok_and(|message| readable(*channel) && ordinary(message)),
 			}
 		}
 		_ => false,

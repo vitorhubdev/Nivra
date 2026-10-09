@@ -960,6 +960,32 @@ impl DiscordApi {
 			Command::Polls(command) => {
 				use client_core::polls::{Command as P, Event as E};
 				Event::Polls(match command {
+					P::Create {
+						channel,
+						question,
+						answers,
+						duration_hours,
+						multiselect,
+						nonce,
+						request,
+					} => {
+						let result = self
+							.create_poll(
+								channel,
+								&question,
+								&answers,
+								duration_hours,
+								multiselect,
+								&nonce,
+							)
+							.await
+							.map(Box::new);
+						E::Created {
+							channel,
+							request,
+							result,
+						}
+					}
 					P::Vote {
 						channel,
 						message,
@@ -1412,6 +1438,59 @@ impl DiscordApi {
 		if let Some(attachment) = attachment {
 			body["attachments"] = serde_json::json!(attachment);
 		}
+		// No enforce_nonce claim until normal-user semantics are live verified. Never auto-retry writes.
+		self.request(
+			Method::POST,
+			&format!("/channels/{channel}/messages"),
+			Some(body),
+		)
+		.await
+		.and_then(|bytes| {
+			let message = decode::<MessageDto>(&bytes).map_err(|_| Failure::Ambiguous)?;
+			if message.channel_id != channel {
+				return Err(Failure::Ambiguous);
+			}
+			Ok(message.into_model())
+		})
+	}
+	/// Documented poll creation: one message carrying the poll object. Never auto-retried.
+	pub(crate) async fn create_poll(
+		&self,
+		channel: model::Id,
+		question: &str,
+		answers: &[String],
+		duration_hours: u32,
+		multiselect: bool,
+		nonce: &str,
+	) -> Result<model::Message, Failure> {
+		let question = question.trim();
+		if question.is_empty()
+			|| question.chars().count() > model::MAX_POLL_QUESTION_CHARS
+			|| answers.len() < 2
+			|| answers.len() > model::MAX_POLL_ANSWERS
+			|| answers.iter().any(|answer| {
+				let answer = answer.trim();
+				answer.is_empty() || answer.chars().count() > model::MAX_POLL_ANSWER_CHARS
+			}) || ![1, 4, 8, 24, 72, 168, 336].contains(&duration_hours)
+		{
+			return Err(Failure::Capacity);
+		}
+		let answers: Vec<serde_json::Value> = answers
+			.iter()
+			.map(|answer| serde_json::json!({"poll_media": {"text": answer.trim()}}))
+			.collect();
+		let body = serde_json::json!({
+			"content": "",
+			"nonce": nonce,
+			"allowed_mentions": allowed_mentions("", None),
+			"poll": {
+				"question": {"text": question},
+				"answers": answers,
+				"duration": duration_hours,
+				"allow_multiselect": multiselect,
+				"layout_type": 1,
+			},
+		});
 		// No enforce_nonce claim until normal-user semantics are live verified. Never auto-retry writes.
 		self.request(
 			Method::POST,
@@ -2394,6 +2473,50 @@ mod tests {
             let result=api.execute(Command::Send{channel:model::Id(2),content:String::new(),nonce:"local".into(),reply:Some(Reply::to(model::Id(50))),sticker:Some(model::Id(9))}).await;
             assert!(matches!(result,Event::SendResult{result:Ok(message),..} if message.sticker_items.len()==1));
             server.await.unwrap();
+        }).await.unwrap();
+	}
+	#[tokio::test]
+	async fn poll_create_posts_the_poll_object_and_reads_the_message() {
+		crate::ensure_tls_provider();
+		tokio::time::timeout(Duration::from_secs(5), async {
+            let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut api=DiscordApi::new(Arc::new(SessionSecret::from_owner_input("SYNTHETIC_POLL_TOKEN".into()).unwrap())).unwrap();
+            api.base=format!("http://{}",listener.local_addr().unwrap());
+            let server=tokio::spawn(async move {
+                let (mut socket,_)=listener.accept().await.unwrap();
+                let mut request=Vec::new();
+                loop {
+                    let mut bytes=[0;1024];let n=socket.read(&mut bytes).await.unwrap();assert!(n>0);request.extend_from_slice(&bytes[..n]);assert!(request.len()<8192);
+                    if let Some(end)=request.windows(4).position(|w|w==b"\r\n\r\n") {
+                        let headers=String::from_utf8_lossy(&request[..end]);
+                        let length:usize=headers.lines().find_map(|line|line.to_ascii_lowercase().strip_prefix("content-length: ").map(str::to_owned)).unwrap().parse().unwrap();
+                        if request.len()>=end+4+length {
+                            assert!(headers.starts_with("POST /channels/2/messages HTTP/1.1"));
+                            let body:serde_json::Value=serde_json::from_slice(&request[end+4..]).unwrap();
+                            assert_eq!(body["content"],"");
+                            assert_eq!(body["poll"]["question"]["text"],"Best layout?");
+                            assert_eq!(body["poll"]["answers"][0]["poll_media"]["text"],"Cozy");
+                            assert_eq!(body["poll"]["answers"][1]["poll_media"]["text"],"Compact");
+                            assert_eq!(body["poll"]["duration"],24);
+                            assert_eq!(body["poll"]["allow_multiselect"],false);
+                            assert_eq!(body["poll"]["layout_type"],1);
+                            break;
+                        }
+                    }
+                }
+                let body=r#"{"id":"100","channel_id":"2","author":{"id":"1","username":"Synthetic"},"content":"","nonce":"local","poll":{"question":{"text":"Best layout?"},"answers":[{"answer_id":1,"poll_media":{"text":"Cozy"}},{"answer_id":2,"poll_media":{"text":"Compact"}}],"allow_multiselect":false,"duration":24}}"#;
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            });
+            let result=api.create_poll(model::Id(2),"Best layout?",&["Cozy".to_owned(),"Compact".to_owned()],24,false,"local").await;
+            let message=result.expect("poll create");
+            assert_eq!(message.channel,model::Id(2));
+            let poll=message.poll.expect("created poll parses");
+            assert_eq!(poll.question,"Best layout?");
+            assert_eq!(poll.answers.len(),2);
+            server.await.unwrap();
+		// Rejected shapes never touch the network.
+		let denied=api.create_poll(model::Id(2),"",&["Only".to_owned()],24,false,"local").await;
+		assert!(matches!(denied,Err(Failure::Capacity)));
         }).await.unwrap();
 	}
 	#[tokio::test]

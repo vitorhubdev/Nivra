@@ -98,10 +98,168 @@ pub fn show(ui: &mut egui::Ui, poll: &Poll, enabled: bool, busy: bool) -> Option
 	action
 }
 
+/// Durations offered when creating a poll: 1h, 4h, 24h, 7d.
+pub const CREATE_DURATIONS: [(u32, &str); 4] = [
+	(1, "1 hour"),
+	(4, "4 hours"),
+	(24, "24 hours"),
+	(168, "7 days"),
+];
+
+/// Poll creation dialog opened by `/poll`: question, 2–10 text answers, a
+/// duration and multiselect. Validation mirrors `prepare_poll_create`, which
+/// still authorizes every submit.
+#[derive(Default)]
+pub struct CreateDialog {
+	open: bool,
+	question: String,
+	answers: Vec<String>,
+	duration: usize,
+	multiselect: bool,
+}
+
+impl CreateDialog {
+	pub fn open(&mut self) {
+		*self = Self {
+			open: true,
+			answers: vec![String::new(), String::new()],
+			..Default::default()
+		};
+	}
+
+	/// Submittable without the service: a question and 2–10 short answers.
+	pub fn submittable(question: &str, answers: &[String]) -> bool {
+		!question.trim().is_empty()
+			&& question.chars().count() <= model::MAX_POLL_QUESTION_CHARS
+			&& (2..=model::MAX_POLL_ANSWERS).contains(
+				&answers
+					.iter()
+					.filter(|answer| !answer.trim().is_empty())
+					.count(),
+			) && answers
+			.iter()
+			.all(|answer| answer.chars().count() <= model::MAX_POLL_ANSWER_CHARS)
+	}
+
+	pub fn show(
+		&mut self,
+		ctx: &egui::Context,
+		state: &mut client_core::State,
+		commands: &mut Vec<client_core::Command>,
+	) {
+		if !self.open {
+			return;
+		}
+		let language = crate::i18n::interface_language(ctx);
+		let t = |english: &'static str| crate::i18n::text(language, english);
+		let mut close = false;
+		let mut create = false;
+		let Self {
+			question,
+			answers,
+			duration,
+			multiselect,
+			..
+		} = self;
+		crate::dialog::Dialog::new("create-poll", t("Create poll"))
+			.width(480.0)
+			.show(ctx, |d| {
+				d.content(|ui| {
+					ui.label(t("Question"));
+					ui.text_edit_singleline(question)
+						.on_hover_text(t("Question"));
+					ui.add_space(8.0);
+					let mut remove = None;
+					let can_remove = answers.len() > 2;
+					for (index, answer) in answers.iter_mut().enumerate() {
+						ui.horizontal(|ui| {
+							ui.label(format!("{}.", index + 1));
+							ui.text_edit_singleline(answer).on_hover_text(t("Answer"));
+							if can_remove && ui.small_button("×").clicked() {
+								remove = Some(index);
+							}
+						});
+					}
+					if let Some(index) = remove {
+						answers.remove(index);
+					}
+					if answers.len() < model::MAX_POLL_ANSWERS
+						&& ui.button(t("Add answer")).clicked()
+					{
+						answers.push(String::new());
+					}
+					ui.add_space(8.0);
+					ui.horizontal(|ui| {
+						ui.label(t("Duration"));
+						let (_, label) = CREATE_DURATIONS[*duration];
+						egui::ComboBox::from_id_salt("poll-duration")
+							.selected_text(t(label))
+							.show_ui(ui, |ui| {
+								for (index, (_, option)) in CREATE_DURATIONS.iter().enumerate() {
+									ui.selectable_value(duration, index, t(option));
+								}
+							});
+						ui.checkbox(multiselect, t("Allow multiple answers"));
+					});
+				});
+				d.footer(|ui| {
+					if crate::dialog::action(ui, t("Cancel"), crate::dialog::Action::Neutral)
+						.clicked()
+					{
+						close = true;
+					}
+					let ready = Self::submittable(question, answers);
+					if ui
+						.add_enabled(ready, egui::Button::new(t("Create poll")))
+						.clicked()
+					{
+						create = true;
+					}
+				});
+			});
+		if create {
+			let hours = CREATE_DURATIONS[*duration].0;
+			if state
+				.prepare_poll_create(question, answers, hours, *multiselect)
+				.map(|command| commands.push(command))
+				.is_some()
+			{
+				close = true;
+			}
+		}
+		if close {
+			self.open = false;
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use model::{PollAnswer, PollCount};
+
+	#[test]
+	fn create_dialog_validates_before_submit() {
+		let two = ["One".to_owned(), "Two".to_owned()];
+		assert!(CreateDialog::submittable("Pick?", &two));
+		assert!(!CreateDialog::submittable("", &two));
+		assert!(!CreateDialog::submittable("Pick?", &["Only".to_owned()]));
+		assert!(!CreateDialog::submittable(
+			"Pick?",
+			&["  ".to_owned(), "Two".to_owned()]
+		));
+		assert!(!CreateDialog::submittable(
+			&"x".repeat(model::MAX_POLL_QUESTION_CHARS + 1),
+			&two
+		));
+		assert!(!CreateDialog::submittable(
+			"Pick?",
+			&[
+				"One".to_owned(),
+				"x".repeat(model::MAX_POLL_ANSWER_CHARS + 1)
+			]
+		));
+	}
 
 	fn poll(multiselect: bool, finalized: bool) -> Poll {
 		Poll {

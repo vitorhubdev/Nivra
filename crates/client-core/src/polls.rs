@@ -15,6 +15,16 @@ pub enum Command {
 		answer_ids: Vec<u64>,
 		request: u64,
 	},
+	/// Publish a new poll as a message; answers carry text only.
+	Create {
+		channel: Id,
+		question: String,
+		answers: Vec<String>,
+		duration_hours: u32,
+		multiselect: bool,
+		nonce: String,
+		request: u64,
+	},
 }
 pub enum Event {
 	/// `MESSAGE_POLL_VOTE_ADD`/`REMOVE`; `user` is the voter.
@@ -31,7 +41,15 @@ pub enum Event {
 		request: u64,
 		result: Result<(), Failure>,
 	},
+	Created {
+		channel: Id,
+		request: u64,
+		result: Result<Box<model::Message>, Failure>,
+	},
 }
+
+/// Durations Discord offers for a poll, in hours.
+pub const CREATE_DURATIONS_HOURS: [u32; 6] = [1, 4, 8, 24, 72, 168];
 
 /// How many own vote echoes from successful writes may await the Gateway.
 const MAX_RECENT_ECHOES: usize = 16;
@@ -40,6 +58,8 @@ const MAX_RECENT_ECHOES: usize = 16;
 pub struct Polls {
 	/// The single in-flight vote, so a second click cannot race the first.
 	writing: Option<(Id, u64)>,
+	/// The single in-flight poll creation, so a double submit cannot duplicate it.
+	creating: Option<(Id, u64)>,
 	/// One bounded poll before/after the in-flight vote.
 	preview: Option<(Id, Poll, Poll)>,
 	/// Own vote echoes the in-flight write is expected to produce.
@@ -51,13 +71,14 @@ pub struct Polls {
 impl Polls {
 	pub fn reset(&mut self) {
 		self.writing = None;
+		self.creating = None;
 		self.preview = None;
 		self.pending_echoes.clear();
 		self.recent_echoes.clear();
 		self.sequence = self.sequence.wrapping_add(1);
 	}
 	pub fn busy(&self) -> bool {
-		self.writing.is_some()
+		self.writing.is_some() || self.creating.is_some()
 	}
 	/// The optimistic tally while a vote is in flight, otherwise the stored poll.
 	pub fn display<'a>(&'a self, message: &'a model::Message) -> Option<&'a Poll> {
@@ -72,6 +93,65 @@ impl Polls {
 	}
 }
 impl State {
+	/// Publishes a new poll. Two to ten non-empty answers, a question, and one
+	/// of the offered durations; text answers only. Like app submissions, the
+	/// service echo paints the card and failures surface as status.
+	pub fn prepare_poll_create(
+		&mut self,
+		question: &str,
+		answers: &[String],
+		duration_hours: u32,
+		multiselect: bool,
+	) -> Option<crate::Command> {
+		if self.auth != AuthState::Authenticated
+			|| !self.gateway_connected
+			|| self.freshness != Freshness::Fresh
+			|| self.polls.creating.is_some()
+		{
+			return None;
+		}
+		let channel = self.selected?;
+		if !self.can_send(channel) {
+			self.status = "Sending is unavailable with the current connection or permissions";
+			return None;
+		}
+		let question = question.trim();
+		let answers: Vec<String> = answers
+			.iter()
+			.map(|answer| answer.trim().to_owned())
+			.filter(|answer| !answer.is_empty())
+			.collect();
+		if question.is_empty()
+			|| question.chars().count() > model::MAX_POLL_QUESTION_CHARS
+			|| answers.len() < 2
+			|| answers.len() > model::MAX_POLL_ANSWERS
+			|| answers
+				.iter()
+				.any(|answer| answer.chars().count() > model::MAX_POLL_ANSWER_CHARS)
+			|| !CREATE_DURATIONS_HOURS.contains(&duration_hours)
+		{
+			self.status = "A poll needs a question and 2 to 10 short answers";
+			return None;
+		}
+		self.polls.sequence = self.polls.sequence.wrapping_add(1);
+		let request = self.polls.sequence;
+		let epoch = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap_or_default()
+			.as_millis();
+		let nonce = crate::fingerprint::nonce(epoch, request);
+		self.polls.creating = Some((channel, request));
+		self.revision += 1;
+		Some(crate::Command::Polls(Command::Create {
+			channel,
+			question: question.to_owned(),
+			answers,
+			duration_hours,
+			multiselect,
+			nonce,
+			request,
+		}))
+	}
 	/// Toggles the caller's vote on one answer and returns the write command.
 	pub fn prepare_poll_vote(&mut self, message: Id, answer_id: u64) -> Option<crate::Command> {
 		if self.auth != AuthState::Authenticated
@@ -126,6 +206,31 @@ impl State {
 	}
 	pub fn apply_polls(&mut self, event: Event) -> Result<(), &'static str> {
 		match event {
+			Event::Created {
+				channel,
+				request,
+				result,
+			} => {
+				if self.selected != Some(channel) || self.polls.creating != Some((channel, request))
+				{
+					return Ok(());
+				}
+				self.polls.creating = None;
+				match result {
+					Ok(_) => {
+						// The service echo (MESSAGE_CREATE) paints the new poll;
+						// nothing optimistic is staged.
+						self.revision += 1;
+					}
+					Err(failure) => {
+						self.revision += 1;
+						self.status = failure.label();
+						if failure.ends_session() {
+							self.fail(failure);
+						}
+					}
+				}
+			}
 			Event::Delta {
 				channel,
 				message,

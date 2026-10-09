@@ -25,6 +25,7 @@ mod server_integrations;
 mod server_invites;
 mod server_roles;
 mod server_settings;
+mod soundboard;
 pub mod spotify;
 pub mod upload;
 mod user_actions;
@@ -842,6 +843,32 @@ impl DiscordApi {
 				result: self.gifs(query.as_deref()).await,
 			},
 			Command::CancelGifs => Event::Failure(Failure::Protocol),
+			Command::Soundboard(command) => {
+				use client_core::soundboard::{Command as S, Event as E};
+				Event::Soundboard(match command {
+					S::List { guild, request } => {
+						let result = self.soundboard_list(guild).await;
+						E::Listed {
+							guild,
+							request,
+							result,
+						}
+					}
+					S::Play {
+						channel,
+						sound,
+						source,
+						request,
+					} => {
+						let result = self.soundboard_play(channel, sound, source).await;
+						E::Played {
+							channel,
+							request,
+							result,
+						}
+					}
+				})
+			}
 			Command::MarkRead {
 				channel,
 				message,

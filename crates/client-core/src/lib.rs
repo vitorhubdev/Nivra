@@ -39,6 +39,7 @@ pub mod server_audit_log;
 pub mod server_integrations;
 pub mod server_roles;
 pub mod server_settings;
+pub mod soundboard;
 mod thread_starter;
 mod threads;
 mod trail;
@@ -202,6 +203,7 @@ pub enum Command {
 	},
 	Reactions(reactions::Command),
 	Polls(polls::Command),
+	Soundboard(soundboard::Command),
 	Profile {
 		user: Id,
 		guild: Option<Id>,
@@ -485,6 +487,7 @@ pub enum Event {
 	NotificationPreferences(notifications::Event),
 	Reactions(reactions::Event),
 	Polls(polls::Event),
+	Soundboard(soundboard::Event),
 	Profile {
 		user: Id,
 		guild: Option<Id>,
@@ -679,6 +682,7 @@ pub struct State {
 	pub notification_preferences: notifications::Preferences,
 	pub reactions: reactions::Reactions,
 	pub polls: polls::Polls,
+	pub soundboard: soundboard::Board,
 	pub profile: Option<profile::ProfileView>,
 	pub profile_request: u64,
 	pub profile_cache: profile::ProfileCache,
@@ -936,6 +940,7 @@ impl Default for State {
 			notification_preferences: notifications::Preferences::default(),
 			reactions: reactions::Reactions::default(),
 			polls: polls::Polls::default(),
+			soundboard: soundboard::Board::default(),
 			profile: None,
 			profile_request: 0,
 			profile_cache: Default::default(),
@@ -2115,6 +2120,28 @@ impl State {
 			self.apply_gifs(request, Err(auth::Failure::Capacity));
 			return;
 		}
+		if let Command::Soundboard(command) = command {
+			use soundboard::{Command as S, Event as E};
+			match command {
+				S::List { guild, request } => {
+					let _ = self.apply_soundboard(E::Listed {
+						guild,
+						request,
+						result: Err(auth::Failure::Capacity),
+					});
+				}
+				S::Play {
+					channel, request, ..
+				} => {
+					let _ = self.apply_soundboard(E::Played {
+						channel,
+						request,
+						result: Err(auth::Failure::Capacity),
+					});
+				}
+			}
+			return;
+		}
 		if let Command::Edit {
 			channel,
 			message,
@@ -2727,6 +2754,7 @@ impl State {
 			}
 			Event::Reactions(event) => self.apply_reactions(event),
 			Event::Polls(event) => self.apply_polls(event),
+			Event::Soundboard(event) => self.apply_soundboard(event),
 			Event::InviteChallenge { request, challenge } => {
 				self.apply_invite_challenge(request, *challenge);
 				Ok(())

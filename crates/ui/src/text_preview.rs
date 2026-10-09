@@ -175,6 +175,10 @@ pub struct TextPreview {
 	pub truncated: bool,
 	/// Characters currently laid out. Starts at one window.
 	pub shown: usize,
+	/// Wide dialog with a taller body, so long files are easier to read.
+	pub maximized: bool,
+	/// The full body was copied to the clipboard at least once.
+	pub copied: bool,
 }
 
 impl TextPreview {
@@ -309,6 +313,8 @@ mod tests {
 			text,
 			truncated: false,
 			shown: PREVIEW_WINDOW_CHARS,
+			maximized: false,
+			copied: false,
 		};
 		assert_eq!(preview.visible_text().chars().count(), PREVIEW_WINDOW_CHARS);
 		assert!(preview.has_more());

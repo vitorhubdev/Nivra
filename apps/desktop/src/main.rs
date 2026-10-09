@@ -1154,6 +1154,8 @@ fn start_text_preview(
 					text,
 					truncated,
 					shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
+					maximized: false,
+					copied: false,
 				})
 			});
 			let _ = send.send(result);
@@ -8406,6 +8408,8 @@ mod tests {
 			text: "PREVIEW_BODY_SENTINEL".into(),
 			truncated: false,
 			shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
+			maximized: false,
+			copied: false,
 		});
 		let mut settings = loaded_settings();
 		settings.current.notices_accepted = true;

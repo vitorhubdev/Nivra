@@ -319,11 +319,22 @@ fn file_card(
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					ui.spacing_mut().item_spacing.x = 6.0;
 					if previewable {
-						let preview = ui.small_button(crate::tr_ui!(ui, "Preview"));
-						if preview.clicked() {
-							download.preview_request = Some(attachment.clone());
+						if download.preview_pending == Some(attachment.id) {
+							ui.horizontal(|ui| {
+								ui.spinner();
+								ui.label(
+									egui::RichText::new(crate::tr_ui!(ui, "Loading preview..."))
+										.size(12.0)
+										.color(colors.muted),
+								);
+							});
+						} else {
+							let preview = ui.small_button(crate::tr_ui!(ui, "Preview"));
+							if preview.clicked() {
+								download.request_preview(attachment);
+							}
+							surface.keep(&preview);
 						}
-						surface.keep(&preview);
 					}
 					let download = download_button(ui, attachment, download, demo);
 					ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -547,6 +558,11 @@ pub struct DownloadUi {
 	pub request: Option<Attachment>,
 	/// Plain-text, markdown or code attachment the owner asked to preview inline.
 	pub preview_request: Option<Attachment>,
+	/// Attachment id with a preview fetch in flight. While set, its card shows
+	/// a spinner instead of the Preview button, so double clicks cannot queue
+	/// a second fetch behind the first. Cleared when the dialog opens or the
+	/// fetch fails.
+	pub preview_pending: Option<Id>,
 	pub copy_request: Option<Attachment>,
 	pub embed_request: Option<(model::EmbedMedia, bool)>,
 	pub cancel_requested: bool,
@@ -660,6 +676,24 @@ impl DownloadUi {
 			|| self.request.is_some()
 			|| self.copy_request.is_some()
 			|| self.embed_request.is_some()
+	}
+	/// Records a Preview click. Returns false without touching anything when
+	/// another preview is already in flight (double-click guard). True hands
+	/// the request to the desktop bridge and marks this attachment's card as
+	/// loading; the desktop clears the mark when it fetches, discards, or
+	/// fails the request.
+	pub fn request_preview(&mut self, attachment: &Attachment) -> bool {
+		if self.preview_pending.is_some() {
+			return false;
+		}
+		self.preview_request = Some(attachment.clone());
+		self.preview_pending = Some(attachment.id);
+		true
+	}
+	/// Drops the loading mark: the dialog opened, the fetch failed, or the
+	/// desktop discarded the request without fetching.
+	pub fn clear_preview_pending(&mut self) {
+		self.preview_pending = None;
 	}
 	pub fn show_status(&mut self, ui: &mut egui::Ui) {
 		if !self.status.is_empty() {
@@ -1204,6 +1238,40 @@ pub fn estimated_height(attachments: &[Attachment], width: f32) -> f32 {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	fn text_attachment(id: u64) -> Attachment {
+		Attachment {
+			id: Id(id),
+			filename: "notes.txt".into(),
+			description: None,
+			content_type: Some("text/plain".into()),
+			size: 128,
+			spoiler: false,
+			media: Default::default(),
+			duration_ms: None,
+			waveform: vec![],
+		}
+	}
+
+	#[test]
+	fn preview_click_queues_and_the_bridge_clears_it() {
+		let mut download = DownloadUi::default();
+		let first = text_attachment(7);
+		assert!(download.request_preview(&first));
+		assert_eq!(download.preview_pending, Some(Id(7)));
+		assert!(download.preview_request.is_some());
+		// A second click before the fetch resolves must not queue another fetch.
+		let second = text_attachment(8);
+		assert!(!download.request_preview(&second));
+		assert_eq!(download.preview_pending, Some(Id(7)));
+		assert_eq!(download.preview_request.as_ref().unwrap().id, Id(7));
+		// The desktop clears the loading mark when it takes the request without
+		// fetching (demo, fixture) or when the dialog opens / fails.
+		download.clear_preview_pending();
+		assert_eq!(download.preview_pending, None);
+		assert!(download.request_preview(&second));
+		assert_eq!(download.preview_pending, Some(Id(8)));
+	}
 
 	#[test]
 	fn shared_artwork_keeps_compact_tiles_and_matching_row_heights() {

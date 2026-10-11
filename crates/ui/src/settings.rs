@@ -1146,6 +1146,15 @@ impl MessagingUi {
 			);
 			design::switch(
 				ui,
+				crate::i18n::text(self.language, "Convert emoticons automatically"),
+				Some(crate::i18n::text(
+					self.language,
+					"Turns :) into 🙂 when sending. Code stays literal.",
+				)),
+				&mut self.emoticon_conversion,
+			);
+			design::switch(
+				ui,
 				crate::i18n::text(self.language, "Reduce motion"),
 				Some(crate::i18n::text(
 					self.language,

@@ -575,6 +575,7 @@ mod tests {
 					confirmed: None,
 					reason: None,
 					reply: None,
+					silent: false,
 				});
 			}
 			let mut source = deleted_source(101, 50, 1);
@@ -603,6 +604,7 @@ mod tests {
 			confirmed: None,
 			reason: None,
 			reply: None,
+			silent: false,
 		});
 		let mut source = deleted_source(101, 50, 1);
 		source.reply_deleted = false;
@@ -633,6 +635,7 @@ mod tests {
 			confirmed: None,
 			reason: None,
 			reply: None,
+			silent: false,
 		});
 		apply(
 			&mut state,
@@ -686,6 +689,7 @@ mod tests {
 			confirmed: None,
 			reason: None,
 			reply: None,
+			silent: false,
 		});
 		let request = state.request;
 		let revision = state.revision;

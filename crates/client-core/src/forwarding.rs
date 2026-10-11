@@ -55,6 +55,7 @@ impl State {
 					confirmed: None,
 					reason: None,
 					reply: None,
+					silent: false,
 				});
 				commands.push(if let Some(content) = content {
 					Command::Send {
@@ -63,6 +64,7 @@ impl State {
 						content: content.into(),
 						nonce,
 						reply: None,
+						silent: false,
 					}
 				} else {
 					Command::Forward {

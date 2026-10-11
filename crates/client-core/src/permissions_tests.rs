@@ -315,6 +315,7 @@ fn snapshot() -> p::Snapshot {
 				p::Role {
 					name: String::new(),
 					color: 0,
+					secondary: None,
 					position: 0,
 					hoist: false,
 					id: Id(10),
@@ -323,6 +324,7 @@ fn snapshot() -> p::Snapshot {
 				p::Role {
 					name: String::new(),
 					color: 0,
+					secondary: None,
 					position: 0,
 					hoist: false,
 					id: Id(11),
@@ -663,6 +665,7 @@ fn role_rest_catalog_and_self_membership_revoke_selected_history_immediately() {
 			name: "Manager".into(),
 			bits: p::MANAGE_ROLES | p::MANAGE_GUILD,
 			color: 0,
+			secondary: None,
 			position: 3,
 			hoist: false,
 		});
@@ -1033,6 +1036,7 @@ fn send_only_access_accepts_new_live_messages_without_restoring_old_history() {
 			role: p::Role {
 				name: String::new(),
 				color: 0,
+				secondary: None,
 				position: 0,
 				hoist: false,
 				id: Id(11),
@@ -1083,6 +1087,7 @@ fn deleting_an_unassigned_role_prunes_its_overwrites_and_invalidates_cached_deci
 			role: p::Role {
 				name: String::new(),
 				color: 0,
+				secondary: None,
 				position: 0,
 				hoist: false,
 				id: Id(10),
@@ -1159,6 +1164,7 @@ fn malformed_snapshots_are_atomic_and_rejected_permission_events_fail_closed() {
 			.map(|id| p::Role {
 				name: String::new(),
 				color: 0,
+				secondary: None,
 				position: 0,
 				hoist: false,
 				id: Id(id),
@@ -1351,6 +1357,7 @@ fn member_role_display_tracks_live_role_metadata_and_membership() {
 		name: format!("Role {id}"),
 		position,
 		color,
+		secondary: None,
 		hoist,
 	};
 	for role in [

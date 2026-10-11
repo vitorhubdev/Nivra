@@ -214,6 +214,7 @@ impl Connection {
                 let mut sticker_detail:Option<AbortTask>=None;
                 let mut reaction_read:Option<AbortTask>=None;
                 let mut ringing:Option<AbortTask>=None;
+                let mut recipient_ringing:Option<AbortTask>=None;
                 let mut upload:Option<AbortTask>=None;
                 let mut upload_cancel:Option<watch::Sender<bool>>=None;
                 let mut voice_request=None;
@@ -233,7 +234,7 @@ impl Connection {
                         }
                         changed=takeover_receive.changed()=> {
                             if changed.is_err() {break;}
-                            if release_taken_over(&mut voice_request,*takeover_receive.borrow_and_update()) {drop(ringing.take());}
+                            if release_taken_over(&mut voice_request,*takeover_receive.borrow_and_update()) {drop(ringing.take());drop(recipient_ringing.take());}
                         }
                         changed=voice_availability.changed()=> {
                             if changed.is_err() {break;}
@@ -241,7 +242,7 @@ impl Connection {
                             // search REST tasks keep running (their results are
                             // request-matched), so their views never stick on
                             // loading with no outcome. History is left running too.
-                            if !*voice_availability.borrow_and_update() {drop(ringing.take());voice_request=None;if let Some(cancel)=&upload_cancel {let _=cancel.send(true);}}
+                            if !*voice_availability.borrow_and_update() {drop(ringing.take());drop(recipient_ringing.take());voice_request=None;if let Some(cancel)=&upload_cancel {let _=cancel.send(true);}}
                         }
                         request=upload_receive.recv()=>{
                             let Some(request)=request else {break;};
@@ -276,7 +277,7 @@ impl Connection {
                         }
                         command=receive.recv()=>{
                             // Select can admit a queued command before the changed-watch branch.
-                            if release_taken_over(&mut voice_request,*takeover_receive.borrow()) {drop(ringing.take());}
+                            if release_taken_over(&mut voice_request,*takeover_receive.borrow()) {drop(ringing.take());drop(recipient_ringing.take());}
                             let Some(command)=command else {break;};
                             if matches!(command,Command::CancelSearch) {drop(search.take());continue;}
                             if matches!(command,Command::CancelGifs) {drop(gifs.take());continue;}
@@ -408,9 +409,38 @@ impl Connection {
 								}
 								continue;
 							}
+							if let Command::Voice(control @ client_core::voice::Command::RingRecipient{..})=&command {
+								use client_core::voice::{Command as V,Event as E};
+								let control=*control;
+								let (channel,request,recipient,stop)=match control {
+									V::RingRecipient{channel,request,recipient,stop}=>(channel,request,recipient,stop),
+									_=>unreachable!(),
+								};
+								let failed = !*voice_availability.borrow();
+								if failed {
+									emit(Event::Voice(E::RingFailed{channel,request,message:"Recipient ringing unavailable while disconnected"}))?;
+									continue;
+								}
+								drop(recipient_ringing.take());
+								let api=api.clone();let emit=emit.clone();let finished=finished.clone();let ring_wake=wake.clone();
+								let takeover=takeover_receive.clone();
+								recipient_ringing=Some(AbortTask(tokio::spawn(async move {
+									let result=tokio::select! {
+										biased;
+										_=wait_for_takeover(takeover,(channel,request))=>return,
+										result=api.ring_call(channel,Some(recipient),stop)=>result,
+									};
+									if let Err(failure)=result {
+										let _=emit(Event::Voice(E::RingFailed{channel,request,message:failure.label()}));
+										if failure.ends_session(){api.stop();let _=finished.send(Some(failure));}
+									}
+									ring_wake.request_repaint();
+								})));
+								continue;
+							}
 							if let Command::Voice(control)=command {
                                 use client_core::voice::{Command as V,Event as E};
-                                let (channel,request)=match control {V::AbandonSession{channel,request}|V::ConfirmSession{channel,request,..}|V::Join{channel,request,..}|V::Ring{channel,request}|V::Leave{channel,request}|V::SetMute{channel,request,..}|V::SetCamera{channel,request,..}=>(channel,request),V::Decline{channel}=>(channel,0),V::Sync{..}|V::StartStream{..}|V::StopStream{..}|V::WatchStream{..}|V::StopWatching{..}=>unreachable!("sync and stream actions routed above")};
+                                let (channel,request)=match control {V::AbandonSession{channel,request}|V::ConfirmSession{channel,request,..}|V::Join{channel,request,..}|V::Ring{channel,request}|V::Leave{channel,request}|V::SetMute{channel,request,..}|V::SetCamera{channel,request,..}=>(channel,request),V::Decline{channel}=>(channel,0),V::RingRecipient{..}|V::Sync{..}|V::StartStream{..}|V::StopStream{..}|V::WatchStream{..}|V::StopWatching{..}=>unreachable!("sync, stream and recipient actions routed above")};
                                 if let V::AbandonSession{channel,request}=control {
                                     let owner=voice_request.map(|(channel,request,_)|(channel,request));
                                     if voice_request.is_some_and(|(id,r,_)|id==channel && r==request) {
@@ -438,8 +468,8 @@ impl Connection {
                                 if join_taken_over(control,*takeover_receive.borrow()) {
                                     emit(Event::Voice(E::Failed{channel,request,message:"Call attempt ended; join again to start a new attempt"}))?;continue;
                                 }
-                                if matches!(control,V::Join{..}) {drop(ringing.take());}
-                                if let V::Leave{channel,request}=control && voice_request.is_some_and(|(id,r,_)|id==channel && r==request) {drop(ringing.take());}
+                                if matches!(control,V::Join{..}) {drop(ringing.take());drop(recipient_ringing.take());}
+                                if let V::Leave{channel,request}=control && voice_request.is_some_and(|(id,r,_)|id==channel && r==request) {drop(ringing.take());drop(recipient_ringing.take());}
                                 let ring=match ring_action(control,user.id,&mut voice_request,dm_channels.lock().map_err(|_|Failure::Protocol)?.contains(&channel)) {
                                     Ok(action)=>action,
                                     Err(())=>{emit(Event::Voice(E::Failed{channel,request,message:"Call action expired; no ringing request was sent"}))?;continue;}
@@ -1088,6 +1118,7 @@ fn ring_action(
 			| V::Leave { .. }
 			| V::SetMute { .. }
 			| V::SetCamera { .. }
+			| V::RingRecipient { .. }
 			| V::StartStream { .. }
 			| V::StopStream { .. }
 			| V::WatchStream { .. }
@@ -1121,6 +1152,7 @@ fn ring_action(
 		| V::Leave { .. }
 		| V::SetMute { .. }
 		| V::SetCamera { .. }
+		| V::RingRecipient { .. }
 		| V::StartStream { .. }
 		| V::StopStream { .. }
 		| V::WatchStream { .. }

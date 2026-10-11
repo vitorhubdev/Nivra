@@ -74,6 +74,7 @@ impl Settings {
 			hide_offline_members: ui.hide_offline_members,
 			hide_bot_dms: ui.hide_bot_dms,
 			compact_timeline: ui.compact_timeline,
+			emoticon_conversion: ui.emoticon_conversion,
 			reduce_motion: ui.reduce_motion,
 			hide_title_bar: ui.hide_title_bar,
 			language: ui.language,
@@ -127,6 +128,7 @@ impl Settings {
 		ui.hide_offline_members = value.hide_offline_members;
 		ui.hide_bot_dms = value.hide_bot_dms;
 		ui.compact_timeline = value.compact_timeline;
+		ui.emoticon_conversion = value.emoticon_conversion;
 		ui.reduce_motion = value.reduce_motion;
 		ui.hide_title_bar = value.hide_title_bar;
 		ui.language = value.language;

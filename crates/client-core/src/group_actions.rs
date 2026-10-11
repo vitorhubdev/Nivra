@@ -404,6 +404,7 @@ mod tests {
 			confirmed: None,
 			reason: None,
 			reply: None,
+			silent: false,
 		});
 		assert!(state.leave_group(Id(10)).is_none());
 		state.pending.clear();

@@ -51,6 +51,8 @@ pub struct Role {
 	pub bits: u128,
 	pub name: String,
 	pub color: u32,
+	/// Gradient end color from the role `colors` object, when set.
+	pub secondary: Option<u32>,
 	pub position: i32,
 	pub hoist: bool,
 }
@@ -61,6 +63,15 @@ impl Role {
 		self.position
 			.cmp(&other.position)
 			.then_with(|| other.id.cmp(&self.id))
+	}
+	/// Gradient end colors when the role carries a two-stop gradient: a set
+	/// secondary that differs from the primary. A holographic role keeps its
+	/// solid primary here; shimmer needs frames, not paint.
+	pub fn gradient(&self) -> Option<(u32, u32)> {
+		match self.secondary {
+			Some(secondary) if secondary != self.color => Some((self.color, secondary)),
+			_ => None,
+		}
 	}
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>() + self.name.capacity()
@@ -297,6 +308,29 @@ pub fn effective(
 mod tests {
 	use super::*;
 
+	fn role(color: u32, secondary: Option<u32>) -> Role {
+		Role {
+			id: Id(1),
+			bits: 0,
+			name: String::new(),
+			color,
+			secondary,
+			position: 0,
+			hoist: false,
+		}
+	}
+
+	#[test]
+	fn gradient_needs_a_distinct_secondary_end() {
+		assert_eq!(
+			role(0x112233, Some(0x445566)).gradient(),
+			Some((0x112233, 0x445566))
+		);
+		assert_eq!(role(0x112233, None).gradient(), None);
+		assert_eq!(role(0x112233, Some(0x112233)).gradient(), None);
+		assert_eq!(role(0, Some(0x445566)).gradient(), Some((0, 0x445566)));
+	}
+
 	#[test]
 	fn member_list_identity_matches_wire_hash_and_bounds() {
 		assert_eq!(murmur3(b""), 0);
@@ -341,6 +375,7 @@ mod tests {
 				Role {
 					name: String::new(),
 					color: 0,
+					secondary: None,
 					position: 0,
 					hoist: false,
 					id: Id(1),
@@ -352,6 +387,7 @@ mod tests {
 				Role {
 					name: String::new(),
 					color: 0,
+					secondary: None,
 					position: 0,
 					hoist: false,
 					id: Id(2),
@@ -360,6 +396,7 @@ mod tests {
 				Role {
 					name: String::new(),
 					color: 0,
+					secondary: None,
 					position: 0,
 					hoist: false,
 					id: Id(3),
@@ -480,6 +517,7 @@ mod tests {
 					Role {
 						name: String::new(),
 						color: 0,
+						secondary: None,
 						position: 0,
 						hoist: false,
 						id: Id(1),
@@ -493,6 +531,7 @@ mod tests {
 				roles: Some(vec![Role {
 					name: String::new(),
 					color: 0,
+					secondary: None,
 					position: 0,
 					hoist: false,
 					id: Id(2),
@@ -527,6 +566,7 @@ mod tests {
 						.map(|id| Role {
 							name: String::new(),
 							color: 0,
+							secondary: None,
 							position: 0,
 							hoist: false,
 							id: Id(id as u64),

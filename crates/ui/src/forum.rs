@@ -902,7 +902,33 @@ fn starter_row(ui: &mut egui::Ui, state: &State, post: &Channel, size: f32) {
 			.map_or(colors.text_strong, |rgb| {
 				design::role_name_color(rgb, colors.raised, colors.text_strong)
 			});
-		ui.label(design::semibold(ui, format!("{}:", starter.author), size).color(author_color));
+		if let Some((primary, secondary)) =
+			state.forum_author_gradient(post.id, starter.author_id, starter.webhook, &starter.roles)
+		{
+			let mut job = design::role_gradient_job(
+				ui,
+				&starter.author,
+				primary,
+				secondary,
+				colors.raised,
+				colors.text_strong,
+				size,
+			);
+			job.append(
+				":",
+				0.0,
+				egui::text::TextFormat {
+					font_id: egui::FontId::new(size, design::semibold_family(ui.ctx())),
+					color: colors.text_strong,
+					..Default::default()
+				},
+			);
+			ui.label(job);
+		} else {
+			ui.label(
+				design::semibold(ui, format!("{}:", starter.author), size).color(author_color),
+			);
+		}
 		ui.add(
 			egui::Label::new(RichText::new(excerpt).size(size).color(colors.text))
 				.truncate()

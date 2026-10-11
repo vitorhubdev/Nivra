@@ -49,7 +49,9 @@ pub use polls::*;
 mod search;
 pub use gifs::*;
 pub use search::*;
+mod soundboard;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+pub use soundboard::{MAX_SOUNDS, Sound, SoundEmoji, valid_sound};
 use std::{fmt, str::FromStr};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -24,6 +24,8 @@ pub const fn supported() -> bool {
 pub enum Voice {
 	#[default]
 	Idle,
+	/// Joining, ringing or securing: amber, before the call is fully up.
+	Connecting,
 	Connected,
 	Muted,
 	Deafened,
@@ -48,11 +50,14 @@ impl TrayLabels {
 	}
 }
 
-/// Maps a call to its tray badge. Deafen wins over mute; anything that is not
-/// an active connected/waiting call shows idle (upstream Serein #504).
-pub fn call_voice(in_call: bool, muted: bool, deafened: bool) -> Voice {
+/// Maps a call to its tray badge. A failed or absent call shows idle; joining,
+/// ringing or securing shows connecting; deafen wins over mute; a live call
+/// with neither shows connected (upstream Serein #504).
+pub fn call_voice(in_call: bool, connecting: bool, muted: bool, deafened: bool) -> Voice {
 	if !in_call {
 		Voice::Idle
+	} else if connecting {
+		Voice::Connecting
 	} else if deafened {
 		Voice::Deafened
 	} else if muted {
@@ -62,9 +67,20 @@ pub fn call_voice(in_call: bool, muted: bool, deafened: bool) -> Voice {
 	}
 }
 
+/// White glyph painted over a call dot. Muted draws a microphone with a slash
+/// so it reads as "mic off" next to the deafened bar and the connecting dots.
+#[derive(Clone, Copy)]
+enum Badge {
+	Plain,
+	Bar,
+	Ellipsis,
+	Mic,
+}
+
 /// Square straight-alpha RGBA tray icon: the app icon scaled to `size`, with a red dot for
-/// unread mentions (top right) and a call dot (bottom right: green, or red with a slash when
-/// muted and a bar when deafened). Each dot is cut out of the icon so it reads at 16 px.
+/// unread mentions (top right) and a call dot (bottom right: green connected, amber
+/// connecting with dots, red with a mic-off glyph when muted and a bar when
+/// deafened). Each dot is cut out of the icon so it reads at 16 px.
 pub fn status_icon(png: &[u8], size: u32, mentions: bool, voice: Voice) -> Option<Vec<u8>> {
 	let base = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?;
 	let mut pixels = base
@@ -73,16 +89,18 @@ pub fn status_icon(png: &[u8], size: u32, mentions: bool, voice: Voice) -> Optio
 		.into_raw();
 	let scale = size as f32 / 32.0;
 	const GREEN: [u8; 3] = [0x23, 0xa5, 0x5a];
+	const AMBER: [u8; 3] = [0xf5, 0xa6, 0x23];
 	const RED: [u8; 3] = [0xf2, 0x3f, 0x43];
 	let mut dots = Vec::new();
 	if mentions {
-		dots.push(((26.0, 6.0), 5.5, RED, None));
+		dots.push(((26.0, 6.0), 5.5, RED, Badge::Plain));
 	}
 	match voice {
 		Voice::Idle => {}
-		Voice::Connected => dots.push(((24.5, 24.5), 7.0, GREEN, None)),
-		Voice::Muted => dots.push(((24.5, 24.5), 7.0, RED, Some(true))),
-		Voice::Deafened => dots.push(((24.5, 24.5), 7.0, RED, Some(false))),
+		Voice::Connecting => dots.push(((24.5, 24.5), 7.0, AMBER, Badge::Ellipsis)),
+		Voice::Connected => dots.push(((24.5, 24.5), 7.0, GREEN, Badge::Plain)),
+		Voice::Muted => dots.push(((24.5, 24.5), 7.0, RED, Badge::Mic)),
+		Voice::Deafened => dots.push(((24.5, 24.5), 7.0, RED, Badge::Bar)),
 	}
 	for y in 0..size {
 		for x in 0..size {
@@ -107,16 +125,38 @@ pub fn status_icon(png: &[u8], size: u32, mentions: bool, voice: Voice) -> Optio
 				pixel[3] = (f32::from(pixel[3]) * (1.0 - gap)) as u8;
 				let fill = cover(&within(radius));
 				let bar = 1.1 * scale;
+				let slash = cover(&|px, py| {
+					let (dx, dy) = (px - cx, py - cy);
+					(dx + dy).abs() <= bar * std::f32::consts::SQRT_2
+						&& dx.abs() <= radius * 0.55
+						&& dy.abs() <= radius * 0.55
+				});
 				let mark = match glyph {
-					None => 0.0,
-					Some(true) => cover(&|px, py| {
-						let (dx, dy) = (px - cx, py - cy);
-						(dx + dy).abs() <= bar * std::f32::consts::SQRT_2
-							&& dx.abs() <= radius * 0.55
-							&& dy.abs() <= radius * 0.55
-					}),
-					Some(false) => {
+					Badge::Plain => 0.0,
+					Badge::Bar => {
 						cover(&|px, py| (py - cy).abs() <= bar && (px - cx).abs() <= radius * 0.55)
+					}
+					Badge::Ellipsis => {
+						let dot = 1.25 * scale;
+						let off = 2.6 * scale;
+						[-off, 0.0, off]
+							.into_iter()
+							.map(|dx| {
+								cover(&move |px, py| {
+									(px - cx - dx).powi(2) + (py - cy).powi(2) <= dot * dot
+								})
+							})
+							.fold(0.0, f32::max)
+					}
+					Badge::Mic => {
+						// Capsule body of a microphone, slashed like the old mark.
+						let (hw, hh, r) = (1.7 * scale, 2.8 * scale, 1.7 * scale);
+						let mic = cover(&|px, py| {
+							let qx = ((px - cx).abs() - (hw - r)).max(0.0);
+							let qy = ((py - cy + 1.2 * scale).abs() - (hh - r)).max(0.0);
+							qx * qx + qy * qy <= r * r
+						});
+						slash.max(mic)
 					}
 				};
 				if fill > 0.0 {
@@ -726,14 +766,35 @@ mod tests {
 
 		let muted = status_icon(&png, 32, false, Voice::Muted).unwrap();
 		let deafened = status_icon(&png, 32, false, Voice::Deafened).unwrap();
+		let connecting = status_icon(&png, 32, false, Voice::Connecting).unwrap();
 		assert_eq!(
 			at(&muted, 21, 21),
 			[0xf2, 0x3f, 0x43, 255],
 			"red when muted"
 		);
 		assert_eq!(at(&muted, 24, 24), [255, 255, 255, 255], "muted slash");
+		assert_eq!(
+			at(&muted, 24, 21),
+			[255, 255, 255, 255],
+			"mic capsule above the slash"
+		);
 		assert_eq!(at(&deafened, 24, 24), [255, 255, 255, 255], "deafened bar");
+		assert_eq!(
+			at(&connecting, 24, 20),
+			[0xf5, 0xa6, 0x23, 255],
+			"amber while connecting"
+		);
+		assert_eq!(
+			at(&connecting, 24, 24),
+			[255, 255, 255, 255],
+			"connecting ellipsis"
+		);
 		assert_ne!(muted, deafened, "muted and deafened look different");
+		assert_ne!(connecting, muted, "connecting and muted look different");
+		assert_ne!(
+			connecting, deafened,
+			"connecting and deafened look different"
+		);
 		assert!(status_icon(b"not a png", 32, false, Voice::Idle).is_none());
 	}
 
@@ -757,23 +818,31 @@ mod voice_tests {
 	use super::*;
 
 	#[test]
-	fn call_voice_maps_the_four_owner_states_in_priority_order() {
-		assert_eq!(call_voice(false, false, false), Voice::Idle);
-		assert_eq!(call_voice(false, true, true), Voice::Idle);
-		assert_eq!(call_voice(true, false, false), Voice::Connected);
-		assert_eq!(call_voice(true, true, false), Voice::Muted);
-		assert_eq!(call_voice(true, false, true), Voice::Deafened);
+	fn call_voice_maps_the_owner_states_in_priority_order() {
+		assert_eq!(call_voice(false, false, false, false), Voice::Idle);
+		assert_eq!(call_voice(false, true, true, true), Voice::Idle);
+		assert_eq!(call_voice(true, false, false, false), Voice::Connected);
+		assert_eq!(call_voice(true, true, false, false), Voice::Connecting);
+		assert_eq!(call_voice(true, true, true, true), Voice::Connecting);
+		assert_eq!(call_voice(true, false, true, false), Voice::Muted);
+		assert_eq!(call_voice(true, false, false, true), Voice::Deafened);
 		assert_eq!(
-			call_voice(true, true, true),
+			call_voice(true, false, true, true),
 			Voice::Deafened,
 			"deafen wins over mute"
 		);
 	}
 
 	#[test]
-	fn status_icon_renders_all_four_badges() {
+	fn status_icon_renders_all_five_badges() {
 		let png = include_bytes!("../../../packaging/windows/nivra.png");
-		for voice in [Voice::Idle, Voice::Connected, Voice::Muted, Voice::Deafened] {
+		for voice in [
+			Voice::Idle,
+			Voice::Connecting,
+			Voice::Connected,
+			Voice::Muted,
+			Voice::Deafened,
+		] {
 			let pixels = status_icon(png, 32, false, voice)
 				.unwrap_or_else(|| panic!("tray icon must render for {voice:?}"));
 			assert_eq!(pixels.len(), 32 * 32 * 4);

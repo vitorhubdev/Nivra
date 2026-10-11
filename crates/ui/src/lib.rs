@@ -208,6 +208,7 @@ mod polls;
 mod profile_edit;
 mod reactions;
 mod reading;
+mod scheduled_events;
 pub mod screen;
 pub mod scroll;
 mod search;

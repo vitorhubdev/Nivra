@@ -18,6 +18,7 @@ mod interactions;
 mod messaging_permissions;
 mod profile_edit;
 pub mod rpc;
+mod scheduled_events;
 mod server_actions;
 mod server_admin;
 mod server_audit_log;
@@ -875,6 +876,19 @@ impl DiscordApi {
 						let result = self.soundboard_play(channel, sound, source).await;
 						E::Played {
 							channel,
+							request,
+							result,
+						}
+					}
+				})
+			}
+			Command::ScheduledEvents(command) => {
+				use client_core::scheduled_events::{Command as S, Event as E};
+				Event::ScheduledEvents(match command {
+					S::List { guild, request } => {
+						let result = self.scheduled_events(guild).await;
+						E::Listed {
+							guild,
 							request,
 							result,
 						}
@@ -2522,7 +2536,6 @@ mod tests {
         }).await.unwrap();
 	}
 	#[tokio::test]
-<<<<<<< HEAD
 	async fn silent_send_sets_suppress_notifications_flag() {
 		crate::ensure_tls_provider();
 		tokio::time::timeout(Duration::from_secs(5), async {
@@ -2560,7 +2573,8 @@ mod tests {
                 assert!(matches!(result,Event::SendResult{result:Ok(_),..}));
             }
             server.await.unwrap();
-=======
+
+	#[tokio::test]
 	async fn poll_create_posts_the_poll_object_and_reads_the_message() {
 		crate::ensure_tls_provider();
 		tokio::time::timeout(Duration::from_secs(5), async {
@@ -2602,7 +2616,6 @@ mod tests {
 		// Rejected shapes never touch the network.
 		let denied=api.create_poll(model::Id(2),"",&["Only".to_owned()],24,false,"local").await;
 		assert!(matches!(denied,Err(Failure::Capacity)));
->>>>>>> origin/feat/poll-creation
         }).await.unwrap();
 	}
 	#[tokio::test]

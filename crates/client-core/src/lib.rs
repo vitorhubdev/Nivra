@@ -31,6 +31,7 @@ mod replies;
 pub use replies::{Reply, ReplyDeletions};
 pub mod group_actions;
 pub mod resident;
+pub mod scheduled_events;
 pub mod screen;
 pub mod search;
 pub mod server_actions;
@@ -204,6 +205,7 @@ pub enum Command {
 	Reactions(reactions::Command),
 	Polls(polls::Command),
 	Soundboard(soundboard::Command),
+	ScheduledEvents(scheduled_events::Command),
 	Profile {
 		user: Id,
 		guild: Option<Id>,
@@ -490,6 +492,7 @@ pub enum Event {
 	Reactions(reactions::Event),
 	Polls(polls::Event),
 	Soundboard(soundboard::Event),
+	ScheduledEvents(scheduled_events::Event),
 	Profile {
 		user: Id,
 		guild: Option<Id>,
@@ -687,6 +690,7 @@ pub struct State {
 	pub reactions: reactions::Reactions,
 	pub polls: polls::Polls,
 	pub soundboard: soundboard::Board,
+	pub events: scheduled_events::Events,
 	pub profile: Option<profile::ProfileView>,
 	pub profile_request: u64,
 	pub profile_cache: profile::ProfileCache,
@@ -947,6 +951,7 @@ impl Default for State {
 			reactions: reactions::Reactions::default(),
 			polls: polls::Polls::default(),
 			soundboard: soundboard::Board::default(),
+			events: scheduled_events::Events::default(),
 			profile: None,
 			profile_request: 0,
 			profile_cache: Default::default(),
@@ -2242,6 +2247,14 @@ impl State {
 					});
 				}
 			}
+		if let Command::ScheduledEvents(command) = command {
+			use scheduled_events::{Command as S, Event as E};
+			let S::List { guild, request } = command;
+			let _ = self.apply_scheduled_events(E::Listed {
+				guild,
+				request,
+				result: Err(auth::Failure::Capacity),
+			});
 			return;
 		}
 		if let Command::Edit {
@@ -2864,6 +2877,7 @@ impl State {
 			Event::Reactions(event) => self.apply_reactions(event),
 			Event::Polls(event) => self.apply_polls(event),
 			Event::Soundboard(event) => self.apply_soundboard(event),
+			Event::ScheduledEvents(event) => self.apply_scheduled_events(event),
 			Event::InviteChallenge { request, challenge } => {
 				self.apply_invite_challenge(request, *challenge);
 				Ok(())
@@ -4947,7 +4961,6 @@ mod tests {
 	}
 
 	#[test]
-<<<<<<< HEAD
 	fn silent_prefix_sends_without_notifications() {
 		let mut state = dm_state();
 		state.drafts.insert(Id(1), "@silent hello there".into());
@@ -5013,7 +5026,8 @@ mod tests {
 		assert_eq!(content, "hey 🙂");
 		assert_eq!(state.pending[0].content, "hey 🙂");
 	}
-=======
+
+	#[test]
 	fn poll_creation_validates_before_queuing() {
 		let answers = ["One".to_owned(), "Two".to_owned()];
 		let mut state = dm_state();
@@ -5054,7 +5068,6 @@ mod tests {
 				.is_none()
 		);
 	}
->>>>>>> origin/feat/poll-creation
 	use super::*;
 
 	#[test]

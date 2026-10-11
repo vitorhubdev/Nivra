@@ -7,12 +7,13 @@ use model::Id;
 enum Dialog {
 	Invite { guild: Id, channel: Option<Id> },
 	Leave(Id),
+	Events(Id),
 }
 
 impl Dialog {
 	fn guild(self) -> Id {
 		match self {
-			Self::Invite { guild, .. } | Self::Leave(guild) => guild,
+			Self::Invite { guild, .. } | Self::Leave(guild) | Self::Events(guild) => guild,
 		}
 	}
 }
@@ -24,6 +25,7 @@ pub(super) struct ServerMenu {
 	dialog: Option<Dialog>,
 	generation: u64,
 	invite: InviteDialog,
+	events: crate::scheduled_events::EventsDialog,
 }
 
 impl ServerMenu {
@@ -47,6 +49,34 @@ impl ServerMenu {
 			.clicked()
 		{
 			self.mark_read_requested = Some(guild);
+			ui.close();
+			return true;
+		}
+		false
+	}
+	/// Upcoming scheduled events; every member may browse, no permission needed.
+	pub fn events_item(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &State,
+		guild: Id,
+		language: model::Language,
+	) -> bool {
+		let available = state.demo || state.gateway_connected;
+		if ui
+			.add_enabled_ui(available, |ui| {
+				menu_row(
+					ui,
+					icons::Icon::Calendar,
+					crate::i18n::text(language, "Events"),
+					design::palette(ui).text,
+				)
+			})
+			.inner
+			.clicked()
+		{
+			self.dialog = Some(Dialog::Events(guild));
+			self.generation = state.generation;
 			ui.close();
 			return true;
 		}
@@ -175,6 +205,7 @@ impl ServerMenu {
 						&& !state.server_invite_pending()
 						&& (state.demo || state.gateway_connected);
 					self.read_item(ui, state, guild, language);
+					self.events_item(ui, state, guild, language);
 					ui.separator();
 					self.settings_item(ui, state, guild, language);
 					if ui
@@ -248,6 +279,19 @@ impl ServerMenu {
 			self.dialog = if close { None } else { Some(dialog) };
 			if close {
 				self.invite = InviteDialog::default();
+			}
+			return;
+		}
+		if let Dialog::Events(events_guild) = dialog {
+			// Idempotent: requests only until the list loads.
+			if let Some(command) = state.request_events(events_guild) {
+				commands.push(command);
+			}
+			let close = self.events.show(ctx, state, events_guild, commands);
+			if close {
+				self.dialog = None;
+			} else {
+				self.dialog = Some(dialog);
 			}
 			return;
 		}

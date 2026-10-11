@@ -1126,9 +1126,10 @@ fn member_range_pair(first: usize, last: usize) -> Vec<[usize; 2]> {
 	}
 	ranges
 }
+/// Channels the conversation pane can present: text, voice, stage, and forum containers.
 fn navigable(channel: &Channel) -> bool {
 	channel.supports_text()
-		|| channel.kind == 2
+		|| matches!(channel.kind, 2 | 13)
 		|| (channel.guild.is_some() && matches!(channel.kind, 15 | 16))
 }
 impl State {
@@ -1281,8 +1282,8 @@ impl State {
 				self.channels
 					.iter()
 					.filter(|c| c.guild == Some(guild) && available(c.id))
-					// Prefer ordinary text/forum channels over threads or voice on first visit.
-					.min_by_key(|c| (matches!(c.kind, 2 | 10..=12), c.position, c.id))
+					// Prefer ordinary text/forum channels over threads, voice or stage on first visit.
+					.min_by_key(|c| (matches!(c.kind, 2 | 10..=13), c.position, c.id))
 					.map(|c| c.id)
 			})?;
 		self.select(channel)

@@ -7,6 +7,7 @@ pub(super) enum Builtin {
 	Gif,
 	Me,
 	Msg,
+	Poll,
 	Shrug,
 	Spoiler,
 	Sticker,
@@ -45,6 +46,12 @@ pub(super) const ALL: &[Descriptor] = &[
 		name: "msg",
 		description: "Message a user.",
 		usage: "/msg @user [message]",
+	},
+	Descriptor {
+		command: Builtin::Poll,
+		name: "poll",
+		description: "Create a poll.",
+		usage: "/poll",
 	},
 	Descriptor {
 		command: Builtin::Shrug,
@@ -90,6 +97,7 @@ pub(super) enum Action<'a> {
 	Gifs(&'a str),
 	Stickers(&'a str),
 	Message { recipient: &'a str, text: &'a str },
+	Poll,
 }
 
 /// Completion is only active for the leading command token, never inline text.
@@ -125,6 +133,7 @@ impl<'a> Invocation<'a> {
 			}
 			Builtin::Gif => return Ok(Action::Gifs(text)),
 			Builtin::Sticker => return Ok(Action::Stickers(text)),
+			Builtin::Poll => return Ok(Action::Poll),
 			Builtin::Msg => {
 				let (recipient, text) = split_word(text);
 				if recipient.is_empty() {
@@ -280,6 +289,10 @@ impl crate::MessagingUi {
 				self.emoji_picker.search_stickers(query);
 				self.clear_draft(state, channel);
 			}
+			Action::Poll => {
+				self.poll_dialog.open();
+				self.clear_draft(state, channel);
+			}
 			Action::Message {
 				recipient: query,
 				text,
@@ -429,6 +442,7 @@ mod tests {
 			parse("/gif cats").unwrap().action(),
 			Ok(Action::Gifs("cats"))
 		);
+		assert_eq!(parse("/poll").unwrap().action(), Ok(Action::Poll));
 		assert_eq!(
 			parse("/sticker").unwrap().action(),
 			Ok(Action::Stickers(""))

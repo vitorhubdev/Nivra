@@ -890,7 +890,7 @@ pub fn voice_demo_state() -> State {
 		.unwrap()
 		.name = "Room 3,5".into();
 	state.channels.push(Channel {
-		id: Id(26),
+		id: Id(30),
 		guild: Some(Id(10)),
 		parent_id: Some(Id(24)),
 		position: 2,
@@ -903,6 +903,11 @@ pub fn voice_demo_state() -> State {
 		last_message: None,
 		tags: None,
 	});
+	// The pushed channel needs permission metadata like the rest.
+	state
+		.permissions
+		.replace(permission_snapshot(&state))
+		.unwrap();
 	state.voice.roster = [
 		(1, "You (synthetic)", false, false),
 		(2, "Robin with a rather long display name", true, true),

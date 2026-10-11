@@ -216,7 +216,11 @@ impl Connection {
                         }
                         changed=voice_availability.changed()=> {
                             if changed.is_err() {break;}
-                            if !*voice_availability.borrow_and_update() {drop(ringing.take());drop(profile.take());drop(search.take());voice_request=None;if let Some(cancel)=&upload_cancel {let _=cancel.send(true);}}
+                            // Only voice work dies with voice availability: profile and
+                            // search REST tasks keep running (their results are
+                            // request-matched), so their views never stick on
+                            // loading with no outcome. History is left running too.
+                            if !*voice_availability.borrow_and_update() {drop(ringing.take());voice_request=None;if let Some(cancel)=&upload_cancel {let _=cancel.send(true);}}
                         }
                         request=upload_receive.recv()=>{
                             let Some(request)=request else {break;};
@@ -466,8 +470,9 @@ impl Connection {
                                 continue;
                             }
                             if let Command::History { channel, request, .. } = &command {
-                                drop(search.take());
-                                drop(reaction_read.take());
+                                // Search and reaction reads run to completion: their
+                                // results are request-scoped, so a history load
+                                // neither corrupts them nor strands their views.
                                 let (channel, request) = (*channel, *request);
                                 drop(history.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let history_wake=wake.clone();
@@ -507,7 +512,10 @@ impl Connection {
                 }
                 Ok::<(),Failure>(())
             }.await;
-            if let Err(f)=result { if !matches!(f, Failure::Capacity | Failure::CapacityAt(_)) { let _=finished.send(Some(f)); } wake.request_repaint(); }
+            // Every terminal failure is signaled, including capacity: main
+            // handles Capacity/CapacityAt distinctly (no auto-reconnect) and
+            // must still tear down the dead task instead of stranding it.
+            if let Err(f)=result { let _=finished.send(Some(f)); wake.request_repaint(); }
         });
 		Self {
 			commands,

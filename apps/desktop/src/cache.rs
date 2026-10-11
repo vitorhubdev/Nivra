@@ -366,9 +366,25 @@ impl Cache {
 					}
 					_ => 0,
 				};
-				let reservation = results
-					.reserve(bytes + 64 * 1024, true)
-					.expect("bounded storage outcome fits queue");
+				let Some(reservation) = results.reserve(bytes + 64 * 1024, true) else {
+					// An oversized load must not panic the only cache worker:
+					// report it and keep serving every later request.
+					let failed = Outcome::Failed {
+						error: StoreError::Capacity,
+						message: "Cached data exceeded safe bounds and was skipped",
+						draft_restore: false,
+						history_cleanup: false,
+					};
+					// A zero-byte reservation always fits; if even that is
+					// unavailable the outcome is dropped and the worker lives on.
+					if let Some(empty) = results.reserve(0, true)
+						&& events.send((generation, failed, empty)).is_err()
+					{
+						break;
+					}
+					ctx.request_repaint();
+					continue;
+				};
 				if events.send((generation, outcome, reservation)).is_err() {
 					break;
 				}

@@ -682,6 +682,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 					text: "# Synthetic release notes\n\nThis preview is the real bounded dialog the desktop opens after fetching a text, Markdown or code attachment. Every line below is invented for the capture.\n\n- **Bold**, *italics*, `inline code` and [links](https://example.com) all render on the render thread only.\n- Oversized files stop at the disclosed window and offer *Show more*; nothing is written to disk.\n\n> Attachments are fetched once, decoded in memory and never executed.\n\n```rust\nfn main() {\n    println!(\"offline fixture\");\n}\n```\n".into(),
 					truncated: false,
 					shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
+					maximized: false,
+					copied: false,
 				});
 			} else if page == "image-viewer" {
 				messaging.preview_image_viewer(model::Id(500), model::Id(700));

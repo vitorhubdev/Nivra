@@ -142,7 +142,11 @@ pub fn show(
 									formatted.show_references(
 										ui,
 										opening,
-										&crate::mentions::known_users(state, pending.channel),
+										&crate::mentions::known_users_cached(
+											ui.ctx(),
+											state,
+											pending.channel,
+										),
 										Some(&source),
 										profile,
 										(

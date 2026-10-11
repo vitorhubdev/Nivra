@@ -58,6 +58,16 @@ pub struct Embed {
 fn string_bytes(value: &Option<String>) -> usize {
 	value.as_ref().map_or(0, String::capacity)
 }
+/// Wire timestamps are RFC 3339; the model only admits that alphabet so a
+/// garbage string never reaches date rendering.
+fn valid_timestamp(value: &str) -> bool {
+	!value.is_empty()
+		&& value.len() <= 64
+		&& value.bytes().all(|b| {
+			b.is_ascii_alphanumeric()
+				|| matches!(b, b'-' | b':' | b'.' | b'+' | b'T' | b'Z' | b't' | b'z')
+		})
+}
 impl EmbedMedia {
 	pub fn bytes(&self) -> usize {
 		string_bytes(&self.url) + string_bytes(&self.proxy_url) + self.placeholder.capacity()
@@ -113,7 +123,7 @@ impl Embed {
 			&& self.title.as_ref().is_none_or(|s| s.len() <= 1024)
 			&& self.description.as_ref().is_none_or(|s| s.len() <= 16_384)
 			&& self.url.as_ref().is_none_or(|s| s.len() <= 2048)
-			&& self.timestamp.as_ref().is_none_or(|s| s.len() <= 64)
+			&& self.timestamp.as_ref().is_none_or(|s| valid_timestamp(s))
 			&& self.fields.len() <= 25
 			&& self
 				.fields

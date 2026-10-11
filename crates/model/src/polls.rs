@@ -22,7 +22,7 @@ impl PollEmoji {
 			!name.is_empty()
 				&& name.chars().count() <= MAX_POLL_EMOJI_CHARS
 				&& !name.chars().any(char::is_control)
-		}) && (self.id.is_some() || self.name.is_some())
+		}) && (self.id.is_some_and(|id| id.0 != 0) || self.name.is_some())
 	}
 	pub fn label(&self) -> String {
 		match (self.id, self.name.as_deref()) {
@@ -130,6 +130,7 @@ pub fn poll_bytes(poll: &Option<Poll>) -> usize {
 pub fn valid_poll(poll: &Poll) -> bool {
 	poll.answers.len() <= MAX_POLL_ANSWERS
 		&& !poll.answers.is_empty()
+		&& !poll.question.is_empty()
 		&& poll.question.chars().count() <= MAX_POLL_QUESTION_CHARS
 		&& poll.bytes() <= MAX_POLL_BYTES
 		&& poll.answers.iter().enumerate().all(|(index, answer)| {

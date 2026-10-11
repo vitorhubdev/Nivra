@@ -1133,7 +1133,7 @@ impl SearchUi {
 						self.formats.get(hit.id, &hit.excerpt).show_search(
 							ui,
 							&mut self.opening,
-							&crate::mentions::known_users(state, hit.channel),
+							&crate::mentions::known_users_cached(ui.ctx(), state, hit.channel),
 							Some(&source),
 							profile,
 							(

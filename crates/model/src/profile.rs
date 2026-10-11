@@ -61,32 +61,101 @@ impl ProfileEdit {
 	}
 }
 
-/// PNG data URI small enough to send as a profile picture.
+/// PNG data URI small enough to send as a profile picture, with decodable
+/// PNG magic and sane dimensions like group icons require.
 pub fn valid_avatar_uri(uri: &str) -> bool {
 	uri.len() <= MAX_PROFILE_AVATAR_URI
 		&& uri
 			.strip_prefix("data:image/png;base64,")
 			.is_some_and(|data| {
-				!data.is_empty()
-					&& data
-						.bytes()
-						.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+				!data.is_empty() && decode_base64(data).is_ok_and(|png| valid_avatar_png(&png))
 			})
+}
+
+/// Minimal standard-alphabet base64 decoder: enough to check PNG magic
+/// without growing a dependency for one validation.
+fn decode_base64(data: &str) -> Result<Vec<u8>, ()> {
+	fn sextet(byte: u8) -> Result<u8, ()> {
+		match byte {
+			b'A'..=b'Z' => Ok(byte - b'A'),
+			b'a'..=b'z' => Ok(byte - b'a' + 26),
+			b'0'..=b'9' => Ok(byte - b'0' + 52),
+			b'+' => Ok(62),
+			b'/' => Ok(63),
+			_ => Err(()),
+		}
+	}
+	let bytes = data.as_bytes();
+	if !bytes.len().is_multiple_of(4) {
+		return Err(());
+	}
+	let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+	for chunk in bytes.as_chunks::<4>().0 {
+		let pad = chunk.iter().rev().take_while(|b| **b == b'=').count();
+		if pad > 2 {
+			return Err(());
+		}
+		let mut triple = 0u32;
+		for (i, byte) in chunk.iter().enumerate() {
+			if i >= 4 - pad {
+				if *byte != b'=' {
+					return Err(());
+				}
+			} else {
+				triple |= u32::from(sextet(*byte)?) << (18 - 6 * i);
+			}
+		}
+		// The data bits sit in the low bytes of the big-endian word:
+		// three bytes for a full quartet, fewer when padded.
+		out.extend_from_slice(&triple.to_be_bytes()[1..4 - pad]);
+	}
+	Ok(out)
+}
+
+fn valid_avatar_png(png: &[u8]) -> bool {
+	png.len() >= 33
+		&& png.starts_with(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR")
+		&& [16, 20].into_iter().all(|offset| {
+			(1..=1024).contains(&u32::from_be_bytes(
+				png[offset..offset + 4].try_into().unwrap_or([0; 4]),
+			))
+		})
 }
 
 #[cfg(test)]
 mod edit_tests {
 	use super::*;
 	#[test]
+	fn base64_decoder_round_trips_without_dependencies() {
+		assert_eq!(decode_base64("").unwrap(), Vec::<u8>::new());
+		assert_eq!(decode_base64("TWFu").unwrap(), b"Man");
+		assert_eq!(decode_base64("TWE=").unwrap(), b"Ma");
+		assert_eq!(decode_base64("TQ==").unwrap(), b"M");
+		assert!(
+			decode_base64("TWF").is_err(),
+			"length must be a multiple of 4"
+		);
+		assert!(decode_base64("T===").is_err(), "at most two pads");
+		assert!(decode_base64("T!WF").is_err(), "bad alphabet");
+		assert!(decode_base64("TW=F").is_err(), "pad only at the end");
+	}
+
+	#[test]
 	fn profile_edit_bounds_unicode_clear_values_and_retained_bytes() {
+		// Minimal decodable PNG: magic plus an IHDR advertising 1x1.
 		let mut edit = ProfileEdit {
 			global_name: Some(Some("🦀".repeat(MAX_PROFILE_NAME_CHARS))),
 			bio: Some("🦀".repeat(MAX_PROFILE_BIO_CHARS)),
 			pronouns: Some("🦀".repeat(MAX_PROFILE_PRONOUNS_CHARS)),
 			accent_color: Some(Some(0xff_ffff)),
-			avatar: Some(Some("data:image/png;base64,iVBORw0KGgo=".into())),
+			avatar: Some(Some(
+				"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAAAAAAAAAAAA".into(),
+			)),
 		};
 		assert!(edit.valid());
+		// Magic alone is not a picture.
+		edit.avatar = Some(Some("data:image/png;base64,iVBORw0KGgo=".into()));
+		assert!(!edit.valid());
 		edit.avatar = Some(Some("data:image/jpeg;base64,/9j/".into()));
 		assert!(!edit.valid());
 		edit.avatar = Some(Some(format!(

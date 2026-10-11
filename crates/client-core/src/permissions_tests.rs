@@ -1644,3 +1644,55 @@ fn thread_members_load_without_parent_list_and_reject_retired_replies() {
 	);
 	assert!(state.request_members().is_none());
 }
+
+#[test]
+fn unknown_role_list_and_member_still_materialize() {
+	let mut state = state();
+	let guild = state
+		.permissions
+		.guilds
+		.get_mut(&Id(10))
+		.expect("synthetic guild");
+	guild.roles = None;
+	guild.member = None;
+	permission(
+		&mut state,
+		PermissionEvent::Role {
+			guild: Id(10),
+			role: p::Role {
+				id: Id(77),
+				bits: BITS,
+				name: "Role 77".into(),
+				position: 1,
+				color: 0,
+				hoist: false,
+			},
+		},
+	);
+	assert_eq!(
+		state
+			.permissions
+			.guilds
+			.get(&Id(10))
+			.and_then(|guild| guild.roles.as_ref())
+			.map(|roles| roles.iter().map(|role| role.id).collect::<Vec<_>>()),
+		Some(vec![Id(77)])
+	);
+	permission(
+		&mut state,
+		PermissionEvent::Member {
+			guild: Id(10),
+			roles: Patch::Value(vec![Id(77)]),
+			timeout_until: Patch::Absent,
+		},
+	);
+	assert_eq!(
+		state
+			.permissions
+			.guilds
+			.get(&Id(10))
+			.and_then(|guild| guild.member.as_ref())
+			.map(|member| member.roles.clone()),
+		Some(vec![Id(77)])
+	);
+}

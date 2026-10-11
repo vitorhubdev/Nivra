@@ -35,11 +35,10 @@ pub const SYSTEM_DLL_NAMES: &[&str] = &[
 ];
 
 /// File names in `dir` that match a system DLL the loader would search first. Pure
-/// filesystem check, testable on every platform.
-pub fn planted_system_dlls(dir: &Path) -> Vec<String> {
-	let Ok(entries) = std::fs::read_dir(dir) else {
-		return Vec::new();
-	};
+/// filesystem check, testable on every platform. An unreadable directory is an
+/// error, never a clean bill: callers must not mistake it for "no findings".
+pub fn planted_system_dlls(dir: &Path) -> Result<Vec<String>, std::io::Error> {
+	let entries = std::fs::read_dir(dir)?;
 	let mut found = Vec::new();
 	for entry in entries.flatten() {
 		let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
@@ -48,7 +47,7 @@ pub fn planted_system_dlls(dir: &Path) -> Vec<String> {
 		}
 	}
 	found.sort();
-	found
+	Ok(found)
 }
 
 /// Loaded modules outside `System32`, `WinSxS` and the application directory. Pure
@@ -141,14 +140,24 @@ pub fn loaded_modules() -> Vec<String> {
 }
 
 /// One startup scan: suspicious neighbours plus foreign loaded modules, already
-/// formatted as bounded, content-free log lines.
+/// formatted as bounded, content-free log lines. An unreadable application
+/// directory is logged explicitly instead of reporting zero findings.
 #[cfg(target_os = "windows")]
 pub fn startup_report() -> (Vec<String>, Vec<String>) {
 	let exe_dir = std::env::current_exe()
 		.ok()
 		.and_then(|exe| exe.parent().map(Path::to_path_buf))
 		.unwrap_or_default();
-	let planted = planted_system_dlls(&exe_dir);
+	let planted = match planted_system_dlls(&exe_dir) {
+		Ok(planted) => planted,
+		Err(error) => {
+			crate::diagnostics::append(
+				crate::diagnostics::Level::Error,
+				&format!("DLL scan unavailable for {}: {error}", exe_dir.display()),
+			);
+			Vec::new()
+		}
+	};
 	let foreign = foreign_module_paths(&exe_dir, loaded_modules());
 	(planted, foreign)
 }
@@ -171,9 +180,10 @@ mod tests {
 		std::fs::write(dir.join("Nivra.exe"), b"synthetic").unwrap();
 		std::fs::write(dir.join("readme.txt"), b"synthetic").unwrap();
 		assert_eq!(
-			planted_system_dlls(&dir),
+			planted_system_dlls(&dir).unwrap(),
 			vec!["dxgi.dll".to_string(), "winmm.dll".to_string()]
 		);
+		assert!(planted_system_dlls(&dir.join("missing")).is_err());
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 

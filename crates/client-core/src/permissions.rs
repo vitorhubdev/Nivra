@@ -290,11 +290,17 @@ impl Permissions {
 				next.guilds.insert(guild.id, guild);
 			}
 			Event::Role { guild, role } => {
-				if let Some(roles) = next.guilds.get_mut(&guild).and_then(|g| g.roles.as_mut()) {
-					if let Some(old) = roles.iter_mut().find(|old| old.id == role.id) {
-						*old = role;
-					} else {
-						roles.push(role);
+				if let Some(guild) = next.guilds.get_mut(&guild) {
+					match guild.roles.as_mut() {
+						Some(roles) => {
+							if let Some(old) = roles.iter_mut().find(|old| old.id == role.id) {
+								*old = role;
+							} else {
+								roles.push(role);
+							}
+						}
+						// A guild whose snapshot had no roles still learns the new one.
+						None => guild.roles = Some(vec![role]),
 					}
 				}
 			}
@@ -388,7 +394,9 @@ impl Permissions {
 				if let Patch::Value(roles) = roles {
 					if let Some(member) = &mut guild.member {
 						member.roles = roles;
-					} else if !matches!(timeout_until, Patch::Absent) {
+					} else {
+						// Roles without a known member still materialize it;
+						// an absent timeout simply leaves no timeout set.
 						guild.member = Some(p::Member {
 							roles,
 							timeout_until: None,

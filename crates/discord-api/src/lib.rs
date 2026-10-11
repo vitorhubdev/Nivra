@@ -439,8 +439,11 @@ impl DiscordApi {
 			}
 			if status == StatusCode::TOO_MANY_REQUESTS {
 				let mut next = self.cooldown.lock().await;
-				*next =
-					(*next).max(Instant::now() + safe_delay(error.retry_after.or(retry_header))?);
+				// A malformed retry delay must not misclassify the rate limit
+				// or skip the cooldown: fall back to the default delay.
+				let delay = safe_delay(error.retry_after.or(retry_header))
+					.unwrap_or(Duration::from_secs(1));
+				*next = (*next).max(Instant::now() + delay);
 				return Err(Failure::RateLimited);
 			}
 			// A missing private note is empty, not a missing user profile. No other 404 is converted.
@@ -2654,6 +2657,11 @@ mod tests {
 			(
 				"429 Too Many Requests",
 				"{\"retry_after\":0.1,\"global\":true}",
+				Failure::RateLimited,
+			),
+			(
+				"429 Too Many Requests",
+				"{\"retry_after\":-5}",
 				Failure::RateLimited,
 			),
 			(

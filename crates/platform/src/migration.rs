@@ -75,11 +75,36 @@ impl std::fmt::Display for DataMigrationError {
 /// - Else (neither exists), `create_dir_all(new)`.
 pub fn migrate_data_dir(old: &Path, new: &Path) -> Result<(), DataMigrationError> {
 	if new.exists() {
+		if !new.is_dir() {
+			return Err(DataMigrationError::RenameFailed(format!(
+				"{} exists and is not a directory",
+				new.display()
+			)));
+		}
 		return Ok(());
 	}
 	if old.exists() {
-		std::fs::rename(old, new).map_err(|e| DataMigrationError::RenameFailed(e.to_string()))?;
-		return Ok(());
+		if !old.is_dir() {
+			return Err(DataMigrationError::RenameFailed(format!(
+				"{} exists and is not a directory",
+				old.display()
+			)));
+		}
+		// A destination created between the check above and the rename leaves
+		// the source untouched instead of merging or replacing it.
+		match std::fs::rename(old, new) {
+			Ok(()) => return Ok(()),
+			Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+				if new.is_dir() {
+					return Ok(());
+				}
+				return Err(DataMigrationError::RenameFailed(format!(
+					"{} appeared during migration and is not a directory",
+					new.display()
+				)));
+			}
+			Err(error) => return Err(DataMigrationError::RenameFailed(error.to_string())),
+		}
 	}
 	std::fs::create_dir_all(new).map_err(|e| DataMigrationError::CreateFailed(e.to_string()))?;
 	#[cfg(unix)]
@@ -682,6 +707,27 @@ mod tests {
 		assert!(migrate_data_dir(&old, &new).is_err());
 		// The blocking file is still there and no empty dir was opened over it.
 		assert!(old.is_file());
+		let _ = std::fs::remove_dir_all(&base);
+	}
+
+	#[test]
+	fn data_dir_refuses_files_where_directories_belong() {
+		let base = temp_base("data-files");
+		let _ = std::fs::remove_dir_all(&base);
+		std::fs::create_dir_all(&base).unwrap();
+		let old = base.join(OLD_DATA_DIR_NAME);
+		let new = base.join(NEW_DATA_DIR_NAME);
+		// A regular file as the legacy path must not migrate.
+		std::fs::write(&old, b"not-a-dir").unwrap();
+		assert!(migrate_data_dir(&old, &new).is_err());
+		assert!(old.is_file());
+		assert!(!new.exists());
+		let _ = std::fs::remove_file(&old);
+		// A regular file as the destination must not be opened over.
+		std::fs::write(&new, b"not-a-dir").unwrap();
+		std::fs::create_dir_all(&old).unwrap();
+		assert!(migrate_data_dir(&old, &new).is_err());
+		assert!(old.is_dir(), "source stays untouched");
 		let _ = std::fs::remove_dir_all(&base);
 	}
 

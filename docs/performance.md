@@ -2018,3 +2018,41 @@ removed the former 12.03 MB `zstd -19` archive). A 20% reduction would require
 removing user-visible content (the emoji atlas) or the x64-only
 DeepFilterNet/tract runtime (~33 MB difference versus ARM64); that remains a
 pending owner decision.
+
+## Layout-fingerprint mention lookup (October 7, 2026)
+
+The timeline rebuilds a layout fingerprint over every display row whenever the
+state revision changes, which is at least once per frame while a conversation is
+active. Each row key hashed the *rendered* mention labels, and resolving one
+unresolved `<@id>` fell through to a scan of the whole timeline
+(`mentions.rs`, `find_user`), so a pass cost O(rows × timeline) once a row
+carried a mention that resolved nowhere in the loaded window.
+
+Measured on the debug host build over a synthetic 1,000-message channel whose
+content carries `<@id> <#id> <@&id>` for ids that resolve nowhere — the case that
+scans everything. Ten repetitions per figure with a temporary `timeline::tests`
+measurement helper, removed before the commit. The harness pins the local UTC
+offset, so the production path's `local_offset_at` cost is excluded and the real
+per-row figure is higher; the proportions, not the absolutes, are the claim.
+
+| Per-row work (1,000 rows, unresolved mention) | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| `presentation_fingerprint` | 9.79 µs | 5.17 µs | −47% |
+| `row_key`, whole row key | 13.42 µs | 8.60 µs | −36% |
+| `row_key`, rows without mentions | 1.70 µs | 1.70 µs | unchanged |
+| Complexity per pass | O(rows × timeline) | O(rows + timeline) | quadratic term removed |
+
+Baseline component shares, measured the same way: `layout_key` 1.08 µs, the two
+`timestamp` calls per row for the day-change test 0.24 µs, and
+`presentation_fingerprint` 9.79 µs of the 13.42 µs row key. One `MentionIndex` is
+built per fingerprint pass — member slots plus timeline authors and mentions,
+first occurrence wins, and it answers only for its own channel — which replaces
+the member-slot and timeline scans with hash lookups; without an index every
+caller keeps the previously scanned behaviour, and an equivalence test asserts
+both paths return the same label and fingerprint.
+
+Three further audit findings were left unchanged because their measured or
+arithmetic cost is noise at these sizes: the twice-per-row `timestamp` (0.24 µs),
+the per-frame row-height sum (~1–3 µs for 1,000 rows) and the gateway's member
+mirror clone (~0.1 ms per network dispatch, not per frame). Avoiding them would
+trade scroll-extent and atomicity correctness for no measurable gain.

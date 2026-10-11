@@ -687,9 +687,13 @@ impl MessagingUi {
 	}
 
 	/// True once any stage tile carries video, so the direct-message stage can grow.
-	pub(super) fn stage_shows_video(&self, state: &State, channel: Id) -> bool {
-		let entries = stage_participants(state, channel);
-		self.stage_tiles(state, channel, &entries)
+	pub(super) fn stage_shows_video(
+		&self,
+		state: &State,
+		channel: Id,
+		entries: &[RosterEntry],
+	) -> bool {
+		self.stage_tiles(state, channel, entries)
 			.iter()
 			.any(|tile| self.tile_has_video(state, channel, tile))
 	}
@@ -1554,6 +1558,7 @@ impl MessagingUi {
 		if let Some(started) = switch.confirmed_at {
 			if state.voice.active.is_some() {
 				self.voice_switch = None;
+				state.status = "Call switch cancelled: another call is already active.";
 			} else if state.voice.departed == Some(switch.from) && self.voice_switch_ready {
 				let switch = self.voice_switch.take().expect("pending switch");
 				let (muted, deafened) = switch
@@ -3252,11 +3257,15 @@ impl MessagingUi {
 			.filter(|call| call.guild.is_none() && Some(call.channel) == selected)
 			.map(|call| call.channel)
 		{
-			let height = if self.stage_shows_video(state, channel) || state.is_group_dm(channel) {
-				(ui.available_height() * 0.74).clamp(320.0, 900.0)
-			} else {
-				(ui.available_height() * 0.42).clamp(240.0, 340.0)
-			};
+			// One roster pass per frame: the entries feed the height check,
+			// the notices and the tiles below.
+			let entries = stage_participants(state, channel);
+			let height =
+				if self.stage_shows_video(state, channel, &entries) || state.is_group_dm(channel) {
+					(ui.available_height() * 0.74).clamp(320.0, 900.0)
+				} else {
+					(ui.available_height() * 0.42).clamp(240.0, 340.0)
+				};
 			egui::Panel::top("dm-call")
 				.resizable(false)
 				.exact_size(height)
@@ -3289,13 +3298,7 @@ impl MessagingUi {
 							.max_rect(body)
 							.layout(egui::Layout::top_down(egui::Align::Min)),
 					);
-					self.participant_tiles(
-						&mut body_ui,
-						state,
-						channel,
-						&stage_participants(state, channel),
-						true,
-					);
+					self.participant_tiles(&mut body_ui, state, channel, &entries, true);
 					let bar = egui::Rect::from_min_max(
 						egui::pos2(rect.left(), rect.bottom() - CONTROL_HEIGHT - STAGE_MARGIN),
 						egui::pos2(rect.right(), rect.bottom() - STAGE_MARGIN),
@@ -6669,7 +6672,7 @@ mod tests {
 					.voice
 					.roster
 					.iter()
-					.filter(|entry| entry.channel == Id(25) || entry.channel == Id(26))
+					.filter(|entry| entry.channel == Id(25) || entry.channel == Id(30))
 				{
 					fixture
 						.view
@@ -6713,7 +6716,7 @@ mod tests {
 		harness
 			.state_mut()
 			.state
-			.apply_voice(voice_state(Some(Id(26)), 2, false, false, false));
+			.apply_voice(voice_state(Some(Id(30)), 2, false, false, false));
 		harness.step();
 		assert_eq!(harness.query_all_by_label("Robin").count(), 3);
 	}

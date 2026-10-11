@@ -374,7 +374,6 @@ impl crate::MessagingUi {
 		if !pending.text.is_empty()
 			&& !state.drafts.contains_key(&target)
 			&& state.drafts.len() >= 64
-			&& self.draft_restore_pending
 		{
 			return Err("Draft budget full. Clear an existing draft before using /msg.");
 		}

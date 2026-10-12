@@ -12,6 +12,41 @@ const MAX_LINKS: usize = 16;
 const MAX_SPOILERS: u8 = 32;
 const MAX_BLOCKS: usize = 32;
 
+/// Readable plain text for release notes that arrive as Markdown: headings and paragraphs
+/// keep their breaks, list items get a bullet, and emphasis or link markers disappear.
+/// Input is bounded so a long changelog cannot make each frame expensive.
+pub fn plain_text(source: &str) -> String {
+	const MAX_NOTES: usize = 64 * 1024;
+	let mut end = source.len().min(MAX_NOTES);
+	while !source.is_char_boundary(end) {
+		end -= 1;
+	}
+	let mut out = String::new();
+	for event in Parser::new_ext(&source[..end], Options::empty()) {
+		match event {
+			Event::Text(text) | Event::Code(text) => out.push_str(&text),
+			Event::SoftBreak | Event::HardBreak => out.push('\n'),
+			Event::Start(Tag::Item) => out.push_str("\u{2022} "),
+			Event::End(TagEnd::Item) => out.push('\n'),
+			Event::Start(Tag::Paragraph | Tag::Heading { .. }) if !out.is_empty() => {
+				while !out.ends_with("\n\n") {
+					out.push('\n');
+				}
+			}
+			Event::End(TagEnd::Paragraph | TagEnd::Heading(_)) => out.push_str("\n\n"),
+			_ => {}
+		}
+	}
+	let mut collapsed: Vec<&str> = Vec::new();
+	for line in out.lines().map(str::trim_end) {
+		if line.is_empty() && collapsed.last().is_none_or(|last| last.is_empty()) {
+			continue;
+		}
+		collapsed.push(line);
+	}
+	collapsed.join("\n").trim().to_owned()
+}
+
 /// True when the raw source escapes the token at `at` with an odd run of backslashes.
 fn escaped(source: &str, at: usize) -> bool {
 	source[..at]
@@ -2307,6 +2342,16 @@ impl Formatted {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn plain_text_drops_markdown_markers_and_keeps_structure() {
+		let notes =
+			"### Mensagens e interface\n\n- Traduções em **português**.\n- Use `/poll`.\n\nFim.";
+		assert_eq!(
+			plain_text(notes),
+			"Mensagens e interface\n\n\u{2022} Traduções em português.\n\u{2022} Use /poll.\n\nFim."
+		);
+	}
+
 	use super::*;
 
 	#[test]

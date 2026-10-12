@@ -2,7 +2,7 @@
 
 ## Nivra 1.0.15
 
-Versão preparada para lançamento; integração das melhorias posteriores à 1.0.14.
+Integra as melhorias posteriores à 1.0.14.
 
 ### Mensagens e interface
 

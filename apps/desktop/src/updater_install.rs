@@ -27,9 +27,16 @@ const WINDOWS_FILES: &[&str] = &[
 	"setup.ps1",
 ];
 
+/// The installed executable: `Nivra.exe`, or the name the release publishes
+/// (`Nivra-<tag>-Windows-<arch>.exe`), which is what people download and run.
 fn windows_executable(name: Option<&std::ffi::OsStr>) -> bool {
-	name.and_then(|name| name.to_str())
-		.is_some_and(|s| s.eq_ignore_ascii_case("Nivra.exe"))
+	name.and_then(|name| name.to_str()).is_some_and(|s| {
+		let lower = s.to_ascii_lowercase();
+		lower == "nivra.exe"
+			|| (lower.starts_with("nivra-")
+				&& lower.contains("-windows-")
+				&& lower.ends_with(".exe"))
+	})
 }
 
 pub(super) fn flatpak_session() -> bool {
@@ -788,10 +795,19 @@ pub(super) fn prepare_restart(
 		let script = directory.join("install.ps1");
 		fs::write(&script, WINDOWS_HELPER)
 			.map_err(|_| "Cannot prepare the update helper.".to_owned())?;
+		// The new build replaces the file that is running, under the name it was started with.
+		let exe_name = std::env::current_exe()
+			.ok()
+			.and_then(|exe| {
+				exe.file_name()
+					.map(|name| name.to_string_lossy().into_owned())
+			})
+			.ok_or_else(|| "Cannot locate the installed application.".to_owned())?;
 		let plan = serde_json::json!({
 			"installation": installation,
 			"parent": std::process::id(),
 			"files": WINDOWS_FILES,
+			"exe_name": exe_name,
 			"marker": marker,
 			"version": version,
 		});
@@ -897,23 +913,26 @@ $backup = Join-Path $stage 'previous'
 [IO.Directory]::CreateDirectory($backup) | Out-Null
 $moved = [Collections.Generic.List[string]]::new()
 $replaced = [Collections.Generic.List[string]]::new()
+# The executable takes the name of the running file, so a release download keeps its name.
+$exeName = if ($plan.exe_name) { [string]$plan.exe_name } else { 'Nivra.exe' }
 try {
   foreach ($name in $plan.files) {
     $source = Join-Path (Join-Path $stage 'package') $name
     if (!(Test-Path -LiteralPath $source)) { continue }
-    $target = Join-Path $installation $name
+    $dest = if ($name -eq 'Nivra.exe') { $exeName } else { $name }
+    $target = Join-Path $installation $dest
     if (Test-Path -LiteralPath $target) {
-      Move-Item -LiteralPath $target -Destination (Join-Path $backup $name)
-      $moved.Add($name)
+      Move-Item -LiteralPath $target -Destination (Join-Path $backup $dest)
+      $moved.Add($dest)
     }
     Move-Item -LiteralPath $source -Destination $target
-    $replaced.Add($name)
+    $replaced.Add($dest)
   }
   $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Nivra'
   if ($plan.version -and (Test-Path -LiteralPath $uninstallKey)) {
     Set-ItemProperty -LiteralPath $uninstallKey -Name 'DisplayVersion' -Value ([string]$plan.version) -ErrorAction SilentlyContinue
   }
-  $exe = Join-Path $installation 'Nivra.exe'
+  $exe = Join-Path $installation $exeName
   Start-Process -FilePath $exe -WorkingDirectory $installation
 } catch {
   $err = $_.ToString()
@@ -928,7 +947,7 @@ try {
   foreach ($name in $moved) {
     Move-Item -LiteralPath (Join-Path $backup $name) -Destination (Join-Path $installation $name) -ErrorAction SilentlyContinue
   }
-  $exe = Join-Path $installation 'Nivra.exe'
+  $exe = Join-Path $installation $exeName
   Start-Process -FilePath $exe -WorkingDirectory $installation -ErrorAction SilentlyContinue
   exit 1
 }
@@ -1012,4 +1031,31 @@ pub(super) fn debug_check() -> Result<(), String> {
 		return Err("Oversized ZIP directory accepted.".into());
 	}
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::windows_executable;
+	use std::ffi::OsStr;
+
+	#[test]
+	fn windows_installs_accept_the_published_name_and_nivra_exe() {
+		for name in [
+			"Nivra.exe",
+			"nivra.exe",
+			"Nivra-v1.0.15-Windows-X64.exe",
+			"Nivra-v1.0.15-Windows-ARM64.exe",
+		] {
+			assert!(windows_executable(Some(OsStr::new(name))), "{name}");
+		}
+		for name in [
+			"nivra-slint.exe",
+			"Nivra-v1.0.15-macOS-ARM64.zip",
+			"notes.txt",
+			"other.exe",
+		] {
+			assert!(!windows_executable(Some(OsStr::new(name))), "{name}");
+		}
+		assert!(!windows_executable(None));
+	}
 }

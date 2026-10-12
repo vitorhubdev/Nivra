@@ -427,8 +427,12 @@ impl MessagingUi {
 				ui.label(design::semibold(ui, title, 14.0).color(colors.text_strong));
 				ui.add_space(6.0);
 				ui.add(
-					egui::Label::new(egui::RichText::new(notes).size(13.0).color(colors.muted))
-						.wrap(),
+					egui::Label::new(
+						egui::RichText::new(crate::markdown::plain_text(notes))
+							.size(13.0)
+							.color(colors.muted),
+					)
+					.wrap(),
 				);
 			});
 		}

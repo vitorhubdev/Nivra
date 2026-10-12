@@ -40,9 +40,18 @@ Versão preparada para lançamento; integração das melhorias posteriores à 1.
 - Enquetes verificam a permissão de envio; Stage bloqueia publicação de mídia; pedidos repetidos de toque e criação não duplicam envios pendentes.
 - Testes de vídeo isolam os modos de simulação e aguardam a liberação dos workers; servidores Gateway sintéticos preservam a conexão até o cliente observar o encerramento.
 
+### Correções de estabilidade e mídia
+
+- Vídeos MP4 do Windows com áudio HE-AAC deixam de ser recusados: o áudio usa o formato real entregue pelo decodificador e, se ainda não puder ser configurado, o vídeo toca sem som com um registro no log.
+- Vendoriza o egui 0.36.2 com uma guarda no AccessKit: o foco nunca aponta para um nó ausente da atualização, a causa do encerramento `Focused ID ... is not in the node list`. A causa exata ainda não foi reproduzida.
+- Alvo de fuzzing volta a compilar após o campo de cargo secundário.
+- Auditoria de 2026-10-08: limites de entrada de texto e de listas de servidor, contagem de bytes, validadores, rate limit e cache de transporte, orçamentos de persistência, quarentena de migração e tratamento de erros do xtask.
+
 ### Limitações
 
 Enquetes permitem respostas de texto; eventos são apenas consulta, sem RSVP; soundboard não gerencia sons; Stage é apenas audiência. A validação sintética não comprova funcionamento em uma conta Discord real.
+
+Não reproduzidos nesta versão: queda de rede durante chamadas de voz e travamentos de 2 a 3 s na fase de voz; a causa do pânico do AccessKit foi contornada, não isolada.
 
 ## Nivra 1.0.14
 

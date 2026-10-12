@@ -276,6 +276,11 @@ opt-level = 3
 [profile.dev.package.ecolor]
 opt-level = 3
 
+# egui 0.36.2 pinned at 99df44a: AccessKit panics on a focused id without a node.
+# Only the `egui` crate is vendored (one guard in context.rs); see vendor/egui/NIVRA-PATCH.md.
+[patch."https://github.com/emilk/egui"]
+egui = { path = "vendor/egui" }
+
 [patch.crates-io]
 # Replace an affected SHAKE dependency while retaining the compatible HPKE API.
 hpke-rs = { path = "vendor/hpke-rs" }

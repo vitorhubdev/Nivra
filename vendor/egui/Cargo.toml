@@ -1,0 +1,47 @@
+[package]
+name = "egui"
+version = "0.36.2"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+authors = ["Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"]
+description = "An easy-to-use immediate mode GUI that runs on both web and native (Nivra patch: see NIVRA-PATCH.md)"
+repository = "https://github.com/emilk/egui"
+
+[lib]
+
+[features]
+default = []
+bytemuck = ["epaint/bytemuck"]
+callstack = ["dep:backtrace"]
+cint = ["epaint/cint"]
+color-hex = ["epaint/color-hex"]
+default_fonts = ["epaint/default_fonts"]
+experimental = []
+mint = ["epaint/mint"]
+monochrome_emoji_fonts = ["default_fonts", "epaint/monochrome_emoji_fonts"]
+persistence = ["serde", "epaint/serde", "ron"]
+rayon = ["epaint/rayon"]
+serde = ["dep:serde", "epaint/serde", "accesskit/serde"]
+unity = ["epaint/unity"]
+_override_unity = ["epaint/_override_unity"]
+
+[dependencies]
+emath = { version = "0.36.2", git = "https://github.com/emilk/egui", rev = "99df44a801749aee958295ed96fccad8dfecb289", default-features = false }
+epaint = { version = "0.36.2", git = "https://github.com/emilk/egui", rev = "99df44a801749aee958295ed96fccad8dfecb289", default-features = false }
+accesskit = { version = "0.24.1" }
+ahash = { version = "0.8.12", default-features = false, features = ["no-rng", "std"] }
+bitflags = { version = "2.13" }
+itertools = { version = "0.15.0" }
+log = { version = "0.4.34", features = ["std"] }
+nohash-hasher = { version = "0.2.0" }
+profiling = { version = "1.0", default-features = false }
+smallvec = { version = "1.16" }
+unicode-segmentation = { version = "1.13" }
+backtrace = { version = "0.3.76", optional = true }
+document-features = { version = "0.2.12", optional = true }
+ron = { version = "0.12.2", optional = true }
+serde = { version = "1.0", features = ["derive", "rc"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3.103", features = ["File"] }

@@ -195,7 +195,10 @@ impl TextPreview {
 	}
 
 	pub fn show_more(&mut self) {
-		self.shown = self.shown.saturating_add(PREVIEW_WINDOW_CHARS);
+		self.shown = self
+			.shown
+			.saturating_add(PREVIEW_WINDOW_CHARS)
+			.min(MAX_PREVIEW_CHARS);
 	}
 }
 

@@ -1,4 +1,39 @@
-# Animated profile review fixes - September 22, 2026
+# Performance measurements
+
+## 1.0.15 integration — Windows x64 (October 11, 2026)
+
+Measured on Windows 11 build 26200, AMD Ryzen 9 5900X, Rust 1.98.1. The baseline
+is the preserved standard package from clean main `23909033` (1.0.14 plus the
+already-merged preview controls), with its package log and SHA-256 verified.
+The after package uses `cargo xtask package`, including voice and excluding demo
+and developer features. Windows distributes one executable; the measured ZIPs
+are compression comparisons only, made with PowerShell `Compress-Archive`
+(`CompressionLevel.Optimal`). No debug PDB or external sing-box engine is bundled.
+
+| Metric / method | Baseline | 1.0.15 | Delta |
+| --- | ---: | ---: | ---: |
+| Standard executable / installed single-file package | 88,125,952 B | 88,945,152 B | +819,200 B / +0.93% |
+| ZIP compression comparison | 42,049,698 B | 42,333,361 B | +283,663 B / +0.67% |
+| Synthetic reducer, 100,000 events, five-run median | 120.4789 ms | 121.5871 ms | +1.1082 ms / +0.92% |
+| Estimated retained timeline, 500 records | 387,992–388,477 B | 387,992–388,477 B | unchanged |
+
+Reducer binaries were compared in five fresh alternating pairs on this host,
+following one warmup per revision; these small differences are not a performance
+improvement or a claim about UI latency. Native full-client CPU, private RAM and
+frame latency were not measured. The standard package has no demo fixture, and
+the framebuffer example does not exercise an equivalent full-client workload.
+Disabling idle HTTP pooling to retire routes can add connection/TLS overhead;
+live latency and provider interoperability remain unmeasured.
+
+The published 1.0.14 Windows x64 asset is 88,256,000 B, so this local 1.0.15 is
+689,152 B larger (+0.78%); this second comparison crosses CI/local builds.
+Raw sizes, hashes and alternating replay samples are in
+[`pr-evidence/release-1.0.15`](pr-evidence/release-1.0.15).
+
+The package was built before the final demo-only fixture/diagnostic fixes; those
+changes are gated by `feature = "demo"` and are excluded from this package.
+
+## Animated profile review fixes — September 22, 2026
 
 Compared the PR head `ffa38ae` with `dda91ab` on Windows x64, Ryzen 7 7800X3D,
 32 GB RAM, Rust 1.98.1. One standard voice-enabled `cargo xtask package` build

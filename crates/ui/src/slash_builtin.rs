@@ -464,6 +464,27 @@ mod tests {
 	}
 
 	#[test]
+	fn builtin_text_send_uses_rest_during_a_transient_gateway_outage() {
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		state.gateway_connected = false;
+		state.freshness = model::Freshness::Stale;
+		let origin = state.selected.unwrap();
+		state
+			.drafts
+			.insert(origin, "/spoiler send explicitly".into());
+		let mut ui = crate::MessagingUi::default();
+		let ctx = egui::Context::default();
+		let mut commands = vec![];
+		assert!(ui.handle_builtin_slash(&mut state, origin, &ctx, &mut commands));
+		assert!(
+			matches!(commands.as_slice(), [Command::Send { channel, content, .. }] if *channel == origin && content == "||send explicitly||")
+		);
+		assert!(!state.drafts.contains_key(&origin));
+		assert_eq!(state.pending.len(), 1);
+	}
+
+	#[test]
 	fn execution_sends_text_preserves_rejected_drafts_and_stages_direct_messages() {
 		let mut state = test_support::demo_state();
 		let mut ui = crate::MessagingUi::default();
@@ -481,11 +502,36 @@ mod tests {
 
 		state.demo = false;
 		state.gateway_connected = false;
+		state.freshness = model::Freshness::Unavailable;
 		state.drafts.insert(origin, "/spoiler keep me".into());
 		assert!(ui.handle_builtin_slash(&mut state, origin, &ctx, &mut commands));
 		assert_eq!(state.drafts[&origin], "/spoiler keep me");
 		assert!(commands.is_empty());
 		state.demo = true;
+		state.freshness = model::Freshness::Fresh;
+
+		// Missing channel permissions also preserve the original command draft.
+		let guild = state
+			.channels
+			.iter()
+			.find(|channel| channel.id == origin)
+			.unwrap()
+			.guild;
+		state
+			.channels
+			.iter_mut()
+			.find(|channel| channel.id == origin)
+			.unwrap()
+			.guild = Some(Id(999_999));
+		assert!(ui.handle_builtin_slash(&mut state, origin, &ctx, &mut commands));
+		assert_eq!(state.drafts[&origin], "/spoiler keep me");
+		assert!(commands.is_empty());
+		state
+			.channels
+			.iter_mut()
+			.find(|channel| channel.id == origin)
+			.unwrap()
+			.guild = guild;
 
 		ui.preview_attachment("keep.txt", 1, None);
 		state.drafts.insert(origin, "/gif cats".into());

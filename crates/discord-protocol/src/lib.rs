@@ -2120,6 +2120,8 @@ pub struct RecipientRemoved {
 pub struct CallDto {
 	pub channel_id: Id,
 	#[serde(default)]
+	pub message_id: Option<Id>,
+	#[serde(default)]
 	pub ringing: Option<Vec<Id>>,
 	#[serde(default)]
 	pub voice_states: Option<Vec<VoiceStateDto>>,

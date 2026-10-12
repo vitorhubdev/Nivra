@@ -111,7 +111,10 @@ impl State {
 			return None;
 		}
 		let channel = self.selected?;
-		if !self.can_send(channel) {
+		if !self.can_send(channel)
+			|| (self.channel(channel).is_some_and(|c| c.guild.is_some())
+				&& self.permission(channel, model::permissions::SEND_POLLS) != Some(true))
+		{
 			self.status = "Sending is unavailable with the current connection or permissions";
 			return None;
 		}

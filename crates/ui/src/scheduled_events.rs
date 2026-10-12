@@ -21,7 +21,9 @@ fn seconds(nanos: i128) -> Option<i64> {
 /// Builds display rows for upcoming events; unparseable times are dropped.
 pub(super) fn rows(events: &[ScheduledEvent], state: &State) -> Vec<Row> {
 	let mut rows = Vec::new();
-	for event in events.iter().filter(|event| event.upcoming()) {
+	let mut upcoming: Vec<_> = events.iter().filter(|event| event.upcoming()).collect();
+	upcoming.sort_by_key(|event| (event.start, event.id));
+	for event in upcoming {
 		let Some(start) = seconds(event.start) else {
 			continue;
 		};
@@ -50,7 +52,6 @@ pub(super) fn rows(events: &[ScheduledEvent], state: &State) -> Vec<Row> {
 			description: event.description.clone(),
 		});
 	}
-	rows.sort_by(|a, b| a.when.cmp(&b.when));
 	rows
 }
 
@@ -162,6 +163,22 @@ mod tests {
 			location: None,
 			user_count: 3,
 		}
+	}
+
+	#[test]
+	fn event_rows_are_sorted_by_instant() {
+		let state = test_support::demo_state();
+		let rows = rows(
+			&[
+				event(2, 1_800_000_000_000_000_000, model::STATUS_SCHEDULED),
+				event(1, 1_700_000_000_000_000_000, model::STATUS_SCHEDULED),
+			],
+			&state,
+		);
+		assert_eq!(
+			rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+			vec!["Event 1", "Event 2"]
+		);
 	}
 
 	#[test]

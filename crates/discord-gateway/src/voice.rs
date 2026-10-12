@@ -981,6 +981,14 @@ impl Calls {
 						participants,
 						unavailable: call.unavailable,
 					}))?;
+					if !call.unavailable
+						&& let Some(message) = call.message_id
+					{
+						emit(Event::Voice(voice::Event::CallMessage {
+							channel: call.channel_id,
+							message,
+						}))?;
+					}
 				}
 			}
 			"VOICE_STATE_UPDATE" => self.state(
@@ -2070,6 +2078,51 @@ mod tests {
 		));
 	}
 
+	#[test]
+	fn call_message_timestamp_dispatch_is_scoped_optional_and_not_a_join() {
+		let mut calls = Calls::default();
+		calls.allowed.insert(Id(2), None);
+		let events = Mutex::new(Vec::new());
+		let emit = |event| {
+			events.lock().unwrap().push(event);
+			Ok(())
+		};
+		for kind in ["CALL_CREATE", "CALL_UPDATE"] {
+			calls
+				.dispatch(
+					kind,
+					br#"{"channel_id":"2","message_id":"1234567890123456789"}"#,
+					Some(Id(1)),
+					&emit,
+				)
+				.unwrap();
+			assert!(matches!(
+				events.lock().unwrap().last(),
+				Some(Event::Voice(voice::Event::CallMessage {
+					channel: Id(2),
+					message: Id(1234567890123456789),
+				}))
+			));
+			assert!(calls.active.is_none());
+		}
+		let count = events.lock().unwrap().len();
+		calls
+			.dispatch(
+				"CALL_CREATE",
+				br#"{"channel_id":"9","message_id":"1234567890123456789"}"#,
+				Some(Id(1)),
+				&emit,
+			)
+			.unwrap();
+		assert_eq!(events.lock().unwrap().len(), count);
+		calls
+			.dispatch("CALL_UPDATE", br#"{"channel_id":"2"}"#, Some(Id(1)), &emit)
+			.unwrap();
+		assert!(matches!(
+			events.lock().unwrap().last(),
+			Some(Event::Voice(voice::Event::Call { channel: Id(2), .. }))
+		));
+	}
 	#[test]
 	fn signaling_is_dm_scoped_secret_bounded_and_never_auto_joins() {
 		let mut calls = Calls::default();

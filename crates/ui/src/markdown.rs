@@ -682,11 +682,34 @@ const QUOTE_GAP: i8 = 8;
 
 impl Formatted {
 	pub fn parse(source: &str) -> Self {
-		let mut end = source.len().min(MAX_INPUT);
+		Self::parse_bounded(source, MAX_INPUT, 128, MAX_EVENTS)
+	}
+	/// Attachment previews have their own bounded document window. Chat messages
+	/// retain the smaller byte, line and event budgets used by `parse`.
+	pub(crate) fn parse_document(source: &str) -> Self {
+		let formatted = Self::parse_bounded(
+			source,
+			crate::text_preview::MAX_PREVIEW_CHARS * 4,
+			crate::text_preview::MAX_PREVIEW_CHARS + 1,
+			32_768,
+		);
+		// One attachment formatting cache has a separate hard allocation budget.
+		if formatted.bytes() > 4 * 1024 * 1024 {
+			let mut end = source.len().min(crate::text_preview::MAX_PREVIEW_CHARS * 4);
+			while !source.is_char_boundary(end) {
+				end -= 1;
+			}
+			Self::limited_literal(&source[..end], source.contains("||"))
+		} else {
+			formatted
+		}
+	}
+	fn parse_bounded(source: &str, max_bytes: usize, max_lines: usize, max_events: usize) -> Self {
+		let mut end = source.len().min(max_bytes);
 		while !source.is_char_boundary(end) {
 			end -= 1;
 		}
-		if let Some((line_end, _)) = source[..end].match_indices('\n').nth(127) {
+		if let Some((line_end, _)) = source[..end].match_indices('\n').nth(max_lines - 1) {
 			end = line_end;
 		}
 		// Discord closes a fence at the end of any line (` ```js\ncode``` `); CommonMark needs
@@ -758,7 +781,7 @@ impl Formatted {
 			Some((event, range))
 		});
 		for (count, (event, range)) in events.enumerate() {
-			if count >= MAX_EVENTS || stack.len() > MAX_DEPTH {
+			if count >= max_events || stack.len() > MAX_DEPTH {
 				return Self::limited_literal(input, source.contains("||"));
 			}
 			style.spoiler = open_spoiler.map(|(_, region)| region);
@@ -2285,6 +2308,38 @@ impl Formatted {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn document_budget_preserves_long_markdown_without_expanding_chat_limits() {
+		let source = format!("{}\n## DOCUMENT_TAIL", "日本語の段落\n\n".repeat(1100));
+		let chat = Formatted::parse(&source);
+		assert!(chat.limited);
+		assert!(
+			!chat
+				.spans
+				.iter()
+				.any(|(text, _)| text.contains("DOCUMENT_TAIL"))
+		);
+		let document = Formatted::parse_document(&source);
+		assert!(!document.limited);
+		assert!(
+			document
+				.spans
+				.iter()
+				.any(|(text, style)| { text.contains("DOCUMENT_TAIL") && style.heading == 2 })
+		);
+		// Pathological nesting falls back to the complete bounded literal, rather
+		// than silently making the end of an attachment unreachable.
+		let deep = format!("{}DOCUMENT_TAIL", "> ".repeat(MAX_DEPTH + 2));
+		let fallback = Formatted::parse_document(&deep);
+		assert!(fallback.limited);
+		assert!(
+			fallback
+				.spans
+				.iter()
+				.any(|(text, _)| text.contains("DOCUMENT_TAIL"))
+		);
+	}
 
 	#[test]
 	fn bidi_runs_keep_each_script_logical_and_follow_paragraph_direction() {

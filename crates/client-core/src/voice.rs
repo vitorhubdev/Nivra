@@ -12,6 +12,25 @@ pub const MAX_DM_CALLS: usize = 64;
 pub const MAX_DM_CALL_BYTES: usize = MAX_DM_CALLS * size_of::<Id>();
 pub const MAX_ROSTER: usize = 4096;
 pub const MAX_ROSTER_BYTES: usize = 1024 * 1024;
+const MAX_CALL_CLOCKS: usize = MAX_ROSTER + MAX_DM_CALLS;
+const MAX_CALL_CLOCK_BYTES: usize = MAX_CALL_CLOCKS * size_of::<CallClock>();
+
+/// A call-wide clock, never the duration of this device's media connection.
+#[derive(Clone, Copy)]
+struct CallClock {
+	channel: Id,
+	guild: Option<Id>,
+	observed: Instant,
+	message: Option<Id>,
+	service_elapsed: std::time::Duration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CallDuration {
+	pub elapsed: std::time::Duration,
+	/// True when no service call-message timestamp is available.
+	pub lower_bound: bool,
+}
 use std::fmt;
 use zeroize::Zeroizing;
 
@@ -130,6 +149,7 @@ pub struct Call {
 }
 #[derive(Default)]
 pub struct State {
+	call_clocks: Vec<CallClock>,
 	pub active: Option<Call>,
 	/// Membership transitions observed while syncing the active call roster, in
 	/// order: every join and every leave becomes a sound, even when both happen
@@ -194,6 +214,44 @@ pub struct VoiceFollow {
 	pub deafened: bool,
 }
 impl State {
+	pub fn clear_call_clocks(&mut self) {
+		self.call_clocks.clear();
+	}
+	pub fn call_duration(&self, channel: Id) -> Option<CallDuration> {
+		let clock = self
+			.call_clocks
+			.iter()
+			.find(|clock| clock.channel == channel)?;
+		Some(CallDuration {
+			elapsed: clock
+				.service_elapsed
+				.saturating_add(clock.observed.elapsed()),
+			lower_bound: clock.message.is_none(),
+		})
+	}
+	fn observe_call(&mut self, channel: Id, guild: Option<Id>) {
+		if self
+			.call_clocks
+			.iter()
+			.any(|clock| clock.channel == channel)
+		{
+			return;
+		}
+		if self.call_clocks.len() == MAX_CALL_CLOCKS {
+			self.call_clocks.remove(0);
+		}
+		if self.call_clocks.capacity() == 0 {
+			self.call_clocks.reserve_exact(MAX_CALL_CLOCKS);
+		}
+		debug_assert!(self.call_clocks.capacity() * size_of::<CallClock>() <= MAX_CALL_CLOCK_BYTES);
+		self.call_clocks.push(CallClock {
+			channel,
+			guild,
+			observed: Instant::now(),
+			message: None,
+			service_elapsed: std::time::Duration::ZERO,
+		});
+	}
 	pub fn has_dm_call(&self, channel: Id) -> bool {
 		self.dm_calls.contains(&channel)
 	}
@@ -284,6 +342,11 @@ pub enum Command {
 	},
 }
 pub enum Event {
+	/// Service call-message snowflake, supplied by the unofficial CALL_* dispatch.
+	CallMessage {
+		channel: Id,
+		message: Id,
+	},
 	/// Gateway accepted the current local transport candidate, scoped to its attempt.
 	SessionConfirmed {
 		channel: Id,
@@ -542,6 +605,9 @@ impl ClientState {
 		}))
 	}
 	pub(crate) fn end_call_in_guild(&mut self, guild: Id) {
+		self.voice
+			.call_clocks
+			.retain(|clock| clock.guild != Some(guild));
 		if self.voice.follow.as_ref().is_some_and(|follow| {
 			self.channel(follow.channel)
 				.is_some_and(|channel| channel.guild == Some(guild))
@@ -682,6 +748,36 @@ impl ClientState {
 					self.voice.ring_error = Some((channel, request, message));
 				}
 			}
+			Event::CallMessage { channel, message } => {
+				if self.auth != AuthState::Authenticated
+					|| !self.has_voice_access(channel)
+					|| !self.voice.has_dm_call(channel)
+				{
+					return;
+				}
+				// The call message's creation time is the call start in the public
+				// interoperability implementation. Do not accept future/invalid IDs.
+				let milliseconds = (message.0 >> 22) + 1_420_070_400_000;
+				let started =
+					std::time::UNIX_EPOCH + std::time::Duration::from_millis(milliseconds);
+				let Ok(elapsed) = std::time::SystemTime::now().duration_since(started) else {
+					return;
+				};
+				if message.0 >> 22 == 0 {
+					return;
+				}
+				if let Some(clock) = self
+					.voice
+					.call_clocks
+					.iter_mut()
+					.find(|clock| clock.channel == channel)
+					&& clock.message.is_none_or(|previous| message > previous)
+				{
+					clock.message = Some(message);
+					clock.observed = Instant::now();
+					clock.service_elapsed = elapsed;
+				}
+			}
 			Event::TakenOver { channel, request } => {
 				if self
 					.voice
@@ -723,6 +819,25 @@ impl ClientState {
 					}
 				}
 				self.refresh_voice_participants();
+				let channels: BTreeSet<_> = self
+					.voice
+					.roster
+					.iter()
+					.filter(|entry| guild.is_none_or(|id| entry.guild == id))
+					.map(|entry| (entry.channel, entry.guild))
+					.collect();
+				if !partial {
+					self.voice.call_clocks.retain(|clock| {
+						clock.guild.is_none()
+							|| (guild.is_some() && clock.guild != guild)
+							|| channels
+								.iter()
+								.any(|(channel, _)| *channel == clock.channel)
+					});
+				}
+				for (channel, guild) in channels {
+					self.voice.observe_call(channel, Some(guild));
+				}
 			}
 			Event::Call {
 				channel,
@@ -756,12 +871,16 @@ impl ClientState {
 					self.end_voice_channel(channel);
 					return;
 				}
+				self.voice.observe_call(channel, None);
 				if !self.voice.has_dm_call(channel) {
 					if self.voice.dm_calls.len() >= MAX_DM_CALLS
 						|| (self.voice.dm_calls.len() + 1) * size_of::<Id>() > MAX_DM_CALL_BYTES
 					{
 						// ponytail: oldest call metadata is evicted; viewing that DM queries it again.
 						let evicted = self.voice.dm_calls.remove(0);
+						self.voice
+							.call_clocks
+							.retain(|clock| clock.channel != evicted);
 						self.voice.dm_participants.retain(|(id, _)| *id != evicted);
 						self.voice.dm_ringing.retain(|(id, _)| *id != evicted);
 					}
@@ -878,6 +997,12 @@ impl ClientState {
 					streaming,
 				};
 				if let Some(guild) = guild {
+					let previous_channel = self
+						.voice
+						.roster
+						.iter()
+						.find(|entry| entry.guild == guild && entry.participant.user == user)
+						.map(|entry| entry.channel);
 					let previous = self
 						.voice
 						.roster
@@ -899,6 +1024,19 @@ impl ClientState {
 							},
 							&mut bytes,
 						);
+						self.voice.observe_call(channel, Some(guild));
+					}
+					if let Some(previous) = previous_channel
+						&& Some(previous) != channel
+						&& !self
+							.voice
+							.roster
+							.iter()
+							.any(|entry| entry.channel == previous)
+					{
+						self.voice
+							.call_clocks
+							.retain(|clock| clock.channel != previous);
 					}
 				}
 				if guild.is_none() {
@@ -1242,6 +1380,9 @@ impl ClientState {
 		self.voice.dm_participants.push((channel, retained));
 	}
 	pub(crate) fn end_voice_channel(&mut self, channel: Id) {
+		self.voice
+			.call_clocks
+			.retain(|clock| clock.channel != channel);
 		if self.voice.outgoing.is_some_and(|(id, _, _)| id == channel) {
 			self.voice.outgoing = None;
 		}
@@ -1941,6 +2082,144 @@ mod tests {
 			}],
 			..ClientState::default()
 		}
+	}
+	#[test]
+	fn call_duration_precedes_join_and_survives_leave_rejoin() {
+		let mut state = dm_state();
+		state.apply_voice(Event::Call {
+			channel: Id(2),
+			ringing: None,
+			participants: Some(people([Id(3)])),
+			unavailable: false,
+		});
+		let now_ms = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap()
+			.as_millis() as u64;
+		let message = Id((now_ms - 90_000 - 1_420_070_400_000) << 22);
+		state.apply_voice(Event::CallMessage {
+			channel: Id(2),
+			message,
+		});
+		let duration = state.voice.call_duration(Id(2)).unwrap();
+		assert!(!duration.lower_bound);
+		assert!((90..92).contains(&duration.elapsed.as_secs()));
+		let original = state.voice.call_clocks[0].observed;
+		assert!(state.start_call(Id(2), false).is_some());
+		let request = state.voice.active.as_ref().unwrap().request;
+		state.apply_voice(Event::Progress {
+			channel: Id(2),
+			request,
+			phase: Phase::Connected,
+		});
+		assert!(state.voice.active.as_ref().unwrap().connected_at.unwrap() > original);
+		assert!(state.leave_call().is_some());
+		assert!(state.start_call(Id(2), false).is_some());
+		state.apply_voice(Event::CallMessage {
+			channel: Id(2),
+			message,
+		});
+		assert_eq!(state.voice.call_clocks[0].observed, original);
+		assert!(state.voice.call_duration(Id(2)).unwrap().elapsed.as_secs() >= 90);
+		state.disconnect_voice("Synthetic transport disconnect");
+		assert_eq!(state.voice.call_clocks[0].observed, original);
+		state.apply_voice(Event::Deleted { channel: Id(2) });
+		assert!(state.voice.call_duration(Id(2)).is_none());
+	}
+	#[test]
+	fn call_duration_unknown_start_invalid_future_and_new_call_identity() {
+		let mut state = dm_state();
+		state.apply_voice(Event::Call {
+			channel: Id(2),
+			ringing: None,
+			participants: None,
+			unavailable: false,
+		});
+		assert!(state.voice.call_duration(Id(2)).unwrap().lower_bound);
+		for message in [Id(1), Id(u64::MAX)] {
+			state.apply_voice(Event::CallMessage {
+				channel: Id(2),
+				message,
+			});
+			assert!(state.voice.call_duration(Id(2)).unwrap().lower_bound);
+		}
+		let now_ms = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap()
+			.as_millis() as u64;
+		let old = Id((now_ms - 600_000 - 1_420_070_400_000) << 22);
+		let new = Id((now_ms - 10_000 - 1_420_070_400_000) << 22);
+		state.apply_voice(Event::CallMessage {
+			channel: Id(2),
+			message: old,
+		});
+		assert!(state.voice.call_duration(Id(2)).unwrap().elapsed.as_secs() >= 600);
+		state.apply_voice(Event::CallMessage {
+			channel: Id(2),
+			message: new,
+		});
+		assert!((10..12).contains(&state.voice.call_duration(Id(2)).unwrap().elapsed.as_secs()));
+		state.apply_voice(Event::CallMessage {
+			channel: Id(2),
+			message: old,
+		});
+		assert_eq!(state.voice.call_clocks[0].message, Some(new));
+		state.voice.clear_call_clocks();
+		assert!(state.voice.call_duration(Id(2)).is_none());
+	}
+	#[test]
+	fn observed_call_clocks_bound_items_bytes_and_guild_empty_reset() {
+		let mut voice = State::default();
+		for channel in 1..=(MAX_CALL_CLOCKS + 1) {
+			voice.observe_call(Id(channel as u64), Some(Id(10)));
+		}
+		assert_eq!(voice.call_clocks.len(), MAX_CALL_CLOCKS);
+		assert!(voice.call_clocks.capacity() * size_of::<CallClock>() <= MAX_CALL_CLOCK_BYTES);
+		assert!(voice.call_duration(Id(1)).is_none());
+		let mut state = dm_state();
+		state.guilds.push(model::Guild {
+			id: Id(10),
+			name: "Synthetic".into(),
+			icon: None,
+			emojis: None,
+			premium_tier: 0,
+			stickers: None,
+		});
+		state.channels[0].id = Id(20);
+		state.channels[0].guild = Some(Id(10));
+		state.channels[0].kind = 2;
+		state.channels[0].recipients.clear();
+		crate::tests::grant_permissions(&mut state);
+		let participant = people([Id(3)])[0];
+		state.apply_voice(Event::Snapshot {
+			partial: false,
+			guild: Some(Id(10)),
+			participants: vec![RosterEntry {
+				guild: Id(10),
+				channel: Id(20),
+				participant,
+				member: None,
+			}],
+		});
+		assert!(state.voice.call_duration(Id(20)).unwrap().lower_bound);
+		let observed = state.voice.call_clocks[0].observed;
+		state.apply_voice(Event::Snapshot {
+			partial: false,
+			guild: Some(Id(10)),
+			participants: vec![RosterEntry {
+				guild: Id(10),
+				channel: Id(20),
+				participant,
+				member: None,
+			}],
+		});
+		assert_eq!(state.voice.call_clocks[0].observed, observed);
+		state.apply_voice(Event::Snapshot {
+			partial: false,
+			guild: Some(Id(10)),
+			participants: vec![],
+		});
+		assert!(state.voice.call_duration(Id(20)).is_none());
 	}
 	#[test]
 	fn dm_calls_require_gesture_and_reject_late_states() {

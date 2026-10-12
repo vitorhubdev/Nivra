@@ -40,6 +40,8 @@ pub const USE_EXTERNAL_STICKERS: u128 = 1 << 37;
 pub const SEND_MESSAGES_IN_THREADS: u128 = 1 << 38;
 pub const MODERATE_MEMBERS: u128 = 1 << 40;
 pub const PIN_MESSAGES: u128 = 1 << 51;
+pub const SEND_POLLS: u128 = 1 << 49;
+pub const USE_SOUNDBOARD: u128 = 1 << 42;
 
 pub const MAX_ROLES: usize = 512;
 pub const MAX_MEMBER_ROLES: usize = 512;

@@ -56,6 +56,40 @@ static TEST_WORKER_LIMIT: AtomicUsize = AtomicUsize::new(MAX_VIDEO_WORKERS);
 /// process-wide slot budget and the limit override stay deterministic.
 #[cfg(test)]
 static VIDEO_START_LOCK: Mutex<()> = Mutex::new(());
+
+/// Isolate process-wide worker limits and retain the lock until synthetic
+/// workers have exited. Production stop remains nonblocking.
+#[cfg(test)]
+struct OfflineVideoTest {
+	_guard: std::sync::MutexGuard<'static, ()>,
+}
+#[cfg(test)]
+impl OfflineVideoTest {
+	fn new() -> Self {
+		let guard = VIDEO_START_LOCK
+			.lock()
+			.unwrap_or_else(|poison| poison.into_inner());
+		source::OFFLINE_PROBE.store(true, Ordering::Release);
+		Self { _guard: guard }
+	}
+}
+#[cfg(test)]
+impl Drop for OfflineVideoTest {
+	fn drop(&mut self) {
+		TEST_WORKER_LIMIT.store(MAX_VIDEO_WORKERS, Ordering::Release);
+		source::OFFLINE_PROBE.store(false, Ordering::Release);
+		let deadline = std::time::Instant::now() + Duration::from_secs(5);
+		while LIVE_VIDEO_WORKERS.load(Ordering::Acquire) != 0 {
+			if std::time::Instant::now() >= deadline {
+				if !std::thread::panicking() {
+					panic!("synthetic video workers did not release their slots");
+				}
+				break;
+			}
+			std::thread::sleep(Duration::from_millis(1));
+		}
+	}
+}
 fn worker_limit() -> usize {
 	#[cfg(test)]
 	{
@@ -179,6 +213,8 @@ impl Session {
 }
 #[derive(Clone)]
 struct Request {
+	#[cfg(test)]
+	offline_probe: bool,
 	session: Arc<Session>,
 	url: Option<url::Url>,
 	fallback: Option<url::Url>,
@@ -357,6 +393,8 @@ impl Video {
 			return Err("Video is busy finishing another open; retry in a moment");
 		}
 		let request = Request {
+			#[cfg(test)]
+			offline_probe: source::OFFLINE_PROBE.load(Ordering::Acquire),
 			session: session.clone(),
 			url,
 			fallback,
@@ -441,7 +479,7 @@ fn play(
 		return Ok(());
 	}
 	#[cfg(test)]
-	if source::OFFLINE_PROBE.load(Ordering::Acquire) {
+	if request.offline_probe {
 		return Ok(());
 	}
 	let start_time = Instant::now();
@@ -951,6 +989,8 @@ mod tests {
 		let runtime = tokio::runtime::Runtime::new().unwrap();
 		let session = Arc::new(Session::new(0., 2));
 		let request = Request {
+			#[cfg(test)]
+			offline_probe: false,
 			session: session.clone(),
 			url: None,
 			fallback: None,
@@ -1048,10 +1088,7 @@ mod attachment_url_tests {
 	}
 	#[test]
 	fn busy_video_open_fails_fast_without_blocking_the_render_thread() {
-		let _turn = VIDEO_START_LOCK
-			.lock()
-			.unwrap_or_else(|poison| poison.into_inner());
-		source::OFFLINE_PROBE.store(true, Ordering::Release);
+		let _turn = OfflineVideoTest::new();
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(1)
 			.enable_all()
@@ -1092,8 +1129,6 @@ mod attachment_url_tests {
 			"refusal must not wait"
 		);
 		assert!(error.contains("busy"));
-		TEST_WORKER_LIMIT.store(MAX_VIDEO_WORKERS, Ordering::Release);
-		source::OFFLINE_PROBE.store(false, Ordering::Release);
 	}
 	#[test]
 	fn diagnostic_budget_caps_lines_per_playback() {
@@ -1163,7 +1198,7 @@ mod attachment_url_tests {
 		};
 		let resolved = crate::downloads::original_url(&attachment).expect("signed url");
 		assert!(resolved.as_str().contains("backend=b2"));
-		source::OFFLINE_PROBE.store(true, Ordering::Release);
+		let _turn = OfflineVideoTest::new();
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(1)
 			.enable_all()
@@ -1192,8 +1227,6 @@ mod attachment_url_tests {
 		);
 		video.stop();
 		drop(video);
-		std::thread::sleep(std::time::Duration::from_millis(50));
-		source::OFFLINE_PROBE.store(false, Ordering::Release);
 		drop(runtime);
 	}
 
@@ -1215,7 +1248,7 @@ mod attachment_url_tests {
 				..Default::default()
 			},
 		};
-		source::OFFLINE_PROBE.store(true, Ordering::Release);
+		let _turn = OfflineVideoTest::new();
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(1)
 			.enable_all()
@@ -1245,8 +1278,6 @@ mod attachment_url_tests {
 		);
 		video.stop();
 		drop(video);
-		std::thread::sleep(std::time::Duration::from_millis(50));
-		source::OFFLINE_PROBE.store(false, Ordering::Release);
 		drop(runtime);
 	}
 
@@ -1294,10 +1325,7 @@ mod attachment_url_tests {
 
 	#[test]
 	fn opening_subsequent_video_cancels_previous_without_blocking() {
-		let _turn = VIDEO_START_LOCK
-			.lock()
-			.unwrap_or_else(|poison| poison.into_inner());
-		source::OFFLINE_PROBE.store(true, Ordering::Release);
+		let _turn = OfflineVideoTest::new();
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(2)
 			.enable_all()
@@ -1355,15 +1383,11 @@ mod attachment_url_tests {
 
 		video.stop();
 		assert!(session2.cancelled.load(Ordering::Acquire));
-		source::OFFLINE_PROBE.store(false, Ordering::Release);
 	}
 
 	#[test]
 	fn opening_and_closing_50_videos_releases_resources() {
-		let _turn = VIDEO_START_LOCK
-			.lock()
-			.unwrap_or_else(|poison| poison.into_inner());
-		source::OFFLINE_PROBE.store(true, Ordering::Release);
+		let _turn = OfflineVideoTest::new();
 		let runtime = tokio::runtime::Builder::new_multi_thread()
 			.worker_threads(2)
 			.enable_all()
@@ -1428,7 +1452,6 @@ mod attachment_url_tests {
 		for s in &sessions {
 			assert!(s.cancelled.load(Ordering::Acquire));
 		}
-		source::OFFLINE_PROBE.store(false, Ordering::Release);
 	}
 
 	#[test]
@@ -1580,6 +1603,8 @@ mod player_tests {
 		))
 		.unwrap();
 		let request = Request {
+			#[cfg(test)]
+			offline_probe: false,
 			session: session.clone(),
 			url: Some(primary),
 			fallback: Some(proxy),
@@ -1677,6 +1702,8 @@ mod player_tests {
 		session.looping.store(true, Ordering::Release);
 		*session.output.lock().unwrap() = Some("null-sink".into());
 		let request = Request {
+			#[cfg(test)]
+			offline_probe: false,
 			session: session.clone(),
 			url: Some(url::Url::parse(&format!("{}/media/short.mov", cdn.origin)).unwrap()),
 			fallback: None,
@@ -1728,6 +1755,8 @@ mod player_tests {
 		let session = Arc::new(Session::new(0., 42));
 		*session.output.lock().unwrap() = Some("null-sink".into());
 		let request = Request {
+			#[cfg(test)]
+			offline_probe: false,
 			session: session.clone(),
 			url: Some(url::Url::parse(&format!("{}/stuck/media.mp4", cdn.origin)).unwrap()),
 			fallback: None,
@@ -1798,6 +1827,8 @@ mod player_tests {
 		*session.output.lock().unwrap() = Some("null-sink".into());
 		session.paused.store(true, Ordering::Release);
 		let request = Request {
+			#[cfg(test)]
+			offline_probe: false,
 			session: session.clone(),
 			url: Some(url::Url::parse(&format!("{}/media/silent.mov", cdn.origin)).unwrap()),
 			fallback: None,

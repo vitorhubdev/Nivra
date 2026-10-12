@@ -33,18 +33,23 @@ async fn send(socket: &mut WebSocketStream<TcpStream>, value: Value) {
 }
 
 async fn packet(socket: &mut WebSocketStream<TcpStream>) -> Value {
-	let Frame::Text(text) = socket.next().await.unwrap().unwrap() else {
+	let frame = timeout(Duration::from_secs(60), socket.next())
+		.await
+		.expect("synthetic gateway packet timed out")
+		.expect("synthetic gateway socket ended")
+		.expect("synthetic gateway packet failed");
+	let Frame::Text(text) = frame else {
 		panic!("expected a synthetic gateway JSON packet");
 	};
 	serde_json::from_str(&text).unwrap()
 }
 
-/// Wall-clock `timeout(10s)` failed when the runner was busy, not when login was wrong.
-/// Record the measured duration and let the result asserts decide. A hang is the CI
-/// nextest cap (60s), which names the test.
+/// Keep local cargo-test runs bounded too; nextest is not the only runner.
 async fn measured(label: &'static str, body: impl std::future::Future<Output = ()>) {
 	let started = std::time::Instant::now();
-	body.await;
+	timeout(Duration::from_secs(60), body)
+		.await
+		.unwrap_or_else(|_| panic!("{label} exceeded the 60 second synthetic test bound"));
 	eprintln!("{label} measured {} ms", started.elapsed().as_millis());
 }
 
@@ -88,6 +93,7 @@ async fn login_counts(
 	measured("synthetic login", async {
 		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 		let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+		let (client_finished, terminal_observed) = tokio::sync::oneshot::channel();
 		let ready = AtomicBool::new(false);
 		let state = std::sync::Mutex::new(client_core::State::default());
 		let server = async {
@@ -131,12 +137,16 @@ async fn login_counts(
 				}
 			}
 			socket
-				.close(Some(CloseFrame {
+				.send(Frame::Close(Some(CloseFrame {
 					code: CloseCode::Library(4004),
 					reason: "synthetic stop".into(),
-				}))
+				})))
 				.await
 				.unwrap();
+			// An unread heartbeat at TCP drop can discard the terminal Close.
+			terminal_observed
+				.await
+				.expect("client observes terminal close");
 		};
 		let client = run_inner(
 			Arc::new(
@@ -176,6 +186,11 @@ async fn login_counts(
 			Arc::new(Notify::new()),
 			Some(&endpoint),
 		);
+		let client = async {
+			let result = client.await;
+			let _ = client_finished.send(());
+			result
+		};
 		let ((), result) = tokio::join!(server, client);
 		assert_eq!(
 			result,
@@ -476,6 +491,7 @@ async fn ready_premium_type_seeds_full_nitro_limit() {
 	measured("synthetic login", async {
 		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 		let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+		let (client_finished, terminal_observed) = tokio::sync::oneshot::channel();
 		let saw_entitlement = std::sync::Arc::new(AtomicBool::new(false));
 		let server = async {
 			let (stream, _) = listener.accept().await.unwrap();
@@ -505,12 +521,16 @@ async fn ready_premium_type_seeds_full_nitro_limit() {
 				}
 			}
 			socket
-				.close(Some(CloseFrame {
+				.send(Frame::Close(Some(CloseFrame {
 					code: CloseCode::Library(4004),
 					reason: "synthetic stop".into(),
-				}))
+				})))
 				.await
 				.unwrap();
+			// An unread heartbeat at TCP drop can discard the terminal Close.
+			terminal_observed
+				.await
+				.expect("client observes terminal close");
 		};
 		let seen = saw_entitlement.clone();
 		let client = run_inner(
@@ -530,6 +550,11 @@ async fn ready_premium_type_seeds_full_nitro_limit() {
 			Arc::new(Notify::new()),
 			Some(&endpoint),
 		);
+		let client = async {
+			let result = client.await;
+			let _ = client_finished.send(());
+			result
+		};
 		let ((), result) = tokio::join!(server, client);
 		assert_eq!(
 			result,

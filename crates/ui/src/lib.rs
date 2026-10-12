@@ -3,6 +3,7 @@
 mod account_badge;
 mod account_menu;
 pub mod anim;
+mod protect;
 pub mod text_preview;
 
 #[cfg(test)]
@@ -37,6 +38,169 @@ mod preview_tests {
 		);
 		view.close_preview();
 		assert!(view.preview.is_none());
+	}
+
+	#[test]
+	fn markdown_preview_show_more_reaches_multibyte_and_long_document_tail() {
+		let ctx = egui::Context::default();
+		ctx.enable_accesskit();
+		let mut view = MessagingUi::default();
+		let mut preview = sample();
+		preview.text = format!("{}\nDOCUMENT_TAIL", "日本語の段落\n\n".repeat(1100));
+		assert!(preview.text.len() > 8192 && preview.text.lines().count() > 128);
+		view.set_preview(preview);
+		let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+		let draw = |view: &mut MessagingUi, events: Vec<egui::Event>| {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(screen),
+					events,
+					..Default::default()
+				},
+				|_| {
+					view.show_preview(&ctx);
+				},
+			);
+			// Read actual visible rows, not labels outside the viewport in the accessibility tree.
+			// Always consume texture deltas before asserting, so a test failure cannot double-panic.
+			let visible = output
+				.shapes
+				.iter()
+				.filter_map(|clipped| {
+					let egui::Shape::Text(text) = &clipped.shape else {
+						return None;
+					};
+					text.galley.rows.iter().find_map(|row| {
+						let label = row.text();
+						let rect = row.rect().translate(text.pos.to_vec2());
+						((label == "Show more" || label.contains("DOCUMENT_TAIL"))
+							&& clipped.clip_rect.intersects(rect)
+							&& screen.intersects(rect))
+						.then_some((label, rect))
+					})
+				})
+				.collect::<Vec<_>>();
+			output.drop_without_applying_deltas();
+			visible
+		};
+		draw(&mut view, vec![]);
+		assert!(view.preview.as_ref().unwrap().has_more());
+		let cached = view.preview_formatted.as_ref().unwrap().1.clone();
+		draw(&mut view, vec![]);
+		assert!(std::sync::Arc::ptr_eq(
+			&cached,
+			&view.preview_formatted.as_ref().unwrap().1
+		));
+		// Navigate the real scroll body and click its real reveal control for each window.
+		// The pointer is inside the centered dialog's body, away from its footer.
+		let scroll_bottom = || {
+			vec![
+				egui::Event::PointerMoved(egui::pos2(400.0, 300.0)),
+				egui::Event::MouseWheel {
+					unit: egui::MouseWheelUnit::Point,
+					delta: egui::vec2(0.0, -100_000.0),
+					modifiers: egui::Modifiers::NONE,
+					phase: egui::TouchPhase::Move,
+				},
+			]
+		};
+		let mut tail_visible = false;
+		for _ in 0..16 {
+			let mut visible = Vec::new();
+			for _ in 0..16 {
+				draw(&mut view, scroll_bottom());
+				visible = draw(&mut view, vec![]);
+				if !visible.is_empty() {
+					break;
+				}
+			}
+			if !view.preview.as_ref().unwrap().has_more() {
+				tail_visible = visible
+					.iter()
+					.any(|(label, _)| label.contains("DOCUMENT_TAIL"));
+				break;
+			}
+			let point = visible
+				.iter()
+				.find_map(|(label, rect)| (label == "Show more").then_some(rect.center()))
+				.expect("Show more must be reachable by scrolling");
+			let previous = view.preview.as_ref().unwrap().shown;
+			for pressed in [true, false] {
+				draw(
+					&mut view,
+					vec![
+						egui::Event::PointerMoved(point),
+						egui::Event::PointerButton {
+							pos: point,
+							button: egui::PointerButton::Primary,
+							pressed,
+							modifiers: egui::Modifiers::NONE,
+						},
+					],
+				);
+			}
+			assert!(
+				view.preview.as_ref().unwrap().shown > previous,
+				"click reveals the next document window"
+			);
+		}
+		assert!(
+			tail_visible,
+			"the entire bounded file must be reachable and painted inside the scroll viewport"
+		);
+		assert!(!view.preview_formatted.as_ref().unwrap().1.limited);
+		view.close_preview();
+		assert!(view.preview_formatted.is_none());
+	}
+
+	#[test]
+	fn preview_escape_closes_and_maximize_fits_a_small_viewport() {
+		let ctx = egui::Context::default();
+		let mut view = MessagingUi::default();
+		let mut preview = sample();
+		preview.maximized = true;
+		view.set_preview(preview);
+		let draw = |view: &mut MessagingUi, events| {
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(360.0, 300.0),
+					)),
+					events,
+					..Default::default()
+				},
+				|_| {
+					view.show_preview(&ctx);
+				},
+			)
+		};
+		for _ in 0..3 {
+			draw(&mut view, Vec::new()).drop_without_applying_deltas();
+		}
+		let size = ctx
+			.data(|data| {
+				data.get_temp::<egui::Vec2>(egui::Id::unique("text-preview").with("dialog-size"))
+			})
+			.unwrap();
+		assert!(
+			size.y <= 300.0,
+			"maximized preview exceeds its viewport: {size:?}"
+		);
+		assert!(view.preview.as_ref().unwrap().maximized);
+		draw(
+			&mut view,
+			vec![egui::Event::Key {
+				key: egui::Key::Escape,
+				physical_key: None,
+				pressed: true,
+				repeat: false,
+				modifiers: egui::Modifiers::NONE,
+			}],
+		)
+		.drop_without_applying_deltas();
+		assert!(view.preview.is_none());
+		assert!(view.preview_formatted.is_none());
 	}
 
 	#[test]
@@ -559,6 +723,8 @@ pub struct MessagingUi {
 	pub long_text_dialog: Option<LongTextDialog>,
 	/// Bounded text, markdown or code preview opened from a file card.
 	pub preview: Option<text_preview::TextPreview>,
+	/// Only the currently revealed document window is parsed, once per Show more.
+	preview_formatted: Option<(usize, std::sync::Arc<markdown::Formatted>)>,
 	/// Send was pressed with over-limit text; the dialog opens once the fresh
 	/// buffer is in scope. Private: only the composer sets and consumes this.
 	long_text_send_requested: bool,
@@ -1186,6 +1352,7 @@ impl MessagingUi {
 	/// Desktop bridge: the bounded body was fetched and decoded; show it.
 	pub fn set_preview(&mut self, preview: text_preview::TextPreview) {
 		self.timeline.download.clear_preview_pending();
+		self.preview_formatted = None;
 		self.preview = Some(preview);
 	}
 	/// Report a preview failure through the shared toast channel, in the interface
@@ -1203,6 +1370,7 @@ impl MessagingUi {
 	/// Close the open preview dialog.
 	pub fn close_preview(&mut self) {
 		self.preview = None;
+		self.preview_formatted = None;
 	}
 	/// Desktop bridge: folder-pick + sequential download request. Attachments are
 	/// bounded (at most 15) by the floating bar before they reach here.
@@ -3885,16 +4053,24 @@ impl MessagingUi {
 		let Some(preview) = self.preview.as_ref() else {
 			return false;
 		};
+		if preview.format == text_preview::PreviewFormat::Markdown
+			&& self
+				.preview_formatted
+				.as_ref()
+				.is_none_or(|(shown, _)| *shown != preview.shown)
+		{
+			self.preview_formatted = Some((
+				preview.shown,
+				std::sync::Arc::new(markdown::Formatted::parse_document(preview.visible_text())),
+			));
+		}
 		let maximized = preview.maximized;
 		let copied = preview.copied;
 		// A maximized preview fills the viewport (the dialog clamps to it) and
 		// grows the scroll body, so long `.md`/`.txt` files are easier to read.
-		let max_body_height = if maximized {
-			(ctx.content_rect().height() - 260.0).clamp(420.0, 1200.0)
-		} else {
-			420.0
-		};
-		crate::dialog::Dialog::new("text-preview", preview.filename.clone())
+		let available_body_height = (ctx.content_rect().height() - 200.0).max(1.0);
+		let max_body_height = available_body_height.min(if maximized { 1200.0 } else { 420.0 });
+		let response = crate::dialog::Dialog::new("text-preview", preview.filename.clone())
 			.width(if maximized { 1100.0 } else { 640.0 })
 			.show(ctx, |d| {
 				d.content(|ui| {
@@ -3917,7 +4093,10 @@ impl MessagingUi {
 							if preview.format == text_preview::PreviewFormat::Markdown {
 								let mut images = crate::avatars::Avatars::default();
 								let mut profile = crate::profiles::ProfileSession::default();
-								markdown::Formatted::parse(preview.visible_text())
+								self.preview_formatted
+									.as_ref()
+									.expect("markdown window was parsed")
+									.1
 									.show_with_images(
 										ui,
 										&mut opening,
@@ -3979,6 +4158,7 @@ impl MessagingUi {
 					}
 				});
 			});
+		close |= response.close;
 		if opening.is_some() {
 			self.timeline.opening = opening;
 		}
@@ -3993,7 +4173,7 @@ impl MessagingUi {
 			preview.maximized = !preview.maximized;
 		}
 		if close {
-			self.preview = None;
+			self.close_preview();
 		}
 		true
 	}
@@ -4347,6 +4527,9 @@ impl MessagingUi {
 	}
 
 	pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
+		if self.timeline.video.take_protect_request() {
+			self.open_protect_scope(model::protect::Scope::Videos);
+		}
 		crate::anim::set_reduce_motion(ui.ctx(), self.reduce_motion);
 		crate::i18n::store_interface_language(ui.ctx(), self.language);
 		crate::scroll::apply_preferences(ui.ctx(), self.reading_preferences);

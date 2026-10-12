@@ -7,6 +7,7 @@ use egui::RichText;
 #[derive(Default)]
 pub(super) struct Settings {
 	pub open: bool,
+	pub(super) protect: crate::protect::Settings,
 	page: Page,
 	query: String,
 	pub(super) editor: crate::profile_edit::Editor,
@@ -17,7 +18,7 @@ pub(super) struct Settings {
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum Page {
+pub(super) enum Page {
 	Account,
 	Profile,
 	General,
@@ -28,6 +29,7 @@ enum Page {
 	Notifications,
 	Activity,
 	Voice,
+	Protect,
 	Keybinds,
 	Storage,
 	Updates,
@@ -37,7 +39,7 @@ enum Page {
 }
 impl Page {
 	/// Every page in sidebar order; the narrow-window page picker lists them the same way.
-	const ALL: [Self; 15] = [
+	const ALL: [Self; 16] = [
 		Self::Account,
 		Self::Profile,
 		Self::MessagingPermissions,
@@ -46,6 +48,7 @@ impl Page {
 		Self::Chat,
 		Self::Notifications,
 		Self::Voice,
+		Self::Protect,
 		Self::Keybinds,
 		Self::Activity,
 		Self::General,
@@ -73,6 +76,7 @@ impl Page {
 				Self::Chat,
 				Self::Notifications,
 				Self::Voice,
+				Self::Protect,
 				Self::Keybinds,
 				Self::Activity,
 				Self::General,
@@ -95,6 +99,7 @@ impl Page {
 			Self::Notifications => "Notifications",
 			Self::Activity => "Game Activity",
 			Self::Voice => "Voice & Video",
+			Self::Protect => "PROTECT",
 			Self::Keybinds => "Keybinds",
 			Self::Storage => "Data & Privacy",
 			Self::Updates => "Updates",
@@ -117,6 +122,7 @@ impl Page {
 			Self::Notifications => "Choose which notifications you receive and how they appear.",
 			Self::Activity => "Show others what you are playing.",
 			Self::Voice => "Microphone, speakers, camera and voice processing.",
+			Self::Protect => "Private routes for voice, streams and files.",
 			Self::Keybinds => "Keyboard shortcuts for Nivra.",
 			Self::Storage => "What Nivra keeps on this device.",
 			Self::Updates => "Keep Nivra up to date on this device.",
@@ -149,6 +155,7 @@ impl Page {
 			Self::Voice => {
 				"voice video camera preview audio microphone speakers devices volume gain noise suppression push to talk"
 			}
+			Self::Protect => "protect proxy vpn wireguard socks socks4 socks5 routes network",
 			Self::Storage => "data privacy local storage clear cache drafts credentials",
 			Self::Updates => {
 				"updates auto update release channel production stable nightly download restart version check diagnostics issue bug system info debug"
@@ -262,6 +269,12 @@ impl MessagingUi {
 	pub(super) fn open_voice_settings(&mut self) {
 		self.settings.open = true;
 		self.settings.page = Page::Voice;
+		self.settings.query.clear();
+	}
+
+	pub(super) fn open_protect_settings(&mut self) {
+		self.settings.open = true;
+		self.settings.page = Page::Protect;
 		self.settings.query.clear();
 	}
 
@@ -448,6 +461,7 @@ impl MessagingUi {
 										state.voice.active.is_some(),
 										false,
 									),
+									Page::Protect => self.settings.protect.show(ui, state.demo),
 									Page::Storage => self.storage_page(ui, state),
 									Page::Updates => self.update_settings(ui, state.demo),
 									Page::Keybinds => crate::keybinds::show(

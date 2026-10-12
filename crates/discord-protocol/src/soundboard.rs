@@ -46,13 +46,22 @@ impl WireSound {
 	}
 }
 
+#[derive(Deserialize)]
+struct WireList {
+	items: List<WireSound, MAX_SOUNDS>,
+}
+
 /// Bounded guild soundboard list; foreign or invalid rows fail the page.
 pub fn sounds(bytes: &[u8], guild: Id) -> Result<Vec<Sound>, DecodeError> {
 	if bytes.len() > MAX_WIRE || guild.0 == 0 {
 		return Err(DecodeError);
 	}
-	let rows: List<WireSound, MAX_SOUNDS> = crate::decode(bytes)?;
-	rows.0.into_iter().map(|row| row.checked(guild)).collect()
+	let rows: WireList = crate::decode(bytes)?;
+	rows.items
+		.0
+		.into_iter()
+		.map(|row| row.checked(guild))
+		.collect()
 }
 
 #[cfg(test)]
@@ -60,9 +69,19 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn guild_soundboard_requires_items_envelope_and_bounds_its_array() {
+		assert!(sounds(br#"[]"#, Id(9)).is_err());
+		assert!(sounds(br#"{}"#, Id(9)).is_err());
+		assert!(sounds(br#"{"items":[]}"#, Id(9)).unwrap().is_empty());
+		let row = r#"{"name":"Sound","sound_id":"7","guild_id":"9"}"#;
+		let oversized = format!("{{\"items\":[{}]}}", vec![row; MAX_SOUNDS + 1].join(","));
+		assert!(sounds(oversized.as_bytes(), Id(9)).is_err());
+	}
+
+	#[test]
 	fn sound_list_keeps_valid_rows_and_rejects_foreign_or_wild_ones() {
 		let page = sounds(
-			r#"[{"name":"Airhorn","sound_id":"7","volume":1.0,"emoji_name":"📯","guild_id":"9","available":true},{"name":"Quiet","sound_id":"8","volume":0.5,"guild_id":"9"}]"#.as_bytes(),
+			r#"{"items":[{"name":"Airhorn","sound_id":"7","volume":1.0,"emoji_name":"📯","guild_id":"9","available":true},{"name":"Quiet","sound_id":"8","volume":0.5,"guild_id":"9"}]}"#.as_bytes(),
 			Id(9),
 		)
 		.unwrap();
@@ -73,14 +92,14 @@ mod tests {
 		assert!(sounds(&vec![b' '; MAX_WIRE + 1], Id(9)).is_err());
 		assert!(
 			sounds(
-				br#"[{"name":"Foreign","sound_id":"7","guild_id":"10"}]"#,
+				br#"{"items":[{"name":"Foreign","sound_id":"7","guild_id":"10"}]}"#,
 				Id(9)
 			)
 			.is_err()
 		);
 		assert!(
 			sounds(
-				br#"[{"name":"Loud","sound_id":"7","volume":9.0,"guild_id":"9"}]"#,
+				br#"{"items":[{"name":"Loud","sound_id":"7","volume":9.0,"guild_id":"9"}]}"#,
 				Id(9)
 			)
 			.is_err()

@@ -602,11 +602,13 @@ fn starter_row(
 							}
 							let time = timestamp(message.id);
 							ui.label(
-								RichText::new(format!("{:02}:{:02}", time.hour(), time.minute()))
+								RichText::new(crate::local_time::message_timestamp(time))
 									.size(12.0)
 									.color(colors.muted),
 							)
-							.on_hover_text_with(|| format!("{time} UTC"));
+							.on_hover_text_with(|| {
+								crate::local_time::message_timestamp_tooltip(time)
+							});
 						},
 					);
 					ui.add(
@@ -1695,11 +1697,11 @@ fn show_system(
 			ui.add_space(8.0);
 			let stamp = ui
 				.label(
-					RichText::new(format!("{:02}:{:02}", time.hour(), time.minute()))
+					RichText::new(crate::local_time::message_timestamp(time))
 						.size(12.0)
 						.color(colors.muted),
 				)
-				.on_hover_text_with(|| format!("{time} UTC"));
+				.on_hover_text_with(|| crate::local_time::message_timestamp_tooltip(time));
 			surface.exclude(stamp.rect);
 		});
 	}
@@ -1829,7 +1831,11 @@ impl TimelineView {
 			return;
 		}
 		self.export_cancelled = false;
-		self.export_job = Some(crate::batch_select::ExportJob::open(markdown, limit));
+		let loaded = state.timeline.iter().count();
+		let first = limit.map_or(0, |count| loaded.saturating_sub(count));
+		self.export_job = Some(crate::batch_select::ExportJob::open_at(
+			markdown, limit, first,
+		));
 	}
 
 	pub(super) fn export_progress(&self) -> Option<(usize, usize)> {
@@ -3047,15 +3053,19 @@ impl TimelineView {
 												let time = timestamp(id);
 												let time = ui
 													.label(
-														RichText::new(format!(
-															"{:02}:{:02}",
-															time.hour(),
-															time.minute()
-														))
+														RichText::new(
+															crate::local_time::message_timestamp(
+																time,
+															),
+														)
 														.size(12.0)
 														.color(colors.muted),
 													)
-													.on_hover_text_with(|| format!("{} UTC", time));
+													.on_hover_text_with(|| {
+														crate::local_time::message_timestamp_tooltip(
+															time,
+														)
+													});
 												surface.exclude(time.rect);
 											},
 										);
@@ -3763,7 +3773,9 @@ impl TimelineView {
 								ui.scope_id().with("timestamp"),
 								egui::Sense::hover(),
 							)
-							.on_hover_text_with(|| format!("{} UTC", time));
+							.on_hover_text_with(|| {
+								crate::local_time::message_timestamp_tooltip(time)
+							});
 						}
 						let own = state
 							.user
@@ -5233,6 +5245,50 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn chat_export_contains_the_newest_requested_ids_in_chronological_order() {
+		let mut state = State::default();
+		for id in 1..=100 {
+			let mut message = text_message(id);
+			message.content = format!("EXPORT_MESSAGE_{id:03}");
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		for markdown in [false, true] {
+			for limit in [Some(10), Some(45), Some(100), Some(150), None, Some(0)] {
+				let first = limit.map_or(0, |count| 100usize.saturating_sub(count));
+				let messages: Vec<_> = state.timeline.iter().skip(first).collect();
+				let ids: Vec<_> = messages.iter().map(|message| message.id).collect();
+				assert_eq!(ids, ((first as u64 + 1)..=100).map(Id).collect::<Vec<_>>());
+				let rows: Vec<_> = messages
+					.into_iter()
+					.map(|message| export_row(message, true))
+					.collect();
+				let expected = if markdown {
+					crate::batch_select::format_md(&rows)
+				} else {
+					crate::batch_select::format_txt(&rows)
+				};
+				let mut view = TimelineView::default();
+				view.begin_chat_export(&state, markdown, limit);
+				for _ in 0..20 {
+					if view.export_job.is_none() {
+						break;
+					}
+					view.advance_export(&state);
+				}
+				assert!(view.export_job.is_none());
+				let actual = view
+					.save_txt_request
+					.map(|(_, bytes)| String::from_utf8(bytes).unwrap())
+					.unwrap_or_default();
+				assert_eq!(
+					actual, expected,
+					"wrong export window for {limit:?}, markdown={markdown}"
+				);
+			}
+		}
+	}
+
+	#[test]
 	fn grouped_delete_failure_waits_until_the_last_request() {
 		let mut view = TimelineView::default();
 		view.begin_group_removal(&[Id(1), Id(2), Id(3), Id(4), Id(5)], 0.0);
@@ -5583,7 +5639,8 @@ mod tests {
 	fn compact_timeline_applies_to_thread_starter_rows() {
 		let ctx = egui::Context::default();
 		let state = test_support::demo_state();
-		let message = test_support::message(1, Id(20));
+		let mut message = test_support::message(1, Id(20));
+		message.id = Id(1); // An old message, with a fixed date regardless of the demo clock.
 		let mut heights = Vec::new();
 		for compact in [false, true] {
 			let mut avatars = crate::avatars::Avatars::default();
@@ -5602,6 +5659,13 @@ mod tests {
 				},
 			);
 			heights.push(height);
+			assert!(
+				output.shapes.iter().any(|shape| {
+					matches!(&shape.shape, egui::Shape::Text(text)
+						if text.galley.job.text == "01/01/2015 00:00")
+				}),
+				"old thread starter shows its full date in compact mode {compact}"
+			);
 			output.drop_without_applying_deltas();
 		}
 		assert!(

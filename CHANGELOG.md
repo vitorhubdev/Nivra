@@ -1,5 +1,49 @@
 # Changelog
 
+## Nivra 1.0.15
+
+Versão preparada para lançamento; integração das melhorias posteriores à 1.0.14.
+
+### Mensagens e interface
+
+- Traduções complementares em português e espanhol.
+- Seleção de mensagens de vários autores e exportação das últimas 50, 100 ou 200 mensagens, ou de toda a conversa carregada.
+- Prévia de texto com Copiar, Maximizar, indicador de carregamento e proteção contra pedidos repetidos. Documentos Markdown possuem orçamento separado das mensagens e resultados antigos são descartados após troca de conversa ou conta.
+- Data completa em mensagens com pelo menos 24 horas; detalhes no horário incluem o fuso local.
+- Envios silenciosos com `@silent`, conversão opcional de emoticons, nova tentativa na busca de GIFs e gradientes nos nomes de cargos.
+- Criação de enquetes com `/poll`; leitura de eventos agendados do servidor.
+- Carregamento de fóruns e publicações arquivadas com tarefas independentes e espera de limite de taxa sem prender slots de requisição.
+
+### Chamadas e mídia
+
+- Reutilização do host de áudio, limite da saída de voz e recuperação explícita de envios durante interrupções do gateway.
+- Bandeja do Windows mostra conexão em andamento e microfone desligado.
+- Controles de toque por participante e soundboard do servidor.
+- Stage permite entrar como audiência, sem microfone, câmera ou compartilhamento de tela.
+- Duração da chamada usa o início informado pelo serviço quando disponível; quando desconhecido, mostra uma duração mínima observada com `≥`.
+- Correção do foco de acessibilidade ao sair da tela cheia e controles de vídeo operáveis pelo teclado.
+
+### PROTECT
+
+- Perfis de sessão com HTTP, SOCKS4a, SOCKS5 e WireGuard, seleção do tráfego protegido, perfil reserva e verificações de conexão.
+- Protocolos TCP são recusados para voz, câmera e streams; uma falha de rota protegida não muda silenciosamente para conexão direta.
+- WireGuard depende de um engine sing-box escolhido pelo usuário. Compatibilidade com provedores reais permanece experimental e não verificada.
+- Login oficial, atualizador, catálogo de extensões e aplicativos externos ficam fora do escopo.
+
+### Correções da integração
+
+- Exportação das últimas mensagens preserva a ordem cronológica e gera um único rodapé com checksum SHA-256 do documento completo.
+- Troca de rota PROTECT aguarda o encerramento dos transportes anteriores fora da renderização; falha de encerramento bloqueia novas trocas até reiniciar, e os controles permanecem ocupados durante a transição.
+- Avatares seguem o escopo da conexão completa, sem serem incluídos indevidamente em “Vídeos e arquivos”.
+- Caches de eventos e soundboard são limitados por quantidade e bytes, com descarte dos dados mais antigos e atualização após um minuto; falhas de eventos aguardam nova tentativa explícita.
+- Soundboard lê o formato real da lista de sons, respeita permissões e bloqueios da chamada e explica ações indisponíveis; descrições de eventos aceitam múltiplas linhas.
+- Enquetes verificam a permissão de envio; Stage bloqueia publicação de mídia; pedidos repetidos de toque e criação não duplicam envios pendentes.
+- Testes de vídeo isolam os modos de simulação e aguardam a liberação dos workers; servidores Gateway sintéticos preservam a conexão até o cliente observar o encerramento.
+
+### Limitações
+
+Enquetes permitem respostas de texto; eventos são apenas consulta, sem RSVP; soundboard não gerencia sons; Stage é apenas audiência. A validação sintética não comprova funcionamento em uma conta Discord real.
+
 ## Nivra 1.0.14
 
 Esta versão é uma auditoria completa do código: 48 achados levantados e tratados, dos quais os graves eram falhas que podiam **derrubar o aplicativo** ou **apagar a conversa na tela**. Nada de recurso novo — o objetivo é o que já existia parar de falhar.

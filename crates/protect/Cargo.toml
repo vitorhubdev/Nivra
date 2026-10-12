@@ -1,0 +1,20 @@
+[package]
+name = "protect"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+model.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+url.workspace = true
+zeroize.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+getrandom.workspace = true
+
+[lints]
+workspace = true

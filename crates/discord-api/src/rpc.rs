@@ -40,10 +40,12 @@ pub fn client() -> Result<Client, &'static str> {
 	Client::builder()
 		.https_only(true)
 		.no_proxy()
+		.pool_max_idle_per_host(0)
+		.proxy(protect::proxy(model::protect::Scope::Complete))
 		.redirect(reqwest::redirect::Policy::none())
 		.timeout(Duration::from_secs(10))
 		.connect_timeout(Duration::from_secs(5))
-		.pool_max_idle_per_host(1)
+		.pool_max_idle_per_host(0)
 		.build()
 		.map_err(|_| "Game application lookup is unavailable.")
 }
@@ -185,6 +187,8 @@ mod tests {
 		});
 		let client = Client::builder()
 			.no_proxy()
+			.pool_max_idle_per_host(0)
+			.proxy(protect::proxy(model::protect::Scope::Complete))
 			.redirect(reqwest::redirect::Policy::none())
 			.timeout(Duration::from_secs(2))
 			.build()

@@ -96,6 +96,13 @@ fn main() -> eframe::Result {
 	}
 	#[cfg(all(debug_assertions, feature = "demo"))]
 	if std::env::args().any(|arg| arg == "--demo")
+		&& std::env::args().any(|arg| arg == "--demo-check-call-cues")
+	{
+		voice::debug_call_cues_check();
+		return Ok(());
+	}
+	#[cfg(all(debug_assertions, feature = "demo"))]
+	if std::env::args().any(|arg| arg == "--demo")
 		&& std::env::args().any(|arg| arg == "--demo-check-voice-preferences")
 	{
 		cache::debug_voice_preferences_check();
@@ -243,6 +250,7 @@ fn main() -> eframe::Result {
 					id: role,
 					name: "Verified".into(),
 					color: 0x00ff00,
+					secondary: None,
 					position: 1,
 					hoist: false,
 					bits: 0,
@@ -792,12 +800,80 @@ impl SessionEnd {
 		self == Self::Logout
 	}
 }
+enum ProtectChange {
+	Tested(&'static str),
+	Imported(Zeroizing<String>),
+	Health(protect::Health, u64),
+	Prepared(Arc<protect::Profile>, Option<Arc<protect::Profile>>),
+	TransportStopped {
+		primary: Option<Arc<protect::Profile>>,
+		reserve: Option<Arc<protect::Profile>>,
+		reconnect: Option<Arc<SessionSecret>>,
+		epoch: u64,
+	},
+}
+struct ProtectResult {
+	generation: u64,
+	change: Result<ProtectChange, &'static str>,
+}
+/// A route can be committed only after every previous account worker has stopped.
+async fn wait_protect_shutdown(
+	shutdown: impl std::future::Future<Output = Result<(), &'static str>>,
+	avatar_cleanup: Option<std::sync::mpsc::Receiver<Result<(), &'static str>>>,
+) -> Result<(), &'static str> {
+	shutdown.await?;
+	if let Some(cleanup) = avatar_cleanup {
+		tokio::task::spawn_blocking(move || {
+			cleanup
+				.recv_timeout(Duration::from_secs(60))
+				.map_err(|_| "Avatar shutdown did not finish; PROTECT route was not changed")?
+		})
+		.await
+		.map_err(|_| "Avatar shutdown worker stopped; PROTECT route was not changed")??;
+	}
+	Ok(())
+}
+#[derive(Default, PartialEq, Eq, Debug)]
+enum ProtectShutdown {
+	#[default]
+	Idle,
+	Waiting,
+	Failed,
+}
+impl ProtectShutdown {
+	fn cancel(&mut self) {
+		if *self == Self::Waiting {
+			*self = Self::Failed;
+		}
+	}
+	fn acknowledge(&mut self) {
+		if *self == Self::Waiting {
+			*self = Self::Idle;
+		}
+	}
+	fn may_apply(&self) -> Result<(), &'static str> {
+		match self {
+			Self::Idle => Ok(()),
+			Self::Waiting => Err("Wait for the previous transport shutdown to finish"),
+			Self::Failed => Err(
+				"Previous transport shutdown was not confirmed; restart Nivra before changing PROTECT",
+			),
+		}
+	}
+}
 struct Desktop {
 	extensions: extension_bridge::Bridge,
 	extension_close_pending: bool,
 	login: Option<platform::LoginView>,
 	captcha: captcha::Captcha,
 	connection: Option<connection::Connection>,
+	/// Redacted, zeroizing session already owned by Connection; never persisted here.
+	connection_secret: Option<Arc<SessionSecret>>,
+	protect_worker: Option<tokio::task::JoinHandle<()>>,
+	protect_done: Option<std::sync::mpsc::Receiver<ProtectResult>>,
+	protect_scope: Option<u64>,
+	protect_shutdown: ProtectShutdown,
+	protect_next_health: std::time::Instant,
 	state: State,
 	messaging: ui::MessagingUi,
 	/// Last invite counter a local Rich Presence client published, so it opens exactly once.
@@ -811,6 +887,8 @@ struct Desktop {
 		Option<std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>>>,
 	/// Cancels the in-flight preview fetch when a newer preview is requested.
 	preview_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+	preview_task: Option<tokio::task::JoinHandle<()>>,
+	preview_scope: Option<(u64, Option<model::Id>)>,
 	/// Diagnostics archive being written by its worker; polled once per frame.
 	export_done: Option<std::sync::mpsc::Receiver<Result<std::path::PathBuf, &'static str>>>,
 	/// Set once per open preview, so "dialog visible" is logged exactly once.
@@ -1116,7 +1194,8 @@ fn write_diagnostics_zip(
 	Ok(path)
 }
 /// The text-preview worker: fetches a bounded body, decodes it and sends exactly one
-/// result. Runs on its own thread; the caller drains the receiver on later frames.
+/// result. Runs on the existing runtime; aborting it immediately drops a stalled
+/// HTTP request. The caller drains the receiver on later frames.
 fn start_text_preview(
 	runtime: &tokio::runtime::Handle,
 	filename: String,
@@ -1125,43 +1204,42 @@ fn start_text_preview(
 	proxy: Option<url::Url>,
 	size: u64,
 	cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>> {
-	let runtime = runtime.clone();
+) -> (
+	std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>>,
+	tokio::task::JoinHandle<()>,
+) {
 	let (send, receive) = std::sync::mpsc::sync_channel(1);
 	let format = ui::text_preview::preview_format(&filename, content_type.as_deref())
 		.unwrap_or(ui::text_preview::PreviewFormat::Plain);
-	std::thread::Builder::new()
-		.name("nivra-preview".into())
-		.spawn(move || {
-			let result = runtime.block_on(async {
-				let bytes =
-					downloads::fetch_preview_cancelled(url, proxy, size, &cancelled).await?;
-				let Some((text, truncated)) = ui::text_preview::decode_preview(&bytes) else {
-					platform::diagnostics::warn(&format!(
-						"text preview refused: reason=decode bytes={}",
-						bytes.len()
-					));
-					return Err("This file has no readable text");
-				};
-				platform::diagnostics::info(&format!(
-					"text preview decoded: bytes={} chars={} truncated={truncated}",
-					bytes.len(),
-					text.chars().count()
+	let task = runtime.spawn(async move {
+		let result = async {
+			let bytes = downloads::fetch_preview_cancelled(url, proxy, size, &cancelled).await?;
+			let Some((text, truncated)) = ui::text_preview::decode_preview(&bytes) else {
+				platform::diagnostics::warn(&format!(
+					"text preview refused: reason=decode bytes={}",
+					bytes.len()
 				));
-				Ok(ui::text_preview::TextPreview {
-					filename,
-					format,
-					text,
-					truncated,
-					shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
-					maximized: false,
-					copied: false,
-				})
-			});
-			let _ = send.send(result);
-		})
-		.ok();
-	receive
+				return Err("This file has no readable text");
+			};
+			platform::diagnostics::info(&format!(
+				"text preview decoded: bytes={} chars={} truncated={truncated}",
+				bytes.len(),
+				text.chars().count()
+			));
+			Ok(ui::text_preview::TextPreview {
+				filename,
+				format,
+				text,
+				truncated,
+				shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
+				maximized: false,
+				copied: false,
+			})
+		}
+		.await;
+		let _ = send.try_send(result);
+	});
+	(receive, task)
 }
 /// Dialogs that overlay the signed-in page: the first-run notices, the licenses screen and
 /// the text preview. Called exactly once per frame from `logic`; every dialog returns early
@@ -1628,6 +1706,7 @@ impl Desktop {
 							bits: 0,
 							name: "Founders".into(),
 							color: 0xe78284,
+							secondary: None,
 							position: 2,
 							hoist: true,
 						},
@@ -1636,6 +1715,7 @@ impl Desktop {
 							bits: 0,
 							name: "Community".into(),
 							color: 0xe5c769,
+							secondary: None,
 							position: 1,
 							hoist: true,
 						},
@@ -2193,6 +2273,12 @@ impl Desktop {
 			login: None,
 			captcha: captcha::Captcha::default(),
 			connection: None,
+			connection_secret: None,
+			protect_worker: None,
+			protect_done: None,
+			protect_scope: None,
+			protect_shutdown: ProtectShutdown::Idle,
+			protect_next_health: std::time::Instant::now() + Duration::from_secs(60),
 			state,
 			messaging,
 			rpc_invite_seen: 0,
@@ -2202,6 +2288,8 @@ impl Desktop {
 			save_txt_done: None,
 			preview_done: None,
 			preview_cancel: None,
+			preview_task: None,
+			preview_scope: None,
 			export_done: None,
 			preview_drawn_logged: false,
 			announced_generation: None,
@@ -2418,6 +2506,7 @@ impl Desktop {
 		self.state.status = "Connecting to Discord…";
 		self.state.failure_detail = None;
 		let secret = Arc::new(secret);
+		self.connection_secret = Some(secret.clone());
 		self.pending_save = save.then(|| secret.clone());
 		self.pending_account_save = Some(secret.clone());
 		self.connection = Some(connection::Connection::start(
@@ -2432,9 +2521,387 @@ impl Desktop {
 	fn logout(&mut self, ctx: &egui::Context) {
 		self.end_session(ctx, SessionEnd::Logout);
 	}
+	fn cancel_preview(&mut self) {
+		if let Some(task) = self.preview_task.take() {
+			task.abort();
+		}
+		if let Some(cancel) = self.preview_cancel.take() {
+			cancel.store(true, std::sync::atomic::Ordering::Release);
+		}
+		self.preview_done = None;
+		self.preview_scope = None;
+		self.messaging.downloads().clear_preview_pending();
+		self.messaging.close_preview();
+	}
+	fn cancel_protect(&mut self) {
+		self.protect_shutdown.cancel();
+		if let Some(worker) = self.protect_worker.take() {
+			worker.abort();
+		}
+		self.protect_done = None;
+		self.protect_scope = None;
+	}
+	fn protect_change_blocked(&self) -> bool {
+		self.state.voice.active.is_some()
+			|| self.state.has_unsent()
+			|| self.uploads.has_unsent()
+			|| self.downloads.is_active()
+			|| self.batch_downloads.is_active()
+			|| self.preview_done.is_some()
+	}
+	/// Queue transport teardown; the route stays unchanged until shutdown is acknowledged.
+	fn apply_protect(
+		&mut self,
+		ctx: &egui::Context,
+		primary: Option<Arc<protect::Profile>>,
+		reserve: Option<Arc<protect::Profile>>,
+	) -> Result<(), &'static str> {
+		self.protect_shutdown.may_apply()?;
+		if self.protect_worker.is_some() {
+			return Err("Wait for the current PROTECT operation to finish");
+		}
+		if self.protect_change_blocked() {
+			return Err("Finish the call, pending sends and transfers before changing PROTECT");
+		}
+		if self.connection.is_some() && self.connection_secret.is_none() {
+			return Err("Reconnect your session before changing PROTECT");
+		}
+		let reconnect = self.connection.as_ref().and(self.connection_secret.clone());
+		let connection = self.connection.take();
+		self.state.gateway_connected = false;
+		if reconnect.is_some() {
+			self.state.auth = AuthState::Authenticating;
+			self.state.status = "Closing the previous connection before changing PROTECT...";
+		}
+		self.audio.stop();
+		self.video.stop();
+		self.voice.stop();
+		self.cancel_preview();
+		if let Some(worker) = self.avatars.take() {
+			self.avatar_cleanup = Some(worker.shutdown());
+		}
+		let avatar_cleanup = self.avatar_cleanup.take();
+		self.avatar_start_failed = false;
+		self.messaging.clear_avatars();
+		let generation = self.state.generation;
+		let epoch = protect::generation();
+		let (send, receive) = std::sync::mpsc::sync_channel(1);
+		let wake = ctx.clone();
+		self.protect_shutdown = ProtectShutdown::Waiting;
+		self.protect_scope = Some(generation);
+		self.protect_done = Some(receive);
+		self.protect_worker = Some(self.runtime.spawn(async move {
+			let stopped = wait_protect_shutdown(
+				async {
+					if let Some(connection) = connection {
+						connection.shutdown().await
+					} else {
+						Ok(())
+					}
+				},
+				avatar_cleanup,
+			)
+			.await;
+			let change = stopped.map(|()| ProtectChange::TransportStopped {
+				primary,
+				reserve,
+				reconnect,
+				epoch,
+			});
+			let _ = send.try_send(ProtectResult { generation, change });
+			wake.request_repaint();
+		}));
+		Ok(())
+	}
+	fn finish_protect(
+		&mut self,
+		ctx: &egui::Context,
+		primary: Option<Arc<protect::Profile>>,
+		reserve: Option<Arc<protect::Profile>>,
+		reconnect: Option<Arc<SessionSecret>>,
+		epoch: u64,
+	) -> Result<&'static str, &'static str> {
+		if protect::generation() != epoch {
+			self.state.auth = AuthState::Failed;
+			self.state.status = "PROTECT route changed while the previous connection was closing";
+			return Err(self.state.status);
+		}
+		if self.protect_change_blocked() {
+			self.state.auth = AuthState::Failed;
+			self.state.status =
+				"Pending activity prevented the PROTECT route change; reconnect your session";
+			return Err(
+				"Pending activity prevented the PROTECT route change; reconnect your session",
+			);
+		}
+		let enabled = primary.is_some();
+		if let Err(reason) = protect::apply(primary, reserve) {
+			self.state.auth = AuthState::Failed;
+			self.state.status = reason;
+			return Err(reason);
+		}
+		if let Some(secret) = reconnect {
+			self.state.generation = self.state.generation.wrapping_add(1);
+			self.state.auth = AuthState::Authenticating;
+			self.state.status = "Reconnecting after PROTECT route change...";
+			self.state.failure_detail = None;
+			self.connection = Some(connection::Connection::start(
+				self.runtime.handle(),
+				secret,
+				self.state.generation,
+				self.state.user.as_ref().map(|user| user.id),
+				self.account_presences.clone(),
+				ctx.clone(),
+			));
+		}
+		self.protect_next_health = std::time::Instant::now() + Duration::from_secs(60);
+		Ok(if enabled {
+			"PROTECT enabled after the previous connection stopped; signaling is reconnecting."
+		} else {
+			"PROTECT disabled after the previous connection stopped; signaling is reconnecting."
+		})
+	}
+	fn poll_protect(&mut self, ctx: &egui::Context) {
+		if !self.state.demo
+			&& !self.fixture_only
+			&& protect::has_fallback()
+			&& self.protect_worker.is_none()
+		{
+			ctx.request_repaint_after(
+				self.protect_next_health
+					.saturating_duration_since(std::time::Instant::now()),
+			);
+		}
+		if self
+			.protect_scope
+			.is_some_and(|generation| generation != self.state.generation)
+		{
+			self.cancel_protect();
+			self.messaging.set_protect_operation_status(
+				if self.protect_shutdown == ProtectShutdown::Failed {
+					"PROTECT shutdown was cancelled; restart Nivra before changing routes"
+				} else {
+					"PROTECT operation cancelled because the session changed"
+				},
+				protect::enabled(),
+				self.protect_worker.is_some(),
+			);
+		}
+		let result = self
+			.protect_done
+			.as_ref()
+			.and_then(|done| match done.try_recv() {
+				Ok(result) => Some(result),
+				Err(std::sync::mpsc::TryRecvError::Empty) => None,
+				Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(ProtectResult {
+					generation: self.state.generation,
+					change: Err("PROTECT worker stopped"),
+				}),
+			});
+		if let Some(result) = result {
+			if result.generation == self.state.generation
+				&& !self.state.demo
+				&& !self.fixture_only
+				&& matches!(&result.change, Ok(ProtectChange::TransportStopped { .. }))
+			{
+				self.protect_shutdown.acknowledge();
+			}
+			self.cancel_protect();
+			if result.generation == self.state.generation && !self.state.demo && !self.fixture_only
+			{
+				let status = match result.change {
+					Ok(ProtectChange::Tested(status)) => Ok(status),
+					Ok(ProtectChange::Imported(config)) => {
+						self.messaging.set_protect_wireguard(&config).map(
+							|_| "WireGuard configuration imported in this session. Test before enabling.",
+						)
+					}
+					Ok(ProtectChange::Health(health, epoch)) => {
+						if protect::generation() != epoch {
+							Err("PROTECT route changed during its health test")
+						} else {
+							match health {
+								protect::Health::Healthy(status) => Ok(status),
+								protect::Health::Swap(primary, reserve) => {
+									if self.protect_change_blocked() {
+										Err(
+											"Reserve profile tested; finish the call and transfers before automatic fallback. Direct fallback stays blocked.",
+										)
+									} else {
+										self.apply_protect(ctx, Some(primary), reserve).map(
+											|_| "Closing the previous connection before activating the tested reserve profile...",
+										)
+									}
+								}
+							}
+						}
+					}
+					Ok(ProtectChange::Prepared(primary, reserve)) => self
+						.apply_protect(ctx, Some(primary), reserve)
+						.map(|_| "Closing the previous connection before enabling PROTECT..."),
+					Ok(ProtectChange::TransportStopped {
+						primary,
+						reserve,
+						reconnect,
+						epoch,
+					}) => self.finish_protect(ctx, primary, reserve, reconnect, epoch),
+					Err(reason) => {
+						if self.connection.is_none()
+							&& self.connection_secret.is_some()
+							&& self.state.auth == AuthState::Authenticating
+						{
+							self.state.auth = AuthState::Failed;
+							self.state.status = reason;
+						}
+						Err(reason)
+					}
+				};
+				self.messaging.set_protect_operation_status(
+					status.unwrap_or_else(|reason| reason),
+					protect::enabled(),
+					self.protect_worker.is_some(),
+				);
+			}
+		}
+		if self.protect_worker.is_some() {
+			return;
+		}
+		let Some(action) = self.messaging.take_protect_action() else {
+			if !self.state.demo
+				&& !self.fixture_only
+				&& protect::has_fallback()
+				&& std::time::Instant::now() >= self.protect_next_health
+			{
+				self.protect_next_health = std::time::Instant::now() + Duration::from_secs(60);
+				let generation = self.state.generation;
+				let epoch = protect::generation();
+				let (send, receive) = std::sync::mpsc::sync_channel(1);
+				let wake = ctx.clone();
+				self.protect_scope = Some(generation);
+				self.protect_done = Some(receive);
+				self.protect_worker = Some(self.runtime.spawn(async move {
+					let change =
+						tokio::time::timeout(Duration::from_secs(45), protect::check_health())
+							.await
+							.unwrap_or(Err(
+								"Protected route health test timed out; direct fallback stays blocked",
+							))
+							.map(|health| ProtectChange::Health(health, epoch));
+					let _ = send.try_send(ProtectResult { generation, change });
+					wake.request_repaint();
+				}));
+				self.messaging.set_protect_operation_status(
+					"Checking protected route...",
+					protect::enabled(),
+					self.protect_worker.is_some(),
+				);
+			}
+			return;
+		};
+		if self.state.demo || self.fixture_only {
+			self.messaging.set_protect_operation_status(
+				"Offline preview: PROTECT does not test or activate routes",
+				false,
+				self.protect_worker.is_some(),
+			);
+			return;
+		}
+		if matches!(action, model::protect::Action::Disable) {
+			let result = self.apply_protect(ctx, None, None);
+			self.messaging.set_protect_operation_status(
+				result.map_or_else(
+					|reason| reason,
+					|_| "Closing the previous connection before disabling PROTECT...",
+				),
+				protect::enabled(),
+				self.protect_worker.is_some(),
+			);
+			return;
+		}
+		if matches!(action, model::protect::Action::Enable(..)) && self.protect_change_blocked() {
+			self.messaging.set_protect_operation_status(
+				"Finish the call, pending sends and transfers before changing PROTECT",
+				protect::enabled(),
+				self.protect_worker.is_some(),
+			);
+			return;
+		}
+		let generation = self.state.generation;
+		let import = matches!(action, model::protect::Action::ImportWireGuard)
+			.then(|| platform::save::wireguard_source(self.window.clone()));
+		let (send, receive) = std::sync::mpsc::sync_channel(1);
+		let wake = ctx.clone();
+		self.protect_scope = Some(generation);
+		self.protect_done = Some(receive);
+		self.protect_worker = Some(self.runtime.spawn(async move {
+			let operation = async {
+				match action {
+					model::protect::Action::ImportWireGuard => {
+						let Some(path) = import
+							.expect("import action creates its native picker")
+							.await
+						else {
+							return Ok(ProtectChange::Tested("WireGuard import cancelled"));
+						};
+						if !path
+							.extension()
+							.and_then(|extension| extension.to_str())
+							.is_some_and(|extension| extension.eq_ignore_ascii_case("conf"))
+						{
+							return Err("Select a WireGuard .conf file");
+						}
+						let config = tokio::task::spawn_blocking(move || {
+							use std::io::Read;
+							let file = std::fs::File::open(path)
+								.map_err(|_| "Could not open WireGuard configuration")?;
+							let mut bytes = Zeroizing::new(Vec::with_capacity(4097));
+							file.take(4097)
+								.read_to_end(&mut bytes)
+								.map_err(|_| "Could not read WireGuard configuration")?;
+							if bytes.is_empty() || bytes.len() > 4096 {
+								return Err("WireGuard configuration must contain at most 4 KiB");
+							}
+							std::str::from_utf8(&bytes)
+								.map(|text| Zeroizing::new(text.to_owned()))
+								.map_err(|_| "WireGuard configuration must be UTF-8 text")
+						})
+						.await
+						.map_err(|_| "WireGuard import worker stopped")??;
+						Ok(ProtectChange::Imported(config))
+					}
+					model::protect::Action::Test(draft) => {
+						let profile = protect::prepare(&draft).await?;
+						protect::test(profile).await.map(ProtectChange::Tested)
+					}
+					model::protect::Action::Enable(draft, reserve) => {
+						let primary = protect::prepare(&draft).await?;
+						protect::test(primary.clone()).await?;
+						let reserve = if let Some(draft) = reserve {
+							let profile = protect::prepare(&draft).await?;
+							protect::test(profile.clone()).await?;
+							Some(profile)
+						} else {
+							None
+						};
+						Ok(ProtectChange::Prepared(primary, reserve))
+					}
+					model::protect::Action::Disable => unreachable!(),
+				}
+			};
+			let change = tokio::time::timeout(Duration::from_secs(60), operation)
+				.await
+				.unwrap_or(Err("PROTECT test timed out; current route unchanged"));
+			let _ = send.try_send(ProtectResult { generation, change });
+			wake.request_repaint();
+		}));
+	}
 	/// Ends the current session. Only logging out removes this account's local data and
 	/// saved login; switching and adding keep both so the account stays in the switcher.
 	fn end_session(&mut self, ctx: &egui::Context, intent: SessionEnd) {
+		self.cancel_preview();
+		self.cancel_protect();
+		self.connection_secret = None;
+		self.messaging.clear_protect();
 		self.captcha.close();
 		self.notification_runtime.clear(&self.window);
 		self.messaging.image_sharing_enabled = false;
@@ -2464,6 +2931,7 @@ impl Desktop {
 		self.login = None;
 		self.connection = None;
 		self.pending_save = None;
+		let _ = protect::apply(None, None);
 		self.pending_account_save = None;
 		let old_account = self.state.user.as_ref().filter(|_| !was_demo).map(|u| u.id);
 		self.switching = None;
@@ -3864,7 +4332,20 @@ impl Desktop {
 								result: Ok(()),
 							}
 						}
+						P::Create {
+							channel, request, ..
+						} => E::Created {
+							channel,
+							request,
+							result: Err(Failure::Protocol),
+						},
 					})
+				}
+				Command::Soundboard(_) | Command::ScheduledEvents(_) => {
+					// These new service flows have no offline host fixture. Release
+					// their pending slot without contacting Discord or faking a result.
+					self.state.command_rejected(command);
+					return;
 				}
 				Command::Voice(_) | Command::CancelProfile | Command::CancelSearch => return,
 				Command::ThreadStarter {
@@ -4251,6 +4732,7 @@ impl Desktop {
 					content,
 					nonce,
 					reply,
+					silent: _,
 				} => {
 					self.synthetic_id += 1;
 					let mut message = test_support::message(self.synthetic_id, channel);
@@ -6444,6 +6926,14 @@ impl eframe::App for Desktop {
 		}
 	}
 	fn on_exit(&mut self) {
+		self.cancel_preview();
+		self.cancel_protect();
+		self.connection = None;
+		self.connection_secret = None;
+		self.voice.stop();
+		self.audio.stop();
+		self.video.stop();
+		let _ = protect::apply(None, None);
 		if self.updater.finish_restart().is_err() {
 			eprintln!(
 				"Could not hand off the prepared update. The installed app was not replaced."
@@ -6452,6 +6942,13 @@ impl eframe::App for Desktop {
 	}
 	/// One UI frame: pumps workers, expires challenges, renders and drains commands.
 	fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+		if self
+			.preview_scope
+			.is_some_and(|scope| scope != (self.state.generation, self.state.selected))
+		{
+			self.cancel_preview();
+		}
+		self.poll_protect(ctx);
 		// Marks this frame as alive and records what it is drawing, so a stalled
 		// render thread leaves a bounded log next to the cache (never a silent freeze).
 		watchdog::beat(if self.video.is_active() {
@@ -6961,6 +7458,12 @@ impl eframe::App for Desktop {
 		self.messaging.downloads().active = self.downloads.is_active();
 		self.messaging.downloads().status = download_status;
 		// Inline text preview: publish the fetched body or its failure once.
+		if self
+			.preview_scope
+			.is_some_and(|scope| scope != (self.state.generation, self.state.selected))
+		{
+			self.cancel_preview();
+		}
 		if let Some(result) = self
 			.preview_done
 			.as_ref()
@@ -6972,6 +7475,8 @@ impl eframe::App for Desktop {
 				}
 			}) {
 			self.preview_done = None;
+			self.preview_cancel = None;
+			self.preview_task = None;
 			match result {
 				Ok(preview) => {
 					platform::diagnostics::info("text preview ready: opening dialog");
@@ -7565,7 +8070,10 @@ impl eframe::App for Desktop {
 							if let Some(previous) = self.preview_cancel.replace(cancel.clone()) {
 								previous.store(true, std::sync::atomic::Ordering::Release);
 							}
-							self.preview_done = Some(start_text_preview(
+							if let Some(task) = self.preview_task.take() {
+								task.abort();
+							}
+							let (receive, task) = start_text_preview(
 								self.runtime.handle(),
 								attachment.filename.clone(),
 								attachment.content_type.clone(),
@@ -7573,7 +8081,10 @@ impl eframe::App for Desktop {
 								proxy,
 								attachment.size,
 								cancel,
-							));
+							);
+							self.preview_done = Some(receive);
+							self.preview_task = Some(task);
+							self.preview_scope = Some((self.state.generation, self.state.selected));
 						}
 						None => {
 							platform::diagnostics::warn("text preview refused: reason=no-source");
@@ -7981,6 +8492,74 @@ impl eframe::App for Desktop {
 
 #[cfg(test)]
 mod tests {
+
+	#[test]
+	fn protect_shutdown_cancellation_blocks_retries_until_restart() {
+		let mut shutdown = ProtectShutdown::Waiting;
+		shutdown.cancel();
+		assert!(shutdown.may_apply().is_err());
+		shutdown.acknowledge();
+		assert!(
+			shutdown.may_apply().is_err(),
+			"a late ack cannot clear an uncertain shutdown"
+		);
+		assert!(ProtectShutdown::default().may_apply().is_ok());
+	}
+	#[test]
+	fn protect_test_failure_does_not_block_apply_but_shutdown_ack_releases_it() {
+		let mut test_only = ProtectShutdown::Idle;
+		test_only.cancel();
+		assert!(test_only.may_apply().is_ok());
+		let mut shutdown = ProtectShutdown::Waiting;
+		assert!(
+			shutdown.may_apply().is_err(),
+			"an in-flight shutdown blocks a second Apply"
+		);
+		shutdown.acknowledge();
+		shutdown.cancel();
+		assert!(shutdown.may_apply().is_ok());
+	}
+
+	#[tokio::test]
+	async fn protect_shutdown_waits_for_transport_and_avatar_acknowledgements() {
+		let (stop, stopped) = tokio::sync::oneshot::channel();
+		let (avatar_stop, avatar_stopped) = std::sync::mpsc::sync_channel(1);
+		let worker = tokio::spawn(wait_protect_shutdown(
+			async move {
+				stopped
+					.await
+					.map_err(|_| "synthetic transport shutdown failed")
+			},
+			Some(avatar_stopped),
+		));
+		tokio::task::yield_now().await;
+		assert!(
+			!worker.is_finished(),
+			"old transport must acknowledge shutdown first"
+		);
+		stop.send(()).unwrap();
+		tokio::task::yield_now().await;
+		assert!(
+			!worker.is_finished(),
+			"avatar worker must acknowledge shutdown too"
+		);
+		avatar_stop.send(Ok(())).unwrap();
+		assert_eq!(
+			tokio::time::timeout(Duration::from_secs(5), worker)
+				.await
+				.unwrap()
+				.unwrap(),
+			Ok(())
+		);
+	}
+	#[tokio::test]
+	async fn protect_shutdown_failure_cannot_authorize_route_change() {
+		assert_eq!(
+			wait_protect_shutdown(async { Err("synthetic old transport still active") }, None)
+				.await,
+			Err("synthetic old transport still active")
+		);
+	}
 	use super::*;
 	fn loaded_settings() -> app_settings::Settings {
 		app_settings::Settings {
@@ -8618,6 +9197,47 @@ mod tests {
 			.expect("clicking Preview must queue the attachment")
 	}
 
+	#[test]
+	fn cancelling_preview_aborts_a_stalled_request_without_publishing() {
+		use std::io::Read;
+		discord_api::ensure_tls_provider();
+		let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+		let address = listener.local_addr().unwrap();
+		let (arrived, arrival) = std::sync::mpsc::sync_channel(1);
+		let (finish, finished) = std::sync::mpsc::sync_channel(1);
+		let server = std::thread::spawn(move || {
+			let (mut socket, _) = listener.accept().unwrap();
+			socket
+				.set_read_timeout(Some(Duration::from_secs(2)))
+				.unwrap();
+			let mut byte = [0; 1];
+			socket.read_exact(&mut byte).unwrap();
+			arrived.send(()).unwrap();
+			let _ = finished.recv_timeout(Duration::from_secs(3));
+		});
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.unwrap();
+		let (receive, task) = start_text_preview(
+			runtime.handle(),
+			"synthetic.md".into(),
+			Some("text/markdown".into()),
+			url::Url::parse(&format!("http://{address}/synthetic.md")).unwrap(),
+			None,
+			32,
+			Arc::new(std::sync::atomic::AtomicBool::new(false)),
+		);
+		arrival.recv_timeout(Duration::from_secs(2)).unwrap();
+		task.abort();
+		assert!(matches!(
+			receive.recv_timeout(Duration::from_secs(2)),
+			Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+		));
+		let _ = finish.send(());
+		server.join().unwrap();
+	}
 	/// End to end through the real worker and frame: local HTTP server -> timeline card ->
 	/// simulated click -> fetch/decode on the worker -> frame_dialogs draws the dialog.
 	fn preview_round_trip(
@@ -8641,7 +9261,7 @@ mod tests {
 			.enable_all()
 			.build()
 			.expect("preview runtime");
-		let receive = start_text_preview(
+		let (receive, _task) = start_text_preview(
 			runtime.handle(),
 			queued.filename.clone(),
 			queued.content_type.clone(),
@@ -8767,7 +9387,7 @@ mod tests {
 			.enable_all()
 			.build()
 			.expect("preview runtime");
-		let receive = start_text_preview(
+		let (receive, _task) = start_text_preview(
 			runtime.handle(),
 			queued.filename.clone(),
 			queued.content_type.clone(),

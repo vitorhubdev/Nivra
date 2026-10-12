@@ -24,10 +24,7 @@ use tokio::{
 	sync::{Notify, mpsc, watch},
 	time::{Instant, interval_at, sleep, timeout},
 };
-use tokio_tungstenite::{
-	connect_async_with_config,
-	tungstenite::{Message as Frame, protocol::WebSocketConfig},
-};
+use tokio_tungstenite::tungstenite::{Message as Frame, protocol::WebSocketConfig};
 use zeroize::Zeroizing;
 
 /// Queues a redacted, user-copyable decode cause ahead of the fixed failure label.
@@ -1318,7 +1315,7 @@ async fn run_inner(
 			.max_write_buffer_size(64 * 1024);
 		let connection = timeout(
 			Duration::from_secs(15),
-			connect_async_with_config(url, Some(config), false),
+			protect::websocket(url, Some(config), model::protect::Scope::Complete),
 		)
 		.await;
 		let Ok(Ok((mut socket, _))) = connection else {
@@ -2291,6 +2288,7 @@ mod tests {
 				.unwrap();
 			let skip = Arc::new(Notify::new());
 			skip.notify_one();
+			let (client_finished, mut terminal_observed) = tokio::sync::oneshot::channel();
 			let server = async {
 				for attempt in 0..2 {
 					let (stream, _) = listener.accept().await.unwrap();
@@ -2340,12 +2338,16 @@ mod tests {
 						saw_join,
 						"accepted Join must be sent on the resumed session"
 					);
-					let _ = socket
-						.close(Some(CloseFrame {
+					socket
+						.send(Frame::Close(Some(CloseFrame {
 							code: CloseCode::Library(4004),
 							reason: "synthetic stop".into(),
-						}))
-						.await;
+						})))
+						.await
+						.unwrap();
+					// Preserve TCP until the client consumes the terminal close, even
+					// if a timer heartbeat remains unread on this synthetic server.
+					(&mut terminal_observed).await.unwrap();
 				}
 			};
 			let client = run_inner(
@@ -2358,6 +2360,11 @@ mod tests {
 				skip,
 				Some(&endpoint),
 			);
+			let client = async {
+				let result = client.await;
+				let _ = client_finished.send(());
+				result
+			};
 			let ((), result) = tokio::join!(server, client);
 			assert_eq!(result, Err(Failure::Expired));
 		})
@@ -2388,6 +2395,7 @@ mod tests {
 				.unwrap();
 			let skip = Arc::new(Notify::new());
 			skip.notify_one();
+			let (client_finished, mut terminal_observed) = tokio::sync::oneshot::channel();
 			let server = async {
 				for attempt in 0..2 {
 					let (stream, _) = listener.accept().await.unwrap();
@@ -2435,12 +2443,16 @@ mod tests {
 							Err(_) => break,
 						}
 					}
-					let _ = socket
-						.close(Some(CloseFrame {
+					socket
+						.send(Frame::Close(Some(CloseFrame {
 							code: CloseCode::Library(4004),
 							reason: "synthetic stop".into(),
-						}))
-						.await;
+						})))
+						.await
+						.unwrap();
+					// Preserve TCP until the client consumes the terminal close, even
+					// if a timer heartbeat remains unread on this synthetic server.
+					(&mut terminal_observed).await.unwrap();
 				}
 			};
 			let client = run_inner(
@@ -2453,6 +2465,11 @@ mod tests {
 				skip,
 				Some(&endpoint),
 			);
+			let client = async {
+				let result = client.await;
+				let _ = client_finished.send(());
+				result
+			};
 			let ((), result) = tokio::join!(server, client);
 			assert_eq!(result, Err(Failure::Expired));
 		})
@@ -3218,6 +3235,7 @@ mod tests {
 		timeout(Duration::from_secs(10),async {
             let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();let endpoint=format!("ws://{}/",listener.local_addr().unwrap());
             let (controls,receive)=mpsc::channel(8);
+            let (client_finished, mut terminal_observed) = tokio::sync::oneshot::channel();
             let server=async {
                 let (stream,_)=listener.accept().await.unwrap();let mut socket=accept_async(stream).await.unwrap();
                 send(&mut socket,json!({"op":10,"d":{"heartbeat_interval":1000}})).await;
@@ -3236,7 +3254,9 @@ mod tests {
                         send(&mut socket,json!({"op":0,"t":"VOICE_SERVER_UPDATE","s":3,"d":{"guild_id":null,"channel_id":"2","token":"synthetic-call-token","endpoint":"voice.discord.media:443"}})).await;
                     } else {assert!(p["d"]["channel_id"].is_null());break;}
                 }
-                socket.close(Some(CloseFrame{code:CloseCode::Library(4004),reason:"synthetic stop".into()})).await.unwrap();
+                socket.send(Frame::Close(Some(CloseFrame{code:CloseCode::Library(4004),reason:"synthetic stop".into()}))).await.unwrap();
+                // A pending heartbeat must not turn terminal Close into a TCP reset.
+                (&mut terminal_observed).await.unwrap();
             };
             let client=run_inner(Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),"wss://gateway.discord.gg/".into(),watch::channel(None).1,receive,None,|event| {
                 match event {
@@ -3247,6 +3267,7 @@ mod tests {
                 }
                 Ok(())
             }, Arc::new(Notify::new()), Some(&endpoint));
+            let client = async { let result = client.await; let _ = client_finished.send(()); result };
             let ((),result)=tokio::join!(server,client);assert_eq!(result,Err(Failure::Expired));
         }).await.unwrap();
 	}
@@ -3918,6 +3939,7 @@ mod member_tests {
             let (selection,receive)=watch::channel(Some(MemberSubscription {thread:false,guild:Id(1),channel:Id(2),request:7,list_id:"everyone".into(),
 			ranges: vec![[0, 99]],
 		}));
+            let (client_finished, mut terminal_observed) = tokio::sync::oneshot::channel();
             let server=async {
                 let (stream,_)=listener.accept().await.unwrap();let mut socket=accept_async(stream).await.unwrap();
                 socket.send(Frame::Text(json!({"op":10,"d":{"heartbeat_interval":1000}}).to_string().into())).await.unwrap();
@@ -3965,7 +3987,9 @@ mod member_tests {
                         socket.send(Frame::Text(json!({"op":0,"t":"GUILD_MEMBER_LIST_UPDATE","s":7,"d":{"guild_id":"1","id":"everyone","member_count":150,"ops":[{"op":"SYNC","range":[100,199],"items":[{"member":{"user":{"id":"9","username":"Later"}}}]}]}}).to_string().into())).await.unwrap();
                     } else {panic!("unexpected member subscription after the scrolled range");}
                 }
-                socket.close(Some(CloseFrame{code:CloseCode::Library(4004),reason:"synthetic stop".into()})).await.unwrap();
+                socket.send(Frame::Close(Some(CloseFrame{code:CloseCode::Library(4004),reason:"synthetic stop".into()}))).await.unwrap();
+                // A pending heartbeat must not turn terminal Close into a TCP reset.
+                (&mut terminal_observed).await.unwrap();
             };
             let client=run_inner(Arc::new(SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap()),"wss://gateway.discord.gg/".into(),receive,mpsc::channel(1).1,None,|event| {
                 if let Event::Members(list)=&event {
@@ -3999,6 +4023,7 @@ mod member_tests {
                 }
                 Ok(())
             }, Arc::new(Notify::new()), Some(&endpoint));
+            let client = async { let result = client.await; let _ = client_finished.send(()); result };
             let ((),result)=tokio::join!(server,client);assert_eq!(result,Err(Failure::Expired));
         }).await.unwrap();
 	}

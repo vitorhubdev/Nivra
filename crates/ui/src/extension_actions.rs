@@ -467,9 +467,17 @@ mod tests {
 				.is_err()
 		);
 		state.selected = Some(Id(22));
-		state.gateway_connected = false;
-		assert!(state.prepare_text_send("Denied").is_none());
-		state.gateway_connected = true;
+		let mut outage = test_state();
+		outage.gateway_connected = false;
+		let mut outage_view = MessagingUi::default();
+		let mut outage_commands = Vec::new();
+		outage_view
+			.apply_extension_app_action(&mut outage, action(), &mut outage_commands)
+			.unwrap();
+		assert!(
+			matches!(&outage_commands[0], Command::Send { content, .. } if content == "Approved text")
+		);
+		assert!(!outage.can_attach(Id(22)));
 		for invalid in [" ".into(), "x".repeat(client_core::MAX_CONTENT + 1)] {
 			assert!(state.prepare_text_send(&invalid).is_none());
 		}

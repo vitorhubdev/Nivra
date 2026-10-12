@@ -64,7 +64,9 @@ pub fn valid_event(event: &ScheduledEvent) -> bool {
 		&& !event.name.chars().any(char::is_control)
 		&& event.description.as_ref().is_none_or(|description| {
 			description.chars().count() <= MAX_EVENT_DESCRIPTION_CHARS
-				&& !description.chars().any(char::is_control)
+				&& !description
+					.chars()
+					.any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
 		}) && event.location.as_ref().is_none_or(|location| {
 		!location.is_empty()
 			&& location.chars().count() <= MAX_EVENT_DESCRIPTION_CHARS
@@ -90,6 +92,15 @@ mod tests {
 			location: None,
 			user_count: 7,
 		}
+	}
+
+	#[test]
+	fn descriptions_allow_multiline_formatting_but_refuse_other_controls() {
+		let mut event = event();
+		event.description = Some("Agenda\r\n\tBring dice".into());
+		assert!(valid_event(&event));
+		event.description = Some("Agenda\0hidden".into());
+		assert!(!valid_event(&event));
 	}
 
 	#[test]

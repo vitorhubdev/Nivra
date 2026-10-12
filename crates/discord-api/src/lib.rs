@@ -154,6 +154,8 @@ impl DiscordApi {
 			// Keep writes single-attempt, including attachment slot allocation.
 			.retry(reqwest::retry::never())
 			.no_proxy()
+			.pool_max_idle_per_host(0)
+			.proxy(protect::proxy(model::protect::Scope::Complete))
 			.timeout(Duration::from_secs(20))
 			.connect_timeout(Duration::from_secs(10))
 			.user_agent(client_core::fingerprint::user_agent())
@@ -2573,7 +2575,8 @@ mod tests {
                 assert!(matches!(result,Event::SendResult{result:Ok(_),..}));
             }
             server.await.unwrap();
-
+        }).await.unwrap();
+	}
 	#[tokio::test]
 	async fn poll_create_posts_the_poll_object_and_reads_the_message() {
 		crate::ensure_tls_provider();

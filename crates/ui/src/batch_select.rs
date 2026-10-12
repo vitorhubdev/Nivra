@@ -151,6 +151,14 @@ fn write_txt_files(out: &mut String, message: &TxtMessage) {
 
 /// Markdown for the same messages: author, time, text, and attachment links.
 pub fn format_md(messages: &[TxtMessage]) -> String {
+	let mut out = format_md_body(messages);
+	if !messages.is_empty() {
+		append_md_footer(&mut out);
+	}
+	out
+}
+
+fn format_md_body(messages: &[TxtMessage]) -> String {
 	let mut out = String::new();
 	for message in messages {
 		out.push_str("**");
@@ -179,13 +187,14 @@ pub fn format_md(messages: &[TxtMessage]) -> String {
 		}
 		out.push_str("\n\n");
 	}
-	if !messages.is_empty() {
-		let digest = sha256_hex(out.as_bytes());
-		out.push_str("---\nExported with Nivra client · SHA-256: `");
-		out.push_str(&digest);
-		out.push_str("`\n");
-	}
 	out
+}
+
+fn append_md_footer(out: &mut String) {
+	let digest = sha256_hex(out.as_bytes());
+	out.push_str("---\nExported with Nivra client · SHA-256: `");
+	out.push_str(&digest);
+	out.push_str("`\n");
 }
 
 /// Formats a loaded history a chunk at a time so a frame does not walk every message.
@@ -218,15 +227,20 @@ impl ExportJob {
 	}
 
 	/// Copies the open timeline one chunk at a time. Nothing is cloned here.
-	/// `limit` caps how many of the newest loaded messages are exported.
+	/// `limit` caps copied rows; use `open_at` for a newest-message window.
 	pub fn open(markdown: bool, limit: Option<usize>) -> Self {
+		Self::open_at(markdown, limit, 0)
+	}
+
+	/// Start at the oldest message belonging to the requested newest-message window.
+	pub(crate) fn open_at(markdown: bool, limit: Option<usize>, first: usize) -> Self {
 		Self {
 			rest: Vec::new(),
 			done: 0,
 			total: 0,
 			markdown,
 			out: String::new(),
-			capture_at: Some(0),
+			capture_at: Some(first),
 			limit,
 		}
 	}
@@ -266,7 +280,7 @@ impl ExportJob {
 		let count = self.rest.len().min(Self::CHUNK);
 		let chunk: Vec<TxtMessage> = self.rest.drain(..count).collect();
 		if self.markdown {
-			self.out.push_str(&format_md(&chunk));
+			self.out.push_str(&format_md_body(&chunk));
 		} else {
 			self.out.push_str(&format_txt(&chunk));
 		}
@@ -274,7 +288,10 @@ impl ExportJob {
 		self.rest.is_empty()
 	}
 
-	pub fn take(self) -> String {
+	pub fn take(mut self) -> String {
+		if self.markdown && self.done > 0 {
+			append_md_footer(&mut self.out);
+		}
 		self.out
 	}
 }
@@ -1120,6 +1137,35 @@ mod tests {
 		assert_eq!(open.capture_index(), ExportJob::CHUNK);
 		open.store_captured(Vec::new(), false);
 		assert!(!open.capturing());
+	}
+
+	#[test]
+	fn chunked_markdown_has_one_checksum_for_the_complete_export() {
+		for count in [0, 1, 40, 41, 85] {
+			let messages: Vec<_> = (0..count)
+				.map(|index| TxtMessage {
+					author: "Synthetic".into(),
+					when: "12:00".into(),
+					text: format!("export-{index:03}"),
+					attachments: vec![],
+					links: vec![],
+				})
+				.collect();
+			let expected = format_md(&messages);
+			let mut job = ExportJob::start(messages, true);
+			while !job.step() {
+				assert!(!job.out.contains("Exported with Nivra client"));
+			}
+			let output = job.take();
+			assert_eq!(
+				output, expected,
+				"chunk boundaries changed the export for {count} rows"
+			);
+			assert_eq!(
+				output.matches("Exported with Nivra client").count(),
+				usize::from(count > 0)
+			);
+		}
 	}
 
 	#[test]

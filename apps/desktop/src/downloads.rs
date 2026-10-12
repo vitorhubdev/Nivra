@@ -201,6 +201,8 @@ impl Downloads {
 					};
 					let client = reqwest::Client::builder()
 						.no_proxy()
+						.pool_max_idle_per_host(0)
+						.proxy(protect::proxy(model::protect::Scope::Videos))
 						.redirect(reqwest::redirect::Policy::none())
 						.connect_timeout(Duration::from_secs(15))
 						.read_timeout(Duration::from_secs(30))
@@ -718,6 +720,8 @@ fn preview_client() -> Option<&'static reqwest::Client> {
 		.get_or_init(|| {
 			reqwest::Client::builder()
 				.no_proxy()
+				.pool_max_idle_per_host(0)
+				.proxy(protect::proxy(model::protect::Scope::Videos))
 				.redirect(reqwest::redirect::Policy::none())
 				.connect_timeout(Duration::from_secs(15))
 				.read_timeout(Duration::from_secs(30))
@@ -1314,6 +1318,8 @@ mod tests {
 		let file = CopyFile::create("image.png", failed.clone()).unwrap();
 		let client = reqwest::Client::builder()
 			.no_proxy()
+			.pool_max_idle_per_host(0)
+			.proxy(protect::proxy(model::protect::Scope::Videos))
 			.redirect(reqwest::redirect::Policy::none())
 			.timeout(Duration::from_secs(5))
 			.build()
@@ -1413,6 +1419,8 @@ mod tests {
 		let destination = root.join("rendition.png");
 		let client = reqwest::Client::builder()
 			.no_proxy()
+			.pool_max_idle_per_host(0)
+			.proxy(protect::proxy(model::protect::Scope::Videos))
 			.redirect(reqwest::redirect::Policy::none())
 			.timeout(Duration::from_secs(5))
 			.build()
@@ -1511,6 +1519,8 @@ mod tests {
 		let destination = root.join("chosen.bin");
 		let client = reqwest::Client::builder()
 			.no_proxy()
+			.pool_max_idle_per_host(0)
+			.proxy(protect::proxy(model::protect::Scope::Videos))
 			.redirect(reqwest::redirect::Policy::none())
 			.timeout(Duration::from_secs(5))
 			.build()

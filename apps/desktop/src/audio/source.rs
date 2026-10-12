@@ -27,6 +27,8 @@ pub(super) fn source(
 			input: Input::Http {
 				client: reqwest::Client::builder()
 					.no_proxy()
+					.pool_max_idle_per_host(0)
+					.proxy(protect::proxy(model::protect::Scope::Videos))
 					.redirect(reqwest::redirect::Policy::none())
 					.timeout(Duration::from_secs(15))
 					.build()

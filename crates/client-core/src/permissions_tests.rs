@@ -1672,6 +1672,7 @@ fn unknown_role_list_and_member_still_materialize() {
 				name: "Role 77".into(),
 				position: 1,
 				color: 0,
+				secondary: None,
 				hoist: false,
 			},
 		},

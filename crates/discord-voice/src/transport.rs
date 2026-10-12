@@ -20,8 +20,10 @@ use std::{
 	},
 	time::Duration,
 };
+#[cfg(test)]
+use tokio::net::UdpSocket;
 use tokio::{
-	net::{TcpStream, UdpSocket},
+	net::TcpStream,
 	sync::watch,
 	time::{Instant, MissedTickBehavior, timeout},
 };
@@ -135,6 +137,20 @@ async fn json_send(ws: &mut Socket, value: Value) -> Result<(), &'static str> {
 /// ICMP unreachable (which Windows reports on the next send of a connected socket) drops
 /// one packet; only a path that keeps failing for `UDP_OUTAGE` ends the call.
 const UDP_OUTAGE: Duration = Duration::from_secs(10);
+trait MediaSend {
+	fn try_send(&self, data: &[u8]) -> std::io::Result<usize>;
+}
+impl MediaSend for protect::Datagram {
+	fn try_send(&self, data: &[u8]) -> std::io::Result<usize> {
+		self.try_send(data)
+	}
+}
+#[cfg(test)]
+impl MediaSend for UdpSocket {
+	fn try_send(&self, data: &[u8]) -> std::io::Result<usize> {
+		self.try_send(data)
+	}
+}
 #[derive(Default)]
 struct UdpFailures(Option<Instant>);
 impl UdpFailures {
@@ -142,7 +158,7 @@ impl UdpFailures {
 	/// full buffer, a roam or a stray ICMP error drops one datagram here.
 	fn send(
 		&mut self,
-		socket: &UdpSocket,
+		socket: &impl MediaSend,
 		data: &[u8],
 		outage: &'static str,
 	) -> Result<(), &'static str> {
@@ -210,7 +226,7 @@ fn transient_receive(error: &std::io::Error) -> bool {
 // Native voice UDP ping: signaling heartbeats alone do not maintain an idle
 // media path (notably a receive-only stream or a muted call).
 fn udp_keepalive(
-	socket: &UdpSocket,
+	socket: &impl MediaSend,
 	failures: &mut UdpFailures,
 	sequence: &mut u32,
 ) -> Result<(), &'static str> {
@@ -387,7 +403,7 @@ async fn run_inner(
 		.max_write_buffer_size(MAX_SIGNAL * 2);
 	let (mut ws, _) = timeout(
 		Duration::from_secs(15),
-		tokio_tungstenite::connect_async_with_config(&url, Some(config), false),
+		protect::websocket(&url, Some(config), model::protect::Scope::Voice),
 	)
 	.await
 	.map_err(|_| "Voice connection timed out")?
@@ -404,7 +420,7 @@ async fn run_inner(
 	// The roster message normally follows the session key within milliseconds; only after
 	// this grace does a sole member conclude nobody else is in the call.
 	let mut secured_at: Option<Instant> = None;
-	let mut udp: Option<UdpSocket> = None;
+	let mut udp: Option<protect::Datagram> = None;
 	let mut next_udp_ping = Instant::now();
 	let mut udp_ping_sequence = 0;
 	let mut udp_failures = UdpFailures::default();
@@ -490,7 +506,7 @@ async fn run_inner(
 							resume_attempts+=1;resuming=true;resume_since=Some(Instant::now());capture_reset=true;
 							deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;awaiting_ack=None;heartbeat_sent=None;missed_acks=0;
 							let config=WebSocketConfig::default().max_message_size(Some(MAX_SIGNAL)).max_frame_size(Some(MAX_SIGNAL)).write_buffer_size(0).max_write_buffer_size(MAX_SIGNAL*2);
-							let (replacement,_)=timeout(Duration::from_secs(15),tokio_tungstenite::connect_async_with_config(&url,Some(config),false)).await.map_err(|_|"Voice resume timed out; rejoin the call")?.map_err(|_|"Voice resume failed; rejoin the call")?;
+							let (replacement,_)=timeout(Duration::from_secs(15),protect::websocket(&url,Some(config),model::protect::Scope::Voice)).await.map_err(|_|"Voice resume timed out; rejoin the call")?.map_err(|_|"Voice resume failed; rejoin the call")?;
 							ws=replacement;
 							json_send(&mut ws,json!({"op":7,"d":{"server_id":credentials.guild.unwrap_or(credentials.channel).to_string(),"session_id":credentials.session.expose(),"token":credentials.token.expose(),"seq_ack":seq_ack}})).await?;
 							continue;
@@ -688,7 +704,7 @@ async fn run_inner(
 					deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;awaiting_ack=None;heartbeat_sent=None;missed_acks=0;
 					emit(Status::Resuming{attempt:resume_attempts}).map_err(|_|"Call interface closed")?;
 					let config=WebSocketConfig::default().max_message_size(Some(MAX_SIGNAL)).max_frame_size(Some(MAX_SIGNAL)).write_buffer_size(0).max_write_buffer_size(MAX_SIGNAL*2);
-					let (replacement,_)=timeout(Duration::from_secs(15),tokio_tungstenite::connect_async_with_config(&url,Some(config),false)).await.map_err(|_|"Voice resume timed out; rejoin the call")?.map_err(|_|"Voice resume failed; rejoin the call")?;
+					let (replacement,_)=timeout(Duration::from_secs(15),protect::websocket(&url,Some(config),model::protect::Scope::Voice)).await.map_err(|_|"Voice resume timed out; rejoin the call")?.map_err(|_|"Voice resume failed; rejoin the call")?;
 					ws=replacement;
 					json_send(&mut ws,json!({"op":7,"d":{"server_id":credentials.guild.unwrap_or(credentials.channel).to_string(),"session_id":credentials.session.expose(),"token":credentials.token.expose(),"seq_ack":seq_ack}})).await?;
 					continue;
@@ -730,8 +746,8 @@ async fn run_inner(
 								if !public_ip(address) && !(cfg!(test) && local_test && address.is_loopback()){return Err("Voice server advertised a nonpublic address");}
 								let port=u16::try_from(number(data,"port")?).ok().filter(|p|*p>0).ok_or("Invalid voice server port")?;
 								if !data["modes"].as_array().is_some_and(|m|m.iter().any(|m|m.as_str()==Some(MODE))){return Err("Required voice transport encryption is unavailable");}
-								let socket=UdpSocket::bind(if address.is_ipv4(){"0.0.0.0:0"}else{"[::]:0"}).await.map_err(|_|"Could not bind voice UDP socket")?;
-								socket.connect(SocketAddr::new(address,port)).await.map_err(|_|"Could not connect voice UDP socket")?;
+								let socket=protect::Datagram::connect(SocketAddr::new(address,port),model::protect::Scope::Voice).await.map_err(|_|"PROTECT voice UDP route failed")?;
+
 								let mut probe=[0;74];probe[..4].copy_from_slice(&[0,1,0,70]);probe[4..8].copy_from_slice(&ssrc.to_be_bytes());socket.send(&probe).await.map_err(|_|"Voice UDP discovery failed")?;
 								udp=Some(socket);discovering=true;discovery_deadline=Instant::now()+Duration::from_secs(8);
 								emit(Status::Discovering).map_err(|_|"Call interface closed")?;
@@ -1303,7 +1319,7 @@ async fn run_stream_inner(
 		.max_write_buffer_size(MAX_SIGNAL * 2);
 	let (mut ws, _) = timeout(
 		Duration::from_secs(15),
-		tokio_tungstenite::connect_async_with_config(&url, Some(config), false),
+		protect::websocket(&url, Some(config), model::protect::Scope::Streams),
 	)
 	.await
 	.map_err(|_| "Stream connection timed out")?
@@ -1326,7 +1342,7 @@ async fn run_stream_inner(
 	)?;
 	let mut encryption: Option<Encryption> = None;
 	let mut secured_at: Option<Instant> = None;
-	let mut udp: Option<UdpSocket> = None;
+	let mut udp: Option<protect::Datagram> = None;
 	let mut next_udp_ping = Instant::now();
 	let mut udp_ping_sequence = 0;
 	let mut udp_failures = UdpFailures::default();
@@ -1610,8 +1626,8 @@ async fn run_stream_inner(
 								if !public_ip(address) && !(cfg!(test) && local_test && address.is_loopback()){return Err("Stream server advertised a nonpublic address");}
 								let port=u16::try_from(number(data,"port")?).ok().filter(|port|*port>0).ok_or("Invalid stream server port")?;
 								if !data["modes"].as_array().is_some_and(|m|m.iter().any(|mode|mode.as_str()==Some(MODE))){return Err("Required stream transport encryption is unavailable");}
-								let socket=UdpSocket::bind(if address.is_ipv4(){"0.0.0.0:0"}else{"[::]:0"}).await.map_err(|_|"Could not bind stream UDP socket")?;
-								socket.connect(SocketAddr::new(address,port)).await.map_err(|_|"Could not connect stream UDP socket")?;
+								let socket=protect::Datagram::connect(SocketAddr::new(address,port),model::protect::Scope::Streams).await.map_err(|_|"PROTECT stream UDP route failed")?;
+
 								let mut probe=[0;74];probe[..4].copy_from_slice(&[0,1,0,70]);probe[4..8].copy_from_slice(&audio_ssrc.to_be_bytes());socket.send(&probe).await.map_err(|_|"Stream UDP discovery failed")?;
 								udp=Some(socket);discovering=true;discovery_deadline=Instant::now()+Duration::from_secs(8);emit(Status::Discovering).map_err(|_|"Stream interface closed")?;
 							},

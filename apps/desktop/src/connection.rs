@@ -45,19 +45,113 @@ pub struct Connection {
 	/// recovery (skip) stays explicit and uncoalesced.
 	send_recovery_pending: std::cell::Cell<bool>,
 	task: JoinHandle<()>,
+	children: Arc<ChildRetirement>,
 }
 impl Drop for Connection {
 	fn drop(&mut self) {
 		self.task.abort();
 	}
 }
-struct AbortTask(JoinHandle<()>);
+#[derive(Default)]
+pub(crate) struct ChildRetirement {
+	pending: std::sync::atomic::AtomicUsize,
+	changed: Notify,
+}
+impl ChildRetirement {
+	/// Register before spawning; cancellation releases the future before its lease.
+	pub(crate) fn track<F: std::future::Future>(self: &Arc<Self>, future: F) -> TrackedFuture<F> {
+		self.pending.fetch_add(1, Ordering::AcqRel);
+		TrackedFuture {
+			future: Some(Box::pin(future)),
+			children: self.clone(),
+		}
+	}
+	async fn drained(&self) {
+		loop {
+			let notified = self.changed.notified();
+			if self.pending.load(Ordering::Acquire) == 0 {
+				return;
+			}
+			notified.await;
+		}
+	}
+}
+pub(crate) struct TrackedFuture<F> {
+	future: Option<std::pin::Pin<Box<F>>>,
+	children: Arc<ChildRetirement>,
+}
+impl<F: std::future::Future> std::future::Future for TrackedFuture<F> {
+	type Output = F::Output;
+	fn poll(
+		self: std::pin::Pin<&mut Self>,
+		cx: &mut std::task::Context<'_>,
+	) -> std::task::Poll<Self::Output> {
+		self.get_mut()
+			.future
+			.as_mut()
+			.expect("tracked future")
+			.as_mut()
+			.poll(cx)
+	}
+}
+impl<F> Drop for TrackedFuture<F> {
+	fn drop(&mut self) {
+		drop(self.future.take());
+		self.children.pending.fetch_sub(1, Ordering::AcqRel);
+		self.children.changed.notify_one();
+	}
+}
+struct AbortTask {
+	task: Option<JoinHandle<()>>,
+	children: Arc<ChildRetirement>,
+}
+impl AbortTask {
+	fn tracked(children: Arc<ChildRetirement>, task: JoinHandle<()>) -> Self {
+		children.pending.fetch_add(1, Ordering::AcqRel);
+		Self {
+			task: Some(task),
+			children,
+		}
+	}
+	fn is_finished(&self) -> bool {
+		self.task.as_ref().is_none_or(JoinHandle::is_finished)
+	}
+	fn task_mut(&mut self) -> &mut JoinHandle<()> {
+		self.task.as_mut().expect("live tracked task")
+	}
+}
 impl Drop for AbortTask {
 	fn drop(&mut self) {
-		self.0.abort();
+		if let Some(task) = self.task.take() {
+			// A select branch may already have consumed this handle's output.
+			// Finished means its future/resources are gone; never poll it twice.
+			if task.is_finished() {
+				self.children.pending.fetch_sub(1, Ordering::AcqRel);
+				self.children.changed.notify_one();
+				return;
+			}
+			task.abort();
+			let children = self.children.clone();
+			tokio::spawn(async move {
+				let _ = task.await;
+				children.pending.fetch_sub(1, Ordering::AcqRel);
+				children.changed.notify_one();
+			});
+		}
 	}
 }
 impl Connection {
+	/// Retire the session transport and wait for its task to release network resources.
+	pub async fn shutdown(mut self) -> Result<(), &'static str> {
+		self.task.abort();
+		tokio::time::timeout(Duration::from_secs(10), async {
+			let _ = (&mut self.task).await;
+			self.children.drained().await;
+		})
+		.await
+		.map_err(|_| "Previous connection transports did not stop; PROTECT route unchanged")
+	}
+
 	pub fn skip_gateway_reconnect(&self) {
 		self.reconnect_skip.notify_one();
 	}
@@ -111,7 +205,10 @@ impl Connection {
 		let status_refresh = status_changed.clone();
 		let reconnect_skip = Arc::new(Notify::new());
 		let gateway_reconnect_skip = reconnect_skip.clone();
+		let children = Arc::new(ChildRetirement::default());
+		let task_children = children.clone();
 		let task=runtime.spawn(async move {
+			let children = task_children;
             let emit=move |event:Event| -> Result<(),Failure> {
                 if let Event::AccountSettings { status: true, .. } = &event { status_changed.notify_one(); }
                 if let Event::Typing(signal) = &event {
@@ -128,7 +225,7 @@ impl Connection {
                 let api=Arc::new(api);
 				let cached = cached_presence.get(&user.id).cloned().filter(|presence| presence.valid());
 				let account_presence_send = Arc::new(account_presence_send);
-				let _presence_edits = AbortTask(tokio::spawn(run_presence_sync(PresenceSync {
+				let _presence_edits = AbortTask::tracked(children.clone(), tokio::spawn(run_presence_sync(PresenceSync {
 					api: api.clone(),
 					edits: presence_edit_events,
 					remote_changed: status_refresh,
@@ -148,9 +245,9 @@ impl Connection {
                 let (voice_send,voice_receive)=mpsc::channel(8);
 				let (activity_send,activity_receive)=watch::channel(None);
 				let (member_query_send, member_query_receive) = watch::channel([None, None]);
-				let _sharing_task=AbortTask(tokio::spawn(run_activity_sharing(api.clone(),share_receive.clone(),sharing_requests,sharing_report,finished.clone(),wake.clone())));
-				let _activity_task=AbortTask(tokio::spawn(crate::game_activity::run(share_receive,activity_send,game_report,invite_send,wake.clone(),user.clone(),api.clone())));
-				let _spotify_task=AbortTask(tokio::spawn(crate::spotify::run(api.clone(),user.id,presence_receive.clone(),spotify_send,wake.clone())));
+				let _sharing_task=AbortTask::tracked(children.clone(), tokio::spawn(run_activity_sharing(api.clone(),share_receive.clone(),sharing_requests,sharing_report,finished.clone(),wake.clone())));
+				let _activity_task=AbortTask::tracked(children.clone(), tokio::spawn(crate::game_activity::run(share_receive,activity_send,game_report,invite_send,wake.clone(),user.clone(),api.clone(),children.clone())));
+				let _spotify_task=AbortTask::tracked(children.clone(), tokio::spawn(crate::spotify::run(api.clone(),user.id,presence_receive.clone(),spotify_send,wake.clone())));
                 let dm_channels=Arc::new(Mutex::new(BTreeSet::new()));
                 let gateway_channels=dm_channels.clone();
                 let (voice_online,mut voice_availability)=watch::channel(false);
@@ -159,7 +256,7 @@ impl Connection {
                 let gateway_api=api.clone();let gateway_api_events=gateway_api.clone();let gateway_emit=emit.clone();let terminal_send=finished.clone();
                 let gateway_wake=wake.clone();
                 let activity_wake=wake.clone();
-                let mut gateway_task=AbortTask(tokio::spawn(async move {
+                let mut gateway_task=AbortTask::tracked(children.clone(), tokio::spawn(async move {
                     let error=discord_gateway::run_with_activity_and_reconnect(secret,gateway,member_receive,voice_receive,(activity_receive,presence_receive,member_query_receive,spotify_receive),move |observation| {
                         if activity_observed.send_if_modified(|current| { if *current == observation { false } else { *current = observation; true } }) { activity_wake.request_repaint(); }
                         Ok(())
@@ -189,7 +286,7 @@ impl Connection {
                 // Keep hangup/mute controls responsive while an HTTP message write is awaiting Discord.
                 let (write_send,mut write_receive)=mpsc::channel(COMMAND_SLOTS);
                 let write_api=api.clone();let write_emit=emit.clone();let write_finished=finished.clone();let write_wake=wake.clone();
-                let mut writes=AbortTask(tokio::spawn(async move {
+                let mut writes=AbortTask::tracked(children.clone(), tokio::spawn(async move {
                     while let Some(command)=write_receive.recv().await {
                         let event=write_api.execute(command).await;
                         let failure=match &event {Event::Interaction(client_core::interactions::Event::Submitted{result:Err(f),..})=>Some(*f),Event::MessagingPermissions{result:Err(f),..}=>Some(*f),Event::ChannelAction(client_core::channel_actions::Event::Finished{result:Err(f),..})=>Some(*f),Event::ServerAdmin(client_core::server_admin::Event{result:Err(f),..})=>Some(*f),Event::ServerSettings(client_core::server_settings::Event{result:Err(f),..})=>Some(*f),Event::Failure(f)=>Some(*f),Event::ProfileEdited{result:Err(f),..} if *f != Failure::Capacity =>Some(*f),Event::Edited{result:Err(f),..}|Event::Pinned{result:Err(f),..}=>Some(*f),Event::GuildFolders(Err(f))=>Some(*f),Event::JoinInvite{result:Err(f),..}|Event::GuildCreated{result:Err(f),..}=>Some(*f),Event::SendResult{result:Err(f),..}=>Some(*f),Event::UserAction(client_core::user_actions::Event::Written{result:Err(f),..})=>Some(*f),Event::UserAction(client_core::user_actions::Event::DmOpened{result:Err(f),..})=>Some(*f),Event::ServerAction(client_core::server_actions::Event::Written{result:Err(f),..})=>Some(*f),Event::ServerAction(client_core::server_actions::Event::InviteSent{result:Err(f),..})=>Some(*f),Event::GroupAction(client_core::group_actions::Event::Written{result:Err(f),..})=>Some(*f),Event::Reactions(client_core::reactions::Event::Written{result:Err(f),..})=>Some(*f),Event::Polls(client_core::polls::Event::Written{result:Err(f),..})=>Some(*f),Event::ReadState(client_core::read_state::Event::Result{result:Err(f),..})=>Some(*f),_=>None};
@@ -222,8 +319,8 @@ impl Connection {
                 let mut pending_abandonment=None;
                 loop {
                     tokio::select! {
-                        _=&mut gateway_task.0=>{break;}
-                        _=&mut writes.0=>{break;}
+                        _=gateway_task.task_mut()=>{break;}
+                        _=writes.task_mut()=>{break;}
                         permit=voice_send.reserve(), if pending_abandonment.is_some()=> {
                             if let Ok(permit)=permit {
                                 permit.send(pending_abandonment.take().expect("pending abandonment"));
@@ -246,7 +343,7 @@ impl Connection {
                         }
                         request=upload_receive.recv()=>{
                             let Some(request)=request else {break;};
-                            if !*voice_availability.borrow() || upload.as_ref().is_some_and(|job|!job.0.is_finished()) {
+                            if !*voice_availability.borrow() || upload.as_ref().is_some_and(|job|!job.is_finished()) {
                                 match request.command {
                                     Command::Interaction(request)=>emit(Event::Interaction(client_core::interactions::Event::Submitted{nonce:request.nonce,result:Err(Failure::ProtocolAt("Upload unavailable; reselect the file to retry"))}))?,
                                     Command::Send{nonce,..}=>emit(Event::SendResult{nonce,result:Err(Failure::ProtocolAt("Upload unavailable; reselect the file to retry"))})?,
@@ -258,7 +355,7 @@ impl Connection {
                             }
                             upload_cancel=Some(request.cancel.clone());
                             let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
-                            upload=Some(AbortTask(tokio::spawn(async move {
+                            upload=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
                                 let mut updates=request.progress.subscribe();
                                 let operation=api.upload_messages(request.command,request.source,request.max_file_bytes,request.progress,request.cancel.subscribe());
                                 tokio::pin!(operation);
@@ -284,7 +381,7 @@ impl Connection {
                             if matches!(command,Command::ApplicationCommands{..}) {
                                 drop(application_commands.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
-                                application_commands=Some(AbortTask(tokio::spawn(async move {
+                                application_commands=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
                                     let event=api.execute(command).await;
                                     let failure=match &event {Event::ApplicationCommands{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
                                     let error=emit(event).err().or(failure);
@@ -297,7 +394,7 @@ impl Connection {
                                 let task=if matches!(command,Command::StickerPacks) {&mut sticker_packs} else {&mut sticker_detail};
                                 drop(task.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
-                                *task=Some(AbortTask(tokio::spawn(async move {
+                                *task=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
                                     let event=api.execute(command).await;
                                     let failure=match &event {Event::StickerPacks(Err(f))|Event::Sticker{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
                                     let error=emit(event).err().or(failure);
@@ -309,7 +406,7 @@ impl Connection {
                             if matches!(command,Command::Gifs{..}) {
                                 drop(gifs.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
-                                gifs=Some(AbortTask(tokio::spawn(async move {
+                                gifs=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
                                     let event=api.execute(command).await;
                                     let failure=match &event {Event::Gifs{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
                                     let error=emit(event).err().or(failure);
@@ -321,7 +418,7 @@ impl Connection {
                             if matches!(command,Command::Search{..}|Command::Pins{..}) {
                                 drop(search.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
-                                search=Some(AbortTask(tokio::spawn(async move {
+                                search=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
                                     let event=api.execute(command).await;
                                     let failure=match &event {Event::Search{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
                                     let error=emit(event).err().or(failure);
@@ -333,7 +430,7 @@ impl Connection {
                             if matches!(command,Command::Archives{..}) {
                                 drop(archives.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
-                                archives=Some(AbortTask(tokio::spawn(async move {
+                                archives=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
                                     let event=api.execute(command).await;
                                     let failure=match &event {Event::Archives{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
                                     let error=emit(event).err().or(failure);
@@ -345,7 +442,7 @@ impl Connection {
                             if matches!(command,Command::ForumPosts{..}) {
                                 drop(forum.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
-                                forum=Some(AbortTask(tokio::spawn(async move {
+                                forum=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
                                     let event=api.execute(command).await;
                                     let failure=match &event {Event::ForumPosts{result:Err(f),..} if f.ends_session() && *f!=Failure::Capacity=>Some(*f),_=>None};
                                     let error=emit(event).err().or(failure);
@@ -357,7 +454,7 @@ impl Connection {
                             if matches!(command,Command::Reactions(client_core::reactions::Command::Read{..})) {
                                 drop(reaction_read.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
-                                reaction_read=Some(AbortTask(tokio::spawn(async move {
+                                reaction_read=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
                                     let event=api.execute(command).await;
                                     let failure=match &event {Event::Reactions(client_core::reactions::Event::Read{result:Err(f),..}) if f.ends_session()=>Some(*f),_=>None};
                                     let error=emit(event).err().or(failure);
@@ -421,10 +518,17 @@ impl Connection {
 									emit(Event::Voice(E::RingFailed{channel,request,message:"Recipient ringing unavailable while disconnected"}))?;
 									continue;
 								}
-								drop(recipient_ringing.take());
+								if !recipient_ring_matches(voice_request, (channel, request), *takeover_receive.borrow()) {
+									emit(Event::Voice(E::RingFailed{channel,request,message:"Call action expired; no ringing request was sent"}))?;
+									continue;
+								}
+								if !recipient_ring_available(&mut recipient_ringing) {
+									emit(Event::Voice(E::RingFailed{channel,request,message:"A ringing request is already in progress"}))?;
+									continue;
+								}
 								let api=api.clone();let emit=emit.clone();let finished=finished.clone();let ring_wake=wake.clone();
 								let takeover=takeover_receive.clone();
-								recipient_ringing=Some(AbortTask(tokio::spawn(async move {
+								recipient_ringing=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
 									let result=tokio::select! {
 										biased;
 										_=wait_for_takeover(takeover,(channel,request))=>return,
@@ -491,7 +595,7 @@ impl Connection {
                                     drop(ringing.take());
                                     let api=api.clone();let emit=emit.clone();let voice_send=voice_send.clone();let finished=finished.clone();let ring_wake=wake.clone();
                                     let takeover=takeover_receive.clone();
-                                    ringing=Some(AbortTask(tokio::spawn(async move {
+                                    ringing=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
                                         let result=tokio::select! {
                                             biased;
                                             _=wait_for_takeover(takeover,(channel,request))=>return,
@@ -509,7 +613,7 @@ impl Connection {
                             if matches!(command, Command::Invite {..}) {
                                 drop(invite.take());
                                 let api=api.clone(); let emit=emit.clone(); let finished=finished.clone(); let wake=wake.clone();
-                                invite=Some(AbortTask(tokio::spawn(async move {
+                                invite=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
                                     let event=api.execute(command).await;
                                     let failure=match &event {Event::Invite{result:Err(f),..} if f.ends_session()=>Some(*f),_=>None};
                                     if let Some(error)=emit(event).err().or(failure) {api.stop();let _=finished.send(Some(error));}
@@ -521,7 +625,7 @@ impl Connection {
                             if matches!(command,Command::Profile{..}) {
                                 drop(profile.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let wake=wake.clone();
-                                profile=Some(AbortTask(tokio::spawn(async move {
+                                profile=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
                                     let event=api.execute(command).await;
                                     let failure=match &event {Event::Profile{result:Err(failure),..} if failure.ends_session() && *failure!=Failure::Capacity=>Some(*failure),_=>None};
                                     let error=emit(event).err().or(failure);
@@ -551,7 +655,7 @@ impl Connection {
                                 let (channel, request) = (*channel, *request);
                                 drop(history.take());
                                 let api=api.clone();let emit=emit.clone();let finished=finished.clone();let history_wake=wake.clone();
-                                history=Some(AbortTask(tokio::spawn(async move {
+                                history=Some(AbortTask::tracked(children.clone(), tokio::spawn(async move {
                                     let event=scope_history_failure(api.execute(command).await,channel,request);
                                     if let Event::Failure(f)=&event&& f.ends_session(){api.stop();let _=finished.send(Some(*f));}
                                     if let Err(f)=emit(event){api.stop();let _=finished.send(Some(f));}
@@ -613,6 +717,7 @@ impl Connection {
 			typing_channel,
 			send_recovery_pending: std::cell::Cell::new(false),
 			task,
+			children,
 		}
 	}
 }
@@ -1080,6 +1185,25 @@ fn abandonment_blocks_join(
 }
 
 // Ring only after the media adapter confirms transport allocation, and only once per current call.
+/// Recipient writes are single-flight. Dropping an unfinished task can cancel
+/// the local waiter after Discord already accepted the write.
+fn recipient_ring_available(active: &mut Option<AbortTask>) -> bool {
+	if active.as_ref().is_some_and(|task| !task.is_finished()) {
+		return false;
+	}
+	drop(active.take());
+	true
+}
+
+fn recipient_ring_matches(
+	active: Option<(model::Id, u64, bool)>,
+	operation: (model::Id, u64),
+	takeover: Option<(model::Id, u64)>,
+) -> bool {
+	active.is_some_and(|(channel, request, _)| operation == (channel, request))
+		&& takeover != Some(operation)
+}
+
 fn ring_action(
 	control: client_core::voice::Command,
 	owner: model::Id,
@@ -1176,6 +1300,132 @@ fn scope_history_failure(event: Event, channel: model::Id, request: u64) -> Even
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn recipient_ring_rejects_stale_call_ownership_and_matching_takeover() {
+		let current = (model::Id(22), 5);
+		let active = Some((current.0, current.1, true));
+		assert!(recipient_ring_matches(active, current, None));
+		assert!(!recipient_ring_matches(active, (current.0, 4), None));
+		assert!(!recipient_ring_matches(active, (model::Id(23), 5), None));
+		assert!(!recipient_ring_matches(None, current, None));
+		assert!(!recipient_ring_matches(active, current, Some(current)));
+		assert!(recipient_ring_matches(
+			active,
+			current,
+			Some((current.0, 4))
+		));
+	}
+
+	#[tokio::test]
+	async fn recipient_ring_single_flight_keeps_the_accepted_write_running() {
+		let children = Arc::new(ChildRetirement::default());
+		let (release, pending) = tokio::sync::oneshot::channel();
+		let committed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let completed = committed.clone();
+		let mut active = Some(AbortTask::tracked(
+			children.clone(),
+			tokio::spawn(async move {
+				pending.await.unwrap();
+				completed.store(true, Ordering::Release);
+			}),
+		));
+		assert!(!recipient_ring_available(&mut active));
+		assert!(!recipient_ring_available(&mut active));
+		assert!(
+			active.is_some(),
+			"a repeated gesture must not cancel the earlier write"
+		);
+		release.send(()).unwrap();
+		active.as_mut().unwrap().task_mut().await.unwrap();
+		assert!(committed.load(Ordering::Acquire));
+		assert!(recipient_ring_available(&mut active));
+		assert!(active.is_none());
+		assert!(recipient_ring_available(&mut active));
+		children.drained().await;
+	}
+
+	#[tokio::test]
+	async fn child_retirement_waits_for_the_aborted_future_to_release_resources() {
+		struct Resource(Arc<std::sync::atomic::AtomicBool>);
+		impl Drop for Resource {
+			fn drop(&mut self) {
+				self.0.store(true, Ordering::Release);
+			}
+		}
+		let children = Arc::new(ChildRetirement::default());
+		let other_connection = ChildRetirement::default();
+		let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let resource = Resource(released.clone());
+		let (ready, started) = tokio::sync::oneshot::channel();
+		let task = AbortTask::tracked(
+			children.clone(),
+			tokio::spawn(async move {
+				let _resource = resource;
+				let _ = ready.send(());
+				std::future::pending::<()>().await;
+			}),
+		);
+		started.await.unwrap();
+		assert_eq!(children.pending.load(Ordering::Acquire), 1);
+		assert_eq!(other_connection.pending.load(Ordering::Acquire), 0);
+		assert!(!released.load(Ordering::Acquire));
+		drop(task);
+		tokio::time::timeout(Duration::from_secs(1), children.drained())
+			.await
+			.unwrap();
+		assert!(released.load(Ordering::Acquire));
+		assert_eq!(children.pending.load(Ordering::Acquire), 0);
+	}
+
+	#[tokio::test]
+	async fn retirement_includes_cancelled_nested_and_unpolled_requests() {
+		struct RequestResource {
+			children: Arc<ChildRetirement>,
+			released: Arc<std::sync::atomic::AtomicBool>,
+		}
+		impl Drop for RequestResource {
+			fn drop(&mut self) {
+				assert!(self.children.pending.load(Ordering::Acquire) > 0);
+				self.released.store(true, Ordering::Release);
+			}
+		}
+		for poll_child in [false, true] {
+			let children = Arc::new(ChildRetirement::default());
+			let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
+			let resource = RequestResource {
+				children: children.clone(),
+				released: released.clone(),
+			};
+			let descendants = children.clone();
+			let (ready, started) = tokio::sync::oneshot::channel();
+			let parent = AbortTask::tracked(
+				children.clone(),
+				tokio::spawn(async move {
+					let mut workers = tokio::task::JoinSet::new();
+					let (child_ready, child_started) = tokio::sync::oneshot::channel();
+					workers.spawn(descendants.track(async move {
+						let _resource = resource;
+						let _ = child_ready.send(());
+						std::future::pending::<()>().await;
+					}));
+					if poll_child {
+						child_started.await.unwrap();
+					}
+					let _ = ready.send(());
+					std::future::pending::<()>().await;
+				}),
+			);
+			started.await.unwrap();
+			assert_eq!(children.pending.load(Ordering::Acquire), 2);
+			drop(parent);
+			tokio::time::timeout(Duration::from_secs(1), children.drained())
+				.await
+				.unwrap();
+			assert!(released.load(Ordering::Acquire));
+			assert_eq!(children.pending.load(Ordering::Acquire), 0);
+		}
+	}
+
 	#[test]
 	fn takeover_rejects_queued_initial_ringing_but_preserves_new_call_ownership() {
 		use client_core::voice::Command as V;

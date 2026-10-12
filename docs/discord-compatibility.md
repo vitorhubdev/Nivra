@@ -1866,9 +1866,37 @@ replace the previous choice the way the service does, and a failed write rolls t
 tally back to the pre-vote value. The caller's own Gateway echoes are correlated with the
 completed write so they cannot double the optimistic count. The route shape comes from the
 normal-user endpoint documentation; normal-account voting interoperability remains unofficial and
-has not been validated against a live account. Poll creation, editing, custom-emoji resolution
-and cross-channel live results are not implemented.
+has not been validated against a live account. Poll creation was added in the 1.0.15
+integration described below; editing, custom-emoji resolution and cross-channel live
+results remain unimplemented.
 
 The offline `profile_preview` example paints `docs/pr-evidence/polls/before.png` and
 `after.png` from synthetic fixtures; they are framebuffer captures, not OS screenshots and not
 proof of live compatibility.
+
+## 1.0.15 integration (October 11, 2026)
+
+The composer opens a native `/poll` dialog with a question, two to ten text answers,
+single or multiple selection, and 1-hour, 4-hour, 24-hour or 7-day durations. Guild
+submissions recheck Send Polls as well as message permissions. One creation may be
+pending at a time, and rejection releases the submit slot for an explicit retry.
+
+The server menu lists scheduled events; it does not create events or send RSVP.
+Multiline descriptions are accepted. Successful lists may refresh after one minute;
+errors wait for the user's Retry action rather than issuing requests each frame.
+The call bar lists and plays server soundboard sounds, rechecking permissions,
+server mute/suppression and deafen. Sound management is not implemented. Stage
+channels admit a muted audience member and prohibit microphone, camera, screen
+publishing and soundboard playback.
+
+Private-call controls can ring or stop ringing a selected participant, with one
+pending request and service-confirmed state. Silent sends, optional emoticon
+conversion, GIF retry and role gradients are implemented in their existing flows.
+During a transient Gateway interruption, explicit text sends may use the existing
+REST session; unavailable history, permission failures and budgets still prevent
+submission and preserve the draft.
+
+PROTECT routes selected Discord traffic through session-only profiles; see
+[protect.md](protect.md) for coverage, engine requirements and exclusions. Synthetic
+tests exercise these paths. Normal-account acceptance and real WireGuard provider
+interoperability remain unverified.

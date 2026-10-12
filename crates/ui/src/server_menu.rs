@@ -283,8 +283,10 @@ impl ServerMenu {
 			return;
 		}
 		if let Dialog::Events(events_guild) = dialog {
-			// Idempotent: requests only until the list loads.
-			if let Some(command) = state.request_events(events_guild) {
+			// Refresh successful lists on expiry; failures wait for explicit Retry.
+			if state.events.error().is_none()
+				&& let Some(command) = state.request_events(events_guild)
+			{
 				commands.push(command);
 			}
 			let close = self.events.show(ctx, state, events_guild, commands);
@@ -489,6 +491,50 @@ mod tests {
 		output.drop_without_applying_deltas();
 		(response.unwrap(), text)
 	}
+	#[test]
+	fn event_failure_waits_for_explicit_retry_across_frames() {
+		let ctx = egui::Context::default();
+		design::apply(&ctx);
+		let mut state = test_support::chat_demo_state();
+		state.auth = client_core::auth::AuthState::Authenticated;
+		state.gateway_connected = true;
+		let command = state.request_events(Id(10)).unwrap();
+		state.command_rejected(command);
+		let mut menu = ServerMenu {
+			dialog: Some(Dialog::Events(Id(10))),
+			generation: state.generation,
+			..Default::default()
+		};
+		let mut commands = vec![];
+		for _ in 0..4 {
+			frame(&ctx, 960.0, &mut menu, &mut state, vec![], &mut commands);
+		}
+		assert!(
+			commands.is_empty(),
+			"rendering an error cannot retry network work"
+		);
+		assert!(state.events.error().is_some());
+		let (_, text) = frame(&ctx, 960.0, &mut menu, &mut state, vec![], &mut commands);
+		let retry = text
+			.iter()
+			.find(|(text, _)| text == "Retry")
+			.unwrap()
+			.1
+			.center();
+		for pressed in [true, false] {
+			frame(
+				&ctx,
+				960.0,
+				&mut menu,
+				&mut state,
+				pointer(retry, pressed),
+				&mut commands,
+			);
+		}
+		assert_eq!(commands.len(), 1);
+		assert!(matches!(commands[0], Command::ScheduledEvents(_)));
+	}
+
 	#[test]
 	fn shared_server_items_hide_settings_without_access_and_leave_for_owners() {
 		for (owner, known) in [(false, true), (true, true), (false, false)] {

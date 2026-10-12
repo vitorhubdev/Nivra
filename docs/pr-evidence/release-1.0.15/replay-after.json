@@ -1,0 +1,12 @@
+{
+  "version": "1.0.15",
+  "method": "fresh alternating pairs on same host; one warmup then five measured runs",
+  "warmup": "Synthetic reducer replay: 100000 events in 125.3904ms; retained timeline 387992..388477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+  "runs": [
+    "Synthetic reducer replay: 100000 events in 133.8133ms; retained timeline 387992..388477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+    "Synthetic reducer replay: 100000 events in 120.7205ms; retained timeline 387992..388477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+    "Synthetic reducer replay: 100000 events in 121.5871ms; retained timeline 387992..388477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+    "Synthetic reducer replay: 100000 events in 120.4019ms; retained timeline 387992..388477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility.",
+    "Synthetic reducer replay: 100000 events in 125.3804ms; retained timeline 387992..388477 estimated bytes, 500 records. This is not process RSS, UI frame time, or live compatibility."
+  ]
+}

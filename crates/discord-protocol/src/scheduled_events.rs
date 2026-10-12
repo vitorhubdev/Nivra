@@ -76,6 +76,15 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn event_page_accepts_multiline_description() {
+		let page = events(br#"[{"id":"5","guild_id":"9","name":"Game night","description":"Agenda\r\n\tBring dice","scheduled_start_time":"2026-10-20T19:00:00+00:00","status":1,"entity_type":2}]"#, Id(9)).unwrap();
+		assert_eq!(
+			page[0].description.as_deref(),
+			Some("Agenda\r\n\tBring dice")
+		);
+	}
+
+	#[test]
 	fn event_list_keeps_valid_rows_and_rejects_foreign_or_wild_ones() {
 		let page = events(
 			r#"[{"id":"5","guild_id":"9","channel_id":"2","name":"Game night","description":"Bring dice","scheduled_start_time":"2026-10-20T19:00:00+00:00","status":1,"entity_type":2,"user_count":7},{"id":"6","guild_id":"9","name":"Meetup","scheduled_start_time":"2026-10-21T19:00:00+00:00","status":2,"entity_type":3,"entity_metadata":{"location":"Cafe"},"user_count":3}]"#.as_bytes(),

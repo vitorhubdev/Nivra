@@ -1433,3 +1433,24 @@ exceed `MAX_BYTES` is refused with no partial write. The in-flight optimistic vo
 one pre/post poll pair per session, cleared on reset. Extension snapshots still expose only the
 `absent`/`unsupported` poll marker; questions, answers and results are not copied into app
 snapshots.
+# Session-only preview and routing bounds
+
+Markdown attachment previews retain one parsed document, bounded to 4 MiB of
+estimated formatted allocations. Parsing is limited to 800,000 UTF-8 bytes and
+32,768 events; overflow falls back to a bounded literal document. Chat-message
+Markdown keeps its smaller existing limits. Show more expands up to 200,000
+characters without reparsing the document on every frame. Closing or replacing a
+preview releases its cache; navigation and logout cancel the asynchronous fetch.
+
+PROTECT retains at most two session-only profiles and no serialized preferences
+containing credentials. Each credential is limited to 255 bytes, host to 253 bytes,
+engine path to 1,024 characters and imported WireGuard configuration to 4 KiB.
+The host admits one operation/result, with at most 512 displayed status characters.
+See [PROTECT](protect.md) for routed scopes and engine lifecycle limits.
+
+Scheduled-event and soundboard lists use separate session-only caches, each bounded
+to 16 guilds and 1 MiB including conservative map overhead. Incoming lists are
+charged before insertion; an oversized single list preserves the previous cache.
+Admission evicts the oldest loaded guilds together with their timestamps. Successful
+entries are reused for one minute; this does not introduce a periodic fetch worker.
+Poll creation retains one bounded pending request and adds no persistent table.

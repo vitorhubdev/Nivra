@@ -115,7 +115,7 @@ fn lookup(language: Language, key: &str) -> Option<&'static str> {
 }
 
 /// Every key the app knows, from the English manifest.
-#[cfg(any(test, feature = "demo"))]
+#[cfg(test)]
 fn known_keys() -> impl Iterator<Item = &'static str> {
 	table(Language::English)
 		.into_iter()

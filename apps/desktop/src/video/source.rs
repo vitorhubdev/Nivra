@@ -49,6 +49,8 @@ pub(super) fn resolve_media_url(
 fn media_client() -> Result<reqwest::Client, &'static str> {
 	reqwest::Client::builder()
 		.no_proxy()
+		.pool_max_idle_per_host(0)
+		.proxy(protect::proxy(model::protect::Scope::Videos))
 		.no_gzip()
 		.no_brotli()
 		.no_deflate()

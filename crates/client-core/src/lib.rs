@@ -1980,6 +1980,20 @@ impl State {
 			Some(rest) if !rest.trim().is_empty() => (rest.trim_start().to_owned(), true),
 			_ => (content, false),
 		};
+		// Conversion can expand ASCII into multi-byte emoji; budget the bytes actually queued.
+		if self.draft_bytes()
+			+ content.len()
+			+ filenames
+				.iter()
+				.map(|name| name.len() + size_of::<String>())
+				.sum::<usize>()
+			+ size_of::<Pending>()
+			+ sticker.map_or(0, Sticker::heap_bytes)
+			+ 32 > MAX_DRAFT_BYTES
+		{
+			self.status = "Send exceeds the session input budget";
+			return None;
+		}
 		self.send_sequence += 1;
 		let epoch = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
@@ -2037,6 +2051,17 @@ impl State {
 	}
 	/// Reports a command the transport could not accept as a bounded outcome error.
 	pub fn command_rejected(&mut self, command: Command) {
+		if let Command::Polls(polls::Command::Create {
+			channel, request, ..
+		}) = &command
+		{
+			let _ = self.apply_polls(polls::Event::Created {
+				channel: *channel,
+				request: *request,
+				result: Err(auth::Failure::Capacity),
+			});
+			return;
+		}
 		match &command {
 			Command::ApplicationCommands {
 				channel, request, ..
@@ -2248,6 +2273,8 @@ impl State {
 					});
 				}
 			}
+			return;
+		}
 		if let Command::ScheduledEvents(command) = command {
 			use scheduled_events::{Command as S, Event as E};
 			let S::List { guild, request } = command;
@@ -3356,6 +3383,7 @@ impl State {
 				self.voice.roster.clear();
 				self.voice.dm_calls.clear();
 				self.voice.dm_participants.clear();
+				self.voice.clear_call_clocks();
 				self.members = None;
 				self.member_search = Default::default();
 				self.clear_profile();
@@ -5026,6 +5054,110 @@ mod tests {
 		};
 		assert_eq!(content, "hey 🙂");
 		assert_eq!(state.pending[0].content, "hey 🙂");
+	}
+
+	#[test]
+	fn guild_poll_requires_send_polls_and_stage_cannot_publish_streams() {
+		let mut state = dm_state();
+		state.user = Some(model::User {
+			id: Id(7),
+			name: "Owner".into(),
+			avatar: None,
+			webhook: false,
+			kind: Default::default(),
+			discriminator: 0,
+			primary_guild: None,
+		});
+		state.channels[0].guild = Some(Id(9));
+		state.channels[0].kind = 0;
+		state.guilds.push(model::Guild {
+			id: Id(9),
+			name: "Synthetic".into(),
+			icon: None,
+			emojis: None,
+			premium_tier: 0,
+			stickers: None,
+		});
+		let grant = |state: &mut State, bits| {
+			state
+				.permissions
+				.replace(model::permissions::Snapshot {
+					guilds: vec![model::permissions::Guild {
+						id: Id(9),
+						owner: Some(Id(999)),
+						roles: Some(vec![model::permissions::Role {
+							id: Id(9),
+							bits,
+							name: String::new(),
+							color: 0,
+							secondary: None,
+							position: 0,
+							hoist: false,
+						}]),
+						member: Some(model::permissions::Member {
+							roles: vec![],
+							timeout_until: None,
+						}),
+					}],
+					channels: vec![model::permissions::Channel {
+						id: Id(1),
+						guild: Id(9),
+						overwrites: Some(vec![]),
+					}],
+				})
+				.unwrap();
+		};
+		let bits = model::permissions::VIEW_CHANNEL
+			| model::permissions::SEND_MESSAGES
+			| model::permissions::CONNECT
+			| model::permissions::STREAM;
+		grant(&mut state, bits);
+		let answers = ["One".into(), "Two".into()];
+		assert!(
+			state
+				.prepare_poll_create("Pick?", &answers, 24, false)
+				.is_none()
+		);
+		grant(&mut state, bits | model::permissions::SEND_POLLS);
+		assert!(
+			state
+				.prepare_poll_create("Pick?", &answers, 24, false)
+				.is_some()
+		);
+		state.channels[0].kind = 2;
+		assert!(state.can_stream(Id(1)));
+		state.channels[0].kind = 13;
+		assert!(!state.can_stream(Id(1)));
+	}
+
+	#[test]
+	fn rejected_poll_creation_releases_submit_for_retry() {
+		let mut state = dm_state();
+		let answers = ["One".to_owned(), "Two".to_owned()];
+		let command = state
+			.prepare_poll_create("Pick?", &answers, 24, false)
+			.unwrap();
+		assert!(state.polls.busy());
+		state.command_rejected(command);
+		assert!(!state.polls.busy());
+		assert!(
+			state
+				.prepare_poll_create("Pick?", &answers, 24, false)
+				.is_some()
+		);
+	}
+
+	#[test]
+	fn emoji_expansion_cannot_exceed_send_byte_budget() {
+		let mut state = dm_state();
+		state.emoticon_conversion = true;
+		state.drafts.insert(Id(1), ":)".into());
+		let overhead = size_of::<Pending>() + 32;
+		let remaining = MAX_DRAFT_BYTES - state.draft_bytes() - 2 - overhead;
+		state.drafts.insert(Id(999), "x".repeat(remaining));
+		assert!(state.prepare_send().is_none());
+		assert!(state.pending.is_empty());
+		assert_eq!(state.drafts.get(&Id(1)).unwrap(), ":)");
 	}
 
 	#[test]

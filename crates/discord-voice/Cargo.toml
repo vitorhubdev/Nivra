@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 client-core.workspace = true
 model.workspace = true
+protect.workspace = true
 platform.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true

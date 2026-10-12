@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 model.workspace = true
+protect.workspace = true
 client-core.workspace = true
 discord-protocol.workspace = true
 reqwest.workspace = true

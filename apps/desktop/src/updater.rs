@@ -962,7 +962,7 @@ pub fn debug_check() -> Result<(), String> {
 				],
 			};
 			if select_release(vec![bad], false, &current).is_ok() {
-				return Err(format!("Updater accepted unexpected repo: {bad_base}").into());
+				return Err(format!("Updater accepted unexpected repo: {bad_base}"));
 			}
 		}
 	}

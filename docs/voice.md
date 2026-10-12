@@ -110,6 +110,24 @@ One-to-one DM calls accept only their expected peer. Group DM and server calls s
 
 ## Group DM calls
 
+Call duration is independent of this device's join/connection time. In private calls,
+the optional `CALL_CREATE`/`CALL_UPDATE.message_id` supplies the call-message snowflake;
+its creation timestamp is the start used by [discord.py-self's call duration](https://github.com/dolfies/discord.py-self/blob/master/discord/calls.py).
+This is unofficial interoperability evidence, not owner-tested Discord behavior. Future
+or invalid message timestamps are ignored. After deriving elapsed time once from the
+local wall clock, the timer advances monotonically; duplicate updates do not reset it.
+A different message ID identifies a new call even in the same DM.
+
+Guild voice states have no service call-start timestamp. Guild duration and private
+calls without a usable message ID therefore show `≥HH:MM:SS`, a lower bound since
+Nivra first observed the call/occupied channel. The tooltip explains that it may
+have started earlier. Leaving/rejoining and transport reconnects do not reset the
+call clock. A service DM call deletion/unavailability, channel/guild invalidation,
+or the last observed guild participant leaving clears it. A fresh Gateway session
+clears the observed history; available private-call message IDs restore its service
+start. At most 4,160 fixed-size clocks and their explicit byte budget are retained,
+with oldest eviction. No timing is persisted or inferred from microphone activity.
+
 Existing group conversations expose the same Start/Answer/Decline/Join controls, call stage,
 mute/deafen, audio device and gain controls, focused push-to-talk, noise suppression,
 privacy code, camera, screen sharing and stream viewing as one-to-one calls. Opening the
@@ -157,7 +175,7 @@ Until actual two-way official-client audio and the relevant encryption/teardown 
 
 ## Server channel workflow and live gate
 
-Select an existing server voice channel to inspect its roster, then explicitly Join. Browsing alone never opens media devices. Participant rows show names/avatars and separate mute/deafen states; the connected channel shows elapsed local connection time. Mute/deafen, audio settings and Leave remain available while reading other channels. Server-enforced mute/deafen cannot be overridden locally. To switch rooms, select the next room and Join, then confirm **Switch call**. The current call closes immediately; the new call waits for the matching service departure acknowledgment and local audio teardown. Cancelling keeps the current call. The pending switch expires after 12 seconds and is cancelled on disconnect, account change or lost target access; it never retries automatically. A rejected/full/inaccessible room fails visibly after the bounded allocation deadline.
+Select an existing server voice channel to inspect its roster, then explicitly Join. Browsing alone never opens media devices. Participant rows show names/avatars and separate mute/deafen states; occupied channels show the observed call duration with an explicit lower-bound marker. Mute/deafen, audio settings and Leave remain available while reading other channels. Server-enforced mute/deafen cannot be overridden locally. To switch rooms, select the next room and Join, then confirm **Switch call**. The current call closes immediately; the new call waits for the matching service departure acknowledgment and local audio teardown. Cancelling keeps the current call. The pending switch expires after 12 seconds and is cancelled on disconnect, account change or lost target access; it never retries automatically. A rejected/full/inaccessible room fails visibly after the bounded allocation deadline.
 
 An authenticated empty room displays “Connected | waiting for others”; audio devices open for local microphone detection, respecting mute, deafen, push-to-talk and SPEAK permission. Captured audio is consumed locally while alone; transmission waits until another participant joins and DAVE is secured. The client does not transmit unencrypted microphone audio to make an empty room appear connected. A server move, changed voice endpoint/session or main Gateway failure requires an explicit rejoin. The roster is session-only, bounded to 4,096 entries and 1 MiB, and is cleared on fresh login/resync and relevant access invalidation; during a resumable disconnect it is labeled last-known until missed events replay. Missing user details use a fallback identity rather than fetching a whole guild directory.
 

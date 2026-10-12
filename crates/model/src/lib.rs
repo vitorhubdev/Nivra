@@ -2,6 +2,7 @@
 pub mod account;
 pub mod application_commands;
 mod image_sharing;
+pub mod protect;
 pub use image_sharing::ImageShare;
 pub mod archives;
 mod channel_preferences;

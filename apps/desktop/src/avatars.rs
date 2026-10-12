@@ -839,10 +839,12 @@ async fn run(
 	let client = reqwest::Client::builder()
 		.https_only(true)
 		.no_proxy()
+		.pool_max_idle_per_host(0)
+		.proxy(protect::proxy(model::protect::Scope::Complete))
 		.redirect(reqwest::redirect::Policy::none())
 		.timeout(Duration::from_secs(15))
 		.connect_timeout(Duration::from_secs(5))
-		.pool_max_idle_per_host(1)
+		.pool_max_idle_per_host(0)
 		.build()
 		.ok();
 	let mut cooldown = Instant::now();
@@ -934,7 +936,13 @@ async fn run(
 		}) => if !result { break },
 		}
 	}
+	retire_jobs(&mut jobs).await;
+}
+
+/// Shutdown acknowledgements follow destruction of every pending network future.
+async fn retire_jobs<T: 'static>(jobs: &mut tokio::task::JoinSet<T>) {
 	jobs.abort_all();
+	while jobs.join_next().await.is_some() {}
 }
 
 fn job_urls(key: &str) -> Option<MediaUrls> {
@@ -1652,6 +1660,30 @@ impl Disk {
 
 #[cfg(test)]
 mod tests {
+	#[tokio::test]
+	async fn shutdown_drain_acknowledges_only_after_pending_avatar_resources_are_released() {
+		struct Resource(std::sync::Arc<std::sync::atomic::AtomicBool>);
+		impl Drop for Resource {
+			fn drop(&mut self) {
+				self.0.store(true, std::sync::atomic::Ordering::Release);
+			}
+		}
+		let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let resource = Resource(released.clone());
+		let (ready, started) = tokio::sync::oneshot::channel();
+		let mut jobs = tokio::task::JoinSet::new();
+		jobs.spawn(async move {
+			let _resource = resource;
+			let _ = ready.send(());
+			std::future::pending::<()>().await;
+		});
+		started.await.unwrap();
+		assert!(!released.load(std::sync::atomic::Ordering::Acquire));
+		retire_jobs(&mut jobs).await;
+		assert!(released.load(std::sync::atomic::Ordering::Acquire));
+		assert!(jobs.is_empty());
+	}
+
 	#[test]
 	fn heic_without_os_codec_falls_back_to_download() {
 		// ftyp says HEIC but the payload is garbage: no OS codec can read it,
@@ -2532,6 +2564,8 @@ mod tests {
 		// Only this private test seam accepts HTTP; production constructs fixed HTTPS CDN URLs.
 		let client = reqwest::Client::builder()
 			.no_proxy()
+			.pool_max_idle_per_host(0)
+			.proxy(protect::proxy(model::protect::Scope::Complete))
 			.redirect(reqwest::redirect::Policy::none())
 			.timeout(Duration::from_secs(2))
 			.build()

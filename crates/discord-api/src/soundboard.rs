@@ -77,7 +77,7 @@ mod tests {
 					(
 						"GET /guilds/9/soundboard-sounds HTTP/1.1",
 						"",
-						r#"[{"name":"Airhorn","sound_id":"7","volume":1.0,"emoji_name":"📯","guild_id":"9","available":true}]"#,
+						r#"{"items":[{"name":"Airhorn","sound_id":"7","volume":1.0,"emoji_name":"📯","guild_id":"9","available":true}]}"#,
 					),
 					(
 						"POST /channels/2/send-soundboard-sound HTTP/1.1",

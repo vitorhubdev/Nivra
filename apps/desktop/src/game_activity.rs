@@ -95,7 +95,8 @@ impl Applications for Service {
 }
 
 /// Sharing owns the listeners and all clients. Dropping it cancels every pending operation.
-pub async fn run(
+#[allow(clippy::too_many_arguments)] // Session channels and transport retirement have separate owners.
+pub(crate) async fn run(
 	enabled: watch::Receiver<bool>,
 	activity: watch::Sender<Option<Activity>>,
 	report: watch::Sender<Detection>,
@@ -103,6 +104,7 @@ pub async fn run(
 	ctx: egui::Context,
 	user: User,
 	api: Arc<discord_api::DiscordApi>,
+	children: Arc<crate::connection::ChildRetirement>,
 ) {
 	run_enabled(enabled, &activity, &report, &ctx, || async {
 		let service = Service {
@@ -110,7 +112,10 @@ pub async fn run(
 			cooldown: Arc::new(tokio::sync::Mutex::new(Instant::now())),
 			api: api.clone(),
 		};
-		listen(&activity, &report, &invites, &ctx, &user, &service).await
+		listen(
+			&activity, &report, &invites, &ctx, &user, &service, &children,
+		)
+		.await
 	})
 	.await;
 }
@@ -169,6 +174,7 @@ async fn listen<A: Applications>(
 	ctx: &egui::Context,
 	user: &User,
 	service: &A,
+	children: &Arc<crate::connection::ChildRetirement>,
 ) -> Result<(), &'static str> {
 	let mut listener = platform::game_activity::Listener::bind().map_err(
 		|_| "Game activity is unavailable. Close other Discord clients, then turn sharing off and on.",
@@ -185,7 +191,9 @@ async fn listen<A: Applications>(
 	let mut next_accept_ipc = Instant::now();
 	let mut next_accept_web = Instant::now();
 	let mut invite_count = 0;
-	let _scanner = Abort(tokio::spawn(scan(service.clone(), scan_send)));
+	let _scanner = Abort(tokio::spawn(
+		children.track(scan(service.clone(), scan_send)),
+	));
 	loop {
 		tokio::select! {
 			// An admission interval also bounds credential-free metadata requests (two per client).
@@ -197,9 +205,9 @@ async fn listen<A: Applications>(
 				next_accept_ipc = Instant::now() + Duration::from_secs(5);
 				let slot = claim(&mut slots);
 				let (send, user, service, invites) = (send.clone(), user.clone(), service.clone(), invite_send.clone());
-				workers.spawn(async move {
+				workers.spawn(children.track(async move {
 					(slot, serve_ipc(stream, &user, send, slot, invites, &service).await)
-				});
+				}));
 			},
 			accepted = async {
 				match &web {
@@ -216,9 +224,9 @@ async fn listen<A: Applications>(
 				if !peer.ip().is_loopback() { continue; }
 				let slot = claim(&mut slots);
 				let (send, user, service, invites) = (send.clone(), user.clone(), service.clone(), invite_send.clone());
-				workers.spawn(async move {
+				workers.spawn(children.track(async move {
 					(slot, serve_web(stream, &user, send, slot, invites, &service).await)
-				});
+				}));
 			},
 			Some((slot, value)) = receive.recv() => {
 				values[slot] = value.map(|value| (Instant::now(), value));

@@ -166,15 +166,22 @@ impl CreateDialog {
 			.show(ctx, |d| {
 				d.content(|ui| {
 					ui.label(t("Question"));
-					ui.text_edit_singleline(question)
-						.on_hover_text(t("Question"));
+					ui.add(
+						egui::TextEdit::singleline(question)
+							.char_limit(model::MAX_POLL_QUESTION_CHARS),
+					)
+					.on_hover_text(t("Question"));
 					ui.add_space(8.0);
 					let mut remove = None;
 					let can_remove = answers.len() > 2;
 					for (index, answer) in answers.iter_mut().enumerate() {
 						ui.horizontal(|ui| {
 							ui.label(format!("{}.", index + 1));
-							ui.text_edit_singleline(answer).on_hover_text(t("Answer"));
+							ui.add(
+								egui::TextEdit::singleline(answer)
+									.char_limit(model::MAX_POLL_ANSWER_CHARS),
+							)
+							.on_hover_text(t("Answer"));
 							if can_remove && ui.small_button("×").clicked() {
 								remove = Some(index);
 							}

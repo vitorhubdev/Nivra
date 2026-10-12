@@ -193,6 +193,7 @@ fn showcase_members(state: &mut client_core::State) {
 					bits: 0,
 					name: "Founders".into(),
 					color: 0xe78284,
+					secondary: None,
 					position: 2,
 					hoist: true,
 				},
@@ -201,6 +202,7 @@ fn showcase_members(state: &mut client_core::State) {
 					bits: 0,
 					name: "Community".into(),
 					color: 0xe5c769,
+					secondary: None,
 					position: 1,
 					hoist: true,
 				},
@@ -517,6 +519,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			| "member-tags"
 			| "dm-tags"
 			| "account"
+			| "protect"
 			| "appearance"
 			| "chat" | "notifications"
 			| "voice" | "help"

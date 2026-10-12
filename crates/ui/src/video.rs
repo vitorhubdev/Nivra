@@ -80,6 +80,10 @@ pub struct VideoUi {
 	fullscreen: Option<(egui::Context, bool, egui::Id)>,
 	/// Native window transition for the desktop to apply after this UI frame.
 	fullscreen_request: Option<bool>,
+	/// Open the integrated route settings; the host consumes this without network I/O.
+	protect_requested: bool,
+	/// Restore keyboard focus only after the inline control exists in the current tree.
+	restore_focus: Option<egui::Id>,
 }
 impl Default for VideoUi {
 	fn default() -> Self {
@@ -102,12 +106,16 @@ impl Default for VideoUi {
 			controls_focused: false,
 			fullscreen: None,
 			fullscreen_request: None,
+			protect_requested: false,
+			restore_focus: None,
 		}
 	}
 }
 impl VideoUi {
 	pub fn stop(&mut self) {
 		self.exit_fullscreen();
+		self.restore_focus = None;
+		self.controls_focused = false;
 		self.active = None;
 		self.texture = None;
 		self.frame = None;
@@ -123,12 +131,22 @@ impl VideoUi {
 	fn exit_fullscreen(&mut self) {
 		if let Some((ctx, previous, focus)) = self.fullscreen.take() {
 			self.fullscreen_request = Some(previous);
-			ctx.memory_mut(|memory| memory.request_focus(focus));
+			self.restore_focus = Some(focus);
+			// The inline player is absent from the closing fullscreen frame. Never
+			// publish its ID as focus before its AccessKit node has been drawn.
+			ctx.memory_mut(|memory| {
+				if let Some(focused) = memory.focused() {
+					memory.surrender_focus(focused);
+				}
+			});
 			ctx.request_repaint();
 		}
 	}
 	pub fn take_fullscreen_request(&mut self) -> Option<bool> {
 		self.fullscreen_request.take()
+	}
+	pub fn take_protect_request(&mut self) -> bool {
+		std::mem::take(&mut self.protect_requested)
 	}
 	pub(super) fn is_fullscreen(&self) -> bool {
 		self.fullscreen.is_some()
@@ -384,7 +402,10 @@ impl VideoUi {
 		let hovered = response.hovered() || ui.rect_contains_pointer(stage);
 		let show_controls = active
 			&& state != VideoState::Idle
-			&& (hovered || state != VideoState::Playing || self.controls_focused);
+			&& (hovered
+				|| state != VideoState::Playing
+				|| self.controls_focused
+				|| (!fullscreen && self.restore_focus.is_some()));
 		// The controls are painted over the stage. Keep playback interaction out of both
 		// overlay bands so a control click cannot also become a play/pause click.
 		let action_top = (stage.top() + 44.0).min(stage.bottom());
@@ -620,7 +641,19 @@ impl VideoUi {
 					ui.horizontal(|ui| {
 						ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
 						let (glyph_rect, glyph) =
-							ui.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::CLICK);
+							ui.allocate_exact_size(egui::Vec2::splat(22.0), egui::Sense::click());
+						glyph.widget_info(|| {
+							egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label)
+						});
+						controls_focused |= glyph.has_focus();
+						if glyph.has_focus() {
+							ui.painter().rect_stroke(
+								glyph_rect,
+								3,
+								egui::Stroke::new(2.0, colors.accent),
+								egui::StrokeKind::Inside,
+							);
+						}
 						let glyph_color = if glyph.hovered() {
 							white
 						} else {
@@ -715,6 +748,10 @@ impl VideoUi {
 										egui::Stroke::new(1.5, white),
 									));
 								}
+							}
+							if !fullscreen && self.restore_focus == Some(button.id) {
+								self.restore_focus = None;
+								button.request_focus();
 							}
 							controls_focused |= button.has_focus();
 							if button.has_focus() {
@@ -836,6 +873,15 @@ impl VideoUi {
 				.layout(egui::Layout::right_to_left(egui::Align::Min)),
 			|ui| {
 				ui.spacing_mut().item_spacing.x = 6.0;
+				let protect = ui
+					.small_button(egui::RichText::new("PROTECT").size(11.0))
+					.on_hover_text(crate::tr_ui!(ui, "Videos and files"));
+				if protect.clicked() {
+					self.exit_fullscreen();
+					self.restore_focus = None;
+					self.protect_requested = true;
+				}
+				response |= protect;
 				let idle = !demo && !download.busy();
 				let disabled_hover = if demo {
 					crate::tr_ui!(ui, "Downloads are disabled for synthetic attachments")
@@ -894,6 +940,7 @@ impl VideoUi {
 impl Drop for VideoUi {
 	fn drop(&mut self) {
 		self.exit_fullscreen();
+		self.restore_focus = None;
 	}
 }
 fn stage_size(attachment: &Attachment, width: f32) -> egui::Vec2 {
@@ -924,6 +971,184 @@ fn timestamp(seconds: f64) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn fullscreen_exit_and_stop_keep_accesskit_focus_in_the_current_tree() {
+		fn frame(
+			ctx: &egui::Context,
+			video: &mut VideoUi,
+			message: &Message,
+			attachment: &Attachment,
+			events: Vec<egui::Event>,
+			stop: bool,
+		) -> egui::FullOutput {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(800.0, 600.0),
+					)),
+					focused: true,
+					events,
+					..Default::default()
+				},
+				|ui| {
+					let mut download = crate::DownloadUi::default();
+					let mut opening = None;
+					if video.is_fullscreen() {
+						video.show_fullscreen(
+							ctx,
+							message,
+							attachment,
+							&mut download,
+							&mut opening,
+							true,
+						);
+					} else {
+						video.show(ui, message, attachment, &mut download, &mut opening, true);
+					}
+					if stop {
+						video.stop();
+					}
+				},
+			);
+			let tree = output.platform_output.accesskit_update.as_ref().unwrap();
+			assert!(
+				tree.nodes.iter().any(|(id, _)| *id == tree.focus),
+				"fullscreen transition published a focused node absent from the current tree"
+			);
+			output
+		}
+		fn center(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+			let tree = output.platform_output.accesskit_update.as_ref().unwrap();
+			let node = tree
+				.nodes
+				.iter()
+				.find(|(_, node)| node.label() == Some(label))
+				.unwrap();
+			let rect = node.1.bounds().unwrap();
+			egui::pos2(
+				((rect.x0 + rect.x1) * 0.5) as f32,
+				((rect.y0 + rect.y1) * 0.5) as f32,
+			)
+		}
+		fn click(pos: egui::Pos2) -> Vec<egui::Event> {
+			let mut events = vec![egui::Event::PointerMoved(pos)];
+			for pressed in [true, false] {
+				events.push(egui::Event::PointerButton {
+					pos,
+					button: egui::PointerButton::Primary,
+					pressed,
+					modifiers: egui::Modifiers::NONE,
+				});
+			}
+			events
+		}
+		let mut message = test_support::message(1, Id(2));
+		let attachment = Attachment {
+			id: Id(3),
+			filename: "synthetic.mp4".into(),
+			content_type: Some("video/mp4".into()),
+			size: 128,
+			media: model::EmbedMedia {
+				width: 640,
+				height: 360,
+				..Default::default()
+			},
+			description: None,
+			spoiler: false,
+			duration_ms: None,
+			waveform: Vec::new(),
+		};
+		message.attachments.push(attachment.clone());
+		for stop in [false, true] {
+			let ctx = egui::Context::default();
+			ctx.enable_accesskit();
+			crate::design::apply(&ctx);
+			let mut video = VideoUi::default();
+			video.begin(&message, &attachment, true);
+			video.state = VideoState::Paused;
+			video.duration = 60.0;
+			let output = frame(&ctx, &mut video, &message, &attachment, Vec::new(), false);
+			let fullscreen = center(&output, "Fullscreen");
+			output.drop_without_applying_deltas();
+			frame(
+				&ctx,
+				&mut video,
+				&message,
+				&attachment,
+				vec![egui::Event::PointerMoved(fullscreen)],
+				false,
+			)
+			.drop_without_applying_deltas();
+			frame(
+				&ctx,
+				&mut video,
+				&message,
+				&attachment,
+				click(fullscreen),
+				false,
+			)
+			.drop_without_applying_deltas();
+			assert!(
+				video.is_fullscreen(),
+				"the real inline button must enter fullscreen"
+			);
+			for _ in 0..3 {
+				frame(&ctx, &mut video, &message, &attachment, Vec::new(), false)
+					.drop_without_applying_deltas();
+			}
+			let escape = egui::Event::Key {
+				key: egui::Key::Escape,
+				physical_key: None,
+				pressed: true,
+				repeat: false,
+				modifiers: egui::Modifiers::NONE,
+			};
+			frame(&ctx, &mut video, &message, &attachment, vec![escape], stop)
+				.drop_without_applying_deltas();
+			assert!(!video.is_fullscreen());
+			if stop {
+				assert!(video.restore_focus.is_none());
+			} else {
+				assert!(video.restore_focus.is_some());
+				video.state = VideoState::Playing;
+			}
+			let output = frame(
+				&ctx,
+				&mut video,
+				&message,
+				&attachment,
+				vec![egui::Event::PointerGone],
+				false,
+			);
+			if !stop {
+				let tree = output.platform_output.accesskit_update.as_ref().unwrap();
+				assert!(
+					tree.nodes.iter().any(|(id, node)| {
+						*id == tree.focus && node.label() == Some("Fullscreen")
+					})
+				);
+				assert!(video.restore_focus.is_none());
+			}
+			output.drop_without_applying_deltas();
+		}
+	}
+
+	#[test]
+	fn dropping_a_fullscreen_player_does_not_request_an_absent_focus_node() {
+		let ctx = egui::Context::default();
+		ctx.enable_accesskit();
+		let output = ctx.run_ui(egui::RawInput::default(), |_| {
+			let mut video = VideoUi::default();
+			video.fullscreen = Some((ctx.clone(), false, egui::Id::unique("removed-video-button")));
+			drop(video);
+		});
+		let tree = output.platform_output.accesskit_update.as_ref().unwrap();
+		assert!(tree.nodes.iter().any(|(id, _)| *id == tree.focus));
+		assert!(ctx.memory(|memory| memory.focused()).is_none());
+		output.drop_without_applying_deltas();
+	}
+
 	#[test]
 	fn video_controls_are_explicit_bounded_and_keyboard_operable() {
 		let mut message = test_support::message(1, Id(2));
@@ -1040,6 +1265,16 @@ mod tests {
 			video.state = VideoState::Playing;
 			frame(&mut video, Some(egui::Key::ArrowRight));
 			assert!(matches!(video.command.take(), Some(VideoCommand::Seek(_))));
+			// The painted play/pause button is independently keyboard operable, and
+			// keeps its overlay alive after the pointer leaves during playback.
+			frame(&mut video, Some(egui::Key::Tab));
+			frame(&mut video, None);
+			assert!(video.controls_focused);
+			frame(&mut video, Some(egui::Key::Enter));
+			assert!(matches!(
+				video.command.take(),
+				Some(VideoCommand::Pause(true))
+			));
 			for key in [egui::Key::Tab, egui::Key::Tab, egui::Key::ArrowLeft] {
 				frame(&mut video, Some(key));
 			}

@@ -108,6 +108,8 @@ async fn run_indices(
 ) {
 	let client = reqwest::Client::builder()
 		.no_proxy()
+		.pool_max_idle_per_host(0)
+		.proxy(protect::proxy(model::protect::Scope::Videos))
 		.redirect(reqwest::redirect::Policy::none())
 		.connect_timeout(Duration::from_secs(15))
 		.read_timeout(Duration::from_secs(30))
@@ -296,6 +298,8 @@ impl BatchDownloads {
 					worker_context.request_repaint();
 					let client = reqwest::Client::builder()
 						.no_proxy()
+						.pool_max_idle_per_host(0)
+						.proxy(protect::proxy(model::protect::Scope::Videos))
 						.redirect(reqwest::redirect::Policy::none())
 						.connect_timeout(Duration::from_secs(15))
 						.read_timeout(Duration::from_secs(30))

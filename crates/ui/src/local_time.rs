@@ -16,6 +16,39 @@ pub fn now() -> time::OffsetDateTime {
 	local(time::OffsetDateTime::now_utc())
 }
 
+/// Message headers include the local calendar date once the message is 24 hours old.
+pub(crate) fn message_timestamp(instant: time::OffsetDateTime) -> String {
+	message_timestamp_at(local(instant), time::OffsetDateTime::now_utc())
+}
+
+fn message_timestamp_at(at: time::OffsetDateTime, now: time::OffsetDateTime) -> String {
+	let clock = format!("{:02}:{:02}", at.hour(), at.minute());
+	if now - at >= time::Duration::hours(24) {
+		format!(
+			"{:02}/{:02}/{:04} {clock}",
+			at.day(),
+			u8::from(at.month()),
+			at.year()
+		)
+	} else {
+		clock
+	}
+}
+
+/// A full local timestamp with its actual offset, including for grouped hover labels.
+pub(crate) fn message_timestamp_tooltip(at: time::OffsetDateTime) -> String {
+	format!(
+		"{:02}/{:02}/{:04} {:02}:{:02}:{:02} UTC{}",
+		at.day(),
+		u8::from(at.month()),
+		at.year(),
+		at.hour(),
+		at.minute(),
+		at.second(),
+		at.offset()
+	)
+}
+
 /// Renders a Discord `<t:seconds:style>` reference the way the official client does: absolute
 /// styles in the viewer's zone, `R` as a coarse relative phrase that refreshes on every frame.
 pub fn discord_timestamp(seconds: i64, style: u8) -> Option<String> {
@@ -93,6 +126,41 @@ fn relative(delta: time::Duration) -> String {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn message_date_appears_at_exactly_twenty_four_hours() {
+		let at = time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+		for (age, expected) in [
+			(
+				time::Duration::hours(24) - time::Duration::nanoseconds(1),
+				"22:13",
+			),
+			(time::Duration::hours(24), "14/11/2023 22:13"),
+			(time::Duration::hours(48), "14/11/2023 22:13"),
+			(time::Duration::hours(-1), "22:13"),
+		] {
+			assert_eq!(super::message_timestamp_at(at, at + age), expected);
+		}
+	}
+
+	#[test]
+	fn message_date_and_clock_use_the_viewers_offset_but_age_uses_the_instant() {
+		// 00:30 UTC on January 1 is still December 31 for a viewer in Brazil.
+		let utc = time::OffsetDateTime::from_unix_timestamp(1_735_691_400).unwrap();
+		let brazil = utc.to_offset(time::UtcOffset::from_hms(-3, 0, 0).unwrap());
+		let ahead = utc.to_offset(time::UtcOffset::from_hms(14, 0, 0).unwrap());
+		let now = utc + time::Duration::hours(24);
+		assert_eq!(super::message_timestamp_at(brazil, now), "31/12/2024 21:30");
+		assert_eq!(super::message_timestamp_at(ahead, now), "01/01/2025 14:30");
+		assert_eq!(
+			super::message_timestamp_at(brazil, now - time::Duration::seconds(1)),
+			"21:30"
+		);
+		assert_eq!(
+			super::message_timestamp_tooltip(brazil),
+			"31/12/2024 21:30:00 UTC-03:00:00"
+		);
+	}
+
 	#[test]
 	fn formats_every_discord_timestamp_style() {
 		let at = 1_700_000_000;

@@ -99,6 +99,8 @@ async fn download_image_share(url: &str, cancelled: &AtomicBool) -> Result<Vec<u
 	let client = reqwest::Client::builder()
 		.https_only(true)
 		.no_proxy()
+		.pool_max_idle_per_host(0)
+		.proxy(protect::proxy(model::protect::Scope::Videos))
 		.redirect(reqwest::redirect::Policy::none())
 		.timeout(std::time::Duration::from_secs(15))
 		.connect_timeout(std::time::Duration::from_secs(5))

@@ -316,7 +316,7 @@ impl MessagingUi {
 			.as_ref()
 			.filter(|c| c.channel == channel.id);
 		let connected = call.is_some_and(|c| matches!(c.phase, Phase::Waiting | Phase::Connected));
-		let elapsed = call.and_then(elapsed_label);
+		let elapsed = elapsed_label(state.voice.call_duration(channel.id));
 		let access = state.channel_access(channel.id);
 		let viewable = !access.hidden();
 		let (rect, response) = ui
@@ -447,7 +447,16 @@ impl MessagingUi {
 			)
 		});
 		response.on_hover_text_with(|| {
-			voice_channel_hover_text(&channel.name, channel_marks::label(access), connected)
+			let mut text =
+				voice_channel_hover_text(&channel.name, channel_marks::label(access), connected);
+			if elapsed.is_some() {
+				text.push('\n');
+				text.push_str(crate::i18n::text(
+					self.language,
+					"Call duration since first observed. The call may have started earlier.",
+				));
+			}
+			text
 		})
 	}
 
@@ -2334,7 +2343,10 @@ impl MessagingUi {
 					if sounds.is_empty() {
 						ui.label(t("No sounds in this server yet"));
 					} else {
-						let playing = state.soundboard.playing();
+						let unavailable = state.soundboard_unavailable(channel);
+						if let Some(reason) = unavailable {
+							ui.label(t(reason));
+						}
 						let sounds: Vec<_> = sounds
 							.iter()
 							.filter(|sound| sound.available)
@@ -2354,7 +2366,7 @@ impl MessagingUi {
 						ui.horizontal_wrapped(|ui| {
 							ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
 							for (id, face, name) in sounds {
-								ui.add_enabled_ui(!playing, |ui| {
+								ui.add_enabled_ui(unavailable.is_none(), |ui| {
 									if ui.button(format!("{face} {name}")).clicked()
 										&& let Some(command) = state.play_sound(channel, id)
 									{
@@ -3046,14 +3058,15 @@ impl MessagingUi {
 				if let Some(guild) = state.channel(channel).and_then(|c| c.guild)
 					&& !state.demo && matches!(phase, Phase::Connected | Phase::Waiting)
 				{
+					let unavailable = state.soundboard_unavailable(channel);
 					let sounds = control(
 						ui,
 						crate::icons::Icon::Soundboard,
 						48.0,
-						true,
+						unavailable.is_none(),
 						STAGE_TEXT,
 						t("Soundboard"),
-						t("Play server sounds to this call"),
+						t(unavailable.unwrap_or("Play server sounds to this call")),
 					);
 					self.soundboard_popup(&sounds, state, guild, channel, commands);
 				}
@@ -3605,6 +3618,12 @@ impl MessagingUi {
 		let channel_id = call.channel;
 		let camera = call.camera;
 		let connected = matches!(phase, Phase::Connected | Phase::Waiting);
+		let duration = state.voice.call_duration(channel_id);
+		let elapsed = if phase != Phase::Failed {
+			elapsed_label(duration)
+		} else {
+			None
+		};
 		// Hold the last green through sub-second flaps: device reopens flip
 		// the phase for a frame or two, and the header must not blink. Only
 		// a sustained disconnect turns it yellow. Failed stays red at once.
@@ -3691,6 +3710,24 @@ impl MessagingUi {
 						.color(colors.warning),
 					);
 				}
+				if let Some(elapsed) = &elapsed {
+					ui.label(
+						RichText::new(elapsed)
+							.monospace()
+							.size(12.0)
+							.color(colors.muted),
+					)
+					.on_hover_text(crate::i18n::text(
+						self.language,
+						if duration.is_some_and(|d| d.lower_bound) {
+							"Call duration since first observed. The call may have started earlier."
+						} else {
+							"Total call duration from Discord's call message, independent of when you joined."
+						},
+					));
+					ui.ctx()
+						.request_repaint_after(std::time::Duration::from_secs(1));
+				}
 				let header = ui.horizontal(|ui| {
 					ui.spacing_mut().item_spacing.x = 10.0;
 					// Square status tile like Discord's, tinted with the connection colour.
@@ -3752,6 +3789,13 @@ impl MessagingUi {
 					header.response.on_hover_ui(|ui| {
 						voice_connection_tip(ui, ping, &place, language);
 					});
+				}
+				if ui
+					.small_button("PROTECT")
+					.on_hover_text(crate::i18n::text(self.language, "Voice and camera"))
+					.clicked()
+				{
+					self.open_protect_scope(model::protect::Scope::Voice);
 				}
 				let (rejoin, export) = call_failure(
 					ui,
@@ -5085,13 +5129,12 @@ fn gain_controls(
 	responses
 }
 
-fn elapsed_label(call: &client_core::voice::Call) -> Option<String> {
-	if !matches!(call.phase, Phase::Waiting | Phase::Connected) {
-		return None;
-	}
-	let seconds = call.connected_at?.elapsed().as_secs();
+fn elapsed_label(duration: Option<client_core::voice::CallDuration>) -> Option<String> {
+	let duration = duration?;
+	let seconds = duration.elapsed.as_secs();
 	Some(format!(
-		"{:02}:{:02}:{:02}",
+		"{}{:02}:{:02}:{:02}",
+		if duration.lower_bound { "≥" } else { "" },
 		seconds / 3600,
 		seconds / 60 % 60,
 		seconds % 60
@@ -6786,12 +6829,27 @@ mod tests {
 			})]
 		));
 		let call = state.voice.active.as_mut().unwrap();
-		assert!(elapsed_label(call).is_none());
+		assert!(elapsed_label(None).is_none());
 		call.connected_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(3663));
 		call.phase = Phase::Waiting;
-		assert_eq!(elapsed_label(call).as_deref(), Some("01:01:03"));
+		assert_eq!(
+			elapsed_label(Some(client_core::voice::CallDuration {
+				elapsed: std::time::Duration::from_secs(3663),
+				lower_bound: false,
+			}))
+			.as_deref(),
+			Some("01:01:03")
+		);
+		assert_eq!(
+			elapsed_label(Some(client_core::voice::CallDuration {
+				elapsed: std::time::Duration::from_secs(3663),
+				lower_bound: true,
+			}))
+			.as_deref(),
+			Some("≥01:01:03")
+		);
 		call.phase = Phase::Failed;
-		assert!(elapsed_label(call).is_none());
+		assert!(elapsed_label(None).is_none());
 		state.demo = true;
 		for width in [640.0, 1120.0] {
 			let mut output = context.run_ui(

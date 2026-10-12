@@ -13,6 +13,7 @@ demo = ["dep:test-support", "ui/demo"]
 
 [dependencies]
 extensions.workspace = true
+protect.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 discord-voice.workspace = true

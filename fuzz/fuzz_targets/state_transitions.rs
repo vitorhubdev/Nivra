@@ -54,6 +54,7 @@ fn ready() -> Event {
 					name: String::new(),
 					color: 0,
 					position: 0,
+					secondary: None,
 					hoist: false,
 				}]),
 				member: Some(p::Member {

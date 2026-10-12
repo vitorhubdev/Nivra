@@ -11,6 +11,8 @@ use tokio::{
 	net::{TcpStream, UdpSocket},
 };
 use zeroize::Zeroizing;
+#[cfg(test)]
+mod wg_core;
 mod wireguard;
 pub use wireguard::prepare;
 
@@ -508,6 +510,18 @@ impl Datagram {
 }
 
 /// Unauthenticated route test; caller runs on its own bounded worker, never rendering.
+// Each result states both transports, so a user sees which one failed.
+const TCP_FAILED: &str = "TCP/TLS: failed · UDP: not tested";
+const TCP_REJECTED: &str = "TCP/TLS: ok · Discord rejected the probe · UDP: not tested";
+const UDP_NOT_NEEDED: &str =
+	"TCP/TLS: ok · UDP: not needed for videos and files · No account credentials were sent";
+const UDP_OK: &str = "TCP/TLS: ok · UDP: ok · Voice, camera and streams can use this route";
+const UDP_ASSOCIATION: &str = "TCP/TLS: ok · UDP: SOCKS5 association failed";
+const UDP_SEND: &str = "TCP/TLS: ok · UDP: send failed";
+const UDP_TIMEOUT: &str = "TCP/TLS: ok · UDP: timed out";
+const UDP_REJECTED_REPLY: &str = "TCP/TLS: ok · UDP: response rejected";
+const UDP_INVALID_REPLY: &str = "TCP/TLS: ok · UDP: invalid response";
+
 pub async fn test(profile: Arc<Profile>) -> Result<&'static str, &'static str> {
 	let _ = rustls::crypto::ring::default_provider().install_default();
 	let client = reqwest::Client::builder()
@@ -522,39 +536,34 @@ pub async fn test(profile: Arc<Profile>) -> Result<&'static str, &'static str> {
 		.get("https://discord.com/api/v10/gateway")
 		.send()
 		.await
-		.map_err(|_| "TCP/TLS test failed")?;
+		.map_err(|_| TCP_FAILED)?;
 	if !response.status().is_success() {
-		return Err("Route responded but Discord rejected the test");
+		return Err(TCP_REJECTED);
 	}
-	if profile.scope.needs_udp() {
-		// A fixed public DNS endpoint proves a UDP payload round trip without
-		// resolving a test hostname on the unprotected system DNS path.
-		let target: SocketAddr = "1.1.1.1:53"
-			.parse()
-			.map_err(|_| "UDP probe endpoint invalid")?;
-		let socket = Datagram::connect_profile(target, Some(&profile))
-			.await
-			.map_err(|_| "SOCKS5 UDP association failed")?;
-		let mut request = vec![
-			0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3,
-			b'c', b'o', b'm', 0, 0, 1, 0, 1,
-		];
-		getrandom::fill(&mut request[..2]).map_err(|_| "Random source unavailable")?;
-		socket
-			.send(&request)
-			.await
-			.map_err(|_| "UDP test send failed")?;
-		let mut reply = [0; 512];
-		let n = tokio::time::timeout(DEADLINE, socket.recv(&mut reply))
-			.await
-			.map_err(|_| "UDP test timed out")?
-			.map_err(|_| "UDP test response rejected")?;
-		if n < 12 || reply[..2] != request[..2] || reply[2] & 0x80 == 0 || reply[3] & 0x0f != 0 {
-			return Err("UDP test response invalid");
-		}
-		return Ok("TCP/TLS and UDP round trip passed. No account or microphone access.");
+	if !profile.scope.needs_udp() {
+		return Ok(UDP_NOT_NEEDED);
 	}
-	Ok("TCP/TLS passed. No account credentials were sent.")
+	// A fixed public DNS endpoint proves a UDP payload round trip without
+	// resolving a test hostname on the unprotected system DNS path.
+	let target: SocketAddr = "1.1.1.1:53".parse().map_err(|_| UDP_ASSOCIATION)?;
+	let socket = Datagram::connect_profile(target, Some(&profile))
+		.await
+		.map_err(|_| UDP_ASSOCIATION)?;
+	let mut request = vec![
+		0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c',
+		b'o', b'm', 0, 0, 1, 0, 1,
+	];
+	getrandom::fill(&mut request[..2]).map_err(|_| UDP_SEND)?;
+	socket.send(&request).await.map_err(|_| UDP_SEND)?;
+	let mut reply = [0; 512];
+	let n = tokio::time::timeout(DEADLINE, socket.recv(&mut reply))
+		.await
+		.map_err(|_| UDP_TIMEOUT)?
+		.map_err(|_| UDP_REJECTED_REPLY)?;
+	if n < 12 || reply[..2] != request[..2] || reply[2] & 0x80 == 0 || reply[3] & 0x0f != 0 {
+		return Err(UDP_INVALID_REPLY);
+	}
+	Ok(UDP_OK)
 }
 
 /// Host calls on one periodic worker. Two consecutive failed probes are required;

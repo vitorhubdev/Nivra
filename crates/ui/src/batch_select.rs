@@ -271,6 +271,11 @@ impl ExportJob {
 		self.markdown
 	}
 
+	/// The scope cap this export was started with; None means every loaded message.
+	pub fn limit(&self) -> Option<usize> {
+		self.limit
+	}
+
 	pub fn progress(&self) -> (usize, usize) {
 		(self.done, self.total)
 	}

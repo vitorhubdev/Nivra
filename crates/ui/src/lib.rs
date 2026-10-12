@@ -2836,19 +2836,38 @@ impl MessagingUi {
 											("Last 200 messages", Some(200)),
 											("Whole loaded conversation", None),
 										] {
-											if ui
-												.selectable_label(
-													scope == limit,
-													crate::i18n::text(self.language, label),
-												)
-												.clicked()
-											{
+											let response = ui.selectable_label(
+												scope == limit,
+												crate::i18n::text(self.language, label),
+											);
+											let response = if limit.is_none() {
+												response.on_hover_text(crate::i18n::text(
+													self.language,
+													"Only messages already on screen. History is not downloaded from Discord.",
+												))
+											} else {
+												response
+											};
+											if response.clicked() {
 												self.timeline.export_scope = limit;
 											}
 										}
+										// The format buttons name the scope they will save, so the choice is explicit.
+										let scope_label = crate::i18n::text(
+											self.language,
+											match scope {
+												Some(50) => "Last 50 messages",
+												Some(100) => "Last 100 messages",
+												Some(200) => "Last 200 messages",
+												_ => "Whole loaded conversation",
+											},
+										);
 										ui.separator();
 										if ui
-											.button(crate::i18n::text(self.language, "Save .txt"))
+											.button(format!(
+												"{} ({scope_label})",
+												crate::i18n::text(self.language, "Save .txt")
+											))
 											.clicked()
 										{
 											self.timeline.begin_chat_export(
@@ -2859,7 +2878,10 @@ impl MessagingUi {
 											ui.close();
 										}
 										if ui
-											.button(crate::i18n::text(self.language, "Save .md"))
+											.button(format!(
+												"{} ({scope_label})",
+												crate::i18n::text(self.language, "Save .md")
+											))
 											.clicked()
 										{
 											self.timeline.begin_chat_export(

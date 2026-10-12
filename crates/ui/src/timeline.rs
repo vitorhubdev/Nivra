@@ -1865,6 +1865,10 @@ impl TimelineView {
 			return;
 		}
 		let markdown = job.markdown();
+		let scope = match job.limit() {
+			Some(count) => format!("last-{count}"),
+			None => "loaded".to_owned(),
+		};
 		let Some(job) = self.export_job.take() else {
 			return;
 		};
@@ -1872,8 +1876,10 @@ impl TimelineView {
 		if text.is_empty() {
 			return;
 		}
-		let name = if markdown { "chat.md" } else { "chat.txt" };
-		self.save_txt_request = Some((name.to_owned(), text.into_bytes()));
+		// The file name states the scope and format, so the saved file is never ambiguous.
+		let extension = if markdown { "md" } else { "txt" };
+		let name = format!("chat-{scope}.{extension}");
+		self.save_txt_request = Some((name, text.into_bytes()));
 	}
 
 	/// A finished snapshot keeps formatting after a channel change. An unfinished copy is cancelled.

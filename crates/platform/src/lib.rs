@@ -11,6 +11,7 @@ pub mod locale;
 pub mod migration;
 pub mod notifications;
 pub mod pointer;
+pub mod priority;
 pub mod processes;
 pub mod save;
 pub mod shortcut;

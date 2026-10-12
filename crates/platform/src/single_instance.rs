@@ -2,11 +2,47 @@
 //! Single instance guard using an OS-held lock (Named Mutex on Windows, flock on Unix)
 //! combined with an informative PID lockfile.
 
-use std::path::{Path, PathBuf};
+use std::{
+	io::{BufRead, BufReader, Read, Write},
+	net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+	path::{Path, PathBuf},
+	sync::{
+		Arc,
+		atomic::{AtomicBool, Ordering},
+	},
+	time::{Duration, Instant},
+};
+
+/// How long a newer launch waits for the previous instance to release the lock.
+const TAKEOVER_WAIT: Duration = Duration::from_secs(15);
+static TAKEOVER: AtomicBool = AtomicBool::new(false);
+static TAKEOVER_WAKE: std::sync::OnceLock<Arc<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
 
 pub struct InstanceLock {
 	path: PathBuf,
 	_os_lock: OsLock,
+}
+
+/// Set when a newer Nivra asked this instance to close. Reading it clears the request.
+pub fn takeover_requested() -> bool {
+	TAKEOVER.swap(false, Ordering::AcqRel)
+}
+
+/// Wakes the UI when a newer launch asks this instance to close, even if its window is hidden.
+pub fn set_takeover_wake(wake: Arc<dyn Fn() + Send + Sync>) {
+	let _ = TAKEOVER_WAKE.set(wake);
+}
+
+fn lock_path() -> std::io::Result<PathBuf> {
+	let Some(data_dir) = dirs::data_local_dir() else {
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::NotFound,
+			"no local data directory for the instance lock",
+		));
+	};
+	let root = data_dir.join("nivra");
+	std::fs::create_dir_all(&root)?;
+	Ok(root.join("instance.lock"))
 }
 
 impl InstanceLock {
@@ -16,17 +52,39 @@ impl InstanceLock {
 	/// Returns `Err(...)` if the lock path cannot be accessed, including when
 	/// no base directory exists at all (never misreported as already-running).
 	pub fn acquire() -> std::io::Result<Option<Self>> {
-		let Some(data_dir) = dirs::data_local_dir() else {
-			return Err(std::io::Error::new(
-				std::io::ErrorKind::NotFound,
-				"no local data directory for the instance lock",
-			));
-		};
-		let root = data_dir.join("nivra");
-		std::fs::create_dir_all(&root)?;
-		let path = root.join("instance.lock");
+		Self::acquire_at(&lock_path()?)
+	}
 
-		Self::acquire_at(&path)
+	/// Acquires the lock, asking a running instance to close when `take_over` is set.
+	/// Returns `Ok(None)` when another instance keeps the lock and no takeover was allowed,
+	/// or when the previous instance did not leave within `TAKEOVER_WAIT`.
+	pub fn acquire_or_take_over(take_over: bool) -> std::io::Result<Option<Self>> {
+		let path = lock_path()?;
+		if let Some(lock) = Self::acquire_at(&path)? {
+			return Ok(Some(lock));
+		}
+		if !take_over {
+			return Ok(None);
+		}
+		let control = read_control(&path);
+		let asked = control
+			.as_ref()
+			.is_some_and(|control| request_close(control).unwrap_or(false));
+		if !asked {
+			// Builds before 1.0.15 have no control channel. Stop only a process whose
+			// executable is a Nivra build, never an arbitrary process that reused the PID.
+			if let Some(pid) = control.map(|c| c.pid).or_else(|| read_pid(&path)) {
+				let _ = terminate_nivra_pid(pid);
+			}
+		}
+		let deadline = Instant::now() + TAKEOVER_WAIT;
+		while Instant::now() < deadline {
+			if let Some(lock) = Self::acquire_at(&path)? {
+				return Ok(Some(lock));
+			}
+			std::thread::sleep(Duration::from_millis(100));
+		}
+		Ok(None)
 	}
 
 	/// Internal helper allowing tests to point to a temporary path.
@@ -67,11 +125,151 @@ impl InstanceLock {
 impl Drop for InstanceLock {
 	fn drop(&mut self) {
 		if let Ok(content) = std::fs::read_to_string(&self.path)
-			&& content.trim() == std::process::id().to_string()
+			&& content.lines().next().map(str::trim)
+				== Some(std::process::id().to_string().as_str())
 		{
 			let _ = std::fs::remove_file(&self.path);
 		}
 	}
+}
+
+/// Starts the local listener that lets a newer launch ask this instance to close.
+/// The port and a random token go into the lock file, which only this user can read.
+pub fn serve_takeover(lock: &InstanceLock) -> std::io::Result<()> {
+	let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+	let port = listener.local_addr()?.port();
+	let mut random = [0u8; 16];
+	getrandom::fill(&mut random).map_err(|error| std::io::Error::other(error.to_string()))?;
+	let token: String = random.iter().map(|b| format!("{b:02x}")).collect();
+	std::fs::write(
+		&lock.path,
+		format!("{}\n{port}\n{token}\n", std::process::id()),
+	)?;
+	std::thread::Builder::new()
+		.name("nivra-takeover".into())
+		.spawn(move || {
+			for stream in listener.incoming().flatten() {
+				handle_takeover(stream, &token);
+			}
+		})
+		.map(|_| ())
+}
+
+fn handle_takeover(mut stream: TcpStream, token: &str) {
+	let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+	let mut line = String::new();
+	if BufReader::new(&stream)
+		.take(256)
+		.read_line(&mut line)
+		.is_err()
+	{
+		return;
+	}
+	if line.trim_end() == format!("takeover {token}") {
+		TAKEOVER.store(true, Ordering::Release);
+		if let Some(wake) = TAKEOVER_WAKE.get() {
+			wake();
+		}
+		let _ = stream.write_all(b"ok\n");
+	}
+}
+
+struct Control {
+	pid: u32,
+	port: u16,
+	token: String,
+}
+
+fn read_pid(path: &Path) -> Option<u32> {
+	std::fs::read_to_string(path)
+		.ok()?
+		.lines()
+		.next()?
+		.trim()
+		.parse()
+		.ok()
+}
+
+fn read_control(path: &Path) -> Option<Control> {
+	let content = std::fs::read_to_string(path).ok()?;
+	let mut lines = content.lines();
+	let pid = lines.next()?.trim().parse().ok()?;
+	let port = lines.next()?.trim().parse().ok()?;
+	let token = lines.next()?.trim().to_owned();
+	(token.len() == 32).then_some(Control { pid, port, token })
+}
+
+/// Sends the takeover request; `Ok(true)` when the running instance acknowledged it.
+fn request_close(control: &Control) -> std::io::Result<bool> {
+	let address = SocketAddr::from((Ipv4Addr::LOCALHOST, control.port));
+	let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(1))?;
+	stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+	stream.write_all(format!("takeover {}\n", control.token).as_bytes())?;
+	let mut reply = String::new();
+	BufReader::new(stream).read_line(&mut reply)?;
+	Ok(reply.trim() == "ok")
+}
+
+#[cfg(windows)]
+fn terminate_nivra_pid(pid: u32) -> std::io::Result<()> {
+	use windows::Win32::Foundation::CloseHandle;
+	use windows::Win32::System::Threading::{
+		OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+		QueryFullProcessImageNameW, TerminateProcess,
+	};
+	use windows::core::PWSTR;
+	if pid == std::process::id() {
+		return Ok(());
+	}
+	// SAFETY: the handle is closed on every path; the buffer length is passed in and bounds the write.
+	unsafe {
+		let handle = OpenProcess(
+			PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+			false,
+			pid,
+		)
+		.map_err(|error| std::io::Error::other(error.to_string()))?;
+		let mut buffer = [0u16; 1024];
+		let mut length = buffer.len() as u32;
+		let named = QueryFullProcessImageNameW(
+			handle,
+			PROCESS_NAME_WIN32,
+			PWSTR(buffer.as_mut_ptr()),
+			&mut length,
+		)
+		.is_ok();
+		let image = String::from_utf16_lossy(&buffer[..length as usize]);
+		let file = image
+			.rsplit(['\\', '/'])
+			.next()
+			.unwrap_or("")
+			.to_ascii_lowercase();
+		let result = if named && file.starts_with("nivra") && file.ends_with(".exe") {
+			TerminateProcess(handle, 0).map_err(|error| std::io::Error::other(error.to_string()))
+		} else {
+			Ok(())
+		};
+		let _ = CloseHandle(handle);
+		result
+	}
+}
+
+#[cfg(not(windows))]
+fn terminate_nivra_pid(pid: u32) -> std::io::Result<()> {
+	let exe = std::fs::read_link(format!("/proc/{pid}/exe")).unwrap_or_default();
+	let nivra = exe
+		.file_name()
+		.and_then(|name| name.to_str())
+		.is_some_and(|name| name.to_ascii_lowercase().starts_with("nivra"));
+	if nivra && pid != std::process::id() {
+		unsafe extern "C" {
+			fn kill(pid: i32, signal: i32) -> i32;
+		}
+		const SIGTERM: i32 = 15;
+		// SAFETY: plain signal delivery to a PID verified above as a Nivra executable.
+		let _ = unsafe { kill(pid as i32, SIGTERM) };
+	}
+	Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -229,6 +427,36 @@ mod tests {
 		drop(held);
 		// Dropping all handles releases the OS lock; a later launch must succeed.
 		assert!(InstanceLock::acquire_at(&lock_path).unwrap().is_some());
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+}
+
+#[cfg(test)]
+mod takeover_tests {
+	use super::*;
+
+	#[test]
+	fn a_newer_launch_is_acknowledged_and_flags_the_running_instance() {
+		let dir = std::env::temp_dir().join(format!("nivra-test-takeover-{}", std::process::id()));
+		let _ = std::fs::create_dir_all(&dir);
+		let path = dir.join("takeover.lock");
+		let lock = InstanceLock::acquire_at(&path).unwrap().unwrap();
+		serve_takeover(&lock).unwrap();
+		let control = read_control(&path).expect("control channel is published");
+		assert!(
+			request_close(&control).unwrap(),
+			"the running instance acknowledges"
+		);
+		assert!(takeover_requested());
+		assert!(!takeover_requested(), "a request is consumed once");
+		let forged = Control {
+			pid: control.pid,
+			port: control.port,
+			token: "0".repeat(32),
+		};
+		assert!(!request_close(&forged).unwrap(), "a wrong token is refused");
+		assert!(!takeover_requested());
+		drop(lock);
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 }

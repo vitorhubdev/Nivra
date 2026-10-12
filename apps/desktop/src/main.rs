@@ -335,9 +335,17 @@ fn main() -> eframe::Result {
 		demo_check_updates();
 		return Ok(());
 	}
+	let autostart = std::env::args().any(|arg| arg == "--autostart");
 	let _instance_lock = if !demo && !std::env::args().any(|arg| arg.starts_with("--demo")) {
-		match platform::single_instance::InstanceLock::acquire() {
-			Ok(Some(lock)) => Some(lock),
+		// A deliberate launch replaces the running instance. A start at login never does:
+		// if Nivra is already open, that session is left alone.
+		match platform::single_instance::InstanceLock::acquire_or_take_over(!autostart) {
+			Ok(Some(lock)) => {
+				if let Err(err) = platform::single_instance::serve_takeover(&lock) {
+					eprintln!("Warning: newer launches cannot ask this instance to close: {err}");
+				}
+				Some(lock)
+			}
 			Ok(None) => {
 				eprintln!("Another instance of Nivra is already running. Exiting.");
 				return Ok(());
@@ -2352,7 +2360,13 @@ impl Desktop {
 			reading,
 			app_settings,
 			app_preferences_unread,
-			updater: updater::Updater::new(demo),
+			updater: {
+				let mut updater = updater::Updater::new(demo);
+				if !demo && std::env::args().any(|arg| arg == "--autostart") {
+					updater.boot_check();
+				}
+				updater
+			},
 			game_activity,
 			tray_setting,
 			startup,
@@ -7294,6 +7308,19 @@ impl eframe::App for Desktop {
 	}
 	fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
 		let ctx = ui.ctx().clone();
+		// Wake the UI for a takeover request even while the window is hidden in the tray.
+		static WAKE_WIRED: std::sync::atomic::AtomicBool =
+			std::sync::atomic::AtomicBool::new(false);
+		if !WAKE_WIRED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+			let wake_ctx = ctx.clone();
+			platform::single_instance::set_takeover_wake(std::sync::Arc::new(move || {
+				wake_ctx.request_repaint()
+			}));
+		}
+		// A newer launch asked this instance to close: leave like Quit does, never to the tray.
+		if platform::single_instance::takeover_requested() {
+			self.tray_window.quit(&ctx);
+		}
 		self.tray_window.ui(&ctx);
 		// PROTECT markers appear only for the route that is live right now.
 		self.messaging

@@ -23,6 +23,8 @@ const MAX_METADATA: usize = 2 * 1024 * 1024;
 const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
 const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(5);
+/// A check started by the computer booting waits longer so it never competes with startup.
+const BOOT_CHECK_DELAY: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Deserialize)]
 struct Asset {
@@ -80,6 +82,7 @@ pub struct Updater {
 	auto_download: bool,
 	demo_available: bool,
 	demo_ready: bool,
+	boot_pending: bool,
 }
 impl Updater {
 	pub fn new(demo: bool) -> Self {
@@ -114,6 +117,45 @@ impl Updater {
 			auto_download: false,
 			demo_available: false,
 			demo_ready: false,
+			boot_pending: false,
+		}
+	}
+
+	/// Called on an automatic start at login: the first check runs later and at the lowest priority.
+	pub fn boot_check(&mut self) {
+		self.boot_pending = true;
+		self.next_check = Instant::now() + BOOT_CHECK_DELAY;
+	}
+
+	/// Checks for a newer release on a dedicated thread at background priority.
+	/// Only the check runs here; nothing is downloaded or installed without the user.
+	fn start_background_check(&mut self, ctx: &egui::Context) {
+		let (sender, receiver) = mpsc::sync_channel(1);
+		let cancel = Arc::new(AtomicBool::new(false));
+		let progress = Arc::new(AtomicU64::new(0));
+		let worker_cancel = Arc::clone(&cancel);
+		let ctx = ctx.clone();
+		let spawned = std::thread::Builder::new()
+			.name("nivra-update-check".into())
+			.spawn(move || {
+				platform::priority::enter_background_priority();
+				let result = tokio::runtime::Builder::new_current_thread()
+					.enable_all()
+					.build()
+					.map_err(|error| error.to_string())
+					.and_then(|runtime| runtime.block_on(check_release(false, worker_cancel)))
+					.map(Outcome::Checked)
+					.map_err(|error| format!("Update failed: {error}"));
+				let _ = sender.send(result);
+				ctx.request_repaint();
+			});
+		if spawned.is_ok() {
+			self.job = Some(Job {
+				receiver,
+				cancel,
+				progress,
+				total: 0,
+			});
 		}
 	}
 
@@ -338,9 +380,13 @@ impl Updater {
 			{
 				self.last_check = Some(Instant::now());
 				self.next_check = Instant::now() + CHECK_INTERVAL;
-				self.start(runtime, ctx, 0, move |cancel, _| async move {
-					check_release(false, cancel).await.map(Outcome::Checked)
-				});
+				if std::mem::take(&mut self.boot_pending) {
+					self.start_background_check(ctx);
+				} else {
+					self.start(runtime, ctx, 0, move |cancel, _| async move {
+						check_release(false, cancel).await.map(Outcome::Checked)
+					});
+				}
 				self.status = "Checking for updates…".into();
 			}
 		}

@@ -318,42 +318,22 @@ impl Decoder {
 			let mut sample_rate = 0;
 			let mut channels = 0;
 			if let Some(index) = audio_index {
-				let audio = reader.GetNativeMediaType(index, 0).map_err(|_| INVALID)?;
-				sample_rate = audio
-					.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)
-					.map_err(|_| UNSUPPORTED)?;
-				channels = audio
-					.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)
-					.map_err(|_| UNSUPPORTED)?;
-				if !(1..=96_000).contains(&sample_rate) || !(1..=2).contains(&channels) {
-					return Err(UNSUPPORTED);
-				}
-				let audio = MFCreateMediaType().map_err(|_| INVALID)?;
-				audio
-					.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
-					.map_err(|_| INVALID)?;
-				audio
-					.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_Float)
-					.map_err(|_| INVALID)?;
-				reader
-					.SetCurrentMediaType(index, None, &audio)
-					.map_err(|_| UNSUPPORTED)?;
-				reader
-					.SetStreamSelection(index, true)
-					.map_err(|_| INVALID)?;
-				let audio = reader.GetCurrentMediaType(index).map_err(|_| INVALID)?;
-				if audio
-					.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)
-					.map_err(|_| INVALID)?
-					!= sample_rate || audio
-					.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)
-					.map_err(|_| INVALID)?
-					!= channels || audio
-					.GetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE)
-					.map_err(|_| INVALID)?
-					!= 32
-				{
-					return Err(UNSUPPORTED);
+				// A broken or exotic audio track must not take the picture down with it:
+				// HE-AAC (SBR/PS) can report a different output rate or layout than its
+				// native type, so the decoder's actual format is adopted. If audio still
+				// cannot be configured, play the video alone and record the step.
+				match configure_audio(&reader, index) {
+					Ok((rate, count)) => {
+						sample_rate = rate;
+						channels = count;
+					}
+					Err(reason) => {
+						let _ = reader.SetStreamSelection(index, false);
+						crate::diagnostics::warn(&format!(
+							"video audio disabled: {reason}; playing picture only"
+						));
+						audio_index = None;
+					}
 				}
 			}
 			let duration = reader
@@ -618,6 +598,58 @@ impl Decoder {
 			}
 		}
 		convert(&sample_bytes(sample)?, self.stride)
+	}
+}
+
+/// Select the decoder's float PCM output for one audio stream and report the format it will
+/// actually deliver. Any refusal returns the step that failed, so the caller keeps the picture.
+unsafe fn configure_audio(
+	reader: &IMFSourceReader,
+	index: u32,
+) -> Result<(u32, u32), &'static str> {
+	// SAFETY: COM calls on the reader that owns this stream; every out value is checked.
+	unsafe {
+		let native = reader
+			.GetNativeMediaType(index, 0)
+			.map_err(|_| "native audio type")?;
+		let native_rate = native
+			.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)
+			.map_err(|_| "native audio rate")?;
+		let native_channels = native
+			.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)
+			.map_err(|_| "native audio channels")?;
+		if !(1..=96_000).contains(&native_rate) || !(1..=2).contains(&native_channels) {
+			return Err("unsupported native audio format");
+		}
+		let audio = MFCreateMediaType().map_err(|_| "audio media type")?;
+		audio
+			.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+			.map_err(|_| "audio major type")?;
+		audio
+			.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_Float)
+			.map_err(|_| "audio subtype")?;
+		reader
+			.SetCurrentMediaType(index, None, &audio)
+			.map_err(|_| "audio decoder refused float output")?;
+		reader
+			.SetStreamSelection(index, true)
+			.map_err(|_| "audio stream selection")?;
+		let current = reader
+			.GetCurrentMediaType(index)
+			.map_err(|_| "current audio type")?;
+		let rate = current
+			.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)
+			.map_err(|_| "current audio rate")?;
+		let count = current
+			.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)
+			.map_err(|_| "current audio channels")?;
+		let bits = current
+			.GetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE)
+			.map_err(|_| "current audio bits")?;
+		if bits != 32 || !(1..=96_000).contains(&rate) || !(1..=2).contains(&count) {
+			return Err("unsupported decoded audio format");
+		}
+		Ok((rate, count))
 	}
 }
 

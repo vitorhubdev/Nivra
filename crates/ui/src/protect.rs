@@ -9,6 +9,8 @@ pub(crate) struct Settings {
 	status: String,
 	busy: bool,
 	enabled: bool,
+	/// Scope of the live route, pushed by the host each frame; drives the PROTECT markers.
+	active: Option<Scope>,
 }
 impl Settings {
 	pub(crate) fn show(&mut self, ui: &mut egui::Ui, demo: bool) {
@@ -80,14 +82,42 @@ impl Settings {
 		}
 		ui.label(crate::tr_ui!(ui,"A failed protected route never silently switches to a direct connection. Changing live media routes requires reconnecting the call."));
 		ui.add_space(12.0);
+		let missing = self.draft.missing();
+		let reserve_missing = (self.fallback && self.draft.protocol != Protocol::WireGuard)
+			.then(|| self.reserve.missing())
+			.flatten();
+		let blocked = missing.or(reserve_missing);
+		ui.label(crate::tr_ui!(
+			ui,
+			if self.enabled {
+				"Route active: the selected scope is protected"
+			} else {
+				"Route inactive: nothing is routed through PROTECT"
+			}
+		));
+		if let Some(reason) = blocked {
+			ui.label(crate::tr_str!(ui, reason));
+		}
 		ui.add_enabled_ui(!demo && !self.busy, |ui| {
 			ui.horizontal(|ui| {
-				if ui.button(crate::tr_ui!(ui, "Test connection")).clicked() {
+				if ui
+					.add_enabled(
+						blocked.is_none(),
+						egui::Button::new(crate::tr_ui!(ui, "Test connection")),
+					)
+					.clicked()
+				{
 					self.action = Some(Action::Test(self.draft.clone()));
 					self.busy = true;
 					self.status = "Testing…".into();
 				}
-				if ui.button(crate::tr_ui!(ui, "Enable")).clicked() {
+				if ui
+					.add_enabled(
+						blocked.is_none(),
+						egui::Button::new(crate::tr_ui!(ui, "Enable")),
+					)
+					.clicked()
+				{
 					self.action = Some(Action::Enable(
 						self.draft.clone(),
 						(self.fallback && self.draft.protocol != Protocol::WireGuard)
@@ -161,6 +191,17 @@ impl crate::MessagingUi {
 	}
 	pub fn take_protect_action(&mut self) -> Option<Action> {
 		self.settings.protect.action.take()
+	}
+	/// The host reports the live route's scope every frame; `None` means nothing is routed.
+	pub fn set_protect_active_scope(&mut self, scope: Option<Scope>) {
+		self.settings.protect.active = scope;
+	}
+	/// True when the live route covers `scope`, so its PROTECT marker may be shown.
+	pub(crate) fn protect_covers(&self, scope: Scope) -> bool {
+		self.settings
+			.protect
+			.active
+			.is_some_and(|active| active.contains(scope))
 	}
 	pub fn set_protect_status(&mut self, status: &str, enabled: bool) {
 		self.set_protect_operation_status(status, enabled, false);

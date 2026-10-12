@@ -3790,10 +3790,11 @@ impl MessagingUi {
 						voice_connection_tip(ui, ping, &place, language);
 					});
 				}
-				if ui
-					.small_button("PROTECT")
-					.on_hover_text(crate::i18n::text(self.language, "Voice and camera"))
-					.clicked()
+				if self.protect_covers(model::protect::Scope::Voice)
+					&& ui
+						.small_button("PROTECT")
+						.on_hover_text(crate::i18n::text(self.language, "Voice and camera"))
+						.clicked()
 				{
 					self.open_protect_scope(model::protect::Scope::Voice);
 				}

@@ -7295,6 +7295,9 @@ impl eframe::App for Desktop {
 	fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
 		let ctx = ui.ctx().clone();
 		self.tray_window.ui(&ctx);
+		// PROTECT markers appear only for the route that is live right now.
+		self.messaging
+			.set_protect_active_scope(protect::active_scope());
 		// Change native hints before drawing, so the clear color and panel alpha
 		// agree for the whole frame. OS calls happen only when an effect changes.
 		self.sync_window_effects();

@@ -77,6 +77,27 @@ impl Default for Draft {
 		}
 	}
 }
+impl Draft {
+	/// Why this draft cannot be tested or enabled yet, if anything is still missing.
+	pub fn missing(&self) -> Option<&'static str> {
+		if self.protocol == Protocol::WireGuard {
+			if self.engine.trim().is_empty() {
+				return Some("Choose the local sing-box executable");
+			}
+			if self.wireguard.trim().is_empty() {
+				return Some("Import a WireGuard configuration first");
+			}
+		} else if self.host.trim().is_empty() {
+			return Some("Enter the proxy server");
+		}
+		if self.scope.needs_udp()
+			&& !matches!(self.protocol, Protocol::Socks5 | Protocol::WireGuard)
+		{
+			return Some("Live media needs SOCKS5 with UDP or WireGuard");
+		}
+		None
+	}
+}
 impl Clone for Draft {
 	fn clone(&self) -> Self {
 		Self {
@@ -96,4 +117,45 @@ pub enum Action {
 	Enable(Draft, Option<Draft>),
 	Disable,
 	ImportWireGuard,
+}
+
+#[cfg(test)]
+mod missing_tests {
+	use super::{Draft, Protocol, Scope};
+
+	#[test]
+	fn an_unconfigured_route_is_never_reported_ready() {
+		let mut draft = Draft {
+			protocol: Protocol::Socks5,
+			..Draft::default()
+		};
+		assert_eq!(draft.missing(), Some("Enter the proxy server"));
+		draft.host = "proxy.example".into();
+		assert_eq!(draft.missing(), None);
+		draft.protocol = Protocol::WireGuard;
+		assert_eq!(
+			draft.missing(),
+			Some("Choose the local sing-box executable")
+		);
+		draft.engine = "C:/tools/sing-box.exe".into();
+		assert_eq!(
+			draft.missing(),
+			Some("Import a WireGuard configuration first")
+		);
+		draft.wireguard = zeroize::Zeroizing::new("[Interface]".into());
+		assert_eq!(draft.missing(), None);
+	}
+
+	#[test]
+	fn live_media_needs_udp_capable_protocols() {
+		let mut draft = Draft {
+			host: "proxy.example".into(),
+			protocol: Protocol::Http,
+			scope: Scope::Voice,
+			..Draft::default()
+		};
+		assert!(draft.missing().is_some());
+		draft.scope = Scope::Videos;
+		assert_eq!(draft.missing(), None);
+	}
 }

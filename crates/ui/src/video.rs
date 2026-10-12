@@ -82,6 +82,8 @@ pub struct VideoUi {
 	fullscreen_request: Option<bool>,
 	/// Open the integrated route settings; the host consumes this without network I/O.
 	protect_requested: bool,
+	/// The live route covers videos and files, so the overlay may show its PROTECT marker.
+	protect_available: bool,
 	/// Restore keyboard focus only after the inline control exists in the current tree.
 	restore_focus: Option<egui::Id>,
 }
@@ -107,6 +109,7 @@ impl Default for VideoUi {
 			fullscreen: None,
 			fullscreen_request: None,
 			protect_requested: false,
+			protect_available: false,
 			restore_focus: None,
 		}
 	}
@@ -147,6 +150,9 @@ impl VideoUi {
 	}
 	pub fn take_protect_request(&mut self) -> bool {
 		std::mem::take(&mut self.protect_requested)
+	}
+	pub fn set_protect_available(&mut self, available: bool) {
+		self.protect_available = available;
 	}
 	pub(super) fn is_fullscreen(&self) -> bool {
 		self.fullscreen.is_some()
@@ -873,15 +879,17 @@ impl VideoUi {
 				.layout(egui::Layout::right_to_left(egui::Align::Min)),
 			|ui| {
 				ui.spacing_mut().item_spacing.x = 6.0;
-				let protect = ui
-					.small_button(egui::RichText::new("PROTECT").size(11.0))
-					.on_hover_text(crate::tr_ui!(ui, "Videos and files"));
-				if protect.clicked() {
-					self.exit_fullscreen();
-					self.restore_focus = None;
-					self.protect_requested = true;
+				if self.protect_available {
+					let protect = ui
+						.small_button(egui::RichText::new("PROTECT").size(11.0))
+						.on_hover_text(crate::tr_ui!(ui, "Videos and files"));
+					if protect.clicked() {
+						self.exit_fullscreen();
+						self.restore_focus = None;
+						self.protect_requested = true;
+					}
+					response |= protect;
 				}
-				response |= protect;
 				let idle = !demo && !download.busy();
 				let disabled_hover = if demo {
 					crate::tr_ui!(ui, "Downloads are disabled for synthetic attachments")

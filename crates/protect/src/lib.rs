@@ -113,6 +113,13 @@ pub fn generation() -> u64 {
 pub fn enabled() -> bool {
 	routes().read().is_ok_and(|r| r.primary.is_some())
 }
+/// Scope of the live primary route, if one is applied. The UI shows PROTECT markers only for it.
+pub fn active_scope() -> Option<Scope> {
+	routes()
+		.read()
+		.ok()
+		.and_then(|r| r.primary.as_ref().map(|p| p.scope))
+}
 pub fn has_fallback() -> bool {
 	routes().read().is_ok_and(|r| r.reserve.is_some())
 }

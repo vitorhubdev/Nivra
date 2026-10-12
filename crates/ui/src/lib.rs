@@ -4530,6 +4530,8 @@ impl MessagingUi {
 		if self.timeline.video.take_protect_request() {
 			self.open_protect_scope(model::protect::Scope::Videos);
 		}
+		let videos_protected = self.protect_covers(model::protect::Scope::Videos);
+		self.timeline.video.set_protect_available(videos_protected);
 		crate::anim::set_reduce_motion(ui.ctx(), self.reduce_motion);
 		crate::i18n::store_interface_language(ui.ctx(), self.language);
 		crate::scroll::apply_preferences(ui.ctx(), self.reading_preferences);

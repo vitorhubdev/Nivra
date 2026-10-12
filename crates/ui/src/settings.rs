@@ -58,8 +58,8 @@ impl Page {
 		Self::Help,
 	];
 	/// Sidebar sections: account-level choices first, then how this app looks and behaves,
-	/// then community add-ons.
-	const SECTIONS: [(&'static str, &'static [Self]); 3] = [
+	/// then community add-ons, and last the native Nivra modules.
+	const SECTIONS: [(&'static str, &'static [Self]); 4] = [
 		(
 			"User settings",
 			&[
@@ -76,7 +76,6 @@ impl Page {
 				Self::Chat,
 				Self::Notifications,
 				Self::Voice,
-				Self::Protect,
 				Self::Keybinds,
 				Self::Activity,
 				Self::General,
@@ -87,6 +86,7 @@ impl Page {
 			"Customization",
 			&[Self::Themes, Self::Extensions, Self::Help],
 		),
+		("Nivra Mods", &[Self::Protect]),
 	];
 	fn label(self, language: model::Language) -> &'static str {
 		let english = match self {

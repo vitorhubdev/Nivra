@@ -1707,3 +1707,10 @@ Soundboard unavailable while server-muted, suppressed or deafened = "Soundboard 
 Wait for the current soundboard request = "Wait for the current soundboard request"
 
 Cached list exceeds the session budget = "Cached list exceeds the session budget"
+Choose the local sing-box executable = "Choose the local sing-box executable"
+Import a WireGuard configuration first = "Import a WireGuard configuration first"
+Enter the proxy server = "Enter the proxy server"
+Live media needs SOCKS5 with UDP or WireGuard = "Live media needs SOCKS5 with UDP or WireGuard"
+Route active: the selected scope is protected = "Route active: the selected scope is protected"
+Route inactive: nothing is routed through PROTECT = "Route inactive: nothing is routed through PROTECT"
+Nivra Mods = "Nivra Mods"

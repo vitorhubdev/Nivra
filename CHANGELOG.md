@@ -1,5 +1,48 @@
 # Changelog
 
+## Nivra 1.0.16
+
+Corrige a atualização pelo próprio app, a abertura de uma segunda janela e a reprodução de vídeos cujo áudio o Windows recusa.
+
+### Atualização
+
+- O app reconhece o instalador publicado (`Nivra-<versão>-Windows-<arquitetura>.exe`). Antes, recusava o nome e mostrava uma mensagem enganosa.
+- A atualização substitui o próprio executável, sem criar uma cópia ao lado.
+- As notas da versão aparecem como texto, com títulos e listas, em vez de Markdown cru.
+- Quem está na 1.0.14 ou na 1.0.15 precisa baixar esta versão manualmente uma vez.
+- Ao iniciar com o sistema, a verificação de atualização roda um minuto depois, em prioridade baixa. Com a atualização automática ligada, a versão nova é baixada como em qualquer verificação.
+
+### Abrir o Nivra de novo
+
+- Abrir o Nivra com outra janela aberta substitui a janela anterior.
+- Se a janela anterior estiver numa chamada ou com mensagens, rascunhos ou envios pendentes, nada é encerrado: a janela existente é trazida para frente.
+- Se a janela anterior for de uma versão antes da 1.0.16, o Nivra mostra um aviso e não a encerra. Feche-a e abra o Nivra de novo.
+- Abrir automaticamente com o sistema nunca substitui uma sessão que já está aberta.
+
+### Vídeo
+
+- Se o Windows recusar o áudio de um vídeo (por exemplo, HE-AAC), a imagem continua tocando sem som, e o motivo vai para o log.
+- Um erro de áudio durante a reprodução também deixa só o som de fora; a imagem segue.
+
+### PROTECT
+
+- Os atalhos PROTECT só aparecem quando a rota ativa cobre aquele uso.
+- "Testar conexão" e "Ativar" ficam desativados até a configuração estar completa, e a tela informa o que falta.
+- O resultado do teste mostra TCP e UDP separados.
+- O PROTECT fica na seção "Nivra Mods", na parte de baixo da barra lateral.
+- WireGuard continua experimental e depende de um sing-box 1.14 instalado por você.
+
+### Exportação
+
+- Os arquivos recebem o nome do escopo escolhido, como `chat-last-50.txt`.
+- "Conversa carregada inteira" exporta só o que já está na tela. O app não baixa histórico do Discord para essa opção.
+
+### Estabilidade
+
+- Correção de um travamento de foco na acessibilidade (AccessKit) quando um controle desaparece no mesmo quadro. O egui usado é a versão 0.36.2, com a correção vendorizada em `vendor/egui`. Ainda não há reprodução confirmada do travamento.
+- O heartbeat de voz entra no log uma vez por minuto, para não empurrar os erros para fora do arquivo.
+- Correção do teste de fuzzing que não acompanhava o campo `secondary`.
+
 ## Nivra 1.0.15
 
 Integra as melhorias posteriores à 1.0.14.

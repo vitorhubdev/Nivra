@@ -1110,6 +1110,8 @@ mod tests {
 			Arc,
 			atomic::{AtomicBool, AtomicU64},
 		};
+		// The app installs its TLS provider at startup; a bare test binary must do the same.
+		let _ = rustls::crypto::ring::default_provider().install_default();
 		let runtime = tokio::runtime::Runtime::new().unwrap();
 		runtime.block_on(async {
 			let client = super::client().unwrap();

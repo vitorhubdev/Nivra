@@ -183,7 +183,7 @@ fn installation() -> Result<PathBuf, String> {
 				.is_none_or(|name| name != "MacOS")
 			|| app.extension().is_none_or(|extension| extension != "app")
 		{
-			return Err("Run the installed Nivra.app to install updates; source builds cannot replace themselves.".into());
+			return Err("This copy of Nivra cannot be updated in place. Install the newest release from the official download.".into());
 		}
 		if app.starts_with("/Volumes") || app.to_string_lossy().contains("/AppTranslocation/") {
 			return Err(
@@ -197,7 +197,7 @@ fn installation() -> Result<PathBuf, String> {
 			.ok_or("Cannot locate the installed application folder.")?;
 		if !windows_executable(exe.file_name()) {
 			return Err(
-				"Run Nivra.exe to install updates; source builds cannot replace themselves.".into(),
+				"This copy of Nivra cannot be updated in place. Install the newest release from the official download.".into(),
 			);
 		}
 		Ok(root.to_owned())

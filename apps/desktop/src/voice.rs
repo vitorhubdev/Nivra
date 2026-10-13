@@ -1052,7 +1052,15 @@ impl Voice {
 						ui.voice_unencrypted = true;
 					}
 					Notice::Ping(ms) => {
-						platform::diagnostics::info(&format!("voice heartbeat ping {ms} ms"));
+						// Logged once a minute: a line every 5 s would push the crash lines out of the rotated log.
+						static LAST_PING_LOG: std::sync::Mutex<Option<Instant>> =
+							std::sync::Mutex::new(None);
+						if let Ok(mut last) = LAST_PING_LOG.lock()
+							&& last.is_none_or(|at| at.elapsed() >= Duration::from_secs(60))
+						{
+							*last = Some(Instant::now());
+							platform::diagnostics::info(&format!("voice heartbeat ping {ms} ms"));
+						}
 						ui.voice_ping_ms = Some(ms);
 					}
 					Notice::Resuming(attempt) => {

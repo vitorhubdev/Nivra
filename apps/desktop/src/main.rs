@@ -339,15 +339,26 @@ fn main() -> eframe::Result {
 	let _instance_lock = if !demo && !std::env::args().any(|arg| arg.starts_with("--demo")) {
 		// A deliberate launch replaces the running instance. A start at login never does:
 		// if Nivra is already open, that session is left alone.
+		use platform::single_instance::{Takeover, notify};
 		match platform::single_instance::InstanceLock::acquire_or_take_over(!autostart) {
-			Ok(Some(lock)) => {
+			Ok(Takeover::Acquired(lock)) => {
 				if let Err(err) = platform::single_instance::serve_takeover(&lock) {
 					eprintln!("Warning: newer launches cannot ask this instance to close: {err}");
 				}
 				Some(lock)
 			}
-			Ok(None) => {
-				eprintln!("Another instance of Nivra is already running. Exiting.");
+			// The running window came forward: it is in a call or holds unsaved work.
+			Ok(Takeover::Busy) | Ok(Takeover::Held) => return Ok(()),
+			Ok(Takeover::Legacy) => {
+				notify(
+					"O Nivra já está aberto numa versão anterior. Feche essa janela e abra o Nivra de novo. Nada foi encerrado.",
+				);
+				return Ok(());
+			}
+			Ok(Takeover::Unresponsive) => {
+				notify(
+					"O Nivra aberto não respondeu a tempo. Feche-o pela janela ou pelo Gerenciador de Tarefas. Nada foi encerrado.",
+				);
 				return Ok(());
 			}
 			Err(err) => {
@@ -1552,6 +1563,31 @@ fn align_undecorated_surface(window: &winit::window::Window) {
 }
 
 impl Desktop {
+	/// Work that closing this window would lose or interrupt. A newer launch treats it as busy too.
+	fn close_needs_confirmation(&self) -> bool {
+		(self.state.demo && self.state.has_unsent())
+			|| self
+				.state
+				.pending
+				.iter()
+				.any(|p| p.delivery != Delivery::Confirmed)
+			|| self.messaging.has_edit()
+			|| self.messaging.has_server_settings_changes()
+			|| self.messaging.extensions.theme_editor_dirty()
+			|| self.state.server_settings.pending
+			|| self.state.server_admin.pending
+			|| self.uploads.has_unsent()
+			|| self.forgetting
+			|| self.messaging.startup_busy
+			|| self.avatar_cleanup.is_some()
+			|| self.cache_pending > 0
+			|| self.cache_clears.pending()
+			|| (!self.fixture_only && self.app_settings.state.needs_attention())
+			|| (!self.fixture_only && self.reading.needs_attention())
+			|| (!self.fixture_only && self.game_activity.needs_attention())
+			|| (!self.fixture_only && self.tray_setting.needs_attention())
+			|| self.cache_error
+	}
 	fn new(
 		cc: &eframe::CreationContext<'_>,
 		demo: bool,
@@ -7038,6 +7074,8 @@ impl eframe::App for Desktop {
 			.is_some_and(|call| call.phase != client_core::voice::Phase::Failed);
 		let upload_active = self.uploads.has_unsent() || self.messaging.upload_busy;
 		let blocked = call_active || upload_active;
+		// A newer launch is refused while closing this window would end a call or lose work.
+		platform::single_instance::set_busy(blocked || self.close_needs_confirmation());
 		self.messaging.updates.blocked_by_call_or_upload = blocked;
 		if blocked {
 			self.messaging.updates.restart_requested = false;
@@ -7320,6 +7358,10 @@ impl eframe::App for Desktop {
 		// A newer launch asked this instance to close: leave like Quit does, never to the tray.
 		if platform::single_instance::takeover_requested() {
 			self.tray_window.quit(&ctx);
+		}
+		// A newer launch was refused because this window is in a call or holds unsaved work.
+		if platform::single_instance::focus_requested() {
+			self.tray_window.show(&ctx);
 		}
 		self.tray_window.ui(&ctx);
 		// PROTECT markers appear only for the route that is live right now.
@@ -7700,31 +7742,7 @@ impl eframe::App for Desktop {
 			self.messaging.accept_server_sticker(&ctx, scope, result);
 		}
 		self.messaging.voice_available = true;
-		if close_requested
-			&& !self.close_approved
-			&& ((self.state.demo && self.state.has_unsent())
-				|| self
-					.state
-					.pending
-					.iter()
-					.any(|p| p.delivery != Delivery::Confirmed)
-				|| self.messaging.has_edit()
-				|| self.messaging.has_server_settings_changes()
-				|| self.messaging.extensions.theme_editor_dirty()
-				|| self.state.server_settings.pending
-				|| self.state.server_admin.pending
-				|| self.uploads.has_unsent()
-				|| self.forgetting
-				|| self.messaging.startup_busy
-				|| self.avatar_cleanup.is_some()
-				|| self.cache_pending > 0
-				|| self.cache_clears.pending()
-				|| (!self.fixture_only && self.app_settings.state.needs_attention())
-				|| (!self.fixture_only && self.reading.needs_attention())
-				|| (!self.fixture_only && self.game_activity.needs_attention())
-				|| (!self.fixture_only && self.tray_setting.needs_attention())
-				|| self.cache_error)
-		{
+		if close_requested && !self.close_approved && self.close_needs_confirmation() {
 			ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
 			self.confirming_close = true;
 		}

@@ -834,7 +834,17 @@ fn play_decoded(
 			let mut decoded = false;
 			// Request each track independently so short/missing audio cannot hold video EOF hostage.
 			if !audio_ended && !paused && pending_audio.is_none() {
-				let sample = decoder.poll_audio()?;
+				let sample = match decoder.poll_audio() {
+					Ok(sample) => sample,
+					// A broken audio track ends the sound, never the picture.
+					Err(reason) => {
+						vlog!(
+							&session.log_budget,
+							"audio stopped: {reason}; playing picture only"
+						);
+						Ready(None)
+					}
+				};
 				decoded |= sample.is_ready();
 				match sample {
 					Ready(Some(Sample::Audio {
@@ -845,7 +855,13 @@ fn play_decoded(
 							((pts - target) * f64::from(info.sample_rate)).round() as i64;
 						let skip = (queued_audio as i64 - packet_start).max(0) as usize;
 						if packet_start > queued_audio as i64 + info.sample_rate as i64 * 2 {
-							return Err("Unsupported video audio timing");
+							vlog!(
+								&session.log_budget,
+								"audio stopped: unsupported timing; playing picture only"
+							);
+							audio_ended = true;
+							eof.store(true, Ordering::Release);
+							continue;
 						}
 						let gap = (packet_start - queued_audio as i64).max(0) as usize;
 						if gap > 0 {

@@ -403,10 +403,29 @@ impl Decoder {
 	}
 
 	pub fn read_audio(&mut self) -> Result<Option<Sample>, &'static str> {
-		match self.audio_index {
-			Some(index) => self.read_from(index),
-			None => Ok(None),
+		let Some(index) = self.audio_index else {
+			return Ok(None);
+		};
+		match self.read_from(index) {
+			Ok(sample) => Ok(sample),
+			// Audio is never worth the picture: a failed or changed audio track is dropped here.
+			Err(reason) => {
+				self.drop_audio(reason);
+				Ok(None)
+			}
 		}
+	}
+
+	/// Stops the audio track for the rest of this playback, keeping the picture.
+	fn drop_audio(&mut self, reason: &'static str) {
+		if let Some(index) = self.audio_index.take() {
+			// SAFETY: live reader on its owner thread; deselecting only stops that stream.
+			let _ = unsafe { self.reader.SetStreamSelection(index, false) };
+			crate::diagnostics::warn(&format!(
+				"video audio stopped: {reason}; playing picture only"
+			));
+		}
+		self.audio_done = true;
 	}
 
 	fn read_from(&mut self, selector: u32) -> Result<Option<Sample>, &'static str> {

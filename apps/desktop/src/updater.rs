@@ -387,7 +387,11 @@ impl Updater {
 						check_release(false, cancel).await.map(Outcome::Checked)
 					});
 				}
-				self.status = "Checking for updates…".into();
+				self.status = if self.job.is_some() {
+					"Checking for updates…".into()
+				} else {
+					"Could not start the update check. Try again from Updates.".into()
+				};
 			}
 		}
 		view.busy = self.job.is_some();
@@ -1062,5 +1066,86 @@ mod tests {
 			expected
 		);
 		assert!(checksum(body.as_bytes(), "nivra-v1.0.5-Windows-X64.zip").is_err());
+	}
+
+	/// Regression: the published Windows asset name must be the one this build looks for.
+	#[test]
+	fn windows_release_asset_is_chosen_by_its_published_name() {
+		let Some(name) = asset_name("v1.0.16") else {
+			return;
+		};
+		if !cfg!(windows) {
+			return;
+		}
+		let url = |file: &str| {
+			format!("https://github.com/vitorhubdev/Nivra/releases/download/v1.0.16/{file}")
+		};
+		let asset = |file: &str| super::Asset {
+			name: file.into(),
+			size: 1024,
+			browser_download_url: url(file),
+		};
+		let release = super::Release {
+			tag_name: "v1.0.16".into(),
+			draft: false,
+			prerelease: false,
+			body: None,
+			assets: vec![asset(&name), asset("SHA256SUMS.txt")],
+		};
+		let current = semver::Version::new(1, 0, 15);
+		let package = super::select_release(vec![release], false, &current)
+			.unwrap()
+			.expect("1.0.16 is newer than 1.0.15");
+		assert_eq!(package.version, "1.0.16");
+		assert_eq!(package.archive.expect("in-app install").name, name);
+		assert!(package.checksums.is_some());
+	}
+
+	/// Live check against the published release: needs network access and a release newer
+	/// than 1.0.15. Run with `cargo test -p nivra live_release -- --ignored`.
+	#[test]
+	#[ignore = "needs network access to GitHub"]
+	fn live_release_downloads_and_matches_its_checksum() {
+		use std::sync::{
+			Arc,
+			atomic::{AtomicBool, AtomicU64},
+		};
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		runtime.block_on(async {
+			let client = super::client().unwrap();
+			let cancel = Arc::new(AtomicBool::new(false));
+			let progress = Arc::new(AtomicU64::new(0));
+			let endpoint = format!("{}/latest", super::RELEASES);
+			let body = super::bounded_body(&client, &endpoint, super::MAX_METADATA, &cancel)
+				.await
+				.unwrap();
+			let release: super::Release = serde_json::from_slice(&body).unwrap();
+			let current = semver::Version::new(1, 0, 15);
+			let package = super::select_release(vec![release], false, &current)
+				.unwrap()
+				.expect("a release newer than 1.0.15 is published");
+			let archive = package
+				.archive
+				.clone()
+				.expect("this platform installs in-app");
+			let sums = package
+				.checksums
+				.clone()
+				.expect("the release publishes SHA256SUMS.txt");
+			let sums_body =
+				super::bounded_body(&client, &sums.browser_download_url, 64 * 1024, &cancel)
+					.await
+					.unwrap();
+			let expected = super::checksum(&sums_body, &archive.name).unwrap();
+			let dir =
+				std::env::temp_dir().join(format!("nivra-live-update-{}", std::process::id()));
+			std::fs::create_dir_all(&dir).unwrap();
+			let target = dir.join(&archive.name);
+			super::download_full(&client, &archive, &target, &expected, &cancel, &progress)
+				.await
+				.expect("the published asset matches SHA256SUMS.txt");
+			assert_eq!(std::fs::metadata(&target).unwrap().len(), archive.size);
+			let _ = std::fs::remove_dir_all(&dir);
+		});
 	}
 }

@@ -22,6 +22,8 @@ const RELEASES: &str = "https://api.github.com/repos/vitorhubdev/Nivra/releases"
 const MAX_METADATA: usize = 2 * 1024 * 1024;
 const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
 const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+/// A failed check (no network yet at login, a rate limit) is retried soon, not after a full interval.
+const FAILED_CHECK_RETRY: Duration = Duration::from_secs(15 * 60);
 const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(5);
 /// A check started by the computer booting waits longer so it never competes with startup.
 const BOOT_CHECK_DELAY: Duration = Duration::from_secs(60);
@@ -77,6 +79,8 @@ pub struct Updater {
 	cleanup_pending: Option<Staged>,
 	status: String,
 	armed: bool,
+	/// A restart the user asked for while a call or upload was running; it resumes when that ends.
+	restart_waiting: bool,
 	helper: Option<install::Prepared>,
 	close_requested: bool,
 	auto_download: bool,
@@ -112,6 +116,7 @@ impl Updater {
 			cleanup_pending: None,
 			status,
 			armed: false,
+			restart_waiting: false,
 			helper: None,
 			close_requested: false,
 			auto_download: false,
@@ -169,7 +174,8 @@ impl Updater {
 	) -> bool {
 		let check = std::mem::take(&mut view.check_requested);
 		let download = std::mem::take(&mut view.download_requested);
-		let restart = std::mem::take(&mut view.restart_requested);
+		let restart = std::mem::take(&mut view.restart_requested)
+			|| (self.restart_waiting && !view.blocked_by_call_or_upload);
 		// Production is the only in-app channel. Leftover Nightly prefs must not
 		// send the startup check at prereleases and miss GitHub `latest`.
 		view.nightly = false;
@@ -295,6 +301,7 @@ impl Updater {
 									helper.stop();
 									self.armed = false;
 									self.close_requested = false;
+									self.restart_waiting = true;
 									self.status =
 										"Update waiting for call or upload to end.".into();
 								} else {
@@ -308,13 +315,14 @@ impl Updater {
 							Err(error) => {
 								self.auto_download = false;
 								self.status = error;
-								self.next_check = Instant::now() + CHECK_INTERVAL;
+								self.next_check = Instant::now() + FAILED_CHECK_RETRY;
 							}
 						}
 					}
 				}
 				Err(mpsc::TryRecvError::Disconnected) => {
 					self.job = None;
+					self.next_check = Instant::now() + FAILED_CHECK_RETRY;
 					self.status = "The update worker stopped. Please try again.".into();
 				}
 				Err(mpsc::TryRecvError::Empty) => {}
@@ -335,6 +343,7 @@ impl Updater {
 					Ok(Outcome::Cleaned)
 				});
 			} else if restart && self.staged.is_some() && !self.armed {
+				self.restart_waiting = false;
 				let stage = self.staged.as_ref().expect("checked stage");
 				let directory = stage.directory.clone();
 				let installation = stage.installation.clone();
@@ -453,6 +462,18 @@ impl Updater {
 		if let Some(stage) = self.staged.take() {
 			self.cleanup_pending = Some(stage);
 		}
+	}
+
+	/// The restart was requested during a call or upload: keep it for when that ends.
+	pub fn defer_restart(&mut self) {
+		self.restart_waiting = true;
+		self.cancel_restart();
+	}
+
+	/// The user dismissed the close that carried the restart: nothing restarts later.
+	pub fn forget_restart(&mut self) {
+		self.restart_waiting = false;
+		self.cancel_restart();
 	}
 
 	pub fn cancel_restart(&mut self) {

@@ -1,4 +1,5 @@
 fn main() {
+	build_commit();
 	if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
 		windows_icon();
 		if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
@@ -61,4 +62,27 @@ fn windows_icon() {
 		"application icon resource compilation failed"
 	);
 	println!("cargo:rustc-link-arg-bin=nivra={}", resource.display());
+}
+
+/// Embeds the commit this binary came from, so a log line can be matched to its source.
+/// CI sets GITHUB_SHA; a local build asks git; anything else stays "unknown".
+fn build_commit() {
+	println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+	println!("cargo:rerun-if-changed=../../.git/HEAD");
+	let commit = std::env::var("GITHUB_SHA")
+		.ok()
+		.filter(|sha| sha.len() >= 7)
+		.map(|sha| sha[..7].to_owned())
+		.or_else(|| {
+			std::process::Command::new("git")
+				.args(["rev-parse", "--short=7", "HEAD"])
+				.output()
+				.ok()
+				.filter(|out| out.status.success())
+				.and_then(|out| String::from_utf8(out.stdout).ok())
+				.map(|sha| sha.trim().to_owned())
+				.filter(|sha| !sha.is_empty())
+		})
+		.unwrap_or_else(|| "unknown".to_owned());
+	println!("cargo:rustc-env=NIVRA_BUILD_COMMIT={commit}");
 }

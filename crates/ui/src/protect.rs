@@ -153,29 +153,13 @@ impl Settings {
 		}
 	}
 }
-/// Official sing-box releases; pick the build for the system shown next to the link.
-const SING_BOX_RELEASES: &str = "https://github.com/SagerNet/sing-box/releases";
-
 fn profile(ui: &mut egui::Ui, draft: &mut Draft, id: &str) {
 	ui.push_id(id,|ui|{
 		egui::ComboBox::from_id_salt("protocol").selected_text(draft.protocol.label()).show_ui(ui,|ui|{for p in Protocol::ALL {ui.selectable_value(&mut draft.protocol,p,p.label());}});
 		if draft.protocol==Protocol::Socks4 && !draft.password.is_empty(){draft.password=Draft::default().password;}
 		if draft.protocol==Protocol::WireGuard {
 			ui.label(crate::tr_ui!(ui, "WireGuard is experimental; real provider compatibility has not been verified."));
-			ui.label(crate::tr_ui!(ui,"Uses your local sing-box 1.14 engine in user space; no system VPN or admin changes. The engine is not bundled or downloaded."));
-			// Official release page; the engine is never downloaded by Nivra itself.
-			let system = if cfg!(target_os = "windows") {
-				"Windows"
-			} else if cfg!(target_os = "macos") {
-				"macOS"
-			} else {
-				"Linux"
-			};
-			ui.hyperlink_to(
-				format!("{} ({system})", crate::tr_ui!(ui, "Download sing-box for this system")),
-				SING_BOX_RELEASES,
-			);
-			ui.label(crate::tr_ui!(ui,"Local sing-box executable"));ui.add(egui::TextEdit::singleline(&mut draft.engine).char_limit(1024));
+			ui.label(crate::tr_ui!(ui,"Runs inside Nivra: no external program, no system VPN and no admin changes. Session only."));
 			ui.label(crate::tr_ui!(ui,"WireGuard configuration · one peer · session only"));ui.add(egui::TextEdit::multiline(&mut *draft.wireguard).password(true).char_limit(4096).desired_rows(5));
 		} else {
 			ui.label(crate::tr_ui!(ui,"Server"));ui.add(egui::TextEdit::singleline(&mut draft.host).hint_text(crate::tr_ui!(ui,"proxy.example.com")).char_limit(253));

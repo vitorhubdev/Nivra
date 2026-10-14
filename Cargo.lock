@@ -5815,6 +5815,7 @@ dependencies = [
 name = "protect"
 version = "1.0.16"
 dependencies = [
+ "base64 0.22.1",
  "boringtun",
  "getrandom 0.4.3",
  "model",

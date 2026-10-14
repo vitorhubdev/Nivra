@@ -1,5 +1,13 @@
 # Changelog
 
+## Não publicado
+
+### PROTECT
+
+- WireGuard roda dentro do próprio Nivra, com boringtun e smoltcp. Não há mais sing-box, processo externo nem código GPL nesse caminho. Nenhuma VPN, rota, DNS ou permissão de administrador do Windows é alterada.
+- O campo do executável do sing-box saiu das Configurações; o `.conf` continua sendo a única entrada.
+- Compatibilidade com provedores reais segue não verificada até o teste do dono.
+
 ## Nivra 1.0.16
 
 Corrige a atualização pelo próprio app, a abertura de uma segunda janela e a reprodução de vídeos cujo áudio o Windows recusa.

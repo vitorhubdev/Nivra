@@ -13,6 +13,7 @@ use tokio::{
 use zeroize::Zeroizing;
 #[cfg(test)]
 mod wg_core;
+mod wg_stack;
 mod wireguard;
 pub use wireguard::{engine_note, prepare};
 

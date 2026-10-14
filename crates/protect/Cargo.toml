@@ -21,3 +21,4 @@ workspace = true
 
 [dev-dependencies]
 boringtun = "0.7.1"
+smoltcp = { version = "0.14.0", default-features = false, features = ["medium-ip", "proto-ipv4", "socket-tcp", "alloc"] }

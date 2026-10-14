@@ -59,8 +59,6 @@ pub struct Draft {
 	pub port: u16,
 	pub username: zeroize::Zeroizing<String>,
 	pub password: zeroize::Zeroizing<String>,
-	/// Explicit user-selected local sing-box executable; never discovered/downloaded.
-	pub engine: String,
 	pub wireguard: zeroize::Zeroizing<String>,
 }
 impl Default for Draft {
@@ -72,7 +70,6 @@ impl Default for Draft {
 			port: 1080,
 			username: zeroize::Zeroizing::new(String::new()),
 			password: zeroize::Zeroizing::new(String::new()),
-			engine: String::new(),
 			wireguard: zeroize::Zeroizing::new(String::new()),
 		}
 	}
@@ -81,9 +78,6 @@ impl Draft {
 	/// Why this draft cannot be tested or enabled yet, if anything is still missing.
 	pub fn missing(&self) -> Option<&'static str> {
 		if self.protocol == Protocol::WireGuard {
-			if self.engine.trim().is_empty() {
-				return Some("Choose the local sing-box executable");
-			}
 			if self.wireguard.trim().is_empty() {
 				return Some("Import a WireGuard configuration first");
 			}
@@ -107,7 +101,6 @@ impl Clone for Draft {
 			port: self.port,
 			username: self.username.clone(),
 			password: self.password.clone(),
-			engine: self.engine.clone(),
 			wireguard: self.wireguard.clone(),
 		}
 	}
@@ -149,11 +142,6 @@ mod missing_tests {
 		draft.host = "proxy.example".into();
 		assert_eq!(draft.missing(), None);
 		draft.protocol = Protocol::WireGuard;
-		assert_eq!(
-			draft.missing(),
-			Some("Choose the local sing-box executable")
-		);
-		draft.engine = "C:/tools/sing-box.exe".into();
 		assert_eq!(
 			draft.missing(),
 			Some("Import a WireGuard configuration first")

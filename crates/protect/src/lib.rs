@@ -11,9 +11,9 @@ use tokio::{
 	net::{TcpStream, UdpSocket},
 };
 use zeroize::Zeroizing;
-#[cfg(test)]
-mod wg_core;
-mod wg_stack;
+mod wg_dns;
+mod wg_engine;
+mod wg_inlet;
 mod wireguard;
 pub use wireguard::{engine_note, prepare};
 
@@ -25,7 +25,11 @@ pub struct Profile {
 	pub port: u16,
 	username: Zeroizing<String>,
 	password: Zeroizing<String>,
-	engine: Option<wireguard::Engine>,
+	#[allow(
+		dead_code,
+		reason = "owns the engine: dropping the profile stops the tunnel and its inlet"
+	)]
+	engine: Option<wg_engine::Engine>,
 }
 impl std::fmt::Debug for Profile {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -17,6 +17,24 @@ pub fn wireguard_source(
 	}
 }
 
+/// Explicit choice of the local sing-box executable; Nivra never downloads or runs it by itself.
+pub fn engine_source(
+	parent: Arc<winit::window::Window>,
+) -> impl std::future::Future<Output = Option<PathBuf>> + Send + 'static {
+	let mut dialog = rfd::AsyncFileDialog::new()
+		.set_parent(parent.as_ref())
+		.set_title("Choose the local sing-box executable");
+	if cfg!(windows) {
+		dialog = dialog.add_filter("Executable", &["exe"]);
+	}
+	let dialog = dialog.pick_file();
+	async move {
+		let file = dialog.await?;
+		drop(parent);
+		Some(file.path().to_owned())
+	}
+}
+
 /// Explicit local extension import; selection grants no plugin capabilities.
 pub fn extension_source(
 	parent: Arc<winit::window::Window>,

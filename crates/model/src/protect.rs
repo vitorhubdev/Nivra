@@ -117,6 +117,7 @@ pub enum Action {
 	Enable(Draft, Option<Draft>),
 	Disable,
 	ImportWireGuard,
+	ImportEngine,
 }
 
 #[cfg(test)]

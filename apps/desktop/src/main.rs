@@ -819,9 +819,17 @@ impl SessionEnd {
 		self == Self::Logout
 	}
 }
+/// Writes the redacted sing-box message from a failed start to the diagnostic log.
+fn log_engine_note() {
+	if let Some(note) = protect::engine_note() {
+		platform::diagnostics::warn(&format!("PROTECT sing-box stopped at startup: {note}"));
+	}
+}
+
 enum ProtectChange {
 	Tested(&'static str),
 	Imported(Zeroizing<String>),
+	EngineChosen(String),
 	Health(protect::Health, u64),
 	Prepared(Arc<protect::Profile>, Option<Arc<protect::Profile>>),
 	TransportStopped {
@@ -2761,6 +2769,10 @@ impl Desktop {
 			{
 				let status = match result.change {
 					Ok(ProtectChange::Tested(status)) => Ok(status),
+					Ok(ProtectChange::EngineChosen(path)) => self
+						.messaging
+						.set_protect_engine(&path)
+						.map(|_| "sing-box executable selected. Test before enabling."),
 					Ok(ProtectChange::Imported(config)) => {
 						self.messaging.set_protect_wireguard(&config).map(
 							|_| "WireGuard configuration imported in this session. Test before enabling.",
@@ -2879,6 +2891,8 @@ impl Desktop {
 		let generation = self.state.generation;
 		let import = matches!(action, model::protect::Action::ImportWireGuard)
 			.then(|| platform::save::wireguard_source(self.window.clone()));
+		let engine_pick = matches!(action, model::protect::Action::ImportEngine)
+			.then(|| platform::save::engine_source(self.window.clone()));
 		let (send, receive) = std::sync::mpsc::sync_channel(1);
 		let wake = ctx.clone();
 		self.protect_scope = Some(generation);
@@ -2919,12 +2933,27 @@ impl Desktop {
 						.map_err(|_| "WireGuard import worker stopped")??;
 						Ok(ProtectChange::Imported(config))
 					}
+					model::protect::Action::ImportEngine => {
+						let Some(path) = engine_pick
+							.expect("engine action creates its native picker")
+							.await
+						else {
+							return Ok(ProtectChange::Tested("sing-box selection cancelled"));
+						};
+						Ok(ProtectChange::EngineChosen(
+							path.to_string_lossy().into_owned(),
+						))
+					}
 					model::protect::Action::Test(draft) => {
-						let profile = protect::prepare(&draft).await?;
+						let profile = protect::prepare(&draft)
+							.await
+							.inspect_err(|_| log_engine_note())?;
 						protect::test(profile).await.map(ProtectChange::Tested)
 					}
 					model::protect::Action::Enable(draft, reserve) => {
-						let primary = protect::prepare(&draft).await?;
+						let primary = protect::prepare(&draft)
+							.await
+							.inspect_err(|_| log_engine_note())?;
 						protect::test(primary.clone()).await?;
 						let reserve = if let Some(draft) = reserve {
 							let profile = protect::prepare(&draft).await?;
@@ -7078,8 +7107,11 @@ impl eframe::App for Desktop {
 		platform::single_instance::set_busy(blocked || self.close_needs_confirmation());
 		self.messaging.updates.blocked_by_call_or_upload = blocked;
 		if blocked {
-			self.messaging.updates.restart_requested = false;
-			self.updater.cancel_restart();
+			if std::mem::take(&mut self.messaging.updates.restart_requested) {
+				self.updater.defer_restart();
+			} else {
+				self.updater.cancel_restart();
+			}
 		}
 		if self.updater.sync(
 			ctx,
@@ -8518,7 +8550,7 @@ impl eframe::App for Desktop {
 					}
 				}
 				Some(ui::dialog::Choice::Cancelled) => {
-					self.updater.cancel_restart();
+					self.updater.forget_restart();
 					self.confirming_close = false;
 					self.tray_window.cancel_quit();
 					self.extension_close_pending = false;

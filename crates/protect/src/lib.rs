@@ -14,7 +14,7 @@ use zeroize::Zeroizing;
 #[cfg(test)]
 mod wg_core;
 mod wireguard;
-pub use wireguard::prepare;
+pub use wireguard::{engine_note, prepare};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 pub struct Profile {
@@ -178,7 +178,7 @@ pub fn proxy(scope: Scope) -> reqwest::Proxy {
 	})
 }
 fn invalid() -> io::Error {
-	io::Error::other("PROTECT proxy handshake failed")
+	io::Error::other("PROTECT route did not respond; nothing was sent over the direct connection")
 }
 async fn read_address(stream: &mut TcpStream) -> io::Result<SocketAddr> {
 	let kind = stream.read_u8().await?;

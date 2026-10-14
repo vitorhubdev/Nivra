@@ -336,7 +336,7 @@ pub async fn prepare(draft: &Draft) -> Result<Arc<Profile>, &'static str> {
 		.kill_on_drop(true)
 		.stdin(Stdio::piped())
 		.stdout(Stdio::null())
-		.stderr(Stdio::null());
+		.stderr(Stdio::piped());
 	#[cfg(windows)]
 	{
 		command.creation_flags(0x08000000);
@@ -348,13 +348,14 @@ pub async fn prepare(draft: &Draft) -> Result<Arc<Profile>, &'static str> {
 		})
 		.map_err(|_| "Wait for previous WireGuard engines to stop")?;
 	let _ = reaper();
-	let child = match command.spawn() {
+	let mut child = match command.spawn() {
 		Ok(child) => child,
 		Err(_) => {
 			ENGINE_SLOTS.fetch_sub(1, Ordering::AcqRel);
 			return Err("Could not start selected WireGuard engine");
 		}
 	};
+	let mut stderr_task = child.stderr.take().map(read_stderr);
 	let engine = Engine(Mutex::new(Some(OwnedChild(child))));
 	let mut stdin = {
 		let mut child = engine.0.lock().map_err(|_| "Engine state unavailable")?;
@@ -396,8 +397,17 @@ pub async fn prepare(draft: &Draft) -> Result<Arc<Profile>, &'static str> {
 			.map_err(|_| "Engine state unavailable")?
 			.is_some()
 		{
+			let lines = match stderr_task.take() {
+				Some(task) => tokio::time::timeout(std::time::Duration::from_millis(500), task)
+					.await
+					.ok()
+					.and_then(Result::ok)
+					.unwrap_or_default(),
+				None => Vec::new(),
+			};
+			set_engine_note(&lines);
 			return Err(
-				"WireGuard engine rejected configuration; use sing-box 1.14 with WireGuard support",
+				"WireGuard engine stopped at startup; check the sing-box 1.14 version and the configuration. Details are in the log.",
 			);
 		}
 		if let Ok(mut socket) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
@@ -419,9 +429,66 @@ pub async fn prepare(draft: &Draft) -> Result<Arc<Profile>, &'static str> {
 	}
 	Err("WireGuard engine did not expose its authenticated local route")
 }
+/// Last sing-box messages from the most recent failed start, redacted, for the diagnostic log only.
+static ENGINE_NOTE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Keeps the last lines sing-box writes to stderr; its own log stays disabled.
+fn read_stderr(stderr: tokio::process::ChildStderr) -> tokio::task::JoinHandle<Vec<String>> {
+	tokio::spawn(async move {
+		use tokio::io::{AsyncBufReadExt, BufReader};
+		let mut lines = BufReader::new(stderr).lines();
+		let mut last: Vec<String> = Vec::new();
+		while let Ok(Some(line)) = lines.next_line().await {
+			if last.len() == 3 {
+				last.remove(0);
+			}
+			last.push(line.chars().take(200).collect());
+		}
+		last
+	})
+}
+
+fn set_engine_note(lines: &[String]) {
+	let note = lines
+		.iter()
+		.map(|line| redact(line))
+		.collect::<Vec<_>>()
+		.join(" | ");
+	if let Ok(mut slot) = ENGINE_NOTE.lock() {
+		*slot = (!note.is_empty()).then_some(note);
+	}
+}
+
+/// The last sing-box message from the most recent failed start, already redacted.
+pub fn engine_note() -> Option<String> {
+	ENGINE_NOTE.lock().ok().and_then(|slot| slot.clone())
+}
+
+/// Hides anything that looks like a key or token before a line can reach the log.
+fn redact(line: &str) -> String {
+	line.split_whitespace()
+		.map(|word| {
+			let secret_like = word.len() >= 32
+				&& word
+					.bytes()
+					.all(|b| b.is_ascii_alphanumeric() || b"+/=_-".contains(&b));
+			if secret_like { "[redacted]" } else { word }
+		})
+		.collect::<Vec<_>>()
+		.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn engine_notes_hide_keys_and_keep_the_reason() {
+		assert_eq!(
+			redact("error key AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= bad"),
+			"error key [redacted] bad"
+		);
+	}
 	fn fixture() -> String {
 		format!(
 			"[Interface]\nPrivateKey = {}\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = {}\nEndpoint = 192.0.2.1:51820\nAllowedIPs = 0.0.0.0/0\n",

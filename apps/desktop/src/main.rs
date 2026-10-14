@@ -18,6 +18,7 @@ mod credentials;
 mod dm_demo;
 mod downloads;
 mod emoji_upload;
+mod engine;
 mod extension_app;
 mod extension_bridge;
 mod extension_data_events;
@@ -830,6 +831,12 @@ enum ProtectChange {
 	Tested(&'static str),
 	Imported(Zeroizing<String>),
 	EngineChosen(String),
+	EngineFound(
+		Option<(String, String)>,
+		Option<model::protect::EngineRelease>,
+	),
+	EngineLatest(Option<model::protect::EngineRelease>),
+	EngineInstalled(String, String),
 	Health(protect::Health, u64),
 	Prepared(Arc<protect::Profile>, Option<Arc<protect::Profile>>),
 	TransportStopped {
@@ -2769,6 +2776,23 @@ impl Desktop {
 			{
 				let status = match result.change {
 					Ok(ProtectChange::Tested(status)) => Ok(status),
+					Ok(ProtectChange::EngineFound(installed, pinned)) => {
+						self.messaging.set_protect_engine_found(installed, pinned);
+						Ok("sing-box status checked on this computer")
+					}
+					Ok(ProtectChange::EngineLatest(latest)) => {
+						let newer = latest.is_some();
+						self.messaging.set_protect_engine_latest(latest);
+						Ok(if newer {
+							"A newer sing-box is available. Update when you are ready."
+						} else {
+							"sing-box is up to date."
+						})
+					}
+					Ok(ProtectChange::EngineInstalled(path, version)) => self
+						.messaging
+						.set_protect_engine_installed(&path, &version)
+						.map(|_| "sing-box installed and selected. Test before enabling."),
 					Ok(ProtectChange::EngineChosen(path)) => self
 						.messaging
 						.set_protect_engine(&path)
@@ -2932,6 +2956,40 @@ impl Desktop {
 						.await
 						.map_err(|_| "WireGuard import worker stopped")??;
 						Ok(ProtectChange::Imported(config))
+					}
+					model::protect::Action::FindEngine => {
+						let root = engine::root();
+						let installed = tokio::task::spawn_blocking(move || {
+							root.and_then(|root| engine::installed(&root))
+								.map(|(path, version)| {
+									(path.to_string_lossy().into_owned(), version)
+								})
+						})
+						.await
+						.map_err(|_| "sing-box lookup stopped unexpectedly")?;
+						Ok(ProtectChange::EngineFound(installed, engine::pinned()))
+					}
+					model::protect::Action::CheckEngine => {
+						let latest = engine::latest().await?;
+						let installed = engine::root().and_then(|root| engine::installed(&root));
+						let latest = latest.filter(|release| {
+							installed.as_ref().is_none_or(|(_, version)| {
+								semver::Version::parse(version)
+									.ok()
+									.zip(semver::Version::parse(&release.version).ok())
+									.is_none_or(|(installed, latest)| latest > installed)
+							})
+						});
+						Ok(ProtectChange::EngineLatest(latest))
+					}
+					model::protect::Action::InstallEngine(release) => {
+						let root = engine::root().ok_or("No local data folder for sing-box")?;
+						let version = release.version.clone();
+						let exe = engine::install(release, root).await?;
+						Ok(ProtectChange::EngineInstalled(
+							exe.to_string_lossy().into_owned(),
+							version,
+						))
 					}
 					model::protect::Action::ImportEngine => {
 						let Some(path) = engine_pick

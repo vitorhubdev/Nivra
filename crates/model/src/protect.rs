@@ -118,6 +118,21 @@ pub enum Action {
 	Disable,
 	ImportWireGuard,
 	ImportEngine,
+	/// Looks for an engine Nivra installed earlier. No network.
+	FindEngine,
+	/// Asks GitHub for a newer stable sing-box than the one installed.
+	CheckEngine,
+	/// Downloads, verifies and installs a specific release.
+	InstallEngine(EngineRelease),
+}
+
+/// A sing-box build the host can download. `sha256` is the digest of the archive, in hex.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EngineRelease {
+	pub version: String,
+	pub url: String,
+	pub size: u64,
+	pub sha256: String,
 }
 
 #[cfg(test)]

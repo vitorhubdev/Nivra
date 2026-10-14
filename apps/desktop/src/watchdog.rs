@@ -69,6 +69,12 @@ static PHASE: AtomicU8 = AtomicU8::new(Phase::Startup as u8);
 static VIDEO: Mutex<String> = Mutex::new(String::new());
 static INSTALLED: OnceLock<()> = OnceLock::new();
 static LAST_REPORT_MS: AtomicU64 = AtomicU64::new(0);
+/// The frame step being drawn, with when it started.
+static STEP: Mutex<(&'static str, Option<Instant>)> = Mutex::new(("none", None));
+/// Steps slower than this are logged; at most [`MAX_SLOW_LOGS`] lines per session.
+const SLOW_STEP: Duration = Duration::from_millis(100);
+const MAX_SLOW_LOGS: u64 = 200;
+static SLOW_LOGS: AtomicU64 = AtomicU64::new(0);
 
 fn now_ms() -> u64 {
 	let base = *BASE.get_or_init(Instant::now);
@@ -86,6 +92,30 @@ pub fn beat(phase: Phase) {
 /// Marks the end of the render frame started by [`beat`].
 pub fn frame_end() {
 	IN_FRAME.store(false, Ordering::Release);
+}
+
+/// Names the part of the frame being drawn now. A step that runs past [`SLOW_STEP`] is logged
+/// with its duration, so a slow step shows even when the window never fully stalls.
+pub fn step(name: &'static str) {
+	let now = Instant::now();
+	if let Ok(mut current) = STEP.lock() {
+		if let Some(started) = current.1 {
+			let took = now.saturating_duration_since(started);
+			if took >= SLOW_STEP && SLOW_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_SLOW_LOGS {
+				platform::diagnostics::info(&format!(
+					"render step {} took {} ms",
+					current.0,
+					took.as_millis()
+				));
+			}
+		}
+		*current = (name, Some(now));
+	}
+}
+
+/// The most recent step name, for stall reports.
+fn current_step() -> &'static str {
+	STEP.lock().map(|current| current.0).unwrap_or("unknown")
 }
 
 /// Bounded media-session snapshot (state, position, worker count) for the report.
@@ -150,10 +180,11 @@ pub fn report_if_stalled(
 	let video = VIDEO.lock().map(|slot| slot.clone()).unwrap_or_default();
 	let stack = std::backtrace::Backtrace::force_capture();
 	let entry = format!(
-		"{} [Nivra] render thread stalled {:.1}s in phase {} (video: {})\n{stack}\n\n",
+		"{} [Nivra] render thread stalled {:.1}s in phase {} at step {} (video: {})\n{stack}\n\n",
 		platform::diagnostics::timestamp(),
 		gap.as_secs_f64(),
 		phase.label(),
+		current_step(),
 		if video.is_empty() { "none" } else { &video },
 	);
 	if let Ok(metadata) = std::fs::metadata(log)
@@ -171,9 +202,10 @@ pub fn report_if_stalled(
 		let _ = file.flush();
 	}
 	platform::diagnostics::warn(&format!(
-		"render thread stalled {:.1}s in phase {}",
+		"render thread stalled {:.1}s in phase {} at step {}",
 		gap.as_secs_f64(),
-		phase.label()
+		phase.label(),
+		current_step()
 	));
 	true
 }

@@ -16,11 +16,29 @@ pub(crate) struct Settings {
 	engine_found: Option<(String, String)>,
 	engine_pinned: Option<model::protect::EngineRelease>,
 	engine_latest: Option<model::protect::EngineRelease>,
+	/// Share of the sing-box download received; `None` when nothing is downloading.
+	engine_progress: Option<f32>,
+	/// Set by the Cancel button; the host stops the download and clears it.
+	engine_cancel: bool,
+	/// The host found the daily check due; the panel starts it once when it opens.
+	engine_check_due: bool,
 }
 impl Settings {
 	/// The sing-box block of the WireGuard panel: what is installed, and the download or update.
 	fn engine_block(&mut self, ui: &mut egui::Ui, demo: bool) {
 		let idle = !demo && !self.busy;
+		if self.engine_check_due && idle {
+			self.engine_check_due = false;
+			self.action = Some(Action::CheckEngine);
+			self.busy = true;
+		}
+		if let Some(fraction) = self.engine_progress {
+			ui.add(egui::ProgressBar::new(fraction).show_percentage());
+			if ui.button(crate::tr_ui!(ui, "Cancel download")).clicked() {
+				self.engine_cancel = true;
+			}
+			return;
+		}
 		if let Some((path, version)) = self.engine_found.clone() {
 			ui.label(format!(
 				"{} {version}",
@@ -289,10 +307,20 @@ impl crate::MessagingUi {
 		&mut self,
 		installed: Option<(String, String)>,
 		pinned: Option<model::protect::EngineRelease>,
+		check_due: bool,
 	) {
 		self.settings.protect.engine_found = installed;
 		self.settings.protect.engine_pinned = pinned;
+		self.settings.protect.engine_check_due = check_due;
 		self.settings.protect.busy = false;
+	}
+	/// The host's view of the download in flight, pushed each frame.
+	pub fn set_protect_engine_progress(&mut self, progress: Option<f32>) {
+		self.settings.protect.engine_progress = progress;
+	}
+	/// True once when the user pressed Cancel download; reading it clears the request.
+	pub fn take_protect_engine_cancel(&mut self) -> bool {
+		std::mem::take(&mut self.settings.protect.engine_cancel)
 	}
 	pub fn set_protect_engine_latest(&mut self, latest: Option<model::protect::EngineRelease>) {
 		self.settings.protect.engine_latest = latest;

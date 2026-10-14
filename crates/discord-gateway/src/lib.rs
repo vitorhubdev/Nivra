@@ -199,6 +199,20 @@ fn jitter_ms(max: u64) -> u64 {
 	(u32::from_le_bytes(buf) % bound) as u64
 }
 
+/// Where connection events go for the app's diagnostic log. Set once at startup. Messages hold
+/// only fixed labels, close codes and attempt numbers: never tokens, IDs or payloads.
+static CONNECTION_LOG: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+pub fn set_connection_log(sink: fn(&str)) {
+	let _ = CONNECTION_LOG.set(sink);
+}
+
+fn connection_log(message: &str) {
+	if let Some(sink) = CONNECTION_LOG.get() {
+		sink(message);
+	}
+}
+
 fn reconnect_delay_ms(attempt: u32) -> u64 {
 	(1000_u64 << attempt.min(5)) + jitter_ms(1000)
 }
@@ -218,6 +232,7 @@ fn emit_gateway_loss(
 	attempt: u32,
 ) -> Result<(), Failure> {
 	if was_ready && ready_at.is_some() {
+		connection_log(&format!("gateway lost; reconnect attempt {attempt}"));
 		if !*outage {
 			emit(Event::Disconnected)?;
 			*outage = true;
@@ -1627,6 +1642,7 @@ async fn run_inner(
 						},
 						Some(Err(error)) => {
 							let failure = socket_failure(error);
+							connection_log(&format!("gateway socket error: {failure}"));
 							// Wire limits (oversized frames) always stop: reconnecting
 							// would re-read the same violation. Transient socket
 							// errors resume via the backoff below.
@@ -1703,6 +1719,7 @@ async fn run_inner(
 								}
 								0 => match packet.t.as_deref().unwrap_or("") {
 									"READY" => {
+									connection_log("gateway ready");
 										gateway_outage = false;
 										reconnect_announced = false;
 										direct_presence=presence::Pending::default();
@@ -1830,6 +1847,7 @@ async fn run_inner(
 										calls.users.clear();
 									}
 									"RESUMED" => {
+									connection_log("gateway resumed");
 										gateway_outage = false;
 										reconnect_announced = false;
 										emit(Event::Interaction(client_core::interactions::Event::Session(state.session.clone().ok_or(Failure::Protocol)?)))?;
@@ -2090,6 +2108,7 @@ async fn run_inner(
 						}
 						Some(Ok(Frame::Close(close))) => {
 							let code = close.map_or(1006, |f| u16::from(f.code));
+							connection_log(&format!("gateway closed by Discord: code {code}"));
 							match close_action(code) {
 								Reconnect::Stop => {
 									return Err(if code == 4004 {

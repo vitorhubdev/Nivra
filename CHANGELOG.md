@@ -1,5 +1,27 @@
 # Changelog
 
+## Nivra 1.0.17
+
+Adiciona o download e a atualização do sing-box pelo próprio PROTECT, e melhora o diagnóstico de quedas e travamentos.
+
+### PROTECT
+
+- O painel baixa o sing-box oficial da SagerNet, em Windows, Linux e macOS, direto para a pasta do Nivra. O arquivo é conferido por SHA-256 antes de ser usado, e nenhum executável é instalado se a conferência falhar.
+- O download mostra o progresso e pode ser cancelado.
+- Uma verificação de versão mais nova roda no máximo uma vez por dia, quando o painel abre. Atualizar exige um clique.
+- Depois de instalado, o sing-box é selecionado sozinho e pode ser reutilizado em outras sessões.
+- Os downloads saem pela sua conexão direta, como as atualizações do Nivra.
+
+### Diagnóstico
+
+- Quedas do gateway e reconexões ficam no log com o código de fechamento e o número da tentativa. Nenhum token, ID ou conteúdo de mensagem é gravado.
+- Etapas lentas do desenho da tela (acima de 100 ms) ficam no log com o nome da etapa e a duração.
+- Os relatórios de travamento dizem em qual etapa a tela estava.
+
+### Segurança
+
+- Atualização de dependência para o rustls 0.23.46, que corrige os avisos RUSTSEC-2026-0346 a 0349.
+
 ## Nivra 1.0.16
 
 Corrige a atualização pelo próprio app, a abertura de uma segunda janela e a reprodução de vídeos cujo áudio o Windows recusa.

@@ -71,7 +71,13 @@ const SIGN_IN_HEADER_HEIGHT: f32 = if cfg!(target_os = "windows") {
 	60.0
 };
 
+/// Connection events for the diagnostic log; the sink only receives fixed labels and codes.
+fn log_connection(message: &str) {
+	platform::diagnostics::info(message);
+}
+
 fn main() -> eframe::Result {
+	discord_gateway::set_connection_log(log_connection);
 	// Before any runtime LoadLibrary: imports and runtime loads resolve from System32 only.
 	#[cfg(windows)]
 	platform::dll::harden_search_path();
@@ -834,6 +840,7 @@ enum ProtectChange {
 	EngineFound(
 		Option<(String, String)>,
 		Option<model::protect::EngineRelease>,
+		bool,
 	),
 	EngineLatest(Option<model::protect::EngineRelease>),
 	EngineInstalled(String, String),
@@ -2776,8 +2783,9 @@ impl Desktop {
 			{
 				let status = match result.change {
 					Ok(ProtectChange::Tested(status)) => Ok(status),
-					Ok(ProtectChange::EngineFound(installed, pinned)) => {
-						self.messaging.set_protect_engine_found(installed, pinned);
+					Ok(ProtectChange::EngineFound(installed, pinned, check_due)) => {
+						self.messaging
+							.set_protect_engine_found(installed, pinned, check_due);
 						Ok("sing-box status checked on this computer")
 					}
 					Ok(ProtectChange::EngineLatest(latest)) => {
@@ -2848,6 +2856,15 @@ impl Desktop {
 					self.protect_worker.is_some(),
 				);
 			}
+		}
+		// The engine download runs outside the action queue, so its cancel and progress are handled here.
+		if self.messaging.take_protect_engine_cancel() {
+			engine::cancel();
+		}
+		self.messaging
+			.set_protect_engine_progress(engine::progress());
+		if engine::progress().is_some() {
+			ctx.request_repaint_after(Duration::from_millis(150));
 		}
 		if self.protect_worker.is_some() {
 			return;
@@ -2967,10 +2984,14 @@ impl Desktop {
 						})
 						.await
 						.map_err(|_| "sing-box lookup stopped unexpectedly")?;
-						Ok(ProtectChange::EngineFound(installed, engine::pinned()))
+						let due = engine::root().is_some_and(|root| engine::check_due(&root));
+						Ok(ProtectChange::EngineFound(installed, engine::pinned(), due))
 					}
 					model::protect::Action::CheckEngine => {
 						let latest = engine::latest().await?;
+						if let Some(root) = engine::root() {
+							engine::mark_checked(&root);
+						}
 						let installed = engine::root().and_then(|root| engine::installed(&root));
 						let latest = latest.filter(|release| {
 							installed.as_ref().is_none_or(|(_, version)| {
@@ -7085,6 +7106,7 @@ impl eframe::App for Desktop {
 		{
 			self.cancel_preview();
 		}
+		watchdog::step("protect");
 		self.poll_protect(ctx);
 		// Marks this frame as alive and records what it is drawing, so a stalled
 		// render thread leaves a bounded log next to the cache (never a silent freeze).
@@ -7096,6 +7118,7 @@ impl eframe::App for Desktop {
 			watchdog::Phase::Idle
 		});
 		watchdog::note_video(self.video.snapshot());
+		watchdog::step("frame");
 		let search_focused = {
 			#[cfg(feature = "demo")]
 			{
@@ -7171,6 +7194,7 @@ impl eframe::App for Desktop {
 				self.updater.cancel_restart();
 			}
 		}
+		watchdog::step("updater");
 		if self.updater.sync(
 			ctx,
 			&self.runtime,
@@ -7191,6 +7215,7 @@ impl eframe::App for Desktop {
 		if self.state.interactions.busy() {
 			ctx.request_repaint_after(Duration::from_millis(250));
 		}
+		watchdog::step("interaction-files");
 		self.poll_interaction_files(ctx);
 		self.state.expire_verification();
 		if self.state.verification().is_some() {
@@ -7341,6 +7366,7 @@ impl eframe::App for Desktop {
 		// transport task still surfaces as Phase::Failed and queues its leave cue (Codex #87 P1).
 		if self.window.is_minimized().unwrap_or(false) || !self.window.is_visible().unwrap_or(true)
 		{
+			watchdog::step("voice");
 			self.poll_voice(ctx);
 		}
 		self.pump_call_cues(ctx);
@@ -7788,6 +7814,7 @@ impl eframe::App for Desktop {
 			self.download_close_pending = false;
 			ctx.send_viewport_cmd(egui::ViewportCommand::Close);
 		}
+		watchdog::step("avatars");
 		self.poll_avatars(&ctx);
 		if let Some((scope, result)) = self.group_icon.poll(&self.state) {
 			self.messaging.accept_group_icon(&ctx, scope, result);
@@ -8414,6 +8441,7 @@ impl eframe::App for Desktop {
 			for command in commands {
 				self.command(command);
 			}
+			watchdog::step("voice-ui");
 			self.poll_voice(&ctx);
 			frame_dialogs(
 				&mut self.messaging,

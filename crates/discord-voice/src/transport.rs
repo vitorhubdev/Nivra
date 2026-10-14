@@ -911,6 +911,10 @@ async fn run_inner(
 								json_send(&mut ws,json!({"op":5,"d":{"speaking":0,"delay":0,"ssrc":ssrc}})).await?;
 								speaking=false;silence=0;
 								resuming=false;resume_since=None;ready_announced=true;
+								// The 30s resume deadline guards a resume that never finishes. A resume that
+								// finishes inside 5s never clears it through the tick (ready_announced is
+								// already set), so a healthy secured session would die 30s later.
+								if dave.ready && encryption.is_some() {deadline=None;}
 								emit(announced_media(&dave)).map_err(|_|"Call interface closed")?;
 							},
 							12=>{

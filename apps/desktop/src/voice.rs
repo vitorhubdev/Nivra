@@ -764,6 +764,14 @@ impl Voice {
 			}
 			_ => "Call dropped and reconnect failed after 3 attempts; rejoin the call",
 		};
+		// Every terminal failure lands here. Without this line the cause of a call that
+		// ended without a reconnect was never written to nivra.log.
+		platform::diagnostics::warn(&format!(
+			"voice call ended: error={error}; shown={final_message}; close_code={}; reconnect_attempts={attempts}",
+			closed
+				.and_then(|(code, _)| code)
+				.map_or_else(|| "none".to_owned(), |code| code.to_string()),
+		));
 		self.fail(state, final_message)
 	}
 	pub fn poll(

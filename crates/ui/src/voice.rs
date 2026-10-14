@@ -4710,13 +4710,23 @@ fn call_failure(
 	let reason = crate::tr_str!(ui, error);
 	let mut rejoin = false;
 	let mut export = false;
-	ui.horizontal_top(|ui| {
-		ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+	ui.vertical(|ui| {
+		ui.add(
+			egui::Label::new(RichText::new(reason.as_ref()).size(12.0).color(color))
+				.wrap()
+				.selectable(true),
+		);
+		ui.horizontal_wrapped(|ui| {
 			if crate::icons::button(ui, crate::icons::Icon::Copy, 28.0, "Copy failure details")
 				.clicked()
 			{
-				ui.ctx()
-					.copy_text(format!("Nivra call failed\nReason: {}", reason.as_ref()));
+				ui.ctx().copy_text(format!(
+					"Nivra {} call failed\nOS: {} {}\nReason: {}\nAttach the diagnostics zip (Export diagnostics) to the bug report.",
+					env!("CARGO_PKG_VERSION"),
+					std::env::consts::OS,
+					std::env::consts::ARCH,
+					reason.as_ref(),
+				));
 			}
 			if retry && ui.button(crate::tr_ui!(ui, "Rejoin call")).clicked() {
 				rejoin = true;
@@ -4727,13 +4737,6 @@ fn call_failure(
 			{
 				export = true;
 			}
-			ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-				ui.add(
-					egui::Label::new(RichText::new(reason.as_ref()).size(12.0).color(color))
-						.wrap()
-						.selectable(true),
-				);
-			});
 		});
 	});
 	(rejoin, export)

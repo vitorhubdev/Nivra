@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <title>PROTECT shield</title>
+  <desc>A shield with a keyhole for the PROTECT private routes: the Nivra violet gradient, one white padlock mark inside. Works on dark and light backgrounds.</desc>
+  <defs>
+    <linearGradient id="shield" x1="48" y1="20" x2="208" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#AE8CFF"/>
+      <stop offset="0.55" stop-color="#8B44F4"/>
+      <stop offset="1" stop-color="#3E27ED"/>
+    </linearGradient>
+  </defs>
+  <path d="M128 18 L206 46 V116 C206 168 174 208 128 238 C82 208 50 168 50 116 V46 Z" fill="url(#shield)"/>
+  <path d="M128 34 L194 58 V116 C194 162 166 196 128 220 C90 196 62 162 62 116 V58 Z" fill="#fff" fill-opacity="0.12"/>
+  <circle cx="128" cy="110" r="20" fill="#fff"/>
+  <path d="M117 118 L112 160 Q112 166 118 166 H138 Q144 166 144 160 L139 118 Z" fill="#fff"/>
+  <circle cx="128" cy="150" r="6" fill="#3E27ED"/>
+</svg>

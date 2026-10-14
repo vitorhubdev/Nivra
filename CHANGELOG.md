@@ -18,6 +18,13 @@ Adiciona o download e a atualização do sing-box pelo próprio PROTECT, e melho
 - Etapas lentas do desenho da tela (acima de 100 ms) ficam no log com o nome da etapa e a duração.
 - Os relatórios de travamento dizem em qual etapa a tela estava.
 
+### Voz
+
+- Uma chamada que se reconecta em menos de 5 segundos não é mais derrubada 30 segundos depois com a mensagem de negociação DAVE.
+- Toda falha que encerra uma chamada fica no log, com a mensagem, o código de fechamento e o número de tentativas.
+- O texto da falha ocupa a largura toda da área de chamada, e os botões ficam abaixo dele.
+- Copiar os detalhes da falha inclui a versão, o sistema e a arquitetura, e pede para anexar o zip de diagnóstico.
+
 ### Segurança
 
 - Atualização de dependência para o rustls 0.23.46, que corrige os avisos RUSTSEC-2026-0346 a 0349.

@@ -1,4 +1,7 @@
-# Nivra — idea to pull request
+# Nivra — idea to main
+
+This file is the single source of agent instructions. `CLAUDE.md` is an identical copy; keep both
+identical whenever either changes.
 
 ## Product boundaries
 
@@ -23,12 +26,14 @@ Preserve unrelated work. More specific `AGENTS.md` files apply inside their subt
 
 ## Default delivery contract
 
-The owner wants to describe an idea and receive an implemented pull request. Treat feature/fix
+The owner wants to describe an idea and receive it implemented directly on `main`. Treat feature/fix
 requests as authorization to implement, test, build locally, capture synthetic native screenshots,
-measure relevant performance, create a task branch, commit task files, push to the existing `origin`
-and open/update its PR. Do not stop at a plan or ask again for those routine steps.
+measure relevant performance, commit task files on `main` and push to `origin/main`. Do not stop at
+a plan or ask again for those routine steps. Do not create task branches or pull requests unless the
+owner asks for one by name.
 
-Read [the delivery skill](.agents/skills/nivra-delivery/SKILL.md) for implementation tasks.
+Read [the delivery skill](.agents/skills/nivra-delivery/SKILL.md) for implementation tasks. Its
+branch and pull-request steps do not apply: follow the Git section of this file instead.
 This is a workflow for an active coding session, not a background daemon or a fixed delivery-time
 promise. Build times, platform access, credentials and CI can delay completion.
 
@@ -63,8 +68,9 @@ or the product boundaries above.
    of source-file wording. Reuse design tokens in `crates/ui/src/design.rs` and existing widgets.
 4. Delegate bounded independent implementation/review tasks when useful; assign separate file
    ownership. Do not spawn agents for work faster to do directly. Review their changes yourself.
-5. Verify behavior, inspect the diff, record real evidence, then deliver the PR. Never merge,
-   publish a release, deploy, force-push or change repository permissions without a separate request.
+5. Verify behavior, inspect the diff, record real evidence, then commit and push to `origin/main`.
+   Never publish a release, deploy, force-push, rewrite `main` or change repository permissions
+   without a separate request.
 
 ## Repository map and commands
 
@@ -91,26 +97,26 @@ suite or native screenshots are needed for an unchanged application.
 
 ## Git and review
 
-- Start with `git status --short`, branch/upstream inspection and `git fetch origin`. Discover the
-  remote default branch; do not assume or switch another person's current task branch.
-- From a clean default branch, fast-forward only, then create `<type>/<short-kebab-description>`.
-  Reuse an existing branch only when it belongs to this task. Do not commit to the default branch.
-- If unrelated changes exist, preserve them. Use a separate worktree or stage only your hunks/files
-  when separation is unambiguous. Never auto-stash, reset, discard, or commit unrelated changes.
-  If baseline fetch is unavailable, record the actual baseline and continue safe local work.
+- Work directly on `main`. Start with `git status --short`, `git fetch origin` and
+  `git switch main && git pull --ff-only origin main`. Do not create task branches, worktrees or
+  pull requests unless the owner asks for one by name.
+- If unrelated changes exist, preserve them. Stage only the files of your task by explicit path.
+  Never auto-stash, reset, discard, rebase, amend or commit unrelated changes.
 - Use scoped Conventional Commit titles, e.g. `feat(ui): add mention picker` or
-  `chore(repo): configure agent delivery`. Do not introduce Node tooling solely for commit messages.
-- Inspect the staged diff, commit explicit task paths, and push normally. Use `gh pr create/edit`
-  with an explicit base/head and a Markdown body file. Follow `.github/pull_request_template.md`.
+  `fix(gateway): retry saved login`. Do not introduce Node tooling solely for commit messages.
+- Run the local checks for the change (format, clippy with warnings denied, the affected tests), commit
+  and push to `origin/main`. Fast-forward only: if the push is rejected, fetch, integrate on top of
+  `origin/main` and re-check; never force.
+- Inspect the CI run of the pushed commit. Fix failures caused by this change; do not disable checks or
+  expand into unrelated repairs. Pending checks stay pending. A failing CI or missing evidence must be
+  reported as such, never described as done.
 - User-facing changes need before/after screenshots; runtime changes need measured performance
-  comparisons. Follow the delivery skill for reproducible evidence and supported image links.
+  comparisons. Follow the delivery skill for reproducible evidence. Record evidence in the commit body
+  or in the final message.
 - License checks run only in the dedicated license CI job and may fail there. Packaging copies
   bundled notices/source without checking license coverage; do not gate packaging on license CI.
-- Inspect PR checks after pushing. Fix failures caused by this task; do not disable checks or
-  expand into unrelated repairs. Pending checks stay pending. Blocked evidence, failed checks or
-  pre-existing CI failures require a draft PR with the precise reason, not a claim of completion.
-- If remote/auth permissions prevent pushing or creating a PR, finish safe local work and report
-  the exact blocker, branch and commit. Never invent a PR URL or ask for a token in chat.
+- If the push is blocked by remote or auth permissions, finish safe local work and report the exact
+  blocker and commit. Never ask for a token in chat.
 
 ## Skills and final handoff
 
@@ -128,7 +134,8 @@ pushed source commit. This wiki maintenance is authorized as part of SDK deliver
 label unmerged capabilities as preview. In `!fast`, keep it local until push is confirmed.
 
 Do not create or write `docs/progress.md` or `docs/adr/`. Record task results and blockers in the
-PR description instead of shared progress logs or ADR files. Update
-`docs/performance.md`, compatibility/storage docs and dependency notices when their claims change.
-Finish with the PR link, what changed, verification/performance outcome and material limitations.
-Keep it concise. Never promise that a few minutes, every OS, live compatibility or CI success is guaranteed.
+commit body instead of shared progress logs or ADR files. Update `docs/performance.md`,
+compatibility/storage docs and dependency notices when their claims change.
+Finish with the pushed commit hash, what changed, verification/performance outcome and material
+limitations. Keep it concise. Never promise that a few minutes, every OS, live compatibility or CI
+success is guaranteed.

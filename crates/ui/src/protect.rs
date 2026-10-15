@@ -11,8 +11,20 @@ pub(crate) struct Settings {
 	enabled: bool,
 	/// Scope of the live route, pushed by the host each frame; drives the PROTECT markers.
 	active: Option<Scope>,
+	/// A call is live, pushed by the host each frame. Enabling then asks before reconnecting it.
+	call_active: bool,
+	call_confirm: bool,
 }
 impl Settings {
+	fn request_enable(&mut self) {
+		self.action = Some(Action::Enable(
+			self.draft.clone(),
+			(self.fallback && self.draft.protocol != Protocol::WireGuard)
+				.then(|| self.reserve.clone()),
+		));
+		self.busy = true;
+		self.status = "Applying…".into();
+	}
 	pub(crate) fn show(&mut self, ui: &mut egui::Ui, demo: bool) {
 		ui.heading(crate::tr_ui!(ui, "PROTECT"));
 		ui.label(crate::tr_ui!(
@@ -98,6 +110,27 @@ impl Settings {
 		if let Some(reason) = blocked {
 			ui.label(crate::tr_str!(ui, reason));
 		}
+		if self.call_confirm {
+			let choice = crate::dialog::Confirm::new(
+				"protect-call-reconnect",
+				crate::tr_ctx!(ui.ctx(), "Reconnect the call with PROTECT on?"),
+				crate::tr_ctx!(
+					ui.ctx(),
+					"Nivra will reconnect you to the call automatically once the route is active. Audio drops for a few seconds."
+				),
+			)
+			.confirm_label(crate::tr_ctx!(ui.ctx(), "Enable and reconnect"))
+			.cancel_label(crate::tr_ctx!(ui.ctx(), "Cancel"))
+			.show(ui.ctx());
+			match choice {
+				Some(crate::dialog::Choice::Confirmed) => {
+					self.call_confirm = false;
+					self.request_enable();
+				}
+				Some(crate::dialog::Choice::Cancelled) => self.call_confirm = false,
+				None => {}
+			}
+		}
 		ui.add_enabled_ui(!demo && !self.busy, |ui| {
 			ui.horizontal(|ui| {
 				if ui
@@ -118,13 +151,11 @@ impl Settings {
 					)
 					.clicked()
 				{
-					self.action = Some(Action::Enable(
-						self.draft.clone(),
-						(self.fallback && self.draft.protocol != Protocol::WireGuard)
-							.then(|| self.reserve.clone()),
-					));
-					self.busy = true;
-					self.status = "Applying…".into();
+					if self.call_active {
+						self.call_confirm = true;
+					} else {
+						self.request_enable();
+					}
 				}
 				if ui
 					.add_enabled(
@@ -201,6 +232,10 @@ impl crate::MessagingUi {
 			.protect
 			.active
 			.is_some_and(|active| active.contains(scope))
+	}
+	/// The host reports whether a call is live every frame, so Enable can ask before reconnecting it.
+	pub fn set_protect_call_active(&mut self, active: bool) {
+		self.settings.protect.call_active = active;
 	}
 	pub fn set_protect_status(&mut self, status: &str, enabled: bool) {
 		self.set_protect_operation_status(status, enabled, false);

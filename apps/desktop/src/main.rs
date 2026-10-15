@@ -825,6 +825,16 @@ impl SessionEnd {
 		self == Self::Logout
 	}
 }
+/// The call a PROTECT route change must put back in place, captured before the change.
+#[derive(Clone)]
+struct ProtectRejoin {
+	channel: model::Id,
+	muted: bool,
+	deafened: bool,
+	since: std::time::Instant,
+}
+/// Longest a route change may take before the call is left for the user to rejoin.
+const PROTECT_REJOIN_WINDOW: Duration = Duration::from_secs(90);
 enum ProtectChange {
 	Tested(&'static str),
 	Imported(Zeroizing<String>),
@@ -895,6 +905,7 @@ struct Desktop {
 	/// Redacted, zeroizing session already owned by Connection; never persisted here.
 	connection_secret: Option<Arc<SessionSecret>>,
 	protect_worker: Option<tokio::task::JoinHandle<()>>,
+	protect_rejoin: Option<ProtectRejoin>,
 	protect_done: Option<std::sync::mpsc::Receiver<ProtectResult>>,
 	protect_scope: Option<u64>,
 	protect_shutdown: ProtectShutdown,
@@ -2325,6 +2336,7 @@ impl Desktop {
 			connection: None,
 			connection_secret: None,
 			protect_worker: None,
+			protect_rejoin: None,
 			protect_done: None,
 			protect_scope: None,
 			protect_shutdown: ProtectShutdown::Idle,
@@ -2598,12 +2610,57 @@ impl Desktop {
 		self.protect_scope = None;
 	}
 	fn protect_change_blocked(&self) -> bool {
-		self.state.voice.active.is_some()
-			|| self.state.has_unsent()
+		self.state.voice.active.is_some() || self.protect_change_blocked_except_call()
+	}
+	/// Pending sends, transfers and previews. Enable handles a live call itself: it reconnects it.
+	fn protect_change_blocked_except_call(&self) -> bool {
+		self.state.has_unsent()
 			|| self.uploads.has_unsent()
 			|| self.downloads.is_active()
 			|| self.batch_downloads.is_active()
 			|| self.preview_done.is_some()
+	}
+	/// Puts the call back after a PROTECT route change, once the gateway has returned.
+	fn resume_protect_call(&mut self) {
+		let Some(rejoin) = self.protect_rejoin.clone() else {
+			return;
+		};
+		let present = self.state.voice.active.as_ref().is_some_and(|call| {
+			call.channel == rejoin.channel && call.phase != client_core::voice::Phase::Failed
+		});
+		if present {
+			self.protect_rejoin = None;
+			return;
+		}
+		if rejoin.since.elapsed() > PROTECT_REJOIN_WINDOW {
+			self.protect_rejoin = None;
+			self.rejoin_failed();
+			return;
+		}
+		if !self.state.gateway_connected || self.state.auth != AuthState::Authenticated {
+			return;
+		}
+		self.protect_rejoin = None;
+		match self
+			.state
+			.start_call_with_mute(rejoin.channel, false, rejoin.muted, rejoin.deafened)
+		{
+			Some(command) => {
+				self.command(command);
+				self.messaging.voice_muted = rejoin.muted;
+				self.messaging.voice_deafened = rejoin.deafened;
+			}
+			None => self.rejoin_failed(),
+		}
+	}
+	fn rejoin_failed(&mut self) {
+		self.messaging.toasts.push(
+			ui::design::Level::Warning,
+			ui::i18n::text(
+				self.messaging.language,
+				"Could not reconnect the call; join it again.",
+			),
+		);
 	}
 	/// Queue transport teardown; the route stays unchanged until shutdown is acknowledged.
 	fn apply_protect(
@@ -2616,11 +2673,29 @@ impl Desktop {
 		if self.protect_worker.is_some() {
 			return Err("Wait for the current PROTECT operation to finish");
 		}
-		if self.protect_change_blocked() {
+		let blocked = if primary.is_some() {
+			self.protect_change_blocked_except_call()
+		} else {
+			self.protect_change_blocked()
+		};
+		if blocked {
 			return Err("Finish the call, pending sends and transfers before changing PROTECT");
 		}
 		if self.connection.is_some() && self.connection_secret.is_none() {
 			return Err("Reconnect your session before changing PROTECT");
+		}
+		if primary.is_some()
+			&& let Some(call) = self.state.voice.active.as_ref()
+		{
+			// The route change tears the connection down; the call is put back once READY returns.
+			self.protect_rejoin = Some(ProtectRejoin {
+				channel: call.channel,
+				muted: call.muted,
+				deafened: call.deafened,
+				since: std::time::Instant::now(),
+			});
+			self.state
+				.disconnect_voice("PROTECT route changed; reconnecting the call");
 		}
 		let reconnect = self.connection.as_ref().and(self.connection_secret.clone());
 		let connection = self.connection.take();
@@ -2682,7 +2757,13 @@ impl Desktop {
 			self.state.status = "PROTECT route changed while the previous connection was closing";
 			return Err(self.state.status);
 		}
-		if self.protect_change_blocked() {
+		let enabled = primary.is_some();
+		let blocked = if enabled {
+			self.protect_change_blocked_except_call()
+		} else {
+			self.protect_change_blocked()
+		};
+		if blocked {
 			self.state.auth = AuthState::Failed;
 			self.state.status =
 				"Pending activity prevented the PROTECT route change; reconnect your session";
@@ -2690,7 +2771,6 @@ impl Desktop {
 				"Pending activity prevented the PROTECT route change; reconnect your session",
 			);
 		}
-		let enabled = primary.is_some();
 		if let Err(reason) = protect::apply(primary, reserve) {
 			self.state.auth = AuthState::Failed;
 			self.state.status = reason;
@@ -2819,6 +2899,7 @@ impl Desktop {
 				);
 			}
 		}
+		self.resume_protect_call();
 		if self.protect_worker.is_some() {
 			return;
 		}
@@ -2874,7 +2955,9 @@ impl Desktop {
 			);
 			return;
 		}
-		if matches!(action, model::protect::Action::Enable(..)) && self.protect_change_blocked() {
+		if matches!(action, model::protect::Action::Enable(..))
+			&& self.protect_change_blocked_except_call()
+		{
 			self.messaging.set_protect_operation_status(
 				"Finish the call, pending sends and transfers before changing PROTECT",
 				protect::enabled(),
@@ -7381,6 +7464,8 @@ impl eframe::App for Desktop {
 		// PROTECT markers appear only for the route that is live right now.
 		self.messaging
 			.set_protect_active_scope(protect::active_scope());
+		self.messaging
+			.set_protect_call_active(self.state.voice.active.is_some());
 		// Change native hints before drawing, so the clear color and panel alpha
 		// agree for the whole frame. OS calls happen only when an effect changes.
 		self.sync_window_effects();

@@ -1289,8 +1289,10 @@ async fn run_inner(
 	// already been taken out of the channel.
 	let mut voice_held: std::collections::VecDeque<client_core::voice::Command> =
 		std::collections::VecDeque::new();
-	// Initial login is bounded, but an established session must survive long outages.
-	while was_ready || attempt < 6 {
+	// Connection attempts never give up: a saved login must survive any outage, before or after READY.
+	// Backoff stays capped (next_attempt), so a long outage costs one attempt every ~32 s. The only exits
+	// are the returns above, for protocol, capacity and session-ending failures.
+	loop {
 		if attempt > 0 {
 			if state.session.is_none() && was_ready {
 				calls.session_reset();
@@ -2160,7 +2162,6 @@ async fn run_inner(
 			.take()
 			.unwrap_or_else(|| next_attempt(attempt, ready_at.map(|ready| ready.elapsed())));
 	}
-	Err(Failure::Network)
 }
 fn notification_settings(
 	entries: Vec<discord_protocol::notifications::Setting>,
@@ -3307,6 +3308,50 @@ mod tests {
 		emit_gateway_loss(true, Some(Instant::now()), &mut outage, &emit, 2).unwrap();
 		let events = events.into_inner().unwrap();
 		assert_eq!(events, ["disconnected", "reconnect-2"]);
+	}
+
+	/// Regression: a saved login whose connection drops before READY must keep retrying, not
+	/// give up after six attempts and send the user back to the sign-in screen.
+	#[tokio::test]
+	async fn initial_login_keeps_retrying_through_a_network_outage() {
+		// A closed local port stands in for a lost connection before READY.
+		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+		drop(listener);
+		let skip = Arc::new(Notify::new());
+		// Counts attempts, not the backoff step: next_attempt caps the step at 6 on purpose.
+		let attempts = std::sync::atomic::AtomicU32::new(0);
+		let stop_after = 8;
+		let result = timeout(
+			Duration::from_secs(20),
+			run_inner(
+				Arc::new(
+					SessionSecret::from_owner_input("synthetic-owner-session".into()).unwrap(),
+				),
+				"wss://gateway.discord.gg/".into(),
+				watch::channel(None).1,
+				mpsc::channel(1).1,
+				None,
+				|event| {
+					if let Event::Reconnecting { .. } = event {
+						let seen = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+						// Test-only stop: the loop has no other exit while the network is down.
+						if seen >= stop_after {
+							return Err(Failure::Forbidden);
+						}
+						// Skip the backoff wait so the test stays fast.
+						skip.notify_one();
+					}
+					Ok(())
+				},
+				skip.clone(),
+				Some(&endpoint),
+			),
+		)
+		.await
+		.expect("retry loop did not reach the test stop");
+		assert_eq!(result, Err(Failure::Forbidden));
+		assert!(attempts.load(std::sync::atomic::Ordering::SeqCst) >= stop_after);
 	}
 
 	#[test]

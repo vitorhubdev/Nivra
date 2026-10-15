@@ -232,7 +232,7 @@ impl ScreenUi {
 		let app_summary = match (selected_app, windows.len()) {
 			(Some(name), _) => name.to_owned(),
 			(None, 0) => t("None open").to_owned(),
-			(None, count) => format!("{} {}", count.min(3), t("open")),
+			(None, count) => format!("{} {}", count, t("open")),
 		};
 		if disclosure(ui, t("Share an app"), &app_summary, self.apps_open).clicked() {
 			self.apps_open = !self.apps_open;
@@ -241,9 +241,16 @@ impl ScreenUi {
 			if windows.is_empty() {
 				crate::design::hint(ui, t("No apps are open to share."));
 			}
-			for (id, name) in windows.iter().take(3) {
-				self.source_row(ui, *id, name, t("App"), false);
-			}
+			// Every open window stays reachable; the list scrolls instead of cutting off at three.
+			egui::ScrollArea::vertical()
+				.id_salt("screen-apps")
+				.max_height(240.0)
+				.auto_shrink([false, true])
+				.show(ui, |ui| {
+					for (id, name) in windows.iter() {
+						self.source_row(ui, *id, name, t("App"), false);
+					}
+				});
 			ui.add_enabled_ui(!state.demo && !cfg!(target_os = "linux"), |ui| {
 				if crate::design::text_action(ui, t("Refresh")).clicked() {
 					self.selected = None;

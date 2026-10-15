@@ -163,6 +163,8 @@ pub struct State {
 	/// Mute state per user id of the baselined active call, so a later toggle
 	/// announces exactly once and a reconnect refill stays silent.
 	membership_mutes: std::collections::BTreeMap<u64, bool>,
+	/// Users already streaming in the baselined call; a new stream is announced once.
+	membership_streaming: BTreeSet<u64>,
 	/// Last service-confirmed departure, scoped to its local request.
 	pub departed: Option<(Id, u64)>,
 	pub incoming: Option<Id>,
@@ -201,6 +203,12 @@ pub enum MembershipEvent {
 		user: Id,
 	},
 	Unmuted {
+		channel: Id,
+		user: Id,
+	},
+	/// A participant who stayed in the call began a Go Live stream. Seen only as a change
+	/// from the baseline, so a snapshot or resume of an existing stream never repeats it.
+	StreamStarted {
 		channel: Id,
 		user: Id,
 	},
@@ -1276,6 +1284,11 @@ impl ClientState {
 		let fresh: BTreeSet<u64> = participants.iter().map(|p| p.user.0).collect();
 		let fresh_mutes: std::collections::BTreeMap<u64, bool> =
 			participants.iter().map(|p| (p.user.0, p.muted)).collect();
+		let fresh_streaming: BTreeSet<u64> = participants
+			.iter()
+			.filter(|p| p.streaming)
+			.map(|p| p.user.0)
+			.collect();
 		let basis = Some((channel, request));
 		if self.voice.membership_basis != basis {
 			self.voice.membership_basis = basis;
@@ -1291,11 +1304,16 @@ impl ClientState {
 			}
 			self.voice.membership_seen = fresh;
 			self.voice.membership_mutes = fresh_mutes;
+			self.voice.membership_streaming = fresh_streaming;
 			return;
 		}
 		let seen = std::mem::replace(&mut self.voice.membership_seen, fresh.clone());
 		let previous_mutes =
 			std::mem::replace(&mut self.voice.membership_mutes, fresh_mutes.clone());
+		let previous_streaming = std::mem::replace(
+			&mut self.voice.membership_streaming,
+			fresh_streaming.clone(),
+		);
 		let own = self.user.as_ref().map(|user| user.id.0);
 		// Leaves sort before joins: a quick leave+rejoin always plays both, in order.
 		for gone in seen.difference(&fresh) {
@@ -1337,6 +1355,16 @@ impl ClientState {
 				}
 			});
 		}
+		// A stream that started while we were in the call. Our own stream is not announced.
+		for user in fresh_streaming.difference(&previous_streaming) {
+			if Some(*user) == own || !seen.contains(user) {
+				continue;
+			}
+			self.push_membership_event(MembershipEvent::StreamStarted {
+				channel,
+				user: Id(*user),
+			});
+		}
 	}
 	fn push_membership_event(&mut self, event: MembershipEvent) {
 		// Only the exact same event twice in a row collapses; leave+rejoin replays fully.
@@ -1358,12 +1386,14 @@ impl ClientState {
 			self.voice.membership_basis = None;
 			self.voice.membership_seen.clear();
 			self.voice.membership_mutes.clear();
+			self.voice.membership_streaming.clear();
 		}
 		self.voice.membership_events.retain(|event| match event {
 			MembershipEvent::Joined { channel: known, .. }
 			| MembershipEvent::Left { channel: known, .. }
 			| MembershipEvent::Muted { channel: known, .. }
-			| MembershipEvent::Unmuted { channel: known, .. } => *known != channel,
+			| MembershipEvent::Unmuted { channel: known, .. }
+			| MembershipEvent::StreamStarted { channel: known, .. } => *known != channel,
 		});
 	}
 	fn remember_dm_participants(&mut self, channel: Id, participants: Vec<Participant>) {
@@ -2463,6 +2493,47 @@ mod tests {
 		assert!(state.ring_recipient(Id(2), request, Id(3), true).is_none());
 		state.end_voice_channel(Id(2));
 		assert!(state.voice.ringing(Id(2)).is_empty());
+	}
+
+	#[test]
+	fn a_stream_that_starts_while_present_is_announced_once() {
+		let mut state = dm_state();
+		let (channel, request) = (Id(2), 9);
+		let sync = |state: &mut ClientState, users: &[(u64, bool)]| {
+			state.sync_call_membership(
+				channel,
+				request,
+				users
+					.iter()
+					.map(|(id, streaming)| Participant {
+						user: Id(*id),
+						muted: false,
+						deafened: false,
+						server_muted: false,
+						server_deafened: false,
+						video: false,
+						streaming: *streaming,
+					})
+					.collect::<Vec<_>>()
+					.into_iter(),
+			);
+		};
+		// A stream that was already running when we looked is baseline, not news.
+		sync(&mut state, &[(2, false), (3, true)]);
+		assert!(state.voice.membership_events.is_empty());
+		// A snapshot or resume repeating the same state announces nothing.
+		sync(&mut state, &[(2, false), (3, true)]);
+		assert!(state.voice.membership_events.is_empty());
+		// A real start is announced once, and repeated snapshots do not repeat it.
+		sync(&mut state, &[(2, true), (3, true)]);
+		sync(&mut state, &[(2, true), (3, true)]);
+		assert_eq!(
+			state.voice.membership_events.drain(..).collect::<Vec<_>>(),
+			vec![MembershipEvent::StreamStarted {
+				channel,
+				user: Id(2)
+			}]
+		);
 	}
 
 	#[test]

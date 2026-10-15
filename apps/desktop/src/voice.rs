@@ -228,6 +228,11 @@ impl CallCues {
 				{
 					Some(Sound::MemberUnmute)
 				}
+				client_core::voice::MembershipEvent::StreamStarted { channel: known, .. }
+					if known == channel =>
+				{
+					Some(Sound::ScreenShareOn)
+				}
 				_ => None,
 			})
 			.collect()

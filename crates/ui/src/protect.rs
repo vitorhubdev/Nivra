@@ -99,14 +99,22 @@ impl Settings {
 			.then(|| self.reserve.missing())
 			.flatten();
 		let blocked = missing.or(reserve_missing);
-		ui.label(crate::tr_ui!(
-			ui,
-			if self.enabled {
-				"Route active: the selected scope is protected"
-			} else {
-				"Route inactive: nothing is routed through PROTECT"
+		// The header describes what the host applied, never the draft being edited.
+		match self.active.filter(|_| self.enabled) {
+			Some(applied) => {
+				ui.label(crate::tr_ui!(ui, "Route active"));
+				ui.label(crate::tr_ui!(ui, applied.label()));
+				if applied != self.draft.scope {
+					ui.label(crate::tr_ui!(ui, "Changes not applied yet"));
+				}
 			}
-		));
+			None => {
+				ui.label(crate::tr_ui!(
+					ui,
+					"Route inactive: nothing is routed through PROTECT"
+				));
+			}
+		}
 		if let Some(reason) = blocked {
 			ui.label(crate::tr_str!(ui, reason));
 		}

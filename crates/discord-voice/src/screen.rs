@@ -116,7 +116,6 @@ pub struct Worker {
 	done: Option<mpsc::Receiver<Result<(), &'static str>>>,
 	#[cfg(target_os = "linux")]
 	status: Arc<Mutex<&'static str>>,
-	#[cfg(target_os = "linux")]
 	preview_visible: Arc<AtomicBool>,
 }
 
@@ -141,9 +140,7 @@ impl Worker {
 		let status = Arc::new(Mutex::new("Choose a screen or window in the system picker"));
 		#[cfg(target_os = "linux")]
 		let worker_status = status.clone();
-		#[cfg(target_os = "linux")]
 		let preview_visible = Arc::new(AtomicBool::new(true));
-		#[cfg(target_os = "linux")]
 		let worker_preview_visible = preview_visible.clone();
 		// A few frames of slack absorbs send jitter without forcing keyframes on every hiccup.
 		let (send, frames) = tokio::sync::mpsc::channel(3);
@@ -186,6 +183,7 @@ impl Worker {
 					audio_send,
 					worker_audio_epoch,
 					worker_preview,
+					worker_preview_visible,
 					&wake,
 				);
 				finished_ready.store(false, Ordering::Release);
@@ -209,7 +207,6 @@ impl Worker {
 				done: Some(done),
 				#[cfg(target_os = "linux")]
 				status,
-				#[cfg(target_os = "linux")]
 				preview_visible,
 			},
 			Video {
@@ -224,9 +221,8 @@ impl Worker {
 		))
 	}
 
-	pub fn set_preview_visible(&self, _visible: bool) {
-		#[cfg(target_os = "linux")]
-		self.preview_visible.store(_visible, Ordering::Release);
+	pub fn set_preview_visible(&self, visible: bool) {
+		self.preview_visible.store(visible, Ordering::Release);
 	}
 
 	pub fn capture_status(&self) -> Option<&'static str> {
@@ -269,6 +265,7 @@ fn encode_loop(
 	audio: Option<tokio::sync::mpsc::Sender<AudioChunk>>,
 	audio_epoch: Arc<AtomicU64>,
 	preview: Arc<Mutex<Option<image::RgbaImage>>>,
+	preview_visible: Arc<AtomicBool>,
 	wake: &impl Fn(),
 ) -> Result<(), &'static str> {
 	if stop.load(Ordering::Acquire) || send.is_closed() {
@@ -338,7 +335,8 @@ fn encode_loop(
 		let now = Instant::now();
 		if let Some(frame) = &frame {
 			first_frame_deadline = None;
-			if now >= next_preview {
+			// A hidden preview costs nothing: no conversion, no slot write, no UI wake.
+			if now >= next_preview && preview_visible.load(Ordering::Acquire) {
 				let image = preview_frame(frame)?;
 				if let Ok(mut slot) = preview.try_lock() {
 					*slot = Some(image);
@@ -798,7 +796,6 @@ mod tests {
 			done: None,
 			#[cfg(target_os = "linux")]
 			status: Arc::new(Mutex::new("")),
-			#[cfg(target_os = "linux")]
 			preview_visible: Arc::new(AtomicBool::new(true)),
 		};
 		assert!(worker.take_preview().is_some());

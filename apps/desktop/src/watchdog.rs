@@ -92,6 +92,25 @@ pub fn beat(phase: Phase) {
 /// Marks the end of the render frame started by [`beat`].
 pub fn frame_end() {
 	IN_FRAME.store(false, Ordering::Release);
+	if let Ok(mut current) = STEP.lock() {
+		finish_step(&mut current, Instant::now());
+		// Time between frames belongs to no step; the next frame names its own.
+		current.0 = "none";
+	}
+}
+
+/// Ends the open step at `now`, logging it if it ran past [`SLOW_STEP`].
+fn finish_step(current: &mut (&'static str, Option<Instant>), now: Instant) {
+	if let Some(started) = current.1.take() {
+		let took = now.saturating_duration_since(started);
+		if took >= SLOW_STEP && SLOW_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_SLOW_LOGS {
+			platform::diagnostics::info(&format!(
+				"render step {} took {} ms",
+				current.0,
+				took.as_millis()
+			));
+		}
+	}
 }
 
 /// Names the part of the frame being drawn now. A step that runs past [`SLOW_STEP`] is logged
@@ -99,16 +118,7 @@ pub fn frame_end() {
 pub fn step(name: &'static str) {
 	let now = Instant::now();
 	if let Ok(mut current) = STEP.lock() {
-		if let Some(started) = current.1 {
-			let took = now.saturating_duration_since(started);
-			if took >= SLOW_STEP && SLOW_LOGS.fetch_add(1, Ordering::Relaxed) < MAX_SLOW_LOGS {
-				platform::diagnostics::info(&format!(
-					"render step {} took {} ms",
-					current.0,
-					took.as_millis()
-				));
-			}
-		}
+		finish_step(&mut current, now);
 		*current = (name, Some(now));
 	}
 }
@@ -297,5 +307,19 @@ mod tests {
 			report.len()
 		);
 		let _ = std::fs::remove_dir_all(&dir);
+	}
+}
+
+#[cfg(test)]
+mod step_tests {
+	use super::*;
+
+	#[test]
+	fn frame_end_closes_the_open_step_so_idle_time_is_not_charged_to_it() {
+		step("voice");
+		frame_end();
+		let open = STEP.lock().unwrap().1;
+		assert!(open.is_none(), "no step may stay open between frames");
+		assert_eq!(current_step(), "none");
 	}
 }

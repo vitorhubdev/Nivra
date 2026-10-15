@@ -5,6 +5,7 @@ pub mod camera;
 mod capture;
 mod crypto;
 mod diagnostics;
+mod heartbeat;
 mod jitter;
 mod mixer;
 pub mod output;
@@ -66,6 +67,28 @@ pub enum CloseDisposition {
 	RateLimited,
 	/// 4022: the call itself was terminated. A new VOICE_SERVER_UPDATE opens the new server.
 	Terminated,
+}
+
+/// Transport failure messages, shared by the producer and the call layer. Recovery is decided by
+/// identity here, never by searching the wording, so a reworded message cannot change the outcome.
+pub mod failure {
+	pub const SOCKET_FAILED: &str = "Voice socket failed; rejoin the call";
+	pub const RESUME_FAILED: &str = "Voice resume failed; rejoin the call";
+	pub const RESUME_TIMED_OUT: &str = "Voice resume timed out; rejoin the call";
+	pub const RESUME_ACK_TIMED_OUT: &str =
+		"Discord voice resume acknowledgement timed out; rejoin the call";
+	/// A nonce this socket never sent. Treated as a protocol violation: not recovered by resume.
+	pub const INVALID_HEARTBEAT_ACK: &str = "Invalid voice heartbeat acknowledgement";
+	/// Three silent heartbeat intervals on a stream socket. Ends that stream, never the call.
+	pub const STREAM_HEARTBEAT_LOST: &str = "Stream connection lost; the stream ended";
+
+	/// Whether a rejoin may recover from this failure without asking Discord to change anything.
+	pub fn recoverable(error: &str) -> bool {
+		matches!(
+			error,
+			SOCKET_FAILED | RESUME_FAILED | RESUME_TIMED_OUT | RESUME_ACK_TIMED_OUT
+		)
+	}
 }
 
 /// Classifies a voice close frame code; `None` is a close without a status code (1005),

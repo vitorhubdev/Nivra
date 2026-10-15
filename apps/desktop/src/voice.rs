@@ -259,8 +259,7 @@ fn reconnectable(
 	if let Some((_, disposition)) = closed {
 		return disposition == discord_voice::CloseDisposition::SessionExpired;
 	}
-	let lower = error.to_ascii_lowercase();
-	lower.contains("resume") || lower.contains("socket failed")
+	discord_voice::failure::recoverable(error)
 }
 /// Remote cameras kept as textures at once; matches the transport's source limit.
 const MAX_REMOTE_VIDEO: usize = 16;
@@ -719,6 +718,9 @@ impl Voice {
 			let delay = reconnect_delay(attempt);
 			let (channel, request, muted, deafened) =
 				(call.channel, call.request, call.muted, call.deafened);
+			// The gateway still owns the failed request until it is released. Releasing it here,
+			// before the scheduled Join, keeps the rejoin from being refused as "still leaving".
+			let release = self.end_control(channel, request);
 			self.reconnect = Some(Reconnect {
 				channel,
 				muted,
@@ -750,7 +752,7 @@ impl Voice {
 				delay.as_secs()
 			));
 			ctx.request_repaint_after(delay);
-			return None;
+			return Some(release);
 		}
 		self.reconnect = None;
 		ui.voice_reconnecting = false;
@@ -2044,9 +2046,18 @@ mod tests {
 	fn reconnect_policy_follows_the_discord_close_table() {
 		use discord_voice::CloseDisposition;
 		// Socket drops and failed resumes are network trouble: bounded rejoin applies.
-		assert!(reconnectable("Voice socket failed; rejoin the call", None));
+		assert!(reconnectable(discord_voice::failure::SOCKET_FAILED, None));
 		assert!(reconnectable(
-			"Voice resume timed out; rejoin the call",
+			discord_voice::failure::RESUME_TIMED_OUT,
+			None
+		));
+		// A nonce this socket never sent is a protocol violation, not a drop to resume.
+		assert!(!reconnectable(
+			discord_voice::failure::INVALID_HEARTBEAT_ACK,
+			None
+		));
+		assert!(!reconnectable(
+			discord_voice::failure::STREAM_HEARTBEAT_LOST,
 			None
 		));
 		// Expired sessions rejoin; deliberate kicks, rate limits and terminations never do.
@@ -2084,7 +2095,15 @@ mod tests {
 			"Voice session timed out (code 4009); rejoin the call",
 			Some((Some(4009), discord_voice::CloseDisposition::SessionExpired)),
 		);
-		assert!(command.is_none(), "the retry waits for its backoff");
+		// The failed request is released first so the gateway no longer owns it when the
+		// scheduled Join arrives; the rejoin itself still waits for its backoff.
+		assert!(
+			matches!(
+				command,
+				Some(Command::Voice(voice::Command::AbandonSession { channel, .. })) if channel == Id(22)
+			),
+			"the failed request must be released before the rejoin"
+		);
 		assert_eq!(
 			state.voice.active.as_ref().unwrap().phase,
 			Phase::Failed,

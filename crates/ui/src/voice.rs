@@ -542,16 +542,19 @@ impl MessagingUi {
 							},
 						);
 					}
-					if entry.participant.muted {
+					if entry.participant.server_muted {
+						status_icon(
+							ui,
+							crate::icons::Icon::Lock,
+							colors.muted,
+							"Muted by server",
+						);
+					} else if entry.participant.muted {
 						status_icon(
 							ui,
 							crate::icons::Icon::MicrophoneSlash,
 							colors.muted,
-							if entry.participant.server_muted {
-								"Muted by server"
-							} else {
-								"Microphone muted"
-							},
+							"Microphone muted",
 						);
 					}
 					if locally_muted {
@@ -1267,7 +1270,10 @@ impl MessagingUi {
 		// Mute state reads as Discord's red ring plus the matching slashed glyph.
 		let silenced = if entry.participant.deafened || entry.participant.server_deafened {
 			Some(crate::icons::Icon::HeadphonesSlash)
-		} else if entry.participant.muted || entry.participant.server_muted {
+		} else if entry.participant.server_muted {
+			// A lock, not a slashed mic: the server imposed this, the person did not choose it.
+			Some(crate::icons::Icon::Lock)
+		} else if entry.participant.muted {
 			Some(crate::icons::Icon::MicrophoneSlash)
 		} else if self.voice_user_locally_muted(entry.participant.user) {
 			// Silenced on this device only; the speaker glyph separates it from a microphone mute.
@@ -3210,6 +3216,34 @@ impl MessagingUi {
 	}
 
 	/// Gateway backoff indicator; appears only after a short disconnect delay.
+	/// A sweeping segment for work with no measurable end. Reduced motion holds a static
+	/// segment instead, and the repaint is requested only while the banner is visible.
+	fn indeterminate_bar(ui: &mut egui::Ui, fill: egui::Color32, track: egui::Color32) {
+		let height = 4.0;
+		let (rect, _) = ui.allocate_exact_size(
+			egui::vec2(ui.available_width(), height),
+			egui::Sense::hover(),
+		);
+		let painter = ui.painter();
+		painter.rect_filled(rect, height * 0.5, track);
+		let segment = rect.width() * 0.3;
+		let left = if crate::anim::reduce_motion(ui.ctx()) {
+			rect.left() + (rect.width() - segment) * 0.5
+		} else {
+			let phase = (ui.input(|input| input.time) as f32 * 0.9).fract();
+			ui.ctx()
+				.request_repaint_after(std::time::Duration::from_millis(33));
+			rect.left() - segment + (rect.width() + segment) * phase
+		};
+		let lit = egui::Rect::from_min_max(
+			egui::pos2(left.max(rect.left()), rect.top()),
+			egui::pos2((left + segment).min(rect.right()), rect.bottom()),
+		);
+		if lit.width() > 0.0 {
+			painter.rect_filled(lit, height * 0.5, fill);
+		}
+	}
+
 	pub(super) fn gateway_reconnect_banner(&mut self, ui: &mut egui::Ui, state: &State) {
 		let Some(disconnected_at) = state.gateway_disconnected_at else {
 			return;
@@ -3220,19 +3254,13 @@ impl MessagingUi {
 		if disconnected_at.elapsed() < std::time::Duration::from_secs(2) {
 			return;
 		}
-		let Some(reconnect) = state.gateway_reconnect else {
+		if state.gateway_reconnect.is_none() {
 			return;
-		};
+		}
 		let colors = design::palette(ui);
-		let label = format!(
-			"{} · {} {}",
-			crate::i18n::text(self.language, "Reconnecting"),
-			crate::i18n::text(self.language, "attempt"),
-			reconnect.attempt
-		);
-		let retry = std::time::Duration::from_millis(reconnect.retry_in_ms.max(1));
-		let progress =
-			(reconnect.since.elapsed().as_secs_f32() / retry.as_secs_f32()).clamp(0.0, 1.0);
+		// No attempt count: the number is diagnostic, and a bar that measured time to the next
+		// try read as progress toward a reconnect that had not happened yet.
+		let label = crate::i18n::text(self.language, "Reconnecting…");
 		let appear = crate::anim::bool_alpha(
 			ui.ctx(),
 			egui::Id::unique("gateway-reconnect-appear"),
@@ -3251,12 +3279,8 @@ impl MessagingUi {
 				ui.set_opacity(appear);
 				ui.vertical(|ui| {
 					ui.spacing_mut().item_spacing.y = 8.0;
-					ui.label(design::semibold(ui, &label, 14.0).color(colors.text_strong));
-					ui.add(
-						egui::ProgressBar::new(progress)
-							.desired_width(f32::INFINITY)
-							.fill(colors.accent),
-					);
+					ui.label(design::semibold(ui, label, 14.0).color(colors.text_strong));
+					Self::indeterminate_bar(ui, colors.accent, colors.border);
 					if disconnected_at.elapsed() >= std::time::Duration::from_secs(2)
 						&& ui
 							.button(crate::i18n::text(self.language, "Reconnect now"))

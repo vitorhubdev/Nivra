@@ -316,17 +316,17 @@ impl Connection {
                 let mut upload_cancel:Option<watch::Sender<bool>>=None;
                 let mut voice_request=None;
                 // One local release may wait for queue space; later joins cannot overtake it.
-                let mut pending_abandonment=None;
+                let mut pending_releases=std::collections::VecDeque::<client_core::voice::Command>::new();
                 loop {
                     tokio::select! {
                         _=gateway_task.task_mut()=>{break;}
                         _=writes.task_mut()=>{break;}
-                        permit=voice_send.reserve(), if pending_abandonment.is_some()=> {
+                        permit=voice_send.reserve(), if !pending_releases.is_empty()=> {
                             if let Ok(permit)=permit {
-                                permit.send(pending_abandonment.take().expect("pending abandonment"));
+                                permit.send(pending_releases.pop_front().expect("pending release"));
                             } else {
                                 // The Gateway task owns connection termination when its queue closes.
-                                pending_abandonment=None;
+                                pending_releases.clear();
                             }
                         }
                         changed=takeover_receive.changed()=> {
@@ -552,14 +552,14 @@ impl Connection {
                                         let _=release_taken_over(&mut voice_request,Some((channel,request)));
                                         drop(ringing.take());
                                     }
-                                    queue_abandonment(&voice_send,&mut pending_abandonment,control,owner);
+                                    queue_release(&voice_send,&mut pending_releases,control,owner);
                                     continue;
                                 }
                                 if matches!(control,V::ConfirmSession{..}) {
                                     if let Some(error)=queue_confirmation(&voice_send,control,voice_request,*voice_availability.borrow()) {emit(Event::Voice(error))?;}
                                     continue;
                                 }
-                                if abandonment_blocks_join(pending_abandonment,control) {
+                                if abandonment_blocks_join(&pending_releases,control) {
                                     emit(Event::Voice(E::Failed{channel,request,message:"Previous call is releasing locally; retry joining after it finishes"}))?;continue;
                                 }
                                 if !*voice_availability.borrow() {
@@ -583,6 +583,17 @@ impl Connection {
                                         emit(Event::Voice(error))?;
                                         continue;
                                     }
+                                } else if matches!(control, V::Leave { .. }) {
+                                    // A Leave that finds the queue full is kept in order; dropping it
+                                    // left the gateway owning the old request and refused the rejoin.
+                                    if !queue_release(&voice_send,&mut pending_releases,control,None) {
+                                        let _ = emit(Event::Voice(E::Failed {
+                                            channel,
+                                            request,
+                                            message: "Call release was not queued; leave again",
+                                        }));
+                                    }
+                                    continue;
                                 } else if voice_send.try_send(control).is_err() {
                                     let _ = emit(Event::Voice(E::Failed {
                                         channel,
@@ -1093,27 +1104,41 @@ async fn wait_for_takeover(
 }
 
 // Queue pressure must not end text signaling or allow a fresh Join ahead of local cleanup.
-fn queue_abandonment(
+/// Releases the gateway must see before any later command. A full voice queue used to drop a
+/// Leave, leaving the old request owned by the gateway; a bounded backlog keeps every release
+/// in order instead. Returns `false` only when the backlog itself is full.
+const RELEASE_BACKLOG: usize = 8;
+fn queue_release(
 	sender: &mpsc::Sender<client_core::voice::Command>,
-	pending: &mut Option<client_core::voice::Command>,
+	pending: &mut std::collections::VecDeque<client_core::voice::Command>,
 	control: client_core::voice::Command,
 	owner: Option<(model::Id, u64)>,
-) {
+) -> bool {
 	if let client_core::voice::Command::AbandonSession { channel, request } = control
 		&& owner.is_some_and(|scope| scope != (channel, request))
 	{
-		return;
+		return true;
 	}
 	debug_assert!(matches!(
 		control,
 		client_core::voice::Command::AbandonSession { .. }
+			| client_core::voice::Command::Leave { .. }
 	));
-	if pending.is_some() {
-		// A new attempt is blocked until this first release is queued; stale releases cannot replace it.
-		return;
+	// Anything already waiting goes first, so a new release cannot overtake an older one.
+	if !pending.is_empty() {
+		if pending.len() >= RELEASE_BACKLOG {
+			return false;
+		}
+		pending.push_back(control);
+		return true;
 	}
-	if let Err(mpsc::error::TrySendError::Full(control)) = sender.try_send(control) {
-		*pending = Some(control);
+	match sender.try_send(control) {
+		Ok(()) => true,
+		Err(mpsc::error::TrySendError::Full(control)) => {
+			pending.push_back(control);
+			true
+		}
+		Err(mpsc::error::TrySendError::Closed(_)) => false,
 	}
 }
 
@@ -1178,10 +1203,10 @@ fn queue_join(
 }
 
 fn abandonment_blocks_join(
-	pending: Option<client_core::voice::Command>,
+	pending: &std::collections::VecDeque<client_core::voice::Command>,
 	control: client_core::voice::Command,
 ) -> bool {
-	pending.is_some() && matches!(control, client_core::voice::Command::Join { .. })
+	!pending.is_empty() && matches!(control, client_core::voice::Command::Join { .. })
 }
 
 // Ring only after the media adapter confirms transport allocation, and only once per current call.
@@ -1653,8 +1678,9 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn abandonment_survives_a_full_queue_and_precedes_a_fresh_join() {
+	async fn releases_survive_a_full_queue_in_order_and_precede_a_fresh_join() {
 		use client_core::voice::Command as V;
+		use std::collections::VecDeque;
 		let (sender, mut receiver) = mpsc::channel(8);
 		for _ in 0..8 {
 			sender
@@ -1663,38 +1689,32 @@ mod tests {
 				})
 				.unwrap();
 		}
+		let mut pending = VecDeque::new();
 		let release = V::AbandonSession {
 			channel: model::Id(20),
 			request: 5,
 		};
-		let mut pending = None;
-		queue_abandonment(&sender, &mut pending, release, Some((model::Id(21), 6)));
-		assert!(pending.is_none()); // An older scope cannot displace the current owner’s later release.
-		queue_abandonment(&sender, &mut pending, release, Some((model::Id(20), 5)));
-		assert!(matches!(
-			pending,
-			Some(V::AbandonSession {
-				channel: model::Id(20),
-				request: 5
-			})
-		));
-		// A delayed stale release must not discard the cleanup that actually releases the old scope.
-		queue_abandonment(
+		let leave = V::Leave {
+			channel: model::Id(20),
+			request: 5,
+		};
+		// A release for another scope is not this call's to send and is dropped.
+		assert!(queue_release(
 			&sender,
 			&mut pending,
-			V::AbandonSession {
-				channel: model::Id(20),
-				request: 4,
-			},
-			None,
-		);
-		assert!(matches!(
-			pending,
-			Some(V::AbandonSession {
-				channel: model::Id(20),
-				request: 5
-			})
+			release,
+			Some((model::Id(21), 6))
 		));
+		assert!(pending.is_empty());
+		// The full queue keeps both releases, oldest first, instead of dropping them.
+		assert!(queue_release(
+			&sender,
+			&mut pending,
+			release,
+			Some((model::Id(20), 5))
+		));
+		assert!(queue_release(&sender, &mut pending, leave, None));
+		assert_eq!(pending.len(), 2);
 		let join = V::Join {
 			channel: model::Id(21),
 			request: 6,
@@ -1702,15 +1722,8 @@ mod tests {
 			mute: false,
 			deaf: false,
 		};
-		assert!(abandonment_blocks_join(pending, join));
-		assert!(receiver.recv().await.is_some());
-		sender
-			.reserve()
-			.await
-			.unwrap()
-			.send(pending.take().unwrap());
-		assert!(!abandonment_blocks_join(pending, join));
-		// The release used the only free slot: an immediately queued Join must fail locally.
+		assert!(abandonment_blocks_join(&pending, join));
+		// A fresh Join is refused locally while the releases are still waiting.
 		let mut owner = Some((model::Id(21), 6, true));
 		assert!(matches!(
 			queue_join(&sender, join, (model::Id(21), 6), &mut owner),
@@ -1721,10 +1734,16 @@ mod tests {
 			})
 		));
 		assert!(owner.is_none());
-		for _ in 0..7 {
+		for _ in 0..8 {
 			assert!(matches!(receiver.recv().await, Some(V::Sync { .. })));
 		}
-		assert!(queue_join(&sender, join, (model::Id(21), 6), &mut owner).is_none());
+		// The desktop drains one release per free slot, in order.
+		sender
+			.reserve()
+			.await
+			.unwrap()
+			.send(pending.pop_front().unwrap());
+		assert!(abandonment_blocks_join(&pending, join));
 		assert!(matches!(
 			receiver.recv().await,
 			Some(V::AbandonSession {
@@ -1732,6 +1751,16 @@ mod tests {
 				request: 5
 			})
 		));
+		sender
+			.reserve()
+			.await
+			.unwrap()
+			.send(pending.pop_front().unwrap());
+		assert!(!abandonment_blocks_join(&pending, join));
+		assert!(matches!(receiver.recv().await, Some(V::Leave { .. })));
+		// Only after the releases left does a fresh Join go out.
+		let mut owner = Some((model::Id(21), 6, true));
+		assert!(queue_join(&sender, join, (model::Id(21), 6), &mut owner).is_none());
 		assert!(matches!(
 			receiver.recv().await,
 			Some(V::Join {
@@ -1741,8 +1770,8 @@ mod tests {
 			})
 		));
 		drop(receiver);
-		queue_abandonment(&sender, &mut pending, release, None);
-		assert!(pending.is_none()); // Closed queues are handled by the existing Gateway task.
+		// A closed queue reports the release as not queued, so the caller can say so.
+		assert!(!queue_release(&sender, &mut pending, release, None));
 	}
 
 	#[test]

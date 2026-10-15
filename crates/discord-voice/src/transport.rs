@@ -2,6 +2,8 @@ use crate::{
 	CloseDisposition, Controls, Frame, Status, close_disposition,
 	crypto::{Dave, Encryption, Identity, MAX_PACKET, MAX_SIGNAL, MODE},
 	diagnostics::{Signal, Video},
+	failure,
+	heartbeat::{Echo, Ledger},
 	video_receive::{
 		DecoderQueue, Encoded, Receivers, VideoSink, has_parameter_sets, is_keyframe, offer, pli,
 		remove as remove_decoder, retain_sources, spawn_decoder,
@@ -68,7 +70,7 @@ fn negotiation_timeout(
 	resuming: bool,
 ) -> &'static str {
 	if resuming {
-		"Discord voice resume acknowledgement timed out; rejoin the call"
+		failure::RESUME_ACK_TIMED_OUT
 	} else if !hello {
 		"Discord voice Hello timed out; rejoin the call"
 	} else if !transport {
@@ -435,10 +437,7 @@ async fn run_inner(
 	let mut seq_ack: i64 = -1;
 	let mut heartbeat_ms: Option<u64> = None;
 	let mut heartbeat_at = Instant::now();
-	let mut awaiting_ack = None;
-	let mut missed_acks = 0u8;
-	let mut heartbeat_sent: Option<Instant> = None;
-	let mut heartbeat_nonce = 0u64;
+	let mut heartbeat = Ledger::default();
 	let mut deadline = Some(Instant::now() + Duration::from_secs(90));
 	let mut ready_announced = false;
 	let mut waiting_announced = false;
@@ -498,24 +497,20 @@ async fn run_inner(
 				if let Some(interval)=heartbeat_ms && now>=heartbeat_at {
 					// One late ack stays in the call. Three missed acks on a socket that
 					// still accepts writes is a half-open connection: resume, do not hang up.
-					if awaiting_ack.is_some() {
-						missed_acks=missed_acks.saturating_add(1);
-						if missed_acks>=3 {
-							if encryption.is_none() || resume_attempts>=2 {return Err("Voice socket failed; rejoin the call");}
-							video.clear();video.announced=false;
-							resume_attempts+=1;resuming=true;resume_since=Some(Instant::now());capture_reset=true;
-							deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;awaiting_ack=None;heartbeat_sent=None;missed_acks=0;
-							let config=WebSocketConfig::default().max_message_size(Some(MAX_SIGNAL)).max_frame_size(Some(MAX_SIGNAL)).write_buffer_size(0).max_write_buffer_size(MAX_SIGNAL*2);
-							let (replacement,_)=timeout(Duration::from_secs(15),protect::websocket(&url,Some(config),model::protect::Scope::Voice)).await.map_err(|_|"Voice resume timed out; rejoin the call")?.map_err(|_|"Voice resume failed; rejoin the call")?;
-							ws=replacement;
-							json_send(&mut ws,json!({"op":7,"d":{"server_id":credentials.guild.unwrap_or(credentials.channel).to_string(),"session_id":credentials.session.expose(),"token":credentials.token.expose(),"seq_ack":seq_ack}})).await?;
-							continue;
-						}
+					if heartbeat.interval_elapsed() {
+						if encryption.is_none() || resume_attempts>=2 {return Err(failure::SOCKET_FAILED);}
+						video.clear();video.announced=false;
+						resume_attempts+=1;resuming=true;resume_since=Some(Instant::now());capture_reset=true;
+						deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;heartbeat=Ledger::default();
+						let config=WebSocketConfig::default().max_message_size(Some(MAX_SIGNAL)).max_frame_size(Some(MAX_SIGNAL)).write_buffer_size(0).max_write_buffer_size(MAX_SIGNAL*2);
+						let (replacement,_)=timeout(Duration::from_secs(15),protect::websocket(&url,Some(config),model::protect::Scope::Voice)).await.map_err(|_|failure::RESUME_TIMED_OUT)?.map_err(|_|failure::RESUME_FAILED)?;
+						ws=replacement;
+						json_send(&mut ws,json!({"op":7,"d":{"server_id":credentials.guild.unwrap_or(credentials.channel).to_string(),"session_id":credentials.session.expose(),"token":credentials.token.expose(),"seq_ack":seq_ack}})).await?;
+						continue;
 					}
-					heartbeat_nonce=heartbeat_nonce.wrapping_add(1);
-					let sent=Instant::now();
-					json_send(&mut ws,json!({"op":3,"d":{"t":heartbeat_nonce,"seq_ack":seq_ack}})).await?;
-					heartbeat_sent=Some(sent);awaiting_ack=Some(heartbeat_nonce);heartbeat_at=now+Duration::from_millis(interval);
+					let nonce=heartbeat.send(now);
+					json_send(&mut ws,json!({"op":3,"d":{"t":nonce,"seq_ack":seq_ack}})).await?;
+					heartbeat_at=now+Duration::from_millis(interval);
 				}
 				if secured_at.is_some_and(|at| now>=at+PEER_GRACE) && !discovering && !resuming && dave.should_wait_for_peer() {dave.enter_sole_member_waiting()?;}
 				let enabled=dave.ready && encryption.is_some() && !discovering && !resuming;
@@ -698,20 +693,20 @@ async fn run_inner(
 					_ => true,
 				};
 				if resumable {
-					if encryption.is_none() || resume_attempts>=2 {return Err("Voice socket failed; rejoin the call");}
+					if encryption.is_none() || resume_attempts>=2 {return Err(failure::SOCKET_FAILED);}
 					video.clear();video.announced=false;
 					resume_attempts+=1;resuming=true;resume_since=Some(Instant::now());capture_reset=true;
-					deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;awaiting_ack=None;heartbeat_sent=None;missed_acks=0;
+					deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;heartbeat=Ledger::default();
 					emit(Status::Resuming{attempt:resume_attempts}).map_err(|_|"Call interface closed")?;
 					let config=WebSocketConfig::default().max_message_size(Some(MAX_SIGNAL)).max_frame_size(Some(MAX_SIGNAL)).write_buffer_size(0).max_write_buffer_size(MAX_SIGNAL*2);
-					let (replacement,_)=timeout(Duration::from_secs(15),protect::websocket(&url,Some(config),model::protect::Scope::Voice)).await.map_err(|_|"Voice resume timed out; rejoin the call")?.map_err(|_|"Voice resume failed; rejoin the call")?;
+					let (replacement,_)=timeout(Duration::from_secs(15),protect::websocket(&url,Some(config),model::protect::Scope::Voice)).await.map_err(|_|failure::RESUME_TIMED_OUT)?.map_err(|_|failure::RESUME_FAILED)?;
 					ws=replacement;
 					json_send(&mut ws,json!({"op":7,"d":{"server_id":credentials.guild.unwrap_or(credentials.channel).to_string(),"session_id":credentials.session.expose(),"token":credentials.token.expose(),"seq_ack":seq_ack}})).await?;
 					continue;
 				}
 				let event = match event {
 					Some(Ok(message)) => message,
-					_ => return Err("Voice socket failed; rejoin the call"),
+					_ => return Err(failure::SOCKET_FAILED),
 				};
 				if signal_window.elapsed()>Duration::from_secs(1){signal_window=Instant::now();signal_count=0;}
 				signal_count+=1;if signal_count>256{return Err("Voice signaling exceeded the bounded processing rate");}
@@ -729,12 +724,14 @@ async fn run_inner(
 								heartbeat_ms=Some(interval.min(5000));heartbeat_at=Instant::now();
 							},
 							6=>{
-								if awaiting_ack.is_none() || data["t"].as_u64()!=awaiting_ack {return Err("Invalid voice heartbeat acknowledgement");}
-								if let Some(sent)=heartbeat_sent.take() {
-									let ms=u32::try_from(sent.elapsed().as_millis().min(9_999)).unwrap_or(9_999);
-									emit(Status::Ping(ms)).map_err(|_| "Call interface closed")?;
-								}
-								awaiting_ack=None;missed_acks=0;
+								match heartbeat.acknowledge(data["t"].as_u64(),Instant::now()) {
+										Echo::Settled{rtt:Some(rtt)}=>{
+											let ms=u32::try_from(rtt.as_millis().min(9_999)).unwrap_or(9_999);
+											emit(Status::Ping(ms)).map_err(|_| "Call interface closed")?;
+										},
+										Echo::Settled{rtt:None}|Echo::Duplicate=>{},
+										Echo::Unknown=>return Err(failure::INVALID_HEARTBEAT_ACK),
+									}
 							},
 							2=>{
 								if udp.is_some(){return Err("Unexpected voice transport replacement; rejoin the call");}
@@ -1368,8 +1365,7 @@ async fn run_stream_inner(
 	);
 	let mut heartbeat_ms = None;
 	let mut heartbeat_at = Instant::now();
-	let mut heartbeat_nonce = 0u64;
-	let mut awaiting_ack = None;
+	let mut heartbeat = Ledger::default();
 	let mut seq_ack = -1i64;
 	let mut deadline = Some(Instant::now() + Duration::from_secs(90));
 	let mut announced = false;
@@ -1440,10 +1436,11 @@ async fn run_stream_inner(
 					next_udp_ping=now+Duration::from_secs(5);
 				}
 				if let Some(interval)=heartbeat_ms && now>=heartbeat_at {
-					let _ = awaiting_ack.take();
-					heartbeat_nonce=heartbeat_nonce.wrapping_add(1);
-					json_send(&mut ws,json!({"op":3,"d":{"t":heartbeat_nonce,"seq_ack":seq_ack}})).await?;
-					awaiting_ack=Some(heartbeat_nonce); heartbeat_at=now+Duration::from_millis(interval);
+					// Three silent intervals end this stream only; the call keeps its own heartbeat.
+					if heartbeat.interval_elapsed() {return Err(failure::STREAM_HEARTBEAT_LOST);}
+					let nonce=heartbeat.send(now);
+					json_send(&mut ws,json!({"op":3,"d":{"t":nonce,"seq_ack":seq_ack}})).await?;
+					heartbeat_at=now+Duration::from_millis(interval);
 				}
 				if secured_at.is_some_and(|at| now>=at+PEER_GRACE) && !discovering && dave.should_wait_for_peer() {dave.enter_sole_member_waiting()?;}
 				let waiting=dave.waiting && encryption.is_some() && !discovering;
@@ -1616,7 +1613,7 @@ async fn run_stream_inner(
 						metrics.signal(signal_of(op),1);
 						match op {
 							8=>{let interval=data["heartbeat_interval"].as_f64().filter(|v|v.is_finite()&&*v>=100.&&*v<=120000.).ok_or("Invalid stream heartbeat")? as u64; heartbeat_ms=Some(interval.min(5000));heartbeat_at=Instant::now();},
-							6=>{if awaiting_ack.is_none()||data["t"].as_u64()!=awaiting_ack{return Err("Invalid stream heartbeat acknowledgement");}awaiting_ack=None;},
+							6=>{if heartbeat.acknowledge(data["t"].as_u64(),Instant::now())==Echo::Unknown {return Err("Invalid stream heartbeat acknowledgement");}},
 							2=>{
 								if udp.is_some(){return Err("Unexpected stream transport replacement");}
 								audio_ssrc=u32::try_from(number(data,"ssrc")?).ok().filter(|ssrc|*ssrc!=0).ok_or("Invalid stream SSRC")?;
@@ -2110,7 +2107,7 @@ mod tests {
 		);
 		assert_eq!(
 			negotiation_timeout(false, true, true, &alice, true),
-			"Discord voice resume acknowledgement timed out; rejoin the call"
+			failure::RESUME_ACK_TIMED_OUT
 		);
 	}
 	#[test]

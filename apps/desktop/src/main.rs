@@ -18,7 +18,6 @@ mod credentials;
 mod dm_demo;
 mod downloads;
 mod emoji_upload;
-mod engine;
 mod extension_app;
 mod extension_bridge;
 mod extension_data_events;
@@ -826,24 +825,19 @@ impl SessionEnd {
 		self == Self::Logout
 	}
 }
-/// Writes the redacted sing-box message from a failed start to the diagnostic log.
-fn log_engine_note() {
-	if let Some(note) = protect::engine_note() {
-		platform::diagnostics::warn(&format!("PROTECT sing-box stopped at startup: {note}"));
-	}
+/// The call a PROTECT route change must put back in place, captured before the change.
+#[derive(Clone)]
+struct ProtectRejoin {
+	channel: model::Id,
+	muted: bool,
+	deafened: bool,
+	since: std::time::Instant,
 }
-
+/// Longest a route change may take before the call is left for the user to rejoin.
+const PROTECT_REJOIN_WINDOW: Duration = Duration::from_secs(90);
 enum ProtectChange {
 	Tested(&'static str),
 	Imported(Zeroizing<String>),
-	EngineChosen(String),
-	EngineFound(
-		Option<(String, String)>,
-		Option<model::protect::EngineRelease>,
-		bool,
-	),
-	EngineLatest(Option<model::protect::EngineRelease>),
-	EngineInstalled(String, String),
 	Health(protect::Health, u64),
 	Prepared(Arc<protect::Profile>, Option<Arc<protect::Profile>>),
 	TransportStopped {
@@ -911,6 +905,7 @@ struct Desktop {
 	/// Redacted, zeroizing session already owned by Connection; never persisted here.
 	connection_secret: Option<Arc<SessionSecret>>,
 	protect_worker: Option<tokio::task::JoinHandle<()>>,
+	protect_rejoin: Option<ProtectRejoin>,
 	protect_done: Option<std::sync::mpsc::Receiver<ProtectResult>>,
 	protect_scope: Option<u64>,
 	protect_shutdown: ProtectShutdown,
@@ -2341,6 +2336,7 @@ impl Desktop {
 			connection: None,
 			connection_secret: None,
 			protect_worker: None,
+			protect_rejoin: None,
 			protect_done: None,
 			protect_scope: None,
 			protect_shutdown: ProtectShutdown::Idle,
@@ -2614,12 +2610,57 @@ impl Desktop {
 		self.protect_scope = None;
 	}
 	fn protect_change_blocked(&self) -> bool {
-		self.state.voice.active.is_some()
-			|| self.state.has_unsent()
+		self.state.voice.active.is_some() || self.protect_change_blocked_except_call()
+	}
+	/// Pending sends, transfers and previews. Enable handles a live call itself: it reconnects it.
+	fn protect_change_blocked_except_call(&self) -> bool {
+		self.state.has_unsent()
 			|| self.uploads.has_unsent()
 			|| self.downloads.is_active()
 			|| self.batch_downloads.is_active()
 			|| self.preview_done.is_some()
+	}
+	/// Puts the call back after a PROTECT route change, once the gateway has returned.
+	fn resume_protect_call(&mut self) {
+		let Some(rejoin) = self.protect_rejoin.clone() else {
+			return;
+		};
+		let present = self.state.voice.active.as_ref().is_some_and(|call| {
+			call.channel == rejoin.channel && call.phase != client_core::voice::Phase::Failed
+		});
+		if present {
+			self.protect_rejoin = None;
+			return;
+		}
+		if rejoin.since.elapsed() > PROTECT_REJOIN_WINDOW {
+			self.protect_rejoin = None;
+			self.rejoin_failed();
+			return;
+		}
+		if !self.state.gateway_connected || self.state.auth != AuthState::Authenticated {
+			return;
+		}
+		self.protect_rejoin = None;
+		match self
+			.state
+			.start_call_with_mute(rejoin.channel, false, rejoin.muted, rejoin.deafened)
+		{
+			Some(command) => {
+				self.command(command);
+				self.messaging.voice_muted = rejoin.muted;
+				self.messaging.voice_deafened = rejoin.deafened;
+			}
+			None => self.rejoin_failed(),
+		}
+	}
+	fn rejoin_failed(&mut self) {
+		self.messaging.toasts.push(
+			ui::design::Level::Warning,
+			ui::i18n::text(
+				self.messaging.language,
+				"Could not reconnect the call; join it again.",
+			),
+		);
 	}
 	/// Queue transport teardown; the route stays unchanged until shutdown is acknowledged.
 	fn apply_protect(
@@ -2632,11 +2673,29 @@ impl Desktop {
 		if self.protect_worker.is_some() {
 			return Err("Wait for the current PROTECT operation to finish");
 		}
-		if self.protect_change_blocked() {
+		let blocked = if primary.is_some() {
+			self.protect_change_blocked_except_call()
+		} else {
+			self.protect_change_blocked()
+		};
+		if blocked {
 			return Err("Finish the call, pending sends and transfers before changing PROTECT");
 		}
 		if self.connection.is_some() && self.connection_secret.is_none() {
 			return Err("Reconnect your session before changing PROTECT");
+		}
+		if primary.is_some()
+			&& let Some(call) = self.state.voice.active.as_ref()
+		{
+			// The route change tears the connection down; the call is put back once READY returns.
+			self.protect_rejoin = Some(ProtectRejoin {
+				channel: call.channel,
+				muted: call.muted,
+				deafened: call.deafened,
+				since: std::time::Instant::now(),
+			});
+			self.state
+				.disconnect_voice("PROTECT route changed; reconnecting the call");
 		}
 		let reconnect = self.connection.as_ref().and(self.connection_secret.clone());
 		let connection = self.connection.take();
@@ -2698,7 +2757,13 @@ impl Desktop {
 			self.state.status = "PROTECT route changed while the previous connection was closing";
 			return Err(self.state.status);
 		}
-		if self.protect_change_blocked() {
+		let enabled = primary.is_some();
+		let blocked = if enabled {
+			self.protect_change_blocked_except_call()
+		} else {
+			self.protect_change_blocked()
+		};
+		if blocked {
 			self.state.auth = AuthState::Failed;
 			self.state.status =
 				"Pending activity prevented the PROTECT route change; reconnect your session";
@@ -2706,7 +2771,6 @@ impl Desktop {
 				"Pending activity prevented the PROTECT route change; reconnect your session",
 			);
 		}
-		let enabled = primary.is_some();
 		if let Err(reason) = protect::apply(primary, reserve) {
 			self.state.auth = AuthState::Failed;
 			self.state.status = reason;
@@ -2783,28 +2847,6 @@ impl Desktop {
 			{
 				let status = match result.change {
 					Ok(ProtectChange::Tested(status)) => Ok(status),
-					Ok(ProtectChange::EngineFound(installed, pinned, check_due)) => {
-						self.messaging
-							.set_protect_engine_found(installed, pinned, check_due);
-						Ok("sing-box status checked on this computer")
-					}
-					Ok(ProtectChange::EngineLatest(latest)) => {
-						let newer = latest.is_some();
-						self.messaging.set_protect_engine_latest(latest);
-						Ok(if newer {
-							"A newer sing-box is available. Update when you are ready."
-						} else {
-							"sing-box is up to date."
-						})
-					}
-					Ok(ProtectChange::EngineInstalled(path, version)) => self
-						.messaging
-						.set_protect_engine_installed(&path, &version)
-						.map(|_| "sing-box installed and selected. Test before enabling."),
-					Ok(ProtectChange::EngineChosen(path)) => self
-						.messaging
-						.set_protect_engine(&path)
-						.map(|_| "sing-box executable selected. Test before enabling."),
 					Ok(ProtectChange::Imported(config)) => {
 						self.messaging.set_protect_wireguard(&config).map(
 							|_| "WireGuard configuration imported in this session. Test before enabling.",
@@ -2857,15 +2899,7 @@ impl Desktop {
 				);
 			}
 		}
-		// The engine download runs outside the action queue, so its cancel and progress are handled here.
-		if self.messaging.take_protect_engine_cancel() {
-			engine::cancel();
-		}
-		self.messaging
-			.set_protect_engine_progress(engine::progress());
-		if engine::progress().is_some() {
-			ctx.request_repaint_after(Duration::from_millis(150));
-		}
+		self.resume_protect_call();
 		if self.protect_worker.is_some() {
 			return;
 		}
@@ -2921,7 +2955,9 @@ impl Desktop {
 			);
 			return;
 		}
-		if matches!(action, model::protect::Action::Enable(..)) && self.protect_change_blocked() {
+		if matches!(action, model::protect::Action::Enable(..))
+			&& self.protect_change_blocked_except_call()
+		{
 			self.messaging.set_protect_operation_status(
 				"Finish the call, pending sends and transfers before changing PROTECT",
 				protect::enabled(),
@@ -2932,8 +2968,6 @@ impl Desktop {
 		let generation = self.state.generation;
 		let import = matches!(action, model::protect::Action::ImportWireGuard)
 			.then(|| platform::save::wireguard_source(self.window.clone()));
-		let engine_pick = matches!(action, model::protect::Action::ImportEngine)
-			.then(|| platform::save::engine_source(self.window.clone()));
 		let (send, receive) = std::sync::mpsc::sync_channel(1);
 		let wake = ctx.clone();
 		self.protect_scope = Some(generation);
@@ -2974,65 +3008,12 @@ impl Desktop {
 						.map_err(|_| "WireGuard import worker stopped")??;
 						Ok(ProtectChange::Imported(config))
 					}
-					model::protect::Action::FindEngine => {
-						let root = engine::root();
-						let installed = tokio::task::spawn_blocking(move || {
-							root.and_then(|root| engine::installed(&root))
-								.map(|(path, version)| {
-									(path.to_string_lossy().into_owned(), version)
-								})
-						})
-						.await
-						.map_err(|_| "sing-box lookup stopped unexpectedly")?;
-						let due = engine::root().is_some_and(|root| engine::check_due(&root));
-						Ok(ProtectChange::EngineFound(installed, engine::pinned(), due))
-					}
-					model::protect::Action::CheckEngine => {
-						let latest = engine::latest().await?;
-						if let Some(root) = engine::root() {
-							engine::mark_checked(&root);
-						}
-						let installed = engine::root().and_then(|root| engine::installed(&root));
-						let latest = latest.filter(|release| {
-							installed.as_ref().is_none_or(|(_, version)| {
-								semver::Version::parse(version)
-									.ok()
-									.zip(semver::Version::parse(&release.version).ok())
-									.is_none_or(|(installed, latest)| latest > installed)
-							})
-						});
-						Ok(ProtectChange::EngineLatest(latest))
-					}
-					model::protect::Action::InstallEngine(release) => {
-						let root = engine::root().ok_or("No local data folder for sing-box")?;
-						let version = release.version.clone();
-						let exe = engine::install(release, root).await?;
-						Ok(ProtectChange::EngineInstalled(
-							exe.to_string_lossy().into_owned(),
-							version,
-						))
-					}
-					model::protect::Action::ImportEngine => {
-						let Some(path) = engine_pick
-							.expect("engine action creates its native picker")
-							.await
-						else {
-							return Ok(ProtectChange::Tested("sing-box selection cancelled"));
-						};
-						Ok(ProtectChange::EngineChosen(
-							path.to_string_lossy().into_owned(),
-						))
-					}
 					model::protect::Action::Test(draft) => {
-						let profile = protect::prepare(&draft)
-							.await
-							.inspect_err(|_| log_engine_note())?;
+						let profile = protect::prepare(&draft).await?;
 						protect::test(profile).await.map(ProtectChange::Tested)
 					}
 					model::protect::Action::Enable(draft, reserve) => {
-						let primary = protect::prepare(&draft)
-							.await
-							.inspect_err(|_| log_engine_note())?;
+						let primary = protect::prepare(&draft).await?;
 						protect::test(primary.clone()).await?;
 						let reserve = if let Some(draft) = reserve {
 							let profile = protect::prepare(&draft).await?;
@@ -7483,6 +7464,8 @@ impl eframe::App for Desktop {
 		// PROTECT markers appear only for the route that is live right now.
 		self.messaging
 			.set_protect_active_scope(protect::active_scope());
+		self.messaging
+			.set_protect_call_active(self.state.voice.active.is_some());
 		// Change native hints before drawing, so the clear color and panel alpha
 		// agree for the whole frame. OS calls happen only when an effect changes.
 		self.sync_window_effects();

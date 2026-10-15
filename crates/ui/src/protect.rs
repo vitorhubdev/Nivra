@@ -11,95 +11,19 @@ pub(crate) struct Settings {
 	enabled: bool,
 	/// Scope of the live route, pushed by the host each frame; drives the PROTECT markers.
 	active: Option<Scope>,
-	/// The host looks for an installed engine once, when the WireGuard panel is first shown.
-	engine_scanned: bool,
-	engine_found: Option<(String, String)>,
-	engine_pinned: Option<model::protect::EngineRelease>,
-	engine_latest: Option<model::protect::EngineRelease>,
-	/// Share of the sing-box download received; `None` when nothing is downloading.
-	engine_progress: Option<f32>,
-	/// Set by the Cancel button; the host stops the download and clears it.
-	engine_cancel: bool,
-	/// The host found the daily check due; the panel starts it once when it opens.
-	engine_check_due: bool,
+	/// A call is live, pushed by the host each frame. Enabling then asks before reconnecting it.
+	call_active: bool,
+	call_confirm: bool,
 }
 impl Settings {
-	/// The sing-box block of the WireGuard panel: what is installed, and the download or update.
-	fn engine_block(&mut self, ui: &mut egui::Ui, demo: bool) {
-		let idle = !demo && !self.busy;
-		if self.engine_check_due && idle {
-			self.engine_check_due = false;
-			self.action = Some(Action::CheckEngine);
-			self.busy = true;
-		}
-		if let Some(fraction) = self.engine_progress {
-			ui.add(egui::ProgressBar::new(fraction).show_percentage());
-			if ui.button(crate::tr_ui!(ui, "Cancel download")).clicked() {
-				self.engine_cancel = true;
-			}
-			return;
-		}
-		if let Some((path, version)) = self.engine_found.clone() {
-			ui.label(format!(
-				"{} {version}",
-				crate::tr_ui!(ui, "sing-box installed by Nivra:")
-			));
-			if self.draft.engine != path
-				&& ui
-					.add_enabled(
-						idle,
-						egui::Button::new(crate::tr_ui!(ui, "Use the installed sing-box")),
-					)
-					.clicked()
-			{
-				self.draft.engine = path;
-			}
-		} else if self.engine_pinned.is_some() {
-			ui.label(crate::tr_ui!(ui, "Nivra has not installed sing-box yet."));
-		}
-		if let Some(pinned) = self.engine_pinned.clone() {
-			if self.engine_found.is_none()
-				&& ui
-					.add_enabled(
-						idle,
-						egui::Button::new(format!(
-							"{} {}",
-							crate::tr_ui!(ui, "Download sing-box"),
-							pinned.version
-						)),
-					)
-					.clicked()
-			{
-				self.action = Some(Action::InstallEngine(pinned));
-				self.busy = true;
-			}
-			if ui
-				.add_enabled(
-					idle,
-					egui::Button::new(crate::tr_ui!(ui, "Check for a newer sing-box")),
-				)
-				.clicked()
-			{
-				self.action = Some(Action::CheckEngine);
-				self.busy = true;
-			}
-			if let Some(latest) = self.engine_latest.clone()
-				&& ui
-					.add_enabled(
-						idle,
-						egui::Button::new(format!(
-							"{} {}",
-							crate::tr_ui!(ui, "Update sing-box to"),
-							latest.version
-						)),
-					)
-					.clicked()
-			{
-				self.action = Some(Action::InstallEngine(latest));
-				self.busy = true;
-			}
-			ui.label(crate::tr_ui!(ui, "Downloads come only from SagerNet's official GitHub release and must match its SHA-256. They use your direct connection, as Nivra updates do."));
-		}
+	fn request_enable(&mut self) {
+		self.action = Some(Action::Enable(
+			self.draft.clone(),
+			(self.fallback && self.draft.protocol != Protocol::WireGuard)
+				.then(|| self.reserve.clone()),
+		));
+		self.busy = true;
+		self.status = "Applying…".into();
 	}
 	pub(crate) fn show(&mut self, ui: &mut egui::Ui, demo: bool) {
 		ui.heading(crate::tr_ui!(ui, "PROTECT"));
@@ -155,25 +79,6 @@ impl Settings {
 			self.action = Some(Action::ImportWireGuard);
 			self.busy = true;
 		}
-		if self.draft.protocol == Protocol::WireGuard
-			&& ui
-				.add_enabled(
-					!demo && !self.busy,
-					egui::Button::new(crate::tr_ui!(ui, "Choose the local sing-box executable")),
-				)
-				.clicked()
-		{
-			self.action = Some(Action::ImportEngine);
-			self.busy = true;
-		}
-		if self.draft.protocol == Protocol::WireGuard {
-			if !self.engine_scanned && !demo {
-				self.engine_scanned = true;
-				self.action = Some(Action::FindEngine);
-				self.busy = true;
-			}
-			self.engine_block(ui, demo);
-		}
 		if self.draft.protocol != Protocol::WireGuard {
 			ui.checkbox(
 				&mut self.fallback,
@@ -205,6 +110,27 @@ impl Settings {
 		if let Some(reason) = blocked {
 			ui.label(crate::tr_str!(ui, reason));
 		}
+		if self.call_confirm {
+			let choice = crate::dialog::Confirm::new(
+				"protect-call-reconnect",
+				crate::tr_ctx!(ui.ctx(), "Reconnect the call with PROTECT on?"),
+				crate::tr_ctx!(
+					ui.ctx(),
+					"Nivra will reconnect you to the call automatically once the route is active. Audio drops for a few seconds."
+				),
+			)
+			.confirm_label(crate::tr_ctx!(ui.ctx(), "Enable and reconnect"))
+			.cancel_label(crate::tr_ctx!(ui.ctx(), "Cancel"))
+			.show(ui.ctx());
+			match choice {
+				Some(crate::dialog::Choice::Confirmed) => {
+					self.call_confirm = false;
+					self.request_enable();
+				}
+				Some(crate::dialog::Choice::Cancelled) => self.call_confirm = false,
+				None => {}
+			}
+		}
 		ui.add_enabled_ui(!demo && !self.busy, |ui| {
 			ui.horizontal(|ui| {
 				if ui
@@ -225,13 +151,11 @@ impl Settings {
 					)
 					.clicked()
 				{
-					self.action = Some(Action::Enable(
-						self.draft.clone(),
-						(self.fallback && self.draft.protocol != Protocol::WireGuard)
-							.then(|| self.reserve.clone()),
-					));
-					self.busy = true;
-					self.status = "Applying…".into();
+					if self.call_active {
+						self.call_confirm = true;
+					} else {
+						self.request_enable();
+					}
 				}
 				if ui
 					.add_enabled(
@@ -260,30 +184,14 @@ impl Settings {
 		}
 	}
 }
-/// Official sing-box releases; pick the build for the system shown next to the link.
-const SING_BOX_RELEASES: &str = "https://github.com/SagerNet/sing-box/releases";
-
 fn profile(ui: &mut egui::Ui, draft: &mut Draft, id: &str) {
 	ui.push_id(id,|ui|{
 		egui::ComboBox::from_id_salt("protocol").selected_text(draft.protocol.label()).show_ui(ui,|ui|{for p in Protocol::ALL {ui.selectable_value(&mut draft.protocol,p,p.label());}});
 		if draft.protocol==Protocol::Socks4 && !draft.password.is_empty(){draft.password=Draft::default().password;}
 		if draft.protocol==Protocol::WireGuard {
 			ui.label(crate::tr_ui!(ui, "WireGuard is experimental; real provider compatibility has not been verified."));
-			ui.label(crate::tr_ui!(ui,"Uses sing-box 1.14. Nothing is changed in the system VPN."));
-			// Official release page; the engine is never downloaded by Nivra itself.
-			let system = if cfg!(target_os = "windows") {
-				"Windows"
-			} else if cfg!(target_os = "macos") {
-				"macOS"
-			} else {
-				"Linux"
-			};
-			ui.hyperlink_to(
-				format!("{} ({system})", crate::tr_ui!(ui, "Download sing-box for this system")),
-				SING_BOX_RELEASES,
-			);
-			ui.label(crate::tr_ui!(ui,"Local sing-box executable"));ui.add(egui::TextEdit::singleline(&mut draft.engine).hint_text(crate::tr_ui!(ui,"Choose the file or paste its full path")).char_limit(1024));
-			ui.label(crate::tr_ui!(ui,"WireGuard configuration · one peer · session only"));ui.add(egui::TextEdit::multiline(&mut *draft.wireguard).password(true).hint_text(crate::tr_ui!(ui,"[Interface] PrivateKey and Address, then one [Peer] with PublicKey, Endpoint and AllowedIPs")).char_limit(4096).desired_rows(5));
+			ui.label(crate::tr_ui!(ui,"Runs inside Nivra: no external program, no system VPN and no admin changes. Session only."));
+			ui.label(crate::tr_ui!(ui,"WireGuard configuration · one peer · session only"));ui.add(egui::TextEdit::multiline(&mut *draft.wireguard).password(true).char_limit(4096).desired_rows(5));
 		} else {
 			ui.label(crate::tr_ui!(ui,"Server"));ui.add(egui::TextEdit::singleline(&mut draft.host).hint_text(crate::tr_ui!(ui,"proxy.example.com")).char_limit(253));
 			ui.horizontal(|ui|{ui.label(crate::tr_ui!(ui,"Port"));ui.add(egui::DragValue::new(&mut draft.port).range(1..=65535));});
@@ -300,50 +208,6 @@ impl crate::MessagingUi {
 	}
 	pub fn clear_protect(&mut self) {
 		self.settings.protect = Settings::default();
-	}
-	/// Stores the sing-box path picked in the native dialog; the text field stays editable.
-	/// The host's scan result: an engine already installed here, and the pinned release to offer.
-	pub fn set_protect_engine_found(
-		&mut self,
-		installed: Option<(String, String)>,
-		pinned: Option<model::protect::EngineRelease>,
-		check_due: bool,
-	) {
-		self.settings.protect.engine_found = installed;
-		self.settings.protect.engine_pinned = pinned;
-		self.settings.protect.engine_check_due = check_due;
-		self.settings.protect.busy = false;
-	}
-	/// The host's view of the download in flight, pushed each frame.
-	pub fn set_protect_engine_progress(&mut self, progress: Option<f32>) {
-		self.settings.protect.engine_progress = progress;
-	}
-	/// True once when the user pressed Cancel download; reading it clears the request.
-	pub fn take_protect_engine_cancel(&mut self) -> bool {
-		std::mem::take(&mut self.settings.protect.engine_cancel)
-	}
-	pub fn set_protect_engine_latest(&mut self, latest: Option<model::protect::EngineRelease>) {
-		self.settings.protect.engine_latest = latest;
-		self.settings.protect.busy = false;
-	}
-	/// A release was installed and verified: it is selected and no longer an update.
-	pub fn set_protect_engine_installed(
-		&mut self,
-		path: &str,
-		version: &str,
-	) -> Result<(), &'static str> {
-		self.set_protect_engine(path)?;
-		self.settings.protect.engine_found = Some((path.to_owned(), version.to_owned()));
-		self.settings.protect.engine_latest = None;
-		Ok(())
-	}
-	pub fn set_protect_engine(&mut self, path: &str) -> Result<(), &'static str> {
-		if path.is_empty() || path.len() > 1024 || path.contains('\0') {
-			return Err("Choose a valid sing-box executable path");
-		}
-		self.settings.protect.draft.engine = path.to_owned();
-		self.settings.protect.busy = false;
-		Ok(())
 	}
 	pub fn set_protect_wireguard(&mut self, text: &str) -> Result<(), &'static str> {
 		if text.len() > 4096 {
@@ -368,6 +232,10 @@ impl crate::MessagingUi {
 			.protect
 			.active
 			.is_some_and(|active| active.contains(scope))
+	}
+	/// The host reports whether a call is live every frame, so Enable can ask before reconnecting it.
+	pub fn set_protect_call_active(&mut self, active: bool) {
+		self.settings.protect.call_active = active;
 	}
 	pub fn set_protect_status(&mut self, status: &str, enabled: bool) {
 		self.set_protect_operation_status(status, enabled, false);

@@ -26,16 +26,19 @@ outer deadline. HTTP/SOCKS4 are rejected for media scopes rather than silently
 sending UDP directly. A failed protected connection never falls back to direct.
 Only a configured reserve profile is eligible. HTTP writes are not replayed.
 
-WireGuard requires a user-selected installed sing-box 1.14 executable with
-WireGuard support. Import accepts one bounded 4 KiB `.conf` peer; shell hooks and
-unsupported system-route directives are rejected. The engine runs in user space,
-with an authenticated loopback SOCKS5 inlet and WireGuard-only routing. Private
-configuration is serialized into zeroizing memory and passed through asynchronous
-stdin, with logs/stdout/stderr disabled. No temporary credential file, system VPN,
-privileged interface or automatic binary download is created. At most four active
-or retiring engine processes are admitted; termination is reaped outside drawing.
-Engine interoperability and real provider connectivity require a separate owner
-test; offline fixtures do not establish those claims.
+WireGuard runs inside Nivra. The tunnel is boringtun and the guest TCP/IP stack is smoltcp,
+both Rust crates in the process: no external program, no sing-box, no GPL code, no system VPN,
+interface, route, DNS or administrator change, and no automatic download. Import accepts one
+bounded 4 KiB `.conf` peer with one IPv4 interface address and IPv4 `AllowedIPs`; `MTU` is
+applied within 576-1500; hooks and system-route directives are rejected; `DNS` is not applied to
+the system. Destinations outside `AllowedIPs` are refused. Names resolve through the tunnel
+only. Traffic reaches the protected scopes through an authenticated loopback SOCKS5 inlet bound
+to 127.0.0.1 with random per-session credentials; a failed tunnel never falls back to a direct
+connection. Private keys are decoded into zeroizing buffers and the x25519 secret is zeroed on
+drop. Bounds: 128 TCP and 32 UDP bridges, 64 KiB socket buffers, 512 queued packets, 16 KiB
+chunks with 32-chunk bridges. Engine interoperability and real provider connectivity require a
+separate owner test; offline fixtures (a UDP loopback peer, with a lossy forwarder in the tests)
+do not establish those claims.
 
 Changing a route retires existing account/media clients and reconnects signaling
 with the current in-memory session. Active writes and transfers prevent Apply;

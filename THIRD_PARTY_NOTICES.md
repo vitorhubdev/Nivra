@@ -1,5 +1,15 @@
 # Third-party notices
 
+PROTECT's WireGuard engine runs in process on **boringtun 0.7.1** (BSD-3-Clause,
+Cloudflare, Inc.) for the tunnel and **smoltcp 0.14.0** (0BSD) for the guest TCP/IP
+stack. The unmodified licenses are bundled as
+`assets/licenses/files/boringtun-0.7.1-LICENSE-BSD-3-Clause` (the crate ships no
+license file; the text matches its source header) and
+`assets/licenses/files/smoltcp-0.14.0-LICENSE-0BSD.txt`. **base64 0.22.1** (MIT OR
+Apache-2.0) decodes WireGuard keys; both unmodified texts are bundled as
+`base64-0.22.1-LICENSE-MIT` and `base64-0.22.1-LICENSE-APACHE`. No sing-box or other
+external engine is bundled or downloaded. `Cargo.lock` records the archive checksums.
+
 Discord Lottie sticker previews use **rasterlottie 0.2.2** (MIT OR Apache-2.0)
 with default features disabled. Nivra uses the MIT option; its unmodified MIT
 license is retained in `assets/licenses/files/rasterlottie-0.2.2-LICENSE-MIT`.

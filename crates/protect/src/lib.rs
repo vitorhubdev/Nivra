@@ -15,7 +15,7 @@ mod wg_dns;
 mod wg_engine;
 mod wg_inlet;
 mod wireguard;
-pub use wireguard::{engine_note, prepare};
+pub use wireguard::prepare;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 pub struct Profile {

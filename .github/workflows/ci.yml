@@ -74,10 +74,10 @@ jobs:
       # The release executable is the long step. PRs compile and test only.
       # Main pushes and v* tags still build and upload dist/.
       - name: Package app without demo or developer features
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || (github.event_name == 'workflow_dispatch' && runner.os == 'Windows' && runner.arch == 'X64')
         run: cargo xtask package
       - uses: actions/upload-artifact@v7.0.1
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || (github.event_name == 'workflow_dispatch' && runner.os == 'Windows' && runner.arch == 'X64')
         with:
           name: nivra-${{ runner.os }}-${{ runner.arch }}-unsigned
           path: dist/

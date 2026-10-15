@@ -18,7 +18,6 @@ mod credentials;
 mod dm_demo;
 mod downloads;
 mod emoji_upload;
-mod engine;
 mod extension_app;
 mod extension_bridge;
 mod extension_data_events;
@@ -826,24 +825,9 @@ impl SessionEnd {
 		self == Self::Logout
 	}
 }
-/// Writes the redacted sing-box message from a failed start to the diagnostic log.
-fn log_engine_note() {
-	if let Some(note) = protect::engine_note() {
-		platform::diagnostics::warn(&format!("PROTECT sing-box stopped at startup: {note}"));
-	}
-}
-
 enum ProtectChange {
 	Tested(&'static str),
 	Imported(Zeroizing<String>),
-	EngineChosen(String),
-	EngineFound(
-		Option<(String, String)>,
-		Option<model::protect::EngineRelease>,
-		bool,
-	),
-	EngineLatest(Option<model::protect::EngineRelease>),
-	EngineInstalled(String, String),
 	Health(protect::Health, u64),
 	Prepared(Arc<protect::Profile>, Option<Arc<protect::Profile>>),
 	TransportStopped {
@@ -2783,28 +2767,6 @@ impl Desktop {
 			{
 				let status = match result.change {
 					Ok(ProtectChange::Tested(status)) => Ok(status),
-					Ok(ProtectChange::EngineFound(installed, pinned, check_due)) => {
-						self.messaging
-							.set_protect_engine_found(installed, pinned, check_due);
-						Ok("sing-box status checked on this computer")
-					}
-					Ok(ProtectChange::EngineLatest(latest)) => {
-						let newer = latest.is_some();
-						self.messaging.set_protect_engine_latest(latest);
-						Ok(if newer {
-							"A newer sing-box is available. Update when you are ready."
-						} else {
-							"sing-box is up to date."
-						})
-					}
-					Ok(ProtectChange::EngineInstalled(path, version)) => self
-						.messaging
-						.set_protect_engine_installed(&path, &version)
-						.map(|_| "sing-box installed and selected. Test before enabling."),
-					Ok(ProtectChange::EngineChosen(path)) => self
-						.messaging
-						.set_protect_engine(&path)
-						.map(|_| "sing-box executable selected. Test before enabling."),
 					Ok(ProtectChange::Imported(config)) => {
 						self.messaging.set_protect_wireguard(&config).map(
 							|_| "WireGuard configuration imported in this session. Test before enabling.",
@@ -2856,15 +2818,6 @@ impl Desktop {
 					self.protect_worker.is_some(),
 				);
 			}
-		}
-		// The engine download runs outside the action queue, so its cancel and progress are handled here.
-		if self.messaging.take_protect_engine_cancel() {
-			engine::cancel();
-		}
-		self.messaging
-			.set_protect_engine_progress(engine::progress());
-		if engine::progress().is_some() {
-			ctx.request_repaint_after(Duration::from_millis(150));
 		}
 		if self.protect_worker.is_some() {
 			return;
@@ -2932,8 +2885,6 @@ impl Desktop {
 		let generation = self.state.generation;
 		let import = matches!(action, model::protect::Action::ImportWireGuard)
 			.then(|| platform::save::wireguard_source(self.window.clone()));
-		let engine_pick = matches!(action, model::protect::Action::ImportEngine)
-			.then(|| platform::save::engine_source(self.window.clone()));
 		let (send, receive) = std::sync::mpsc::sync_channel(1);
 		let wake = ctx.clone();
 		self.protect_scope = Some(generation);
@@ -2974,65 +2925,12 @@ impl Desktop {
 						.map_err(|_| "WireGuard import worker stopped")??;
 						Ok(ProtectChange::Imported(config))
 					}
-					model::protect::Action::FindEngine => {
-						let root = engine::root();
-						let installed = tokio::task::spawn_blocking(move || {
-							root.and_then(|root| engine::installed(&root))
-								.map(|(path, version)| {
-									(path.to_string_lossy().into_owned(), version)
-								})
-						})
-						.await
-						.map_err(|_| "sing-box lookup stopped unexpectedly")?;
-						let due = engine::root().is_some_and(|root| engine::check_due(&root));
-						Ok(ProtectChange::EngineFound(installed, engine::pinned(), due))
-					}
-					model::protect::Action::CheckEngine => {
-						let latest = engine::latest().await?;
-						if let Some(root) = engine::root() {
-							engine::mark_checked(&root);
-						}
-						let installed = engine::root().and_then(|root| engine::installed(&root));
-						let latest = latest.filter(|release| {
-							installed.as_ref().is_none_or(|(_, version)| {
-								semver::Version::parse(version)
-									.ok()
-									.zip(semver::Version::parse(&release.version).ok())
-									.is_none_or(|(installed, latest)| latest > installed)
-							})
-						});
-						Ok(ProtectChange::EngineLatest(latest))
-					}
-					model::protect::Action::InstallEngine(release) => {
-						let root = engine::root().ok_or("No local data folder for sing-box")?;
-						let version = release.version.clone();
-						let exe = engine::install(release, root).await?;
-						Ok(ProtectChange::EngineInstalled(
-							exe.to_string_lossy().into_owned(),
-							version,
-						))
-					}
-					model::protect::Action::ImportEngine => {
-						let Some(path) = engine_pick
-							.expect("engine action creates its native picker")
-							.await
-						else {
-							return Ok(ProtectChange::Tested("sing-box selection cancelled"));
-						};
-						Ok(ProtectChange::EngineChosen(
-							path.to_string_lossy().into_owned(),
-						))
-					}
 					model::protect::Action::Test(draft) => {
-						let profile = protect::prepare(&draft)
-							.await
-							.inspect_err(|_| log_engine_note())?;
+						let profile = protect::prepare(&draft).await?;
 						protect::test(profile).await.map(ProtectChange::Tested)
 					}
 					model::protect::Action::Enable(draft, reserve) => {
-						let primary = protect::prepare(&draft)
-							.await
-							.inspect_err(|_| log_engine_note())?;
+						let primary = protect::prepare(&draft).await?;
 						protect::test(primary.clone()).await?;
 						let reserve = if let Some(draft) = reserve {
 							let profile = protect::prepare(&draft).await?;

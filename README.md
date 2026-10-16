@@ -39,25 +39,25 @@
 
 Stable builds are published on the [Releases page](https://github.com/vitorhubdev/Nivra/releases/latest). On Windows, download the single `.exe` and open it: there is nothing to extract. Only the assets attached to a release on that page are Nivra binaries.
 
-| System | Asset (v1.0.17) | Notes |
+| System | Asset (v1.0.18) | Notes |
 | --- | --- | --- |
-| Windows x64 | `Nivra-v1.0.17-Windows-X64.exe` | Single executable, no installer |
-| Windows ARM64 | `Nivra-v1.0.17-Windows-ARM64.exe` | Maximum noise suppression (DeepFilterNet) is unavailable and falls back to RNNoise |
-| Linux x64 | `Nivra-v1.0.17-Linux-X64.tar.gz` | Extract and run |
-| macOS Apple Silicon | `Nivra-v1.0.17-macOS-ARM64.zip` | Intel macOS is not published |
+| Windows x64 | `Nivra-v1.0.18-Windows-X64.exe` | Single executable, no installer |
+| Windows ARM64 | `Nivra-v1.0.18-Windows-ARM64.exe` | Maximum noise suppression (DeepFilterNet) is unavailable and falls back to RNNoise |
+| Linux x64 | `Nivra-v1.0.18-Linux-X64.tar.gz` | Extract and run |
+| macOS Apple Silicon | `Nivra-v1.0.18-macOS-ARM64.zip` | Intel macOS is not published |
 
 Every release also attaches a `SHA256SUMS.txt` checksum file. Verify the file you downloaded before running it:
 
 ```powershell
 # Windows (PowerShell) — compare the output with the matching line in SHA256SUMS.txt
-Get-FileHash .\Nivra-v1.0.17-Windows-X64.exe -Algorithm SHA256
+Get-FileHash .\Nivra-v1.0.18-Windows-X64.exe -Algorithm SHA256
 ```
 
 ```sh
 # Linux — checks the files that are present and ignores the rest of the manifest
 sha256sum --ignore-missing -c SHA256SUMS.txt
 # macOS — compare the printed hash with the matching line in SHA256SUMS.txt
-shasum -a 256 Nivra-v1.0.17-macOS-ARM64.zip
+shasum -a 256 Nivra-v1.0.18-macOS-ARM64.zip
 ```
 
 **Signing status differs by platform.** Windows and Linux packages are unsigned. The macOS `.app` is ad-hoc signed and not notarized (tag builds); a manual release-workflow build with Apple credentials is Developer ID-signed and notarized instead. If Gatekeeper still warns about the app you downloaded, right-click it, choose **Open**, and confirm; macOS also allows it later under System Settings → Privacy & Security. On Windows, SmartScreen may show *"Windows protected your PC"*: choose **More info** → **Run anyway**.
@@ -74,7 +74,7 @@ Nivra is built around three voice pillars, each covered by an offline, measured 
 
 These pillars are synthetic, offline tests. Live Discord interoperability and physical microphone/speaker behavior remain unverified. The [Performance](#performance) section carries the Serein reference figures; Nivra's own memory and CPU measurement is still pending.
 
-**New in 1.0.17:** call recovery and switching fixes, clearer LIVE controls and stream notifications, native in-process WireGuard, saved PROTECT profiles and optional exit-IP/country flags. The last imported/tested/applied primary profile is restored into the editor after restart; secrets stay in the OS credential store. Capture and conversion reuse resources, with measured component improvements; real screenshare/input latency and provider interoperability still require owner-operated validation. See [CHANGELOG.md](CHANGELOG.md), [docs/protect.md](docs/protect.md) and [docs/performance.md](docs/performance.md).
+**New in 1.0.18:** watch up to four streams at once in a grid, a call that survives more than two network drops, one-click saved PROTECT profiles (restored on launch, with a visible alert if they cannot turn on), and less GPU work while the window is hidden. All of it is covered by automated tests only: nothing was exercised on a real Discord call, and the high GPU use while sharing the screen is still unmeasured. See [CHANGELOG.md](CHANGELOG.md), [docs/protect.md](docs/protect.md) and [docs/performance.md](docs/performance.md).
 
 **Recently added** (1.0.12–1.0.14):
 

@@ -1,9 +1,14 @@
 # Changelog
 
-## Não publicado
+## Nivra 1.0.18
+
+Assiste a várias transmissões ao mesmo tempo, transforma o PROTECT em uma lista de perfis de um clique e corrige a chamada que morria na terceira queda de rede. Tudo foi validado por testes automáticos; nada foi exercitado numa chamada real do Discord, e a causa do uso alto de GPU ao compartilhar tela continua sem medição.
 
 ### Chamadas e LIVE
 
+- Dá para assistir até 4 transmissões ao mesmo tempo, em grade de 2 a 4 quadros, cada uma com seu botão de parar. O palco mostra "N na chamada · M ao vivo · K assistindo". Tela cheia e imagem em imagem seguem a transmissão mais recente. Ainda não há contador de espectadores por transmissão: o protocolo não informa.
+- A chamada não morre mais na terceira queda de rede: antes, o limite de duas retomadas valia para a chamada inteira, mesmo com a conexão saudável entre elas. Um socket retomado que fica de pé por 60 s recupera o limite; um que cai de novo e de novo continua desistindo depois de duas.
+- Um clique no LIVE cuja chamada não chega a conectar passa a avisar, em vez de não fazer nada.
 - Duas pessoas entrando juntas na chamada ou na transmissão deixam de derrubar a mídia: as transições de chave pendentes ficam em fila, em vez de a segunda apagar a primeira. A transmissão também passa a aplicar o commit guardado ao executar. Cada transição recusada fica no log com o motivo.
 - O LIVE na lista de canais é um botão: um clique abre o palco do canal, entra na chamada se preciso, assiste e abre a transmissão ampliada. O aviso da barra inferior lista todas as transmissões (não só a primeira), e o palco ganha uma faixa para trocar de transmissão a partir de duas. O palco mostra quantas pessoas estão na chamada e quantas ao vivo.
 - Tela cheia: os botões Full screen e Stop watching ocupavam o mesmo canto e o segundo cobria o primeiro; agora ficam empilhados. Atalho F e clique duplo na transmissão. Nova janela flutuante (imagem em imagem, atalho P) que continua com a janela principal minimizada; fecha com clique duplo ou Esc.
@@ -12,12 +17,13 @@
 ### PROTECT
 
 - A aba é uma lista de perfis: clicar conecta e ativa, sem confirmação (a chamada reconecta sozinha), e o erro aparece se falhar. Importar um .conf já o salva com o nome do arquivo e coleta país e ping. Bandeiras e país vêm ligados, com um botão para removê-los. WireGuard é o tipo padrão. O restante fica em "Avançado".
-- Ao reabrir, o PROTECT volta ativo antes de o login sair. Falha, erro ou prazo de 25 s mostram um alerta e o app conecta sem ele.
+- Ao reabrir, o PROTECT volta ativo antes de o login sair. Falha, erro ou prazo de 25 s mostram um alerta e o app conecta sem ele. Se o prazo estoura, o pedido de ligar fica descartado e não liga o PROTECT depois, no meio da conexão.
+- Um arquivo de perfil corrompido deixa de esconder os outros perfis salvos e de impedir a exclusão: só ele é ignorado.
 
 ### Desempenho e diagnóstico
 
-- Transmissão e câmeras remotas não sobem textura para a GPU enquanto a janela está minimizada ou outro canal está aberto.
-- Um quadro que nunca fechava com a janela oculta gerava travamentos falsos de ~2 s e etapas de 20 s no log; corrigido.
+- Transmissão e câmeras remotas não sobem textura para a GPU nem acordam a interface enquanto a janela está minimizada ou outro canal está aberto.
+- Um quadro que nunca fechava com a janela oculta gerava travamentos falsos de ~2 s e etapas de 20 s no log; corrigido, e o registro de quadros por segundo deixa de contar quadros ocultos como se não gastassem tempo.
 - O log passa a registrar, uma vez por minuto de uso intenso, os quadros por segundo e as linhas de código que pediram repintura.
 
 ## Nivra 1.0.17

@@ -1003,7 +1003,7 @@ fn voice_send_failure(
 			stream_request,
 			streamer,
 			event: client_core::screen::Event::Failed(
-				"Another stream is already being watched, or the call is unavailable",
+				"This stream cannot be watched right now: the call is unavailable or the watch limit is reached",
 			),
 		}))?,
 		_ => {}

@@ -1,5 +1,6 @@
-//! Desktop ownership for watching one other participant's screen share. The choice is an
-//! explicit click; frames are decoded off the render thread and never written to disk.
+//! Desktop ownership for watching other participants' screen shares. The choices are
+//! explicit clicks; the primary (most recently chosen) view negotiates here while the
+//! set can hold more. Frames are decoded off the render thread and never written to disk.
 use client_core::{Command, Event, State, screen, voice};
 use discord_voice::{Identity, Status};
 use eframe::egui;
@@ -209,7 +210,7 @@ impl Watch {
 		audio: Option<std::sync::mpsc::SyncSender<discord_voice::Frame>>,
 	) -> Option<Command> {
 		let wanted = state.voice.active.as_ref().and_then(|active| {
-			let streamer = active.watching?;
+			let streamer = active.watching_primary()?;
 			matches!(
 				active.phase,
 				voice::Phase::Connected | voice::Phase::Waiting
@@ -231,6 +232,14 @@ impl Watch {
 			self.status = "Stopped watching";
 			platform::diagnostics::info(&format!("watch: stopped after {} ms", self.elapsed_ms()));
 			self.requested_at = None;
+			// Single-view enforcement: the newly chosen primary replaces the viewed
+			// stream. Switching to nothing (a transient reconnect or an explicit stop)
+			// never forgets the set; stopping is the UI's own explicit choice.
+			if let Some((_, _, _, streamer)) = wanted
+				&& streamer != context.streamer
+			{
+				state.unwatch_stream(context.streamer);
+			}
 			if context.generation == state.generation && !state.demo {
 				command = Some(Command::Voice(voice::Command::StopWatching {
 					channel: context.channel,
@@ -252,7 +261,9 @@ impl Watch {
 			self.stop();
 			self.status = message;
 			self.notice = message;
-			state.stop_watching();
+			if let Some(context) = context {
+				state.unwatch_stream(context.streamer);
+			}
 			ui.voice_stream_view = None;
 			ui.voice_stream_status = self.status;
 			return command.or_else(|| {

@@ -3239,9 +3239,7 @@ impl State {
 						&& call.channel == channel
 					{
 						call.participants.retain(|p| p.user != user);
-						if call.watching == Some(user) {
-							call.watching = None;
-						}
+						call.watching.retain(|watched| *watched != user);
 					}
 					if self.selected == Some(channel) && self.members.is_some() {
 						let _ = self.request_members();
@@ -6815,7 +6813,7 @@ mod tests {
 			deafened: false,
 			participants: Vec::new(),
 			camera: false,
-			watching: None,
+			watching: Vec::new(),
 			error: None,
 		});
 		state.auto_rejoin = Some(AutoRejoinCall {

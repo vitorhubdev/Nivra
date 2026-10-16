@@ -670,7 +670,7 @@ mod tests {
 			participants: vec![],
 			error: None,
 			camera: false,
-			watching: None,
+			watching: Vec::new(),
 		});
 		let mut screen = Screen {
 			pending: Some(Pending {

@@ -9776,7 +9776,7 @@ mod account_card_tests {
 			deafened: false,
 			participants: Vec::new(),
 			camera: false,
-			watching: None,
+			watching: Vec::new(),
 			error: None,
 		}
 	}

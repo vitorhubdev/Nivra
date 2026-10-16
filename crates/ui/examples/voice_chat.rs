@@ -136,7 +136,7 @@ fn main() {
 			);
 			assert_eq!(state.voice.active.as_ref().unwrap().channel, channel);
 		}
-		state.voice.active.as_mut().unwrap().watching = Some(model::Id(7));
+		state.voice.active.as_mut().unwrap().watching = vec![model::Id(7)];
 		if right_click {
 			view.voice_stream_view = Some(ctx.load_texture(
 				"synthetic stream",

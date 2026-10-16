@@ -748,7 +748,7 @@ impl MessagingUi {
 		}) {
 			tiles.push(Tile::LocalScreen);
 		}
-		if let Some(streamer) = call.and_then(|call| call.watching) {
+		if let Some(streamer) = call.and_then(|call| call.watching_primary()) {
 			tiles.push(Tile::Stream(streamer));
 		}
 		tiles.extend(entries.iter().map(Tile::Participant));
@@ -1024,7 +1024,7 @@ impl MessagingUi {
 			self.voice_stream_pip = false;
 		}
 		let watching = state.voice.active.as_ref().is_some_and(|call| {
-			call.watching.is_some() && matches!(call.phase, Phase::Connected | Phase::Waiting)
+			!call.watching.is_empty() && matches!(call.phase, Phase::Connected | Phase::Waiting)
 		});
 		if !watching {
 			self.voice_stream_pip = false;
@@ -1076,7 +1076,7 @@ impl MessagingUi {
 	/// F toggles full screen for the stream being watched, unless a text field has the keys.
 	pub(super) fn apply_stream_shortcuts(&mut self, ctx: &egui::Context, state: &State) {
 		let watching = state.voice.active.as_ref().is_some_and(|call| {
-			call.watching.is_some() && matches!(call.phase, Phase::Connected | Phase::Waiting)
+			!call.watching.is_empty() && matches!(call.phase, Phase::Connected | Phase::Waiting)
 		}) && self.voice_stream_view.is_some();
 		if !watching || ctx.egui_wants_keyboard_input() {
 			return;
@@ -1112,7 +1112,7 @@ impl MessagingUi {
 			return false;
 		}
 		let valid = state.voice.active.as_ref().is_some_and(|call| {
-			call.watching.is_some() && matches!(call.phase, Phase::Connected | Phase::Waiting)
+			!call.watching.is_empty() && matches!(call.phase, Phase::Connected | Phase::Waiting)
 		}) && self.voice_stream_view.is_some();
 		if !valid || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
 			self.exit_voice_stream_fullscreen(ctx);
@@ -1363,7 +1363,7 @@ impl MessagingUi {
 			}
 			return;
 		};
-		if call.watching == Some(pending.streamer) {
+		if call.watching_primary() == Some(pending.streamer) {
 			self.live_watch = None;
 		} else if call
 			.participants
@@ -1425,7 +1425,7 @@ impl MessagingUi {
 			live_badge(ui);
 			for entry in streamers {
 				let (_, name) = resolve_member(state, entry);
-				let watching = call.watching == Some(entry.participant.user);
+				let watching = call.watching.contains(&entry.participant.user);
 				let text = RichText::new(name).color(if watching {
 					colors.accent_text
 				} else {
@@ -1659,7 +1659,7 @@ impl MessagingUi {
 			&& !own && let Some(call) = call
 			&& matches!(call.phase, Phase::Connected | Phase::Waiting)
 		{
-			let watching = call.watching == Some(entry.participant.user);
+			let watching = call.watching.contains(&entry.participant.user);
 			let (label, fill, hint) = if watching {
 				(
 					"Stop watching",
@@ -1719,7 +1719,7 @@ impl MessagingUi {
 			if !self.voice_camera_status.is_empty() {
 				notices.push((self.voice_camera_status.into(), false));
 			}
-			if call.watching.is_none() && !self.voice_stream_status.is_empty() {
+			if call.watching.is_empty() && !self.voice_stream_status.is_empty() {
 				notices.push((self.voice_stream_status.into(), false));
 			}
 			if call.server_deafened {
@@ -3975,7 +3975,8 @@ impl MessagingUi {
 			return;
 		};
 		let own = state.user.as_ref().map(|user| user.id);
-		let (channel, watching) = (call.channel, call.watching);
+		let channel = call.channel;
+		let watching = call.watching_primary();
 		let mut streamers: Vec<Id> = call
 			.participants
 			.iter()
@@ -6108,7 +6109,14 @@ mod tests {
 			.click();
 		harness.run();
 		assert_eq!(
-			harness.state().1.voice.active.as_ref().unwrap().watching,
+			harness
+				.state()
+				.1
+				.voice
+				.active
+				.as_ref()
+				.unwrap()
+				.watching_primary(),
 			Some(Id(3))
 		);
 		harness
@@ -6116,7 +6124,15 @@ mod tests {
 			.click();
 		harness.run();
 		let (_, state) = harness.state();
-		assert_eq!(state.voice.active.as_ref().unwrap().watching, None);
+		assert!(
+			state
+				.voice
+				.active
+				.as_ref()
+				.unwrap()
+				.watching_all()
+				.is_empty()
+		);
 		assert_eq!(state.voice.active.as_ref().unwrap().request, original);
 	}
 
@@ -6142,16 +6158,30 @@ mod tests {
 			.click();
 		harness.run();
 		assert_eq!(
-			harness.state().1.voice.active.as_ref().unwrap().watching,
+			harness
+				.state()
+				.1
+				.voice
+				.active
+				.as_ref()
+				.unwrap()
+				.watching_primary(),
 			Some(Id(3))
 		);
 		harness
 			.get_by_role_and_label(egui::Role::Button, "Stop watching")
 			.click();
 		harness.run();
-		assert_eq!(
-			harness.state().1.voice.active.as_ref().unwrap().watching,
-			None
+		assert!(
+			harness
+				.state()
+				.1
+				.voice
+				.active
+				.as_ref()
+				.unwrap()
+				.watching_all()
+				.is_empty()
 		);
 		assert_eq!(
 			harness.state().1.voice.active.as_ref().unwrap().channel,
@@ -6172,7 +6202,10 @@ mod tests {
 		assert_eq!(state.selected, Some(channel), "the call's stage opens");
 		assert_eq!(view.voice_focus, Some(StageFocus::Stream(Id(3))));
 		view.apply_live_watch(&mut state);
-		assert_eq!(state.voice.active.as_ref().unwrap().watching, Some(Id(3)));
+		assert_eq!(
+			state.voice.active.as_ref().unwrap().watching_primary(),
+			Some(Id(3))
+		);
 		assert!(view.live_watch.is_none() && view.live_open.is_none());
 	}
 
@@ -6180,21 +6213,23 @@ mod tests {
 	fn a_live_click_on_another_stream_switches_the_watched_one() {
 		let mut state = test_support::voice_demo_state();
 		let channel = state.voice.active.as_ref().unwrap().channel;
-		state.voice.active.as_mut().unwrap().watching = Some(Id(2));
+		state.voice.active.as_mut().unwrap().watching = vec![Id(2)];
 		let mut view = MessagingUi {
 			live_open: Some((channel, Id(3))),
 			..MessagingUi::default()
 		};
 		view.apply_live_open(&mut state, &mut Vec::new());
 		view.apply_live_watch(&mut state);
-		assert_eq!(state.voice.active.as_ref().unwrap().watching, Some(Id(3)));
+		let call = state.voice.active.as_ref().unwrap();
+		assert_eq!(call.watching_primary(), Some(Id(3)));
+		assert_eq!(call.watching_all(), &[Id(2), Id(3)]);
 	}
 
 	#[test]
 	fn the_floating_stream_window_follows_watching_and_closes_on_request() {
 		let ctx = egui::Context::default();
 		let mut state = test_support::voice_demo_state();
-		state.voice.active.as_mut().unwrap().watching = Some(Id(3));
+		state.voice.active.as_mut().unwrap().watching = vec![Id(3)];
 		let mut view = MessagingUi {
 			voice_stream_pip: true,
 			..MessagingUi::default()
@@ -6220,7 +6255,7 @@ mod tests {
 		assert!(!view.voice_stream_pip);
 		// It cannot outlive the stream: nothing watched, nothing floating.
 		view.voice_stream_pip = true;
-		state.voice.active.as_mut().unwrap().watching = None;
+		state.voice.active.as_mut().unwrap().watching = Vec::new();
 		run(&mut view, &state);
 		assert!(!view.voice_stream_pip);
 	}
@@ -6247,7 +6282,7 @@ mod tests {
 		// Not watching: the keys do nothing.
 		press(&mut view, &state, egui::Key::P);
 		assert!(!view.voice_stream_pip);
-		state.voice.active.as_mut().unwrap().watching = Some(Id(3));
+		state.voice.active.as_mut().unwrap().watching = vec![Id(3)];
 		view.voice_stream_view = Some(ctx.load_texture(
 			"test-stream",
 			egui::ColorImage::example(),
@@ -6276,7 +6311,15 @@ mod tests {
 		};
 		view.apply_live_watch(&mut state);
 		assert!(view.live_watch.is_some(), "still waiting for the stream");
-		assert_eq!(state.voice.active.as_ref().unwrap().watching, None);
+		assert!(
+			state
+				.voice
+				.active
+				.as_ref()
+				.unwrap()
+				.watching_all()
+				.is_empty()
+		);
 		view.live_watch.as_mut().unwrap().until =
 			std::time::Instant::now() - std::time::Duration::from_millis(1);
 		view.apply_live_watch(&mut state);

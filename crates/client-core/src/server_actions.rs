@@ -881,7 +881,7 @@ mod tests {
 			deafened: false,
 			participants: vec![],
 			camera: false,
-			watching: None,
+			watching: Vec::new(),
 			error: None,
 		};
 		current.voice.active = Some(connected(Id(20), Id(2)));

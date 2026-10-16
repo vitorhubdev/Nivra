@@ -762,6 +762,9 @@ pub struct MessagingUi {
 	pub voice_remote_video: Vec<(Id, egui::TextureHandle)>,
 	/// Latest picture of the screen share this device chose to watch.
 	pub voice_stream_view: Option<egui::TextureHandle>,
+	/// Latest pictures of all watched screen shares by streamer; the desktop bounds
+	/// and replaces them. The primary view above shares its handle with this map.
+	pub voice_stream_views: Vec<(Id, egui::TextureHandle)>,
 	pub voice_stream_status: &'static str,
 	/// Session-only stream playback level; unset is 100%. Mute preserves the level.
 	voice_stream_volume: Option<u16>,
@@ -778,6 +781,8 @@ pub struct MessagingUi {
 	pub voice_chat_open: bool,
 	/// Tile click to start (`Some(user)`) or stop (`None`) watching, applied by the stage.
 	watch_request: Option<Option<Id>>,
+	/// Tile click to stop watching one stream of several, applied by the stage.
+	unwatch_request: Option<Id>,
 	/// Picture-in-picture: the watched stream in its own small always-on-top window.
 	pub voice_stream_pip: bool,
 	voice_stream_pip_shared: Option<std::sync::Arc<voice::PipShared>>,

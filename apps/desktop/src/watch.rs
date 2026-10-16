@@ -1,11 +1,12 @@
-//! Desktop ownership for watching other participants' screen shares. The choices are
-//! explicit clicks; the primary (most recently chosen) view negotiates here while the
-//! set can hold more. Frames are decoded off the render thread and never written to disk.
+//! Desktop ownership for watching other participants' screen shares, up to the
+//! shared multi-watch cap. Every explicitly watched stream negotiates its own view;
+//! frames are decoded off the render thread and never written to disk.
 use client_core::{Command, Event, State, screen, voice};
 use discord_voice::{Identity, Status};
 use eframe::egui;
 use model::Id;
 use std::{
+	collections::VecDeque,
 	sync::{
 		Arc, Mutex,
 		atomic::{AtomicBool, Ordering},
@@ -88,6 +89,23 @@ struct Context {
 	stream_request: u64,
 	streamer: Id,
 }
+impl Context {
+	/// Same call session and streamer: `stream_request` differs per negotiation.
+	fn matches(&self, generation: u64, channel: Id, request: u64, streamer: Id) -> bool {
+		self.generation == generation
+			&& self.channel == channel
+			&& self.request == request
+			&& self.streamer == streamer
+	}
+}
+/// Tell the gateway to release one negotiated view.
+fn stop_command(context: Context) -> Command {
+	Command::Voice(voice::Command::StopWatching {
+		channel: context.channel,
+		request: context.request,
+		stream_request: context.stream_request,
+	})
+}
 struct Pending {
 	context: Context,
 	user: Id,
@@ -98,6 +116,8 @@ struct Pending {
 	rtc: Option<(Id, Id)>,
 	server: Option<(voice::Secret, String)>,
 	started: Instant,
+	/// The view failed before connecting; torn down on the next poll.
+	ended: Option<&'static str>,
 }
 #[derive(Clone, Copy)]
 enum Notice {
@@ -109,44 +129,46 @@ struct Live {
 	task: JoinHandle<()>,
 	events: watch::Receiver<Option<Notice>>,
 	frames: Arc<Mutex<Option<egui::ColorImage>>>,
+	status: &'static str,
+	/// The streamer stopped or Discord failed the view; torn down on the next poll.
+	ended: Option<&'static str>,
+	/// When the current view was requested, for the local diagnostics timeline.
+	requested_at: Instant,
+	first_frame_logged: bool,
 }
 
 #[derive(Default)]
 pub(super) struct Watch {
-	pending: Option<Pending>,
-	live: Option<Live>,
-	/// The streamer stopped or Discord failed the view; the state choice is cleared next poll.
-	ended: Option<&'static str>,
+	pending: Vec<Pending>,
+	lives: Vec<Live>,
+	/// Voice commands produced faster than the single-command lane drains: one is
+	/// returned per poll while the rest wait here. A non-empty outbox schedules the
+	/// next frame, so every queued stop and start completes within a few polls.
+	outbox: VecDeque<Command>,
 	sequence: u64,
 	status: &'static str,
 	/// Why the last view stopped; shown as a stage notice until the next request or hang-up.
 	notice: &'static str,
-	/// When the current view was requested, for the local diagnostics timeline.
-	requested_at: Option<Instant>,
-	first_frame_logged: bool,
-	/// Whether the latest decoded frame could be seen (main stage or PiP). The decoder
-	/// thread checks this before waking the UI, so a hidden stream never schedules
-	/// full-window redraws; the bounded slot keeps the newest frame meanwhile.
+	/// Whether a decoded frame could be seen (stage or PiP). The decoder threads
+	/// check this before waking the UI, so hidden streams never schedule
+	/// full-window redraws; the bounded slots keep the newest frames meanwhile.
 	visible: Arc<AtomicBool>,
 }
 impl Watch {
 	pub fn stop(&mut self) {
-		self.pending = None;
-		self.ended = None;
-		if let Some(live) = self.live.take() {
+		self.pending.clear();
+		self.outbox.clear();
+		for live in self.lives.drain(..) {
 			live.task.abort();
 		}
 	}
-	/// Milliseconds since the current view was requested; zero when none was.
-	fn elapsed_ms(&self) -> u128 {
-		self.requested_at
-			.map_or(0, |requested| requested.elapsed().as_millis())
-	}
-	fn context(&self) -> Option<Context> {
-		self.pending
-			.as_ref()
-			.map(|pending| pending.context)
-			.or_else(|| self.live.as_ref().map(|live| live.context))
+	/// One queued voice command per poll; a non-empty outbox schedules the next frame.
+	fn drain(&mut self, ctx: &egui::Context) -> Option<Command> {
+		if self.outbox.is_empty() {
+			return None;
+		}
+		ctx.request_repaint();
+		self.outbox.pop_front()
 	}
 	/// Take negotiation secrets before the UI reduces the event. Nothing is persisted.
 	pub fn observe(&mut self, state: &State, event: &mut Event) {
@@ -160,44 +182,48 @@ impl Watch {
 		else {
 			return;
 		};
-		let Some(context) = self.context() else {
-			return;
-		};
-		if context.generation != state.generation
-			|| (
-				context.channel,
-				context.request,
-				context.stream_request,
-				context.streamer,
-			) != (*channel, *request, *stream_request, *streamer)
-		{
-			return;
-		}
-		match event {
-			screen::Event::Created {
-				rtc_server,
-				rtc_channel,
-			} => {
-				if let Some(pending) = &mut self.pending {
+		if let Some(pending) = self.pending.iter_mut().find(|pending| {
+			pending
+				.context
+				.matches(state.generation, *channel, *request, *streamer)
+				&& pending.context.stream_request == *stream_request
+		}) {
+			match event {
+				screen::Event::Created {
+					rtc_server,
+					rtc_channel,
+				} => {
 					pending.rtc = Some((*rtc_server, *rtc_channel));
 				}
-			}
-			screen::Event::Server { token, endpoint } => {
-				if let Some(pending) = &mut self.pending {
+				screen::Event::Server { token, endpoint } => {
 					match (token.take(), endpoint.take()) {
 						(Some(token), Some(endpoint)) => pending.server = Some((token, endpoint)),
 						// A null endpoint means Discord is still allocating the stream server.
 						(_, None) => pending.server = None,
 						(None, Some(_)) => {
-							self.ended = Some("Discord omitted the stream connection token");
+							pending.ended = Some("Discord omitted the stream connection token");
 						}
 					}
 				}
+				screen::Event::Deleted { reason } => {
+					pending.ended = Some(reason.unwrap_or("The stream ended"));
+				}
+				screen::Event::Failed(message) => pending.ended = Some(message),
 			}
-			screen::Event::Deleted { reason } => {
-				self.ended = Some(reason.unwrap_or("The stream ended"));
+			return;
+		}
+		if let Some(live) = self.lives.iter_mut().find(|live| {
+			live.context
+				.matches(state.generation, *channel, *request, *streamer)
+				&& live.context.stream_request == *stream_request
+		}) {
+			match event {
+				screen::Event::Deleted { reason } => {
+					live.ended = Some(reason.unwrap_or("The stream ended"));
+				}
+				screen::Event::Failed(message) => live.ended = Some(message),
+				_ => {}
 			}
-			screen::Event::Failed(message) => self.ended = Some(message),
 		}
 	}
 	pub fn poll(
@@ -209,196 +235,323 @@ impl Watch {
 		call: Option<super::screen::Call<'_>>,
 		audio: Option<std::sync::mpsc::SyncSender<discord_voice::Frame>>,
 	) -> Option<Command> {
-		let wanted = state.voice.active.as_ref().and_then(|active| {
-			let streamer = active.watching_primary()?;
-			matches!(
-				active.phase,
-				voice::Phase::Connected | voice::Phase::Waiting
-			)
-			.then_some((state.generation, active.channel, active.request, streamer))
-		});
-		let current = self.context();
-		let mut command = None;
-		if let Some(context) = current
-			&& (state.demo
-				|| wanted
-					!= Some((
-						context.generation,
-						context.channel,
-						context.request,
-						context.streamer,
-					))) {
-			self.stop();
-			self.status = "Stopped watching";
-			platform::diagnostics::info(&format!("watch: stopped after {} ms", self.elapsed_ms()));
-			self.requested_at = None;
-			// Single-view enforcement: the newly chosen primary replaces the viewed
-			// stream. Switching to nothing (a transient reconnect or an explicit stop)
-			// never forgets the set; stopping is the UI's own explicit choice.
-			if let Some((_, _, _, streamer)) = wanted
-				&& streamer != context.streamer
-			{
-				state.unwatch_stream(context.streamer);
+		// Every explicitly watched stream of the connected call, oldest first. Empty
+		// while demoing or reconnecting, so stale sessions end below and resume after.
+		let wanted: Vec<(u64, Id, u64, Id)> = if state.demo {
+			Vec::new()
+		} else {
+			state
+				.voice
+				.active
+				.as_ref()
+				.filter(|active| {
+					matches!(
+						active.phase,
+						voice::Phase::Connected | voice::Phase::Waiting
+					)
+				})
+				.map(|active| {
+					active
+						.watching_all()
+						.iter()
+						.map(|streamer| {
+							(state.generation, active.channel, active.request, *streamer)
+						})
+						.collect()
+				})
+				.unwrap_or_default()
+		};
+		// Sessions nobody wants anymore (unwatched, hung up, reconnecting) end here.
+		// Their teardown commands queue in the outbox, one draining per poll.
+		let mut index = 0;
+		while index < self.pending.len() {
+			let context = self.pending[index].context;
+			if wanted
+				.iter()
+				.any(|(generation, channel, request, streamer)| {
+					context.matches(*generation, *channel, *request, *streamer)
+				}) {
+				index += 1;
+			} else {
+				let pending = self.pending.remove(index);
+				self.outbox.push_back(stop_command(pending.context));
+				platform::diagnostics::info(&format!(
+					"watch: dropped pending view of {}",
+					pending.context.streamer.0
+				));
 			}
-			if context.generation == state.generation && !state.demo {
-				command = Some(Command::Voice(voice::Command::StopWatching {
-					channel: context.channel,
-					request: context.request,
-					stream_request: context.stream_request,
-				}));
+		}
+		let mut index = 0;
+		while index < self.lives.len() {
+			let context = self.lives[index].context;
+			if wanted
+				.iter()
+				.any(|(generation, channel, request, streamer)| {
+					context.matches(*generation, *channel, *request, *streamer)
+				}) {
+				index += 1;
+			} else {
+				let live = self.lives.remove(index);
+				live.task.abort();
+				self.outbox.push_back(stop_command(live.context));
+				platform::diagnostics::info(&format!(
+					"watch: stopped view of {} after {} ms",
+					live.context.streamer.0,
+					live.requested_at.elapsed().as_millis()
+				));
 			}
 		}
 		if state.voice.active.is_none() {
 			self.notice = "";
 		}
-		if let Some(message) = self.ended.take() {
-			let context = self.context();
-			platform::diagnostics::warn(&format!(
-				"watch: ended after {} ms: {message}",
-				self.elapsed_ms()
-			));
-			self.requested_at = None;
-			self.stop();
-			self.status = message;
-			self.notice = message;
-			if let Some(context) = context {
-				state.unwatch_stream(context.streamer);
-			}
-			ui.voice_stream_view = None;
-			ui.voice_stream_status = self.status;
-			return command.or_else(|| {
-				let context = context.filter(|context| context.generation == state.generation)?;
-				Some(Command::Voice(voice::Command::StopWatching {
-					channel: context.channel,
-					request: context.request,
-					stream_request: context.stream_request,
-				}))
-			});
-		}
 		if state.demo {
-			ui.voice_stream_status = if wanted.is_some() {
-				"Offline preview · no stream is received"
-			} else {
+			ui.voice_stream_status = if wanted.is_empty() {
 				""
+			} else {
+				"Offline preview · no stream is received"
 			};
-			return command;
+			return self.drain(ctx);
 		}
-		if let Some((generation, channel, request, streamer)) = wanted
-			&& self.context().is_none()
-			&& command.is_none()
-		{
-			let Some(call) = call.filter(|call| {
-				call.generation == generation && call.channel == channel && call.request == request
+		// One view per wanted stream: negotiations run side by side, each with its
+		// own gateway slot. Starts queue in the outbox behind any pending stops.
+		for (generation, channel, request, streamer) in &wanted {
+			let known = self.pending.iter().any(|pending| {
+				pending
+					.context
+					.matches(*generation, *channel, *request, *streamer)
+			}) || self.lives.iter().any(|live| {
+				live.context
+					.matches(*generation, *channel, *request, *streamer)
+			});
+			if known {
+				continue;
+			}
+			let Some(call) = call.as_ref().filter(|call| {
+				call.generation == *generation
+					&& call.channel == *channel
+					&& call.request == *request
 			}) else {
 				ui.voice_stream_status = "Connect the call before watching a stream";
-				return None;
+				return self.drain(ctx);
 			};
 			self.sequence = self.sequence.wrapping_add(1);
 			let context = Context {
-				generation,
-				channel,
-				request,
+				generation: *generation,
+				channel: *channel,
+				request: *request,
 				stream_request: self.sequence,
-				streamer,
+				streamer: *streamer,
 			};
-			self.pending = Some(Pending {
+			self.pending.push(Pending {
 				context,
 				user: call.user,
 				peer: call.peer,
 				session: Zeroizing::new(call.session.to_owned()),
-				identity: call.identity,
-				audio,
+				identity: call.identity.clone(),
+				audio: audio.clone(),
 				rtc: None,
 				server: None,
 				started: Instant::now(),
+				ended: None,
 			});
 			self.status = "Requesting the stream…";
 			self.notice = "";
-			self.requested_at = Some(Instant::now());
-			self.first_frame_logged = false;
-			platform::diagnostics::info("watch: stream requested");
-			command = Some(Command::Voice(voice::Command::WatchStream {
-				channel,
-				request,
-				stream_request: context.stream_request,
-				streamer,
-			}));
+			platform::diagnostics::info(&format!("watch: stream {} requested", streamer.0));
+			self.outbox
+				.push_back(Command::Voice(voice::Command::WatchStream {
+					channel: *channel,
+					request: *request,
+					stream_request: context.stream_request,
+					streamer: *streamer,
+				}));
 		}
-		if let Some(pending) = &self.pending {
+		for pending in &mut self.pending {
+			if pending.ended.is_some() {
+				continue;
+			}
 			if pending.started.elapsed() >= SIGNAL_TIMEOUT {
-				self.ended = Some("Discord did not provide the stream connection; try again");
+				pending.ended = Some("Discord did not provide the stream connection; try again");
 				ctx.request_repaint();
 			} else {
 				ctx.request_repaint_after(SIGNAL_TIMEOUT.saturating_sub(pending.started.elapsed()));
 			}
 		}
-		if self
-			.pending
-			.as_ref()
-			.is_some_and(|pending| pending.rtc.is_some() && pending.server.is_some())
-		{
-			let pending = self.pending.take().expect("complete stream negotiation");
+		let mut index = 0;
+		while index < self.pending.len() {
+			if self.pending[index].ended.is_some()
+				|| self.pending[index].rtc.is_none()
+				|| self.pending[index].server.is_none()
+			{
+				index += 1;
+				continue;
+			}
+			let pending = self.pending.remove(index);
+			let context = pending.context;
 			platform::diagnostics::info(&format!(
-				"watch: negotiation complete after {} ms",
-				self.elapsed_ms()
+				"watch: negotiation with {} complete after {} ms",
+				context.streamer.0,
+				pending.started.elapsed().as_millis()
 			));
 			if let Err(error) = self.start(runtime, pending, ctx) {
-				self.ended = Some(error);
+				state.unwatch_stream(context.streamer);
+				self.outbox.push_back(stop_command(context));
+				self.notice = error;
+				platform::diagnostics::warn(&format!(
+					"watch: view of {} failed to start: {error}",
+					context.streamer.0
+				));
 			}
 		}
-		if let Some(live) = &mut self.live {
+		for live in &mut self.lives {
 			match *live.events.borrow_and_update() {
-				Some(Notice::Status(status)) => self.status = status,
-				Some(Notice::Failed(error)) => self.ended = Some(error),
+				Some(Notice::Status(status)) => live.status = status,
+				Some(Notice::Failed(error)) => live.ended = Some(error),
 				None => {}
 			}
-			if live.task.is_finished() && self.ended.is_none() {
-				self.ended = Some("The stream connection ended");
+			if live.task.is_finished() && live.ended.is_none() {
+				live.ended = Some("The stream connection ended");
 			}
+		}
+		// Views the service ended (or that failed) leave the set one by one.
+		let mut index = 0;
+		while index < self.pending.len() {
+			if let Some(message) = self.pending[index].ended {
+				let pending = self.pending.remove(index);
+				state.unwatch_stream(pending.context.streamer);
+				self.outbox.push_back(stop_command(pending.context));
+				self.notice = message;
+				platform::diagnostics::warn(&format!(
+					"watch: pending view of {} ended: {message}",
+					pending.context.streamer.0
+				));
+			} else {
+				index += 1;
+			}
+		}
+		let mut index = 0;
+		while index < self.lives.len() {
+			if let Some(message) = self.lives[index].ended {
+				let live = self.lives.remove(index);
+				live.task.abort();
+				state.unwatch_stream(live.context.streamer);
+				self.outbox.push_back(stop_command(live.context));
+				self.status = message;
+				self.notice = message;
+				platform::diagnostics::warn(&format!(
+					"watch: view of {} ended after {} ms: {message}",
+					live.context.streamer.0,
+					live.requested_at.elapsed().as_millis()
+				));
+			} else {
+				index += 1;
+			}
+		}
+		// The set may have shrunk above; the grid below follows what is wanted now.
+		let wanted: Vec<(u64, Id, u64, Id)> = state
+			.voice
+			.active
+			.as_ref()
+			.filter(|active| {
+				matches!(
+					active.phase,
+					voice::Phase::Connected | voice::Phase::Waiting
+				)
+			})
+			.map(|active| {
+				active
+					.watching_all()
+					.iter()
+					.map(|streamer| (state.generation, active.channel, active.request, *streamer))
+					.collect()
+			})
+			.unwrap_or_default();
+		let primary = wanted.last().copied();
+		let minimized = ctx.input(|input| input.viewport().minimized.unwrap_or(false));
+		// Streams nobody can see (another channel open, or the window minimized) are
+		// not uploaded to the GPU: their frames are dropped here and the next visible
+		// ones are shown. The decoder threads read the same flag before waking the UI,
+		// so hidden frames never schedule full-window redraws either.
+		let visible = !self.lives.is_empty()
+			&& state.voice.active.as_ref().is_some_and(|active| {
+				stream_visible(
+					ui.voice_stream_pip,
+					state.selected,
+					active.channel,
+					minimized,
+				)
+			});
+		self.visible.store(visible, Ordering::Release);
+		for live in &mut self.lives {
 			let image = live.frames.try_lock().ok().and_then(|mut slot| slot.take());
-			// A stream nobody can see (another channel open, or the window minimized) is not
-			// uploaded to the GPU: the frame is dropped here and the next visible one is shown.
-			// The decoder thread reads the same flag before waking the UI, so hidden frames
-			// never schedule full-window redraws either.
-			let visible = stream_visible(
-				ui.voice_stream_pip,
-				state.selected,
-				live.context.channel,
-				ctx.input(|input| input.viewport().minimized.unwrap_or(false)),
-			);
-			self.visible.store(visible, Ordering::Release);
 			if let Some(image) = image.filter(|_| visible) {
-				if let Some(texture) = &mut ui.voice_stream_view {
+				let streamer = live.context.streamer;
+				if let Some((_, texture)) = ui
+					.voice_stream_views
+					.iter_mut()
+					.find(|(id, _)| *id == streamer)
+				{
 					texture.set(image, egui::TextureOptions::LINEAR);
 				} else {
-					ui.voice_stream_view = Some(ctx.load_texture(
-						"remote-stream",
-						image,
-						egui::TextureOptions::LINEAR,
+					ui.voice_stream_views.push((
+						streamer,
+						ctx.load_texture(
+							format!("remote-stream-{}", streamer.0),
+							image,
+							egui::TextureOptions::LINEAR,
+						),
 					));
 				}
-				self.status = "Watching the stream";
-				if ui.voice_stream_pip {
-					ctx.request_repaint_of(ui::stream_pip_viewport());
-				}
-				if !self.first_frame_logged {
-					self.first_frame_logged = true;
-					platform::diagnostics::info(&format!(
-						"watch: first frame after {} ms",
-						self.elapsed_ms()
-					));
+				live.status = "Watching the stream";
+				if primary.map(|(_, _, _, primary)| primary) == Some(streamer) {
+					if !live.first_frame_logged {
+						live.first_frame_logged = true;
+						platform::diagnostics::info(&format!(
+							"watch: first frame of {} after {} ms",
+							streamer.0,
+							live.requested_at.elapsed().as_millis()
+						));
+					}
+					if ui.voice_stream_pip {
+						ctx.request_repaint_of(ui::stream_pip_viewport());
+					}
 				}
 			}
-		} else {
-			ui.voice_stream_view = None;
-			self.visible.store(false, Ordering::Release);
 		}
-		ui.voice_stream_status = if wanted.is_some() {
+		ui.voice_stream_views.retain(|(id, _)| {
+			self.pending
+				.iter()
+				.any(|pending| pending.context.streamer == *id)
+				|| self.lives.iter().any(|live| live.context.streamer == *id)
+		});
+		// The primary tile, PiP and fullscreen share one handle to the primary texture.
+		ui.voice_stream_view = primary.and_then(|(_, _, _, streamer)| {
+			ui.voice_stream_views
+				.iter()
+				.find(|(id, _)| *id == streamer)
+				.map(|(_, texture)| texture.clone())
+		});
+		// The primary view drives the shared status line.
+		if let Some((_, _, _, streamer)) = primary {
+			if self
+				.pending
+				.iter()
+				.any(|pending| pending.context.streamer == streamer)
+			{
+				self.status = "Requesting the stream…";
+			} else if let Some(live) = self
+				.lives
+				.iter()
+				.find(|live| live.context.streamer == streamer)
+			{
+				self.status = live.status;
+			}
+		}
+		ui.voice_stream_status = if primary.is_some() {
 			self.status
 		} else {
 			self.notice
 		};
-		command
+		self.drain(ctx)
 	}
 	fn start(
 		&mut self,
@@ -480,11 +633,15 @@ impl Watch {
 			wake.request_repaint();
 		});
 		self.status = "Connecting to the stream…";
-		self.live = Some(Live {
+		self.lives.push(Live {
 			context: pending.context,
 			task,
 			events,
 			frames,
+			status: "Connecting to the stream…",
+			ended: None,
+			requested_at: Instant::now(),
+			first_frame_logged: false,
 		});
 		Ok(())
 	}
@@ -525,6 +682,78 @@ mod tests {
 		assert!(!watch.visible.load(Ordering::Acquire));
 		watch.visible.store(true, Ordering::Release);
 		assert!(watch.visible.load(Ordering::Acquire));
+	}
+
+	#[test]
+	fn two_watched_streams_queue_one_command_each_and_unwatching_drops_one() {
+		let runtime = tokio::runtime::Builder::new_current_thread()
+			.enable_all()
+			.build()
+			.unwrap();
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		let channel = Id(25);
+		state.start_call(channel, false).unwrap();
+		let request = state.voice.active.as_ref().unwrap().request;
+		let call = state.voice.active.as_mut().unwrap();
+		call.phase = voice::Phase::Waiting;
+		for user in [Id(3), Id(4)] {
+			call.participants.push(voice::Participant {
+				user,
+				muted: false,
+				deafened: false,
+				server_muted: false,
+				server_deafened: false,
+				video: false,
+				streaming: true,
+			});
+		}
+		assert!(state.watch_stream(Id(3)).is_some());
+		assert!(state.watch_stream(Id(4)).is_some());
+		let mut ui = ui::MessagingUi::default();
+		let mut watch = Watch::default();
+		let generation = state.generation;
+		let media = || crate::screen::Call {
+			generation,
+			channel,
+			request,
+			user: Id(1),
+			peer: None,
+			session: "synthetic-session",
+			identity: discord_voice::Identity::generate(),
+		};
+		let watch_command = |watch: &mut Watch, state: &mut State, ui: &mut ui::MessagingUi| {
+			watch.poll(&runtime, state, ui, &ctx, Some(media()), None)
+		};
+		// One gateway command per poll: the negotiations queue behind each other.
+		let Some(Command::Voice(voice::Command::WatchStream {
+			streamer,
+			stream_request: first,
+			..
+		})) = watch_command(&mut watch, &mut state, &mut ui)
+		else {
+			panic!("first stream negotiates");
+		};
+		assert_eq!(streamer, Id(3));
+		let Some(Command::Voice(voice::Command::WatchStream { streamer, .. })) =
+			watch_command(&mut watch, &mut state, &mut ui)
+		else {
+			panic!("second stream negotiates");
+		};
+		assert_eq!(streamer, Id(4));
+		assert_eq!(watch.pending.len(), 2);
+		assert!(watch.outbox.is_empty());
+		// Forgetting one stream tears down only its negotiation.
+		state.unwatch_stream(Id(3));
+		let Some(Command::Voice(voice::Command::StopWatching { stream_request, .. })) =
+			watch_command(&mut watch, &mut state, &mut ui)
+		else {
+			panic!("dropped view is released");
+		};
+		assert_eq!(stream_request, first);
+		assert_eq!(watch.pending.len(), 1);
+		assert!(watch.outbox.is_empty());
 	}
 
 	#[test]

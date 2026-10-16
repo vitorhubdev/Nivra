@@ -680,7 +680,7 @@ impl MessagingUi {
 						.color(STAGE_MUTED),
 					);
 				}
-				self.stage_counter(&mut body_ui, &entries);
+				self.stage_counter(&mut body_ui, state, &entries);
 				self.live_switcher(&mut body_ui, state, channel, &entries);
 				self.participant_tiles(&mut body_ui, state, channel, &entries, false);
 			}
@@ -748,8 +748,10 @@ impl MessagingUi {
 		}) {
 			tiles.push(Tile::LocalScreen);
 		}
-		if let Some(streamer) = call.and_then(|call| call.watching_primary()) {
-			tiles.push(Tile::Stream(streamer));
+		if let Some(call) = call {
+			for streamer in call.watching_all() {
+				tiles.push(Tile::Stream(*streamer));
+			}
 		}
 		tiles.extend(entries.iter().map(Tile::Participant));
 		tiles
@@ -879,6 +881,13 @@ impl MessagingUi {
 		self.voice_remote_video
 			.iter()
 			.find(|(id, _)| *id == user)
+			.map(|(_, texture)| texture)
+	}
+
+	fn watched_stream_texture(&self, streamer: Id) -> Option<&egui::TextureHandle> {
+		self.voice_stream_views
+			.iter()
+			.find(|(id, _)| *id == streamer)
 			.map(|(_, texture)| texture)
 	}
 
@@ -1191,7 +1200,7 @@ impl MessagingUi {
 	) {
 		let name = participant_user(state, channel, streamer)
 			.map_or_else(|| "Participant".to_owned(), |user| user.name.clone());
-		let content = match &self.voice_stream_view {
+		let content = match self.watched_stream_texture(streamer) {
 			Some(texture) => {
 				let content = fit_rect(rect, texture.size_vec2());
 				ui.put(
@@ -1299,7 +1308,7 @@ impl MessagingUi {
 		)
 		.clicked()
 		{
-			self.watch_request = Some(None);
+			self.unwatch_request = Some(streamer);
 		}
 	}
 
@@ -1378,13 +1387,29 @@ impl MessagingUi {
 		}
 	}
 
-	/// How many people are in the call and how many of them are streaming.
-	fn stage_counter(&self, ui: &mut egui::Ui, entries: &[RosterEntry]) {
+	/// How many people are in the call, how many of them are streaming, and how
+	/// many of those streams this device is watching.
+	fn stage_counter(&self, ui: &mut egui::Ui, state: &State, entries: &[RosterEntry]) {
 		let people = entries.len();
 		let live = entries
 			.iter()
 			.filter(|entry| entry.participant.streaming)
 			.count();
+		let watching = state
+			.voice
+			.active
+			.as_ref()
+			.map(|call| call.watching_all().len())
+			.unwrap_or(0);
+		ui.label(
+			RichText::new(self.stage_counter_text(people, live, watching))
+				.small()
+				.color(STAGE_MUTED),
+		);
+	}
+
+	/// Counter line for the stage: people present, streams live, views watched.
+	fn stage_counter_text(&self, people: usize, live: usize, watching: usize) -> String {
 		let mut text = format!(
 			"{people} {}",
 			crate::i18n::text(self.language, "in the call")
@@ -1395,7 +1420,13 @@ impl MessagingUi {
 				crate::i18n::text(self.language, "live")
 			));
 		}
-		ui.label(RichText::new(text).small().color(STAGE_MUTED));
+		if watching > 0 {
+			text.push_str(&format!(
+				" · {watching} {}",
+				crate::i18n::text(self.language, "watching")
+			));
+		}
+		text
 	}
 
 	/// One-click choice among several streams of the connected call, shown from two streams
@@ -1449,7 +1480,7 @@ impl MessagingUi {
 				let response = ui.add(button).on_hover_text(format!("{hint} · {name}"));
 				if response.clicked() {
 					if watching {
-						self.watch_request = Some(None);
+						self.unwatch_request = Some(entry.participant.user);
 					} else {
 						self.live_open = Some((channel, entry.participant.user));
 					}
@@ -1459,8 +1490,12 @@ impl MessagingUi {
 		ui.add_space(6.0);
 	}
 
-	/// Apply a tile's watch click once the stage has mutable state again.
+	/// Apply tile watch clicks once the stage has mutable state again: one stream
+	/// leaves while the rest keep playing.
 	fn apply_watch_request(&mut self, state: &mut State) {
+		if let Some(streamer) = self.unwatch_request.take() {
+			state.unwatch_stream(streamer);
+		}
 		match self.watch_request.take() {
 			Some(Some(user)) => {
 				let _ = state.watch_stream(user);
@@ -1702,7 +1737,11 @@ impl MessagingUi {
 				tile_button(ui, rect, label, fill, hover, hint).clicked()
 			};
 			if clicked {
-				self.watch_request = Some((!watching).then_some(entry.participant.user));
+				if watching {
+					self.unwatch_request = Some(entry.participant.user);
+				} else {
+					self.watch_request = Some(Some(entry.participant.user));
+				}
 			}
 		}
 	}
@@ -4024,7 +4063,7 @@ impl MessagingUi {
 					let label = if is_watching { stop_label } else { watch_label };
 					if ui.button(label).clicked() {
 						if is_watching {
-							state.stop_watching();
+							state.unwatch_stream(streamer);
 						} else {
 							self.live_open = Some((channel, streamer));
 						}
@@ -6207,6 +6246,61 @@ mod tests {
 			Some(Id(3))
 		);
 		assert!(view.live_watch.is_none() && view.live_open.is_none());
+	}
+
+	#[test]
+	fn stage_tiles_show_every_watched_stream_up_to_the_cap() {
+		let mut state = test_support::voice_demo_state();
+		let channel = state.voice.active.as_ref().unwrap().channel;
+		state.voice.active.as_mut().unwrap().watching = vec![Id(3), Id(4), Id(5), Id(6)];
+		let entries = stage_participants(&state, channel);
+		let view = MessagingUi::default();
+		let tiles = view.stage_tiles(&state, channel, &entries);
+		let streams: Vec<Id> = tiles
+			.iter()
+			.filter_map(|tile| match tile {
+				Tile::Stream(streamer) => Some(*streamer),
+				_ => None,
+			})
+			.collect();
+		assert_eq!(streams, vec![Id(3), Id(4), Id(5), Id(6)]);
+	}
+
+	#[test]
+	fn stage_counter_names_people_live_and_watched_streams() {
+		let view = MessagingUi {
+			language: model::Language::English,
+			..MessagingUi::default()
+		};
+		assert_eq!(view.stage_counter_text(3, 0, 0), "3 in the call");
+		assert_eq!(view.stage_counter_text(3, 2, 0), "3 in the call · 2 live");
+		assert_eq!(
+			view.stage_counter_text(3, 2, 2),
+			"3 in the call · 2 live · 2 watching"
+		);
+		let watched = MessagingUi {
+			language: model::Language::PortugueseBrazil,
+			..MessagingUi::default()
+		};
+		assert_eq!(
+			watched.stage_counter_text(3, 2, 2),
+			"3 na chamada · 2 ao vivo · 2 assistindo"
+		);
+	}
+
+	#[test]
+	fn unwatch_request_leaves_the_other_streams_playing() {
+		let mut state = test_support::voice_demo_state();
+		state.voice.active.as_mut().unwrap().watching = vec![Id(3), Id(4)];
+		let mut view = MessagingUi {
+			unwatch_request: Some(Id(3)),
+			..MessagingUi::default()
+		};
+		view.apply_watch_request(&mut state);
+		assert_eq!(
+			state.voice.active.as_ref().unwrap().watching_all(),
+			&[Id(4)]
+		);
 	}
 
 	#[test]

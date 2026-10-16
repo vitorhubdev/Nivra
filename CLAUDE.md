@@ -101,7 +101,8 @@ suite or native screenshots are needed for an unchanged application.
 - Work only on `main`; it is the single branch of this repository. Start with
   `git status --short`, `git fetch origin` and `git switch main && git pull --ff-only origin main`.
   Never create task branches, worktrees or pull requests, and never push any ref other than
-  `main`. If another branch, worktree or open PR turns up, do not build on or delete it: report it
+  `main`; the one exception is the `vX.Y.Z` tag of a release the owner asked for, which is what
+  makes CI publish it. If another branch, worktree or open PR turns up, do not build on or delete it: report it
   to the owner. Work found there is moved onto `main` by the owner's request, then the branch is
   removed.
 - If unrelated changes exist, preserve them. Stage only the files of your task by explicit path.

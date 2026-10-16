@@ -1,45 +1,50 @@
 # Changelog
 
-## Não publicado
-
-### PROTECT
-
-- WireGuard roda dentro do próprio Nivra, com boringtun e smoltcp. Não há mais sing-box, download de engine, processo externo nem código GPL nesse caminho. Nenhuma VPN, rota, DNS ou permissão de administrador do Windows é alterada.
-- O campo do executável do sing-box e o download da engine saíram das Configurações; o `.conf` continua sendo a única entrada.
-- Compatibilidade com provedores reais segue não verificada até o teste do dono.
-
-### Conexão
-
-- Uma sessão salva que cai antes do primeiro READY continua tentando reconectar, em vez de voltar para a tela de login depois de seis tentativas.
-
 ## Nivra 1.0.17
 
-Adiciona o download e a atualização do sing-box pelo próprio PROTECT, e melhora o diagnóstico de quedas e travamentos.
+Melhora a recuperação de chamadas, a interface do LIVE e o PROTECT, com WireGuard nativo e perfis persistentes.
 
-### PROTECT
+### PROTECT e WireGuard
 
-- O painel baixa o sing-box oficial da SagerNet, em Windows, Linux e macOS, direto para a pasta do Nivra. O arquivo é conferido por SHA-256 antes de ser usado, e nenhum executável é instalado se a conferência falhar.
-- O download mostra o progresso e pode ser cancelado.
-- Uma verificação de versão mais nova roda no máximo uma vez por dia, quando o painel abre. Atualizar exige um clique.
-- Depois de instalado, o sing-box é selecionado sozinho e pode ser reutilizado em outras sessões.
-- Os downloads saem pela sua conexão direta, como as atualizações do Nivra.
+- WireGuard roda dentro do Nivra, com boringtun e smoltcp. Não exige sing-box, download de engine, processo externo, VPN do sistema ou permissão de administrador. Não altera rotas nem DNS do Windows.
+- Até 16 perfis nomeados podem ser salvos, carregados e removidos. A configuração principal importada, testada ou ativada também é lembrada e restaurada no editor ao reabrir o aplicativo.
+- Senhas e o `.conf` original ficam no cofre de credenciais do sistema. A pasta de dados `nivra/protect` guarda metadados e cópias públicas sem chaves privadas; não há fallback de segredos para texto simples.
+- “Testar todos” verifica os perfis sequencialmente, permite cancelar e não aplica a rota testada. Para evitar interferência no túnel ativo, os testes WireGuard exigem PROTECT desativado.
+- A consulta de IP de saída, país aproximado e bandeira é opcional e começa desligada. Quando habilitada, usa ipwho.is e FlagCDN pela rota testada; esses serviços recebem seu IP de saída.
+- Os campos públicos do `.conf`, incluindo DNS, ficam visíveis. O MTU é aplicado pelo motor; o DNS informado no arquivo é exibido, mas o túnel continua usando seu resolvedor próprio.
+- O painel mostra o escopo realmente aplicado e avisa sobre alterações ainda não aplicadas. Ativar PROTECT durante uma chamada oferece reconectá-la após a troca de rota.
+- Restaurar um perfil não ativa a rota automaticamente. Edições ainda não testadas/aplicadas/salvas e a configuração de reserva continuam na sessão. Falhas de gravação aparecem no painel.
 
-### Diagnóstico
+### Chamadas e reconexão
 
-- Quedas do gateway e reconexões ficam no log com o código de fechamento e o número da tentativa. Nenhum token, ID ou conteúdo de mensagem é gravado.
-- Etapas lentas do desenho da tela (acima de 100 ms) ficam no log com o nome da etapa e a duração.
-- Os relatórios de travamento dizem em qual etapa a tela estava.
+- ACKs atrasados ou duplicados de heartbeat deixam de derrubar a chamada; um nonce nunca enviado continua sendo rejeitado.
+- A saída anterior é liberada antes da nova entrada, e pedidos de saída não são descartados quando a fila está cheia.
+- O clique mais recente define a chamada desejada. A troca e a recuperação têm prazos totais e podem ser canceladas, inclusive quando o gateway fica indisponível.
+- A interface usa estados de conexão e uma faixa animada, sem mostrar contagem de tentativas.
+- Uma falha de heartbeat da transmissão encerra apenas a transmissão, preservando a chamada.
+- Corrigida a transição DAVE da transmissão para o modo autorizado pelo servidor, mantendo a criptografia autenticada do transporte e aguardando a confirmação correta.
+- Uma reconexão rápida deixa de provocar uma queda tardia por negociação DAVE. Falhas de chamada e códigos de fechamento ficam disponíveis no diagnóstico local.
 
-### Voz
+### LIVE e desempenho
 
-- Uma chamada que se reconecta em menos de 5 segundos não é mais derrubada 30 segundos depois com a mensagem de negociação DAVE.
-- Toda falha que encerra uma chamada fica no log, com a mensagem, o código de fechamento e o número de tentativas.
-- O texto da falha ocupa a largura toda da área de chamada, e os botões ficam abaixo dele.
-- Copiar os detalhes da falha inclui a versão, o sistema e a arquitetura, e pede para anexar o zip de diagnóstico.
+- Os controles de assistir, parar de assistir e sair foram reorganizados. Uma transmissão remota nova toca um aviso sonoro, uma única vez por início de transmissão; reconexões e snapshots não o repetem.
+- O seletor de compartilhamento lista todas as janelas disponíveis com rolagem.
+- O preview deixa de ser gerado quando fica oculto. A captura solicita a cadência escolhida ao compositor quando a API permite.
+- A conversão de imagem reutiliza o plano de escala e buffers auxiliares. No teste sintético de conversão de 4K para 1080p, o tempo caiu cerca de 20%; esse valor mede somente o conversor.
+- A captura Windows reaproveita os buffers de quadro em vez de alocar um por captura (33 MB em 4K); a cópia sintética de 4K caiu de 6,24 ms para 3,65 ms em build de debug. A captura também reutiliza a textura intermediária da GPU. O teste sintético de readback mostrou ganho de aproximadamente 4% em 1080p e nenhuma melhora relevante em 4K.
+- A leitura integral de 4K e a espera síncrona pela GPU permanecem. Essas medições não comprovam a eliminação do travamento global do mouse; método e limites estão em `docs/performance.md`.
 
-### Segurança
+### Atualização, conexão e diagnóstico
 
-- Atualização de dependência para o rustls 0.23.46, que corrige os avisos RUSTSEC-2026-0346 a 0349.
+- A verificação de atualização que falha tenta novamente após 15 minutos. Uma reinicialização adiada por chamada é retomada quando fica disponível.
+- Uma sessão salva que cai antes do primeiro READY continua tentando reconectar.
+- O ícone de mudo imposto pelo servidor agora é um cadeado, diferente do microfone cortado do mudo próprio.
+- As etapas lentas do desenho da tela e os erros de chamada ficam no diagnóstico local. O cronômetro das etapas exclui o intervalo entre quadros, evitando durações enganosas.
+- Dependência rustls atualizada para 0.23.46.
+
+### Limites de validação
+
+Os testes automáticos usam dados sintéticos, loopback e texturas geradas para teste. Eles não comprovam interoperabilidade com todos os provedores WireGuard, clientes Discord ou dispositivos. O desempenho em captura real e a eliminação do lag global ainda precisam de validação no computador afetado.
 
 ## Nivra 1.0.16
 

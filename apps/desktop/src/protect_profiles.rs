@@ -441,6 +441,10 @@ enum Event {
 	Remembered,
 	Result(String, String),
 	Location(String, String, Option<eframe::egui::ColorImage>),
+	/// The exit location of this profile was fetched: it is never asked for again this session.
+	Located(String),
+	/// Profiles tested so far, and how many this run will test.
+	Progress(usize, usize),
 	Finished(Result<&'static str, &'static str>),
 }
 #[derive(Default)]
@@ -455,6 +459,12 @@ pub struct Manager {
 	pending_named: Option<(String, Draft)>,
 	/// Test the saved profiles (country, ping) once the current store operation ends.
 	auto_test: bool,
+	/// The running test is the automatic one: it skips profiles already tested this session.
+	auto_run: bool,
+	/// Profiles whose route test finished this session, and those whose exit country was fetched.
+	/// The country lookup leaves this computer, so each profile is asked about once.
+	tested: std::collections::HashSet<String>,
+	located: std::collections::HashSet<String>,
 	/// What the last launch left on: the configuration to turn on again, or none restorable.
 	startup: Option<Option<Draft>>,
 }
@@ -545,7 +555,14 @@ impl Manager {
 				}
 				Some(Event::Loaded(draft, _)) => ui.set_protect_draft(draft),
 				Some(Event::Remembered) => {}
-				Some(Event::Result(id, result)) => ui.set_protect_profile_result(&id, &result),
+				Some(Event::Result(id, result)) => {
+					self.tested.insert(id.clone());
+					ui.set_protect_profile_result(&id, &result)
+				}
+				Some(Event::Located(id)) => {
+					self.located.insert(id);
+				}
+				Some(Event::Progress(done, total)) => ui.set_protect_profile_progress(done, total),
 				Some(Event::Location(id, text, flag)) => {
 					ui.set_protect_profile_location(ctx, &id, &text, flag)
 				}
@@ -556,6 +573,7 @@ impl Manager {
 					self.testing = false;
 					if std::mem::take(&mut self.auto_test) && !protect::enabled() {
 						let location = ui.protect_locate();
+						self.auto_run = true;
 						self.start(Some(ProfileAction::TestAll { location }), runtime, ctx, ui);
 					}
 				}
@@ -618,6 +636,13 @@ impl Manager {
 		ui: &mut ui::MessagingUi,
 	) {
 		self.testing = matches!(action, Some(ProfileAction::TestAll { .. }));
+		// The automatic run only tests what was never tested; "Test all" tests everything again.
+		let skip_tested = if std::mem::take(&mut self.auto_run) {
+			self.tested.clone()
+		} else {
+			std::collections::HashSet::new()
+		};
+		let located = self.located.clone();
 		ui.set_protect_profile_status(
 			if self.testing {
 				"Testing saved profiles sequentially…"
@@ -649,7 +674,15 @@ impl Manager {
 				.await
 				{
 					Ok(Ok(profiles)) => {
-						for (id, draft) in profiles {
+						let profiles: Vec<_> = profiles
+							.into_iter()
+							.filter(|(id, _)| !skip_tested.contains(id))
+							.collect();
+						let total = profiles.len();
+						publish(Event::Progress(0, total));
+						for (done, (id, draft)) in profiles.into_iter().enumerate() {
+							publish(Event::Progress(done, total));
+							let had_location = located.contains(&id);
 							let draft = match draft {
 								Ok(draft) => draft,
 								Err(error) => {
@@ -658,12 +691,13 @@ impl Manager {
 								}
 							};
 							if draft.protocol == Protocol::WireGuard && protect::enabled() {
-								publish(Event::Location(id.clone(), String::new(), None));
 								publish(Event::Result(id, WG_TEST_BLOCKED.into()));
 								continue;
 							}
 							let begin = std::time::Instant::now();
-							publish(Event::Location(id.clone(), String::new(), None));
+							if !had_location {
+								publish(Event::Location(id.clone(), String::new(), None));
+							}
 							let tested = tokio::time::timeout(Duration::from_secs(30), async {
 								let profile = protect::prepare(&draft).await?;
 								let result = protect::test(profile.clone()).await?;
@@ -679,7 +713,9 @@ impl Manager {
 								id.clone(),
 								format!("{} · {} ms", status, begin.elapsed().as_millis()),
 							));
-							if location && let Some(profile) = tested_profile {
+							if location
+								&& !had_location && let Some(profile) = tested_profile
+							{
 								match tokio::time::timeout(
 									Duration::from_secs(22),
 									protect::exit_location(profile),
@@ -689,6 +725,7 @@ impl Manager {
 									Ok(Ok(location)) => {
 										let flag =
 											location.flag_png.as_deref().and_then(decode_flag);
+										publish(Event::Located(id.clone()));
 										publish(Event::Location(
 											id,
 											format!(
@@ -712,6 +749,7 @@ impl Manager {
 								}
 							}
 						}
+						publish(Event::Progress(total, total));
 						Ok(
 							"All saved profiles tested; active route unchanged. Probes do not prove a working call.",
 						)
@@ -925,6 +963,9 @@ mod tests {
 			generation: None,
 			pending_named: None,
 			auto_test: false,
+			auto_run: false,
+			tested: Default::default(),
+			located: Default::default(),
 			startup: None,
 		};
 		let mut ui = ui::MessagingUi::default();
@@ -953,6 +994,9 @@ mod tests {
 			generation: None,
 			pending_named: None,
 			auto_test: false,
+			auto_run: false,
+			tested: Default::default(),
+			located: Default::default(),
 			startup: None,
 		};
 		let mut ui = ui::MessagingUi::default();
@@ -1000,6 +1044,9 @@ mod tests {
 			generation: None,
 			pending_named: None,
 			auto_test: false,
+			auto_run: false,
+			tested: Default::default(),
+			located: Default::default(),
 			startup: None,
 		};
 		let mut ui = ui::MessagingUi::default();

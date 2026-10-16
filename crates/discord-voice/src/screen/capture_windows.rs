@@ -91,11 +91,50 @@ struct Flags {
 	frames: SyncSender<RawFrame>,
 	stop: Arc<AtomicBool>,
 	pending: Arc<AtomicBool>,
+	/// Secure media can flow: someone is watching. Until then frames are only kept warm.
+	ready: Arc<AtomicBool>,
+	/// The local preview is on screen and needs a moving picture.
+	preview_visible: Arc<AtomicBool>,
 	next_frame: Instant,
 	interval: Duration,
+	waiting: bool,
+}
+
+/// While nobody watches, a full-screen readback per frame is pure cost: it is copied from the GPU
+/// and then dropped. A slow trickle keeps the latest picture for the first viewer's keyframe, and
+/// the local preview asks for a livelier one only while it is visible.
+const IDLE_INTERVAL: Duration = Duration::from_millis(1000);
+const PREVIEW_INTERVAL: Duration = Duration::from_millis(100);
+
+impl Flags {
+	/// Time between captured frames right now. Going from idle to watched restarts the schedule so
+	/// the first real frame does not wait out the idle interval.
+	fn current_interval(&mut self, now: Instant) -> Duration {
+		if self.ready.load(Ordering::Acquire) {
+			if std::mem::take(&mut self.waiting) {
+				self.next_frame = now;
+			}
+			self.interval
+		} else {
+			self.waiting = true;
+			if self.preview_visible.load(Ordering::Acquire) {
+				PREVIEW_INTERVAL.max(self.interval)
+			} else {
+				IDLE_INTERVAL.max(self.interval)
+			}
+		}
+	}
 }
 
 struct Handler(Flags, crate::diagnostics::Metrics, readback::Reader);
+
+/// What the encode loop shares with the capture callback to pace it.
+pub(crate) struct Pacing {
+	/// A frame is still being handled; the callback skips new ones meanwhile.
+	pub pending: Arc<AtomicBool>,
+	/// The local preview is on screen and needs a livelier picture while nobody watches.
+	pub preview_visible: Arc<AtomicBool>,
+}
 
 /// Frame buffers the encoder has finished with. A full-source BGRA buffer is 33 MB at 4K30;
 /// allocating and faulting one in per captured frame costs more than the copy itself. At
@@ -165,12 +204,13 @@ impl GraphicsCaptureApiHandler for Handler {
 			return Ok(());
 		}
 		let now = Instant::now();
+		let interval = self.0.current_interval(now);
 		if now + Duration::from_millis(2) < self.0.next_frame
 			|| self.0.pending.swap(true, Ordering::AcqRel)
 		{
 			return Ok(());
 		}
-		self.0.next_frame = (self.0.next_frame + self.0.interval).max(now + self.0.interval / 2);
+		self.0.next_frame = (self.0.next_frame + interval).max(now + interval / 2);
 		let (width, height) = (frame.width(), frame.height());
 		let Some(row_bytes) = (width as usize).checked_mul(4) else {
 			self.0.stop.store(true, Ordering::Release);
@@ -259,8 +299,12 @@ impl Capture {
 		stop: Arc<AtomicBool>,
 		ready: Arc<AtomicBool>,
 		audio_epoch: Arc<AtomicU64>,
-		pending: Arc<AtomicBool>,
+		pacing: Pacing,
 	) -> Result<Self, &'static str> {
+		let Pacing {
+			pending,
+			preview_visible,
+		} = pacing;
 		if settings.width == 0
 			|| settings.height == 0
 			|| settings.width > MAX_FRAME_WIDTH
@@ -276,7 +320,15 @@ impl Capture {
 					.into_iter()
 					.find(|monitor| monitor_id(monitor) == id)
 					.ok_or("Selected display is no longer available")?;
-				start_item(settings, monitor, frames, stop.clone(), pending)
+				start_item(
+					settings,
+					monitor,
+					frames,
+					stop.clone(),
+					pending,
+					ready.clone(),
+					preview_visible,
+				)
 			}
 			SourceId::Window(id) => {
 				let window = Window::enumerate()
@@ -284,7 +336,15 @@ impl Capture {
 					.into_iter()
 					.find(|window| window_id(window) == id)
 					.ok_or("Selected window is no longer available")?;
-				start_item(settings, window, frames, stop.clone(), pending)
+				start_item(
+					settings,
+					window,
+					frames,
+					stop.clone(),
+					pending,
+					ready.clone(),
+					preview_visible,
+				)
 			}
 			#[allow(unreachable_patterns)] // Portal may be absent from platform-scoped models.
 			_ => return Err("The desktop screen picker is available only on Linux"),
@@ -331,6 +391,8 @@ fn start_item<T>(
 	frames: SyncSender<RawFrame>,
 	stop: Arc<AtomicBool>,
 	pending: Arc<AtomicBool>,
+	ready: Arc<AtomicBool>,
+	preview_visible: Arc<AtomicBool>,
 ) -> Result<Capture, &'static str>
 where
 	T: NativeSource,
@@ -345,8 +407,11 @@ where
 		frames,
 		stop,
 		pending,
+		ready,
+		preview_visible,
 		next_frame: Instant::now(),
 		interval: Duration::from_secs_f64(1.0 / f64::from(settings.fps)),
+		waiting: false,
 	};
 	let native = Settings::new(
 		item,
@@ -383,6 +448,73 @@ impl Drop for Capture {
 		if let Some(control) = self.control.take() {
 			let _ = control.stop();
 		}
+	}
+}
+
+#[cfg(test)]
+mod idle_capture_tests {
+	use super::*;
+
+	fn flags(ready: bool, preview: bool, fps: f64) -> Flags {
+		let (frames, _receive) = std::sync::mpsc::sync_channel(1);
+		Flags {
+			frames,
+			stop: Arc::new(AtomicBool::new(false)),
+			pending: Arc::new(AtomicBool::new(false)),
+			ready: Arc::new(AtomicBool::new(ready)),
+			preview_visible: Arc::new(AtomicBool::new(preview)),
+			next_frame: Instant::now(),
+			interval: Duration::from_secs_f64(1.0 / fps),
+			waiting: false,
+		}
+	}
+
+	#[test]
+	fn nobody_watching_means_a_slow_trickle_unless_the_preview_is_open() {
+		let now = Instant::now();
+		// No viewer and no preview: one frame a second keeps the picture warm and costs little.
+		assert_eq!(
+			flags(false, false, 30.0).current_interval(now),
+			IDLE_INTERVAL
+		);
+		// The local preview is on screen: it needs a moving picture, still far below the share rate.
+		assert_eq!(
+			flags(false, true, 30.0).current_interval(now),
+			PREVIEW_INTERVAL
+		);
+		// A watched share runs at its own rate.
+		let watched = flags(true, false, 30.0);
+		let mut watched = watched;
+		assert_eq!(watched.current_interval(now), watched.interval);
+	}
+
+	#[test]
+	fn a_share_never_captures_slower_than_its_own_rate_requires() {
+		// A very low frame rate must not be sped up by the idle intervals.
+		let slow = flags(false, true, 0.5);
+		let mut slow = slow;
+		assert_eq!(
+			slow.current_interval(Instant::now()),
+			Duration::from_secs(2)
+		);
+	}
+
+	#[test]
+	fn the_first_viewer_does_not_wait_out_the_idle_interval() {
+		let mut capture = flags(false, false, 30.0);
+		let idle_start = Instant::now();
+		capture.current_interval(idle_start);
+		// The idle schedule pushed the next frame a second away...
+		capture.next_frame = idle_start + IDLE_INTERVAL;
+		// ...and the moment someone starts watching it comes back to now.
+		capture.ready.store(true, Ordering::Release);
+		let watched_at = idle_start + Duration::from_millis(10);
+		capture.current_interval(watched_at);
+		assert_eq!(capture.next_frame, watched_at);
+		// Later frames keep their own schedule instead of resetting every time.
+		capture.next_frame = watched_at + Duration::from_millis(33);
+		capture.current_interval(watched_at + Duration::from_millis(5));
+		assert_eq!(capture.next_frame, watched_at + Duration::from_millis(33));
 	}
 }
 

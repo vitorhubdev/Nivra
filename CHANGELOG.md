@@ -2,6 +2,16 @@
 
 ## Não publicado
 
+### Compartilhamento de tela
+
+- Sem ninguém assistindo, a captura da tela no Windows deixa de ler a tela inteira da GPU a cada quadro. O log de um teste real mostrou o envio parado em "waiting" (sem espectador, o que é normal) enquanto a captura continuava a ~40 quadros por segundo só para descartá-los, o que pesa no sistema inteiro em telas grandes. Agora ela faz 1 quadro por segundo sem espectador e 10 por segundo só enquanto o preview local está aberto, e volta ao ritmo normal assim que alguém assiste.
+
+### PROTECT
+
+- Trocar a rota não derruba mais a sessão nem a chamada quando o escopo é "Vídeos e arquivos" ou "Compartilhamento de tela": só "Voz e câmera" e "Conexão completa" passam pelo gateway ou pela voz. Antes qualquer troca desligava o gateway e reentrava na chamada, e o áudio dos outros podia não voltar.
+- A aba perdeu o título repetido, o texto "Configuração restaurada…" e a frase fixa sobre a conexão anterior, e mostra o nome do perfil ativo na linha de estado. O escopo (o que é roteado) fica na tela principal em vez de escondido em "Avançado". O protocolo não é repetido em cada perfil quando é WireGuard.
+- Importar um perfil novo testa só o novo: o resultado e o país dos outros são mantidos quando a lista é atualizada. O IP de saída é consultado uma única vez por perfil por sessão; "Testar todos" repete só o ping. Uma barra de progresso mostra quantos perfis já foram testados.
+
 ### Diagnóstico
 
 - Novo modo `--ultra-diagnostics` (ou `NIVRA_ULTRA_DIAGNOSTICS=1`): liga de uma vez os diagnósticos de voz, gateway, captura e transmissão e os grava em `nivra-ultra.log`, ao lado do log normal. Os diagnósticos por variável de ambiente iam para o `stderr`, que um `.exe` aberto por duplo clique não mostra. O arquivo é local, gira em 4 arquivos de 4 MiB, mascara segredos e entra no ZIP exportado. Nada é enviado para fora do computador.

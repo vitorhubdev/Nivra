@@ -856,6 +856,16 @@ struct ProtectRejoin {
 }
 /// Longest a route change may take before the call is left for the user to rejoin.
 const PROTECT_REJOIN_WINDOW: Duration = Duration::from_secs(90);
+/// Whether a route change between these scopes has to take the session down: only a route that
+/// carries the gateway (complete connection) or the voice transport (voice and camera) does.
+fn scopes_touch_session(
+	current: Option<model::protect::Scope>,
+	new: Option<model::protect::Scope>,
+) -> bool {
+	use model::protect::Scope;
+	let carries = |scope: Scope| matches!(scope, Scope::Complete | Scope::Voice);
+	current.is_some_and(carries) || new.is_some_and(carries)
+}
 enum ProtectChange {
 	Tested(&'static str),
 	Imported(Zeroizing<String>, String),
@@ -866,6 +876,8 @@ enum ProtectChange {
 		reserve: Option<Arc<protect::Profile>>,
 		reconnect: Option<Arc<SessionSecret>>,
 		epoch: u64,
+		/// The route does not carry the gateway or the call, so both stayed up.
+		kept_session: bool,
 	},
 }
 struct ProtectResult {
@@ -2655,6 +2667,15 @@ impl Desktop {
 		self.protect_done = None;
 		self.protect_scope = None;
 	}
+	/// Only a route that carries the gateway (complete connection) or the voice transport
+	/// (voice and camera) has to take the session down. Videos, files and screen streams open their
+	/// own new connections, so changing them leaves the gateway and a running call untouched.
+	fn protect_touches_session(primary: Option<&protect::Profile>) -> bool {
+		scopes_touch_session(
+			protect::active_scope(),
+			primary.map(|profile| profile.scope),
+		)
+	}
 	fn protect_change_blocked(&self) -> bool {
 		self.state.voice.active.is_some() || self.protect_change_blocked_except_call()
 	}
@@ -2719,7 +2740,8 @@ impl Desktop {
 		if self.protect_worker.is_some() {
 			return Err("Wait for the current PROTECT operation to finish");
 		}
-		let blocked = if primary.is_some() {
+		let keeps_session = !Self::protect_touches_session(primary.as_deref());
+		let blocked = if primary.is_some() || keeps_session {
 			self.protect_change_blocked_except_call()
 		} else {
 			self.protect_change_blocked()
@@ -2730,7 +2752,8 @@ impl Desktop {
 		if self.connection.is_some() && self.connection_secret.is_none() {
 			return Err("Reconnect your session before changing PROTECT");
 		}
-		if primary.is_some()
+		if !keeps_session
+			&& primary.is_some()
 			&& let Some(call) = self.state.voice.active.as_ref()
 		{
 			// The route change tears the connection down; the call is put back once READY returns.
@@ -2743,23 +2766,29 @@ impl Desktop {
 			self.state
 				.disconnect_voice("PROTECT route changed; reconnecting the call");
 		}
-		let reconnect = self.connection.as_ref().and(self.connection_secret.clone());
-		let connection = self.connection.take();
-		self.state.gateway_connected = false;
-		if reconnect.is_some() {
-			self.state.auth = AuthState::Authenticating;
-			self.state.status = "Closing the previous connection before changing PROTECT...";
-		}
-		self.audio.stop();
-		self.video.stop();
-		self.voice.stop();
-		self.cancel_preview();
-		if let Some(worker) = self.avatars.take() {
-			self.avatar_cleanup = Some(worker.shutdown());
-		}
-		let avatar_cleanup = self.avatar_cleanup.take();
-		self.avatar_start_failed = false;
-		self.messaging.clear_avatars();
+		let (reconnect, connection, avatar_cleanup) = if keeps_session {
+			// Nothing to tear down: the next HTTP or stream connection simply uses the new route.
+			(None, None, None)
+		} else {
+			let reconnect = self.connection.as_ref().and(self.connection_secret.clone());
+			let connection = self.connection.take();
+			self.state.gateway_connected = false;
+			if reconnect.is_some() {
+				self.state.auth = AuthState::Authenticating;
+				self.state.status = "Closing the previous connection before changing PROTECT...";
+			}
+			self.audio.stop();
+			self.video.stop();
+			self.voice.stop();
+			self.cancel_preview();
+			if let Some(worker) = self.avatars.take() {
+				self.avatar_cleanup = Some(worker.shutdown());
+			}
+			let avatar_cleanup = self.avatar_cleanup.take();
+			self.avatar_start_failed = false;
+			self.messaging.clear_avatars();
+			(reconnect, connection, avatar_cleanup)
+		};
 		let generation = self.state.generation;
 		let epoch = protect::generation();
 		let (send, receive) = std::sync::mpsc::sync_channel(1);
@@ -2784,6 +2813,7 @@ impl Desktop {
 				reserve,
 				reconnect,
 				epoch,
+				kept_session: keeps_session,
 			});
 			let _ = send.try_send(ProtectResult { generation, change });
 			wake.request_repaint();
@@ -2797,6 +2827,7 @@ impl Desktop {
 		reserve: Option<Arc<protect::Profile>>,
 		reconnect: Option<Arc<SessionSecret>>,
 		epoch: u64,
+		kept_session: bool,
 	) -> Result<&'static str, &'static str> {
 		if protect::generation() != epoch {
 			self.state.auth = AuthState::Failed;
@@ -2804,7 +2835,7 @@ impl Desktop {
 			return Err(self.state.status);
 		}
 		let enabled = primary.is_some();
-		let blocked = if enabled {
+		let blocked = if enabled || kept_session {
 			self.protect_change_blocked_except_call()
 		} else {
 			self.protect_change_blocked()
@@ -2841,6 +2872,13 @@ impl Desktop {
 			));
 		}
 		self.protect_next_health = std::time::Instant::now() + Duration::from_secs(60);
+		if kept_session {
+			return Ok(if enabled {
+				"PROTECT is on for new connections. The call and your session were not interrupted."
+			} else {
+				"PROTECT is off. The call and your session were not interrupted."
+			});
+		}
 		Ok(if enabled {
 			"PROTECT enabled after the previous connection stopped; signaling is reconnecting."
 		} else {
@@ -2985,7 +3023,8 @@ impl Desktop {
 						reserve,
 						reconnect,
 						epoch,
-					}) => self.finish_protect(ctx, primary, reserve, reconnect, epoch),
+						kept_session,
+					}) => self.finish_protect(ctx, primary, reserve, reconnect, epoch, kept_session),
 					Err(reason) => {
 						if self.connection.is_none()
 							&& self.connection_secret.is_some()
@@ -8828,6 +8867,21 @@ impl eframe::App for Desktop {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn only_routes_that_carry_the_gateway_or_the_voice_take_the_session_down() {
+		use model::protect::Scope::{Complete, Streams, Videos, Voice};
+		// Screen streams and files open their own connections: the call and the gateway stay up.
+		assert!(!scopes_touch_session(None, Some(Streams)));
+		assert!(!scopes_touch_session(None, Some(Videos)));
+		assert!(!scopes_touch_session(Some(Streams), None));
+		assert!(!scopes_touch_session(Some(Videos), Some(Streams)));
+		// Voice and the complete connection are carried by the session itself.
+		assert!(scopes_touch_session(None, Some(Voice)));
+		assert!(scopes_touch_session(None, Some(Complete)));
+		// Turning off or leaving a session-level route also needs the teardown.
+		assert!(scopes_touch_session(Some(Complete), None));
+		assert!(scopes_touch_session(Some(Voice), Some(Streams)));
+	}
 
 	#[test]
 	fn protect_shutdown_cancellation_blocks_retries_until_restart() {

@@ -15,6 +15,9 @@ pub(crate) struct Settings {
 	profile_status: String,
 	profiles_busy: bool,
 	profiles_testing: bool,
+	/// How many saved profiles the running test has finished, and how many it will test.
+	test_done: usize,
+	test_total: usize,
 	reveal: bool,
 	/// Exit country, ping and flags are collected by default. This switches them off and
 	/// removes what was fetched.
@@ -57,10 +60,15 @@ impl Settings {
 		ui.horizontal(|ui| {
 			match self.active.filter(|_| self.enabled) {
 				Some(applied) => {
+					let name = self
+						.active_profile
+						.as_deref()
+						.and_then(|id| self.profiles.iter().find(|row| row.id == id))
+						.map(|row| row.name.clone())
+						.unwrap_or_else(|| crate::tr_ui!(ui, "Route active").to_string());
 					ui.label(
 						egui::RichText::new(format!(
-							"● {} · {}",
-							crate::tr_ui!(ui, "Route active"),
+							"● {name} · {}",
 							crate::tr_ui!(ui, applied.label())
 						))
 						.strong()
@@ -93,7 +101,8 @@ impl Settings {
 				ui.spinner();
 			}
 		});
-		if !self.status.is_empty() {
+		// A live route already says everything in the line above; only progress and errors need words.
+		if !self.status.is_empty() && (self.busy || !self.enabled) {
 			ui.label(crate::tr_str!(ui, &self.status));
 		}
 		if demo {
@@ -115,6 +124,15 @@ impl Settings {
 				self.action = Some(Action::Profiles(ProfileAction::CancelTests));
 			}
 		});
+		if self.profiles_testing && self.test_total > 0 {
+			let fraction = self.test_done as f32 / self.test_total as f32;
+			ui.add(
+				egui::ProgressBar::new(fraction)
+					.animate(true)
+					.desired_width(ui.available_width())
+					.text(format!("{} / {}", self.test_done, self.test_total)),
+			);
+		}
 		if self.profiles.is_empty() {
 			ui.label(crate::tr_ui!(
 				ui,
@@ -183,7 +201,7 @@ impl Settings {
 					});
 				}
 			});
-		if !self.profile_status.is_empty() {
+		if !self.profile_status.is_empty() && (self.profiles_busy || self.profiles_testing) {
 			ui.label(
 				egui::RichText::new(crate::tr_str!(ui, &self.profile_status))
 					.small()
@@ -193,7 +211,11 @@ impl Settings {
 	}
 	/// Protocol, test result and (unless removed) the exit country, in one muted line.
 	fn row_detail(ui: &egui::Ui, row: &SavedProfile, flags_removed: bool) -> String {
-		let mut parts = vec![row.protocol.label().to_owned()];
+		// WireGuard is the default; naming it on every row is noise.
+		let mut parts = Vec::new();
+		if row.protocol != Protocol::WireGuard {
+			parts.push(row.protocol.label().to_owned());
+		}
 		if !row.result.is_empty() {
 			if let Some((result, elapsed)) = row
 				.result
@@ -235,48 +257,43 @@ impl Settings {
 			}
 		});
 	}
-	/// Everything the old page showed, folded away: scope, manual proxies, reserve, keys.
-	fn advanced(&mut self, ui: &mut egui::Ui, demo: bool) {
+	/// What to route, chosen before connecting: it decides whether the call is touched at all.
+	fn scope_row(&mut self, ui: &mut egui::Ui) {
 		ui.add_enabled_ui(!self.profiles_busy, |ui| {
-			ui.strong(crate::tr_ui!(ui, "Configure route"));
-			egui::ComboBox::from_id_salt("protect_scope")
-				.selected_text(crate::tr_ui!(ui, self.draft.scope.label()))
-				.show_ui(ui, |ui| {
-					for scope in Scope::ALL {
-						ui.selectable_value(
-							&mut self.draft.scope,
-							scope,
-							crate::tr_ui!(ui, scope.label()),
-						);
-					}
-				});
-			match self.draft.scope {
-				Scope::Videos => {
-					ui.label(crate::tr_ui!(
-						ui,
-						"Routes attachment video and file transfers. Text, voice and camera keep their usual route."
-					));
-				}
-				Scope::Voice => {
-					ui.label(crate::tr_ui!(
-						ui,
-						"Voice and camera use the same Discord socket and move together."
-					));
-				}
-				Scope::Streams => {
-					ui.label(crate::tr_ui!(
-						ui,
-						"Routes screen streams and their audio; voice and camera keep their usual route."
-					));
-				}
-				Scope::Complete => {
-					ui.label(crate::tr_ui!(ui,"Routes account signaling, messages, downloads and live media. Official login and external apps are separate."));
-				}
-			}
-			if self.active.filter(|_| self.enabled).is_some_and(|applied| applied != self.draft.scope) {
+			ui.horizontal(|ui| {
+				ui.label(crate::tr_ui!(ui, "Configure route"));
+				egui::ComboBox::from_id_salt("protect_scope")
+					.selected_text(crate::tr_ui!(ui, self.draft.scope.label()))
+					.show_ui(ui, |ui| {
+						for scope in Scope::ALL {
+							ui.selectable_value(
+								&mut self.draft.scope,
+								scope,
+								crate::tr_ui!(ui, scope.label()),
+							);
+						}
+					});
+			});
+			let colors = crate::design::palette(ui);
+			let explanation = match self.draft.scope {
+				Scope::Videos => crate::tr_ui!(ui, "Routes attachment video and file transfers. Text, voice and camera keep their usual route.").to_string(),
+				Scope::Voice => crate::tr_ui!(ui, "Voice and camera use the same Discord socket and move together.").to_string(),
+				Scope::Streams => crate::tr_ui!(ui, "Routes screen streams and their audio; voice and camera keep their usual route.").to_string(),
+				Scope::Complete => crate::tr_ui!(ui, "Routes account signaling, messages, downloads and live media. Official login and external apps are separate.").to_string(),
+			};
+			ui.label(egui::RichText::new(explanation).small().color(colors.muted));
+			if self
+				.active
+				.filter(|_| self.enabled)
+				.is_some_and(|applied| applied != self.draft.scope)
+			{
 				ui.label(crate::tr_ui!(ui, "Changes not applied yet"));
 			}
-			ui.add_space(8.0);
+		});
+	}
+	/// What most people never need, folded away: manual proxies, reserve, keys.
+	fn advanced(&mut self, ui: &mut egui::Ui, demo: bool) {
+		ui.add_enabled_ui(!self.profiles_busy, |ui| {
 			profile(ui, &mut self.draft, "primary", &mut self.reveal);
 			if self.draft.protocol != Protocol::WireGuard {
 				ui.checkbox(
@@ -336,9 +353,10 @@ impl Settings {
 		ui.label(crate::tr_ui!(ui,"A failed protected route never silently switches to a direct connection. Changing live media routes reconnects the call automatically."));
 	}
 	pub(crate) fn show(&mut self, ui: &mut egui::Ui, demo: bool) {
-		ui.heading(crate::tr_ui!(ui, "PROTECT"));
-		ui.add_space(6.0);
+		// The window already carries the PROTECT title.
 		self.status_header(ui, demo);
+		ui.add_space(6.0);
+		self.scope_row(ui);
 		ui.add_space(10.0);
 		self.profile_list(ui, demo);
 		ui.add_space(8.0);
@@ -381,8 +399,26 @@ impl crate::MessagingUi {
 		self.settings.protect.draft.clone()
 	}
 	pub fn set_protect_profiles(&mut self, profiles: Vec<SavedProfile>) {
-		self.settings.protect.profiles = profiles.into_iter().take(16).collect();
-		self.settings.protect.flags.clear();
+		let protect = &mut self.settings.protect;
+		let previous = std::mem::take(&mut protect.profiles);
+		protect.profiles = profiles
+			.into_iter()
+			.take(16)
+			.map(|mut row| {
+				// A refresh of the list must not erase what was already tested or located.
+				if let Some(old) = previous.iter().find(|old| old.id == row.id) {
+					if row.result.is_empty() {
+						row.result = old.result.clone();
+					}
+					if row.location.is_empty() {
+						row.location = old.location.clone();
+					}
+				}
+				row
+			})
+			.collect();
+		let kept: Vec<String> = protect.profiles.iter().map(|row| row.id.clone()).collect();
+		protect.flags.retain(|id, _| kept.contains(id));
 	}
 	pub fn set_protect_profile_location(
 		&mut self,
@@ -436,6 +472,12 @@ impl crate::MessagingUi {
 		if let Some(id) = protect.activate_after_tests.take() {
 			protect.activate(&id);
 		}
+	}
+	/// Progress of the running profile test, for the bar in the list.
+	pub fn set_protect_profile_progress(&mut self, done: usize, total: usize) {
+		let protect = &mut self.settings.protect;
+		protect.test_done = done.min(total);
+		protect.test_total = total;
 	}
 	pub fn set_protect_profile_result(&mut self, id: &str, result: &str) {
 		if let Some(row) = self
@@ -586,6 +628,39 @@ mod tests {
 			result: String::new(),
 			location: String::new(),
 		}
+	}
+
+	#[test]
+	fn refreshing_the_list_keeps_what_was_already_tested_and_located() {
+		let ctx = egui::Context::default();
+		let mut ui = crate::MessagingUi::default();
+		ui.set_protect_profiles(vec![saved("a")]);
+		ui.set_protect_profile_result("a", "Reachable · 42 ms");
+		ui.set_protect_profile_location(&ctx, "a", "203.0.113.7 · United States (US)", None);
+		// Importing another profile makes the host send the whole list again, without results.
+		ui.set_protect_profiles(vec![saved("a"), saved("b")]);
+		let rows = &ui.settings.protect.profiles;
+		assert_eq!(rows[0].result, "Reachable · 42 ms");
+		assert_eq!(rows[0].location, "203.0.113.7 · United States (US)");
+		assert!(rows[1].result.is_empty() && rows[1].location.is_empty());
+		// A removed profile takes its result with it.
+		ui.set_protect_profiles(vec![saved("b")]);
+		assert_eq!(ui.settings.protect.profiles.len(), 1);
+	}
+
+	#[test]
+	fn the_test_bar_follows_the_host_progress_and_never_overshoots() {
+		let mut ui = crate::MessagingUi::default();
+		ui.set_protect_profile_progress(1, 3);
+		assert_eq!(
+			(
+				ui.settings.protect.test_done,
+				ui.settings.protect.test_total
+			),
+			(1, 3)
+		);
+		ui.set_protect_profile_progress(9, 3);
+		assert_eq!(ui.settings.protect.test_done, 3);
 	}
 
 	#[test]

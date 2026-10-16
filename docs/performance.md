@@ -1,5 +1,20 @@
 # Performance measurements
 
+## Screen share with no viewer — evidence from a real log (October 16, 2026)
+
+Source: the owner's `nivra-ultra.log` from a 1.0.18-based build (`4bb07224`) with
+`--ultra-diagnostics`, two shares of 17 s and about 50 s on a Windows 11 PC. The shares were
+captured but never encoded: every `StreamSend` report shows `waiting` equal to its tick count,
+`announced=0` and `video_send=[0, 0, 0]`, which is the normal state while nobody watches. The
+Windows capture still read the full source from the GPU for 199 to 219 frames per five seconds
+(about 40 a second, 0.8 ms average on the CPU side) and dropped them. The UI itself stayed light
+(`slow=0`, 0.7 ms average CPU per frame).
+
+The capture now keeps one frame a second while nobody watches (ten while the local preview is
+open) and returns to the share rate when a viewer joins. This was reasoned from the log and
+covered by unit tests of the schedule; it was **not measured** on a real share, so the effect on
+the system-wide lag the owner reported is unconfirmed.
+
 ## 1.0.15 integration — Windows x64 (October 11, 2026)
 
 Measured on Windows 11 build 26200, AMD Ryzen 9 5900X, Rust 1.98.1. The baseline

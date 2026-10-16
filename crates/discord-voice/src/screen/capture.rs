@@ -38,10 +38,10 @@ mod imp;
 #[path = "capture_windows.rs"]
 mod imp;
 
-#[cfg(target_os = "windows")]
-pub(crate) use imp::recycle_frame;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) use imp::{Capture, sources};
+#[cfg(target_os = "windows")]
+pub(crate) use imp::{Pacing, recycle_frame};
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn sources() -> Result<Vec<Source>, &'static str> {

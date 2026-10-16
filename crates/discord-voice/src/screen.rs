@@ -286,7 +286,10 @@ fn encode_loop(
 		capture_stop.clone(),
 		ready.clone(),
 		audio_epoch,
-		raw_pending.clone(),
+		capture::Pacing {
+			pending: raw_pending.clone(),
+			preview_visible: preview_visible.clone(),
+		},
 	)?;
 	#[cfg(not(target_os = "windows"))]
 	let _native = capture::Capture::start(

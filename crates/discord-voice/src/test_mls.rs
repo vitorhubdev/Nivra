@@ -287,3 +287,84 @@ fn guild_welcome_requires_announced_members_and_rejects_duplicate_credentials() 
 	);
 	assert!(!alice.ready);
 }
+
+#[test]
+fn held_transitions_queue_by_id_instead_of_replacing_each_other() {
+	let mut dave = Dave::new(1, None, 3).unwrap();
+	let frame = |id: u16| [id.to_be_bytes().as_slice(), &[9, 9]].concat();
+	// Two people joining together announce two transitions back to back.
+	dave.hold(29, &frame(7)).unwrap();
+	dave.hold(29, &frame(8)).unwrap();
+	assert_eq!(dave.take_deferred(7), Some((29, frame(7))));
+	assert_eq!(dave.take_deferred(8), Some((29, frame(8))));
+	assert_eq!(dave.take_deferred(8), None, "each transition is taken once");
+}
+
+#[test]
+fn an_execute_for_a_later_transition_drops_the_superseded_earlier_one() {
+	let mut dave = Dave::new(1, None, 3).unwrap();
+	let frame = |id: u16| [id.to_be_bytes().as_slice(), &[9, 9]].concat();
+	dave.hold(29, &frame(7)).unwrap();
+	dave.hold(29, &frame(8)).unwrap();
+	assert_eq!(dave.take_deferred(8), Some((29, frame(8))));
+	assert_eq!(
+		dave.take_deferred(7),
+		None,
+		"7 never executed and was superseded"
+	);
+}
+
+#[test]
+fn a_repeated_announcement_replaces_its_copy_and_the_queue_is_bounded() {
+	let mut dave = Dave::new(1, None, 3).unwrap();
+	let frame = |id: u16, byte: u8| [id.to_be_bytes().as_slice(), &[byte]].concat();
+	dave.hold(29, &frame(7, 1)).unwrap();
+	dave.hold(29, &frame(7, 2)).unwrap();
+	assert_eq!(dave.take_deferred(7), Some((29, frame(7, 2))));
+	for id in 1..=8 {
+		dave.hold(29, &frame(id, 0)).unwrap();
+	}
+	assert!(
+		dave.hold(29, &frame(99, 0)).is_err(),
+		"too many pending transitions"
+	);
+}
+
+#[test]
+fn a_held_commit_is_applied_at_its_execute_and_keeps_the_group_in_sync() {
+	let server = Delivery::new();
+	let mut alice = Dave::new(1, None, 3).unwrap();
+	let mut bob = Dave::new(2, None, 3).unwrap();
+	let mut charlie = Dave::new(4, None, 3).unwrap();
+	for member in [&mut alice, &mut bob, &mut charlie] {
+		member
+			.session
+			.set_external_sender(&server.external)
+			.unwrap();
+		member.connect(&[1, 2, 4]).unwrap();
+	}
+	let transition = |bytes: &[u8], id: u16| [id.to_be_bytes().as_slice(), bytes].concat();
+	let (commit, welcome) = server.add(&mut alice, &bob.key_package().unwrap());
+	alice.group_changed(29, &transition(&commit, 0)).unwrap();
+	bob.group_changed(30, &transition(&welcome, 0)).unwrap();
+	assert!(alice.ready && bob.ready);
+	// Charlie joins while Bob is already ready: Bob holds the commit until its execute.
+	let proposal = server.add_proposal(&alice, &charlie.key_package().unwrap());
+	let result = alice.proposals(&proposal).unwrap().unwrap();
+	bob.proposals(&proposal).unwrap();
+	let (commit, welcome) = Delivery::split(&result);
+	alice.group_changed(29, &transition(&commit, 7)).unwrap();
+	charlie.group_changed(30, &transition(&welcome, 7)).unwrap();
+	bob.hold(29, &transition(&commit, 7)).unwrap();
+	// Opcode 22 for 7: apply what was held for exactly this transition, then execute.
+	let (opcode, payload) = bob.take_deferred(7).expect("held for transition 7");
+	assert_eq!(bob.group_changed(opcode, &payload).unwrap(), 7);
+	bob.execute(7).unwrap();
+	alice.execute(7).unwrap();
+	charlie.execute(7).unwrap();
+	assert_eq!(bob.session.get_user_ids().unwrap().len(), 3);
+	assert_eq!(
+		bob.session.voice_privacy_code(),
+		alice.session.voice_privacy_code()
+	);
+}

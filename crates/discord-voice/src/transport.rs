@@ -852,7 +852,7 @@ async fn run_inner(
 								if dave.downgrade_pending {
 									dave.finish_downgrade();
 									emit(Status::TransportOnly).map_err(|_|"Call interface closed")?;
-								} else if let Some((opcode,payload))=dave.take_deferred() {
+								} else if let Some((opcode,payload))=dave.take_deferred(id) {
 									match dave.group_changed(opcode,&payload) {
 										Ok(transition_id)=>{
 											if transition_id!=0 && dave.pending==Some(transition_id) {
@@ -861,7 +861,8 @@ async fn run_inner(
 												if was_open {ready_announced=false;}
 											}
 										}
-										Err(_)=>{
+										Err(error)=>{
+											let _=emit(Status::Note(error));
 											let bad=u16::from_be_bytes([payload[0],payload[1]]);
 											json_send(&mut ws,json!({"op":31,"d":{"transition_id":bad}})).await?;
 											if !dave.ready {
@@ -950,7 +951,8 @@ async fn run_inner(
 									}
 									match dave.group_changed(opcode,data){
 										Ok(id)=>{if id!=0 {json_send(&mut ws,json!({"op":23,"d":{"transition_id":id}})).await?;}},
-										Err(_)=>{
+										Err(error)=>{
+											let _=emit(Status::Note(error));
 											let id=u16::from_be_bytes([data[0],data[1]]);
 											json_send(&mut ws,json!({"op":31,"d":{"transition_id":id}})).await?;
 											if !dave.ready {
@@ -1666,7 +1668,7 @@ async fn run_stream_inner(
 							}else{dave.downgrade_pending=false;announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
 					};dave.pending=Some(transition(data)?);if dave.pending==Some(0){if dave.session.is_ready(){dave.execute(0)?;}else if dave.alone(){dave.enter_sole_member_waiting()?;deadline=None;}else{dave.pending=None;dave.ready=false;}}else{json_send(&mut ws,json!({"op":23,"d":{"transition_id":dave.pending}})).await?;}}},
-							22=>{let id=transition(data)?;if dave.downgrade_pending{if dave.pending==Some(id){dave.finish_downgrade();emit(Status::TransportOnly).map_err(|_|"Stream interface closed")?;}}else{let was_open=dave.transport_only;dave.execute(id)?;if was_open{dave.transport_only=false;}}},
+							22=>{let id=transition(data)?;if dave.downgrade_pending{if dave.pending==Some(id){dave.finish_downgrade();emit(Status::TransportOnly).map_err(|_|"Stream interface closed")?;}}else if let Some((opcode,payload))=dave.take_deferred(id){match dave.group_changed(opcode,&payload){Ok(applied)=>{if applied!=0 && dave.pending==Some(applied){let was_open=dave.transport_only;dave.execute(applied)?;if was_open{dave.transport_only=false;}}},Err(error)=>{let _=emit(Status::Note(error));json_send(&mut ws,json!({"op":31,"d":{"transition_id":id}})).await?;if !dave.ready{dave.reset()?;send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;metrics.signal(Signal::KeyPackageSent,1);}}}}else{let was_open=dave.transport_only;dave.execute(id)?;if was_open{dave.transport_only=false;}}},
 							24=>{let version=number(data,"protocol_version")?;if version>1{return Err("Unsupported stream DAVE version");}else if version==0{dave.downgrade_pending=true;}else if number(data,"epoch")?==1{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
 					};let stay=dave.ready||dave.transport_only;dave.reinitialize()?;if stay{dave.transport_only=true;dave.ready=true;}send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;}},
@@ -1677,7 +1679,7 @@ async fn run_stream_inner(
 					},
 					Message::Binary(bytes)=>{if bytes.len()<3{return Err("Truncated stream DAVE signaling");}seq_ack=i64::from(u16::from_be_bytes([bytes[0],bytes[1]]));metrics.signal(Signal::Binary,1);metrics.signal(match bytes[2]{25=>Signal::ExternalSender,27=>Signal::Proposals,29|30=>Signal::Commit,_=>Signal::Other},1);match bytes[2]{25=>dave.session.set_external_sender(&bytes[3..]).map_err(|_|"Stream DAVE external sender validation failed")?,27=>if let Ok(Some(response))=dave.proposals(&bytes[3..]){send(&mut ws,Message::Binary(response.into())).await?;},29|30=>{if bytes.len()>=5 && dave.ready && dave.session.is_ready() && u16::from_be_bytes([bytes[3],bytes[4]])!=0 {dave.hold(bytes[2],&bytes[3..])?;json_send(&mut ws,json!({"op":23,"d":{"transition_id":u16::from_be_bytes([bytes[3],bytes[4]])}})).await?;}else{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
-					};match dave.group_changed(bytes[2],&bytes[3..]){Ok(id)=>if id!=0{json_send(&mut ws,json!({"op":23,"d":{"transition_id":id}})).await?;metrics.signal(Signal::TransitionReadySent,1);},Err(_)=>{if bytes.len()<5{return Err("Truncated stream DAVE transition");}let id=u16::from_be_bytes([bytes[3],bytes[4]]);json_send(&mut ws,json!({"op":31,"d":{"transition_id":id}})).await?;if !dave.ready{dave.reset()?;send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;metrics.signal(Signal::KeyPackageSent,1);}}}}},_=>return Err("Unsupported stream DAVE opcode")}},
+					};match dave.group_changed(bytes[2],&bytes[3..]){Ok(id)=>if id!=0{json_send(&mut ws,json!({"op":23,"d":{"transition_id":id}})).await?;metrics.signal(Signal::TransitionReadySent,1);},Err(error)=>{let _=emit(Status::Note(error));if bytes.len()<5{return Err("Truncated stream DAVE transition");}let id=u16::from_be_bytes([bytes[3],bytes[4]]);json_send(&mut ws,json!({"op":31,"d":{"transition_id":id}})).await?;if !dave.ready{dave.reset()?;send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;metrics.signal(Signal::KeyPackageSent,1);}}}}},_=>return Err("Unsupported stream DAVE opcode")}},
 					Message::Ping(data)=>send(&mut ws,Message::Pong(data)).await?, Message::Close(_)=>return Err("Discord stream connection closed"), _=>{}
 				}
 			}
@@ -2560,7 +2562,7 @@ mod tests {
 						}
 						Status::Connecting | Status::Discovering | Status::Securing
 						| Status::TransportReady | Status::Speaking(_) | Status::CameraAvailable(_)
-						| Status::Ping(_) | Status::TransportOnly
+						| Status::Ping(_) | Status::TransportOnly | Status::Note(_)
 						| Status::Resuming { .. } | Status::Closed { .. } => {}
 					},
 					result = &mut captured_rx, if !captured => {
@@ -3183,7 +3185,7 @@ mod tests {
 							Status::Connecting | Status::Discovering | Status::Securing
 							| Status::TransportReady | Status::Speaking(_) | Status::CameraAvailable(_)
 							| Status::Ping(_) | Status::WaitingForPeer | Status::RemoteAudio
-							| Status::Resuming { .. } | Status::Closed { .. },
+							| Status::Note(_) | Status::Resuming { .. } | Status::Closed { .. },
 						) => {}
 					},
 					_ = capture_tick.tick(), if ready => {

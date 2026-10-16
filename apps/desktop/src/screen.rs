@@ -506,6 +506,11 @@ impl Screen {
 					Status::TransportReady | Status::Securing => "Securing screen video…",
 					Status::WaitingForPeer => "Screen preview · waiting for others",
 					Status::Ready { .. } => "Sharing your screen",
+					// Why a group transition was refused, for the local log; no state changes.
+					Status::Note(reason) => {
+						note("stream_dave_note", reason);
+						return Ok(());
+					}
 					Status::RemoteAudio
 					| Status::Speaking(_)
 					| Status::CameraAvailable(_)

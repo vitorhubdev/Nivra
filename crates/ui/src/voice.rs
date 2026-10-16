@@ -566,7 +566,16 @@ impl MessagingUi {
 						);
 					}
 					if entry.participant.streaming {
-						live_badge(ui);
+						let own = state
+							.user
+							.as_ref()
+							.is_some_and(|me| me.id == entry.participant.user);
+						if own {
+							live_badge(ui);
+						} else if live_badge_button(ui, name).clicked() {
+							// One click: open this channel's stage and watch this person.
+							self.live_open = Some((entry.channel, entry.participant.user));
+						}
 					}
 					ui.allocate_ui_with_layout(
 						egui::vec2(ui.available_width(), 28.0),
@@ -671,6 +680,7 @@ impl MessagingUi {
 						.color(STAGE_MUTED),
 					);
 				}
+				self.live_switcher(&mut body_ui, state, channel, &entries);
 				self.participant_tiles(&mut body_ui, state, channel, &entries, false);
 			}
 		}
@@ -1187,6 +1197,132 @@ impl MessagingUi {
 			self.voice_stream_volume.get_or_insert(100),
 			"Stream volume",
 		);
+	}
+
+	/// A pending LIVE click: open that call's stage and, when not in the call yet, join it.
+	/// The latest click replaces an earlier one; the stream is watched once connected.
+	pub(super) fn apply_live_open(&mut self, state: &mut State, commands: &mut Vec<Command>) {
+		let Some((channel, streamer)) = self.live_open.take() else {
+			return;
+		};
+		if state.selected != Some(channel)
+			&& let Some(command) = state.select(channel)
+		{
+			commands.push(command);
+		}
+		let in_call = state
+			.voice
+			.active
+			.as_ref()
+			.is_some_and(|call| call.channel == channel && call.phase != Phase::Failed);
+		if !in_call
+			&& self
+				.request_call_audio(state, channel, false, None, commands)
+				.is_err()
+		{
+			state.status = "Joining this call is no longer available.";
+			return;
+		}
+		// The stream opens enlarged as soon as it shows video.
+		self.voice_focus = Some(StageFocus::Stream(streamer));
+		self.live_watch = Some(LiveWatch {
+			channel,
+			streamer,
+			until: std::time::Instant::now() + LIVE_WATCH_WAIT,
+		});
+	}
+
+	/// Starts watching a stream chosen with a LIVE click as soon as its call is connected and
+	/// the person is streaming; gives up quietly after `LIVE_WATCH_WAIT`.
+	pub(super) fn apply_live_watch(&mut self, state: &mut State) {
+		let Some(pending) = self.live_watch else {
+			return;
+		};
+		let expired = std::time::Instant::now() >= pending.until;
+		let ready = state.voice.active.as_ref().filter(|call| {
+			call.channel == pending.channel
+				&& matches!(call.phase, Phase::Connected | Phase::Waiting)
+		});
+		let Some(call) = ready else {
+			if expired {
+				self.live_watch = None;
+			}
+			return;
+		};
+		if call.watching == Some(pending.streamer) {
+			self.live_watch = None;
+		} else if call
+			.participants
+			.iter()
+			.any(|participant| participant.user == pending.streamer && participant.streaming)
+		{
+			let _ = state.watch_stream(pending.streamer);
+			self.live_watch = None;
+		} else if expired {
+			self.live_watch = None;
+			state.status = "That stream has ended.";
+		}
+	}
+
+	/// One-click choice among several streams of the connected call, shown from two streams
+	/// on. With one stream, the LIVE click and the tile button already reach it directly.
+	fn live_switcher(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &State,
+		channel: Id,
+		entries: &[RosterEntry],
+	) {
+		let Some(call) = state.voice.active.as_ref().filter(|call| {
+			call.channel == channel && matches!(call.phase, Phase::Connected | Phase::Waiting)
+		}) else {
+			return;
+		};
+		let own = state.user.as_ref().map(|user| user.id);
+		let streamers: Vec<&RosterEntry> = entries
+			.iter()
+			.filter(|entry| entry.participant.streaming && Some(entry.participant.user) != own)
+			.collect();
+		if streamers.len() < 2 {
+			return;
+		}
+		let colors = design::palette(ui);
+		ui.horizontal_wrapped(|ui| {
+			live_badge(ui);
+			for entry in streamers {
+				let (_, name) = resolve_member(state, entry);
+				let watching = call.watching == Some(entry.participant.user);
+				let text = RichText::new(name).color(if watching {
+					colors.accent_text
+				} else {
+					STAGE_TEXT
+				});
+				let button = egui::Button::new(text)
+					.fill(if watching {
+						colors.accent
+					} else {
+						egui::Color32::from_white_alpha(22)
+					})
+					.corner_radius(14);
+				let hint = crate::i18n::text(
+					self.language,
+					if watching {
+						"Stop watching"
+					} else {
+						"Watch stream"
+					},
+				);
+				let response = ui.add(button).on_hover_text(format!("{hint} · {name}"));
+				if response.clicked() {
+					if watching {
+						self.watch_request = Some(None);
+					} else {
+						self.live_open = Some((channel, entry.participant.user));
+					}
+				}
+			}
+		});
+		ui.add_space(6.0);
 	}
 
 	/// Apply a tile's watch click once the stage has mutable state again.
@@ -3692,8 +3828,10 @@ impl MessagingUi {
 	const CONNECTED_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
 	/// A persistent, actionable LIVE notice in the account card, even off the call's channel.
-	/// It reuses the current roster rather than retaining another notification queue.
+	/// Every stream is listed (three at most, then a count), so a second streamer never hides
+	/// behind the first; one click watches it and opens the call's stage.
 	fn stream_live_notice(&mut self, ui: &mut egui::Ui, state: &mut State) {
+		const SHOWN: usize = 3;
 		let Some(call) = state
 			.voice
 			.active
@@ -3703,56 +3841,70 @@ impl MessagingUi {
 			return;
 		};
 		let own = state.user.as_ref().map(|user| user.id);
-		let watching = call.watching;
-		let Some(streamer) = call
+		let (channel, watching) = (call.channel, call.watching);
+		let mut streamers: Vec<Id> = call
 			.participants
 			.iter()
-			.find(|participant| {
-				participant.streaming
-					&& Some(participant.user) != own
-					&& watching.is_none_or(|user| user == participant.user)
-			})
+			.filter(|participant| participant.streaming && Some(participant.user) != own)
 			.map(|participant| participant.user)
-		else {
+			.collect();
+		if streamers.is_empty() {
 			return;
-		};
-		let name = state
-			.voice
-			.roster
+		}
+		// The stream being watched always stays in view, first.
+		if let Some(position) = streamers.iter().position(|user| Some(*user) == watching) {
+			streamers.swap(0, position);
+		}
+		let hidden = streamers.len().saturating_sub(SHOWN);
+		let rows: Vec<(Id, String)> = streamers
 			.iter()
-			.find(|entry| entry.channel == call.channel && entry.participant.user == streamer)
-			.map(|entry| resolve_member(state, entry).1.to_owned())
-			.or_else(|| {
-				state.channel(call.channel).and_then(|channel| {
-					channel
-						.recipients
-						.iter()
-						.find(|user| user.id == streamer)
-						.map(|user| user.name.clone())
-				})
+			.take(SHOWN)
+			.map(|&streamer| {
+				let name = state
+					.voice
+					.roster
+					.iter()
+					.find(|entry| entry.channel == channel && entry.participant.user == streamer)
+					.map(|entry| resolve_member(state, entry).1.to_owned())
+					.or_else(|| {
+						state.channel(channel).and_then(|found| {
+							found
+								.recipients
+								.iter()
+								.find(|user| user.id == streamer)
+								.map(|user| user.name.clone())
+						})
+					})
+					.unwrap_or_else(|| "LIVE".into());
+				(streamer, name)
 			})
-			.unwrap_or_else(|| "LIVE".into());
-		let label = crate::i18n::text(
-			self.language,
-			if watching.is_some() {
-				"Stop watching"
-			} else {
-				"Watch stream"
-			},
-		);
-		ui.horizontal(|ui| {
-			live_badge(ui);
-			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-				if ui.button(label).clicked() {
-					if watching.is_some() {
-						state.stop_watching();
-					} else {
-						let _ = state.watch_stream(streamer);
+			.collect();
+		let watch_label = crate::i18n::text(self.language, "Watch stream");
+		let stop_label = crate::i18n::text(self.language, "Stop watching");
+		for (streamer, name) in rows {
+			let is_watching = watching == Some(streamer);
+			ui.horizontal(|ui| {
+				live_badge(ui);
+				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					let label = if is_watching { stop_label } else { watch_label };
+					if ui.button(label).clicked() {
+						if is_watching {
+							state.stop_watching();
+						} else {
+							self.live_open = Some((channel, streamer));
+						}
 					}
-				}
-				ui.add(egui::Label::new(name).truncate());
+					ui.add(egui::Label::new(name).truncate());
+				});
 			});
-		});
+		}
+		if hidden > 0 {
+			ui.label(
+				RichText::new(format!("+{hidden}"))
+					.small()
+					.color(design::palette(ui).muted),
+			);
+		}
 	}
 
 	/// Call details drawn inside the account card while connected: Discord's "Voice
@@ -4681,6 +4833,16 @@ const HANG_UP: f32 = 64.0;
 const BAR_GAP: f32 = 12.0;
 
 /// Green ring like Discord's speaking indicator; the accessible label still names the state.
+/// A LIVE click that is still opening: the stream to watch once its call is connected.
+#[derive(Clone, Copy)]
+pub(crate) struct LiveWatch {
+	channel: Id,
+	streamer: Id,
+	until: std::time::Instant,
+}
+/// How long a LIVE click may wait for the call to connect and the stream to show up.
+const LIVE_WATCH_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Which stage tile is enlarged; cleared automatically when it stops showing video.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StageFocus {
@@ -5345,9 +5507,24 @@ fn status_icon(ui: &mut egui::Ui, icon: crate::icons::Icon, color: egui::Color32
 	response.on_hover_text(label);
 }
 
+/// A LIVE pill that watches that person's stream when clicked.
+fn live_badge_button(ui: &mut egui::Ui, name: &str) -> egui::Response {
+	let response = live_badge_with(ui, egui::Sense::click());
+	let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+	let label = format!("{} · {name}", crate::tr_ui!(ui, "Watch stream"));
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+	response.on_hover_text(label)
+}
+
 /// Discord's LIVE pill, sized for the channel list row rather than a stage tile.
 fn live_badge(ui: &mut egui::Ui) {
-	let (rect, response) = ui.allocate_exact_size(egui::vec2(32.0, 16.0), egui::Sense::hover());
+	let response = live_badge_with(ui, egui::Sense::hover());
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Live"));
+	response.on_hover_text(crate::tr_ui!(ui, "Streaming"));
+}
+
+fn live_badge_with(ui: &mut egui::Ui, sense: egui::Sense) -> egui::Response {
+	let (rect, response) = ui.allocate_exact_size(egui::vec2(32.0, 16.0), sense);
 	let colors = design::palette(ui);
 	ui.painter().rect_filled(rect, 4, colors.danger);
 	ui.painter().text(
@@ -5357,8 +5534,7 @@ fn live_badge(ui: &mut egui::Ui) {
 		egui::FontId::new(9.0, design::medium_family(ui.ctx())),
 		egui::Color32::WHITE,
 	);
-	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Live"));
-	response.on_hover_text(crate::tr_ui!(ui, "Streaming"));
+	response
 }
 
 fn device_combo(
@@ -5805,7 +5981,12 @@ mod tests {
 		let mut harness = egui_kittest::HarnessBuilder::default()
 			.allow_missing_glyphs()
 			.build_ui_state(
-				|ui, (view, state): &mut (MessagingUi, State)| view.stream_live_notice(ui, state),
+				|ui, (view, state): &mut (MessagingUi, State)| {
+					view.stream_live_notice(ui, state);
+					// The frame hooks of `MessagingUi::show`, which turn the click into a watch.
+					view.apply_live_open(state, &mut Vec::new());
+					view.apply_live_watch(state);
+				},
 				(MessagingUi::default(), state),
 			);
 		harness.run();
@@ -5829,6 +6010,60 @@ mod tests {
 			harness.state().1.voice.active.as_ref().unwrap().channel,
 			Id(25)
 		);
+	}
+
+	#[test]
+	fn a_live_click_opens_the_stage_and_watches_in_one_step() {
+		let mut state = test_support::voice_demo_state();
+		let channel = state.voice.active.as_ref().unwrap().channel;
+		let mut view = MessagingUi {
+			live_open: Some((channel, Id(3))),
+			..MessagingUi::default()
+		};
+		let mut commands = Vec::new();
+		view.apply_live_open(&mut state, &mut commands);
+		assert_eq!(state.selected, Some(channel), "the call's stage opens");
+		assert_eq!(view.voice_focus, Some(StageFocus::Stream(Id(3))));
+		view.apply_live_watch(&mut state);
+		assert_eq!(state.voice.active.as_ref().unwrap().watching, Some(Id(3)));
+		assert!(view.live_watch.is_none() && view.live_open.is_none());
+	}
+
+	#[test]
+	fn a_live_click_on_another_stream_switches_the_watched_one() {
+		let mut state = test_support::voice_demo_state();
+		let channel = state.voice.active.as_ref().unwrap().channel;
+		state.voice.active.as_mut().unwrap().watching = Some(Id(2));
+		let mut view = MessagingUi {
+			live_open: Some((channel, Id(3))),
+			..MessagingUi::default()
+		};
+		view.apply_live_open(&mut state, &mut Vec::new());
+		view.apply_live_watch(&mut state);
+		assert_eq!(state.voice.active.as_ref().unwrap().watching, Some(Id(3)));
+	}
+
+	#[test]
+	fn a_live_watch_waits_for_the_stream_then_gives_up_quietly() {
+		let mut state = test_support::voice_demo_state();
+		let channel = state.voice.active.as_ref().unwrap().channel;
+		// Id(2) is in the call but not streaming.
+		let mut view = MessagingUi {
+			live_watch: Some(LiveWatch {
+				channel,
+				streamer: Id(2),
+				until: std::time::Instant::now() + std::time::Duration::from_secs(30),
+			}),
+			..MessagingUi::default()
+		};
+		view.apply_live_watch(&mut state);
+		assert!(view.live_watch.is_some(), "still waiting for the stream");
+		assert_eq!(state.voice.active.as_ref().unwrap().watching, None);
+		view.live_watch.as_mut().unwrap().until =
+			std::time::Instant::now() - std::time::Duration::from_millis(1);
+		view.apply_live_watch(&mut state);
+		assert!(view.live_watch.is_none());
+		assert_eq!(state.status, "That stream has ended.");
 	}
 
 	#[test]

@@ -111,6 +111,9 @@ pub(super) struct Watch {
 	status: &'static str,
 	/// Why the last view stopped; shown as a stage notice until the next request or hang-up.
 	notice: &'static str,
+	/// When the current view was requested, for the local diagnostics timeline.
+	requested_at: Option<Instant>,
+	first_frame_logged: bool,
 }
 impl Watch {
 	pub fn stop(&mut self) {
@@ -119,6 +122,11 @@ impl Watch {
 		if let Some(live) = self.live.take() {
 			live.task.abort();
 		}
+	}
+	/// Milliseconds since the current view was requested; zero when none was.
+	fn elapsed_ms(&self) -> u128 {
+		self.requested_at
+			.map_or(0, |requested| requested.elapsed().as_millis())
 	}
 	fn context(&self) -> Option<Context> {
 		self.pending
@@ -208,6 +216,8 @@ impl Watch {
 					))) {
 			self.stop();
 			self.status = "Stopped watching";
+			platform::diagnostics::info(&format!("watch: stopped after {} ms", self.elapsed_ms()));
+			self.requested_at = None;
 			if context.generation == state.generation && !state.demo {
 				command = Some(Command::Voice(voice::Command::StopWatching {
 					channel: context.channel,
@@ -221,6 +231,11 @@ impl Watch {
 		}
 		if let Some(message) = self.ended.take() {
 			let context = self.context();
+			platform::diagnostics::warn(&format!(
+				"watch: ended after {} ms: {message}",
+				self.elapsed_ms()
+			));
+			self.requested_at = None;
 			self.stop();
 			self.status = message;
 			self.notice = message;
@@ -275,6 +290,9 @@ impl Watch {
 			});
 			self.status = "Requesting the stream…";
 			self.notice = "";
+			self.requested_at = Some(Instant::now());
+			self.first_frame_logged = false;
+			platform::diagnostics::info("watch: stream requested");
 			command = Some(Command::Voice(voice::Command::WatchStream {
 				channel,
 				request,
@@ -296,6 +314,10 @@ impl Watch {
 			.is_some_and(|pending| pending.rtc.is_some() && pending.server.is_some())
 		{
 			let pending = self.pending.take().expect("complete stream negotiation");
+			platform::diagnostics::info(&format!(
+				"watch: negotiation complete after {} ms",
+				self.elapsed_ms()
+			));
 			if let Err(error) = self.start(runtime, pending, ctx) {
 				self.ended = Some(error);
 			}
@@ -321,6 +343,13 @@ impl Watch {
 					));
 				}
 				self.status = "Watching the stream";
+				if !self.first_frame_logged {
+					self.first_frame_logged = true;
+					platform::diagnostics::info(&format!(
+						"watch: first frame after {} ms",
+						self.elapsed_ms()
+					));
+				}
 			}
 		} else {
 			ui.voice_stream_view = None;
@@ -381,6 +410,11 @@ impl Watch {
 						Status::TransportReady | Status::Securing => "Securing the stream…",
 						Status::WaitingForPeer => "Waiting for the streamer…",
 						Status::Ready { .. } => "Stream secured · waiting for video",
+						// Why a group key transition was refused; logged, no state change.
+						Status::Note(reason) => {
+							platform::diagnostics::info(&format!("watch key transition: {reason}"));
+							return Ok(());
+						}
 						Status::RemoteAudio
 						| Status::Speaking(_)
 						| Status::CameraAvailable(_)

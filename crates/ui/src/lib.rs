@@ -777,6 +777,10 @@ pub struct MessagingUi {
 	pub voice_chat_open: bool,
 	/// Tile click to start (`Some(user)`) or stop (`None`) watching, applied by the stage.
 	watch_request: Option<Option<Id>>,
+	/// A LIVE click waiting to open that stream: (voice channel, streamer).
+	live_open: Option<(Id, Id)>,
+	/// The stream to start watching once its call is connected, with its give-up time.
+	live_watch: Option<voice::LiveWatch>,
 	/// Ring one DM participant again (or stop), applied as a voice command next frame.
 	ring_request: Option<(Id, u64, Id, bool)>,
 	pub voice_inputs: Vec<(String, String)>,
@@ -4612,6 +4616,8 @@ impl MessagingUi {
 			forward: side.forward && !self.button_claimed(egui::PointerButton::Extra2),
 		};
 		let mut commands = Vec::new();
+		self.apply_live_open(state, &mut commands);
+		self.apply_live_watch(state);
 		if self.timeline.batch_restore_notice {
 			self.timeline.batch_restore_notice = false;
 			self.toasts.push(

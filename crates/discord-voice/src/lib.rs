@@ -126,6 +126,9 @@ pub enum Status {
 	Resuming {
 		attempt: u8,
 	},
+	/// A recoverable negotiation problem, as static text with no identifiers, for the local
+	/// diagnostics log. It never changes the call state.
+	Note(&'static str),
 	/// The voice socket closed with `code`; the disposition says what follows.
 	Closed {
 		code: Option<u16>,

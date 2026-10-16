@@ -13,6 +13,8 @@ use zeroize::Zeroize;
 
 pub(crate) const MODE: &str = "aead_xchacha20_poly1305_rtpsize";
 pub(crate) const MAX_PACKET: usize = 4096;
+/// Group transitions that may wait for their execute at once.
+const MAX_HELD_TRANSITIONS: usize = 8;
 pub(crate) const MAX_SIGNAL: usize = 64 * 1024;
 pub(crate) use client_core::voice::MAX_PARTICIPANTS;
 
@@ -315,8 +317,10 @@ pub(crate) struct Dave {
 	epochs: u16,
 	identity: Arc<Identity>,
 	pending_commit: Option<Vec<u8>>,
-	/// Commit or welcome kept until opcode 22 so sends stay on the current epoch key.
-	deferred: Option<(u8, Vec<u8>)>,
+	/// Commits and welcomes kept until their opcode 22 so sends stay on the current epoch key.
+	/// Several can be waiting at once (two people joining together announce two transitions
+	/// back to back), so they queue by transition id instead of replacing each other.
+	deferred: std::collections::VecDeque<(u16, u8, Vec<u8>)>,
 	/// A non-DAVE participant is in the call: transport encryption only, no MLS frames.
 	pub transport_only: bool,
 	/// Opcode 21 or 24 announced protocol version 0. Applied on execute_transition.
@@ -348,7 +352,7 @@ impl Dave {
 			epochs: 0,
 			identity,
 			pending_commit: None,
-			deferred: None,
+			deferred: std::collections::VecDeque::new(),
 			transport_only: false,
 			downgrade_pending: false,
 		})
@@ -464,7 +468,7 @@ impl Dave {
 		self.waiting = false;
 		self.pending = None;
 		self.pending_commit = None;
-		self.deferred = None;
+		self.deferred.clear();
 		self.downgrade_pending = false;
 		self.transport_only = false;
 		self.session
@@ -557,22 +561,36 @@ impl Dave {
 			}
 		}
 	}
-	/// Hold one MLS commit or welcome until `dave_protocol_execute_transition`.
+	/// Hold an MLS commit or welcome until `dave_protocol_execute_transition` for its id.
+	/// Earlier transitions stay queued behind it; a repeated announcement of the same id
+	/// replaces its earlier copy.
 	pub fn hold(&mut self, opcode: u8, payload: &[u8]) -> Result<(), &'static str> {
 		if payload.len() < 2 || payload.len() > MAX_SIGNAL {
 			return Err("Truncated DAVE group transition");
 		}
-		self.deferred = Some((opcode, payload.to_vec()));
+		let id = u16::from_be_bytes([payload[0], payload[1]]);
+		self.deferred.retain(|(known, ..)| *known != id);
+		if self.deferred.len() >= MAX_HELD_TRANSITIONS {
+			return Err("Too many pending DAVE transitions");
+		}
+		self.deferred.push_back((id, opcode, payload.to_vec()));
 		Ok(())
 	}
-	pub fn take_deferred(&mut self) -> Option<(u8, Vec<u8>)> {
-		self.deferred.take()
+	/// The held commit or welcome for transition `id`. Transitions announced before it that
+	/// never executed were superseded by the server and are dropped; later ones stay queued
+	/// for their own execute.
+	pub fn take_deferred(&mut self, id: u16) -> Option<(u8, Vec<u8>)> {
+		let position = self.deferred.iter().position(|(known, ..)| *known == id)?;
+		self.deferred.drain(..position);
+		self.deferred
+			.pop_front()
+			.map(|(_, opcode, payload)| (opcode, payload))
 	}
 	/// Stop MLS frame encryption and keep the XChaCha20 transport key.
 	pub fn finish_downgrade(&mut self) {
 		self.downgrade_pending = false;
 		self.pending = None;
-		self.deferred = None;
+		self.deferred.clear();
 		self.transport_only = true;
 		self.ready = true;
 		self.waiting = false;

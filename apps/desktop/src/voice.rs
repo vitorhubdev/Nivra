@@ -1896,6 +1896,11 @@ impl Voice {
 							status_wake.request_repaint();
 							return Ok(());
 						}
+						// Why a group key transition was refused; logged, never a call state.
+						Status::Note(reason) => {
+							platform::diagnostics::info(&format!("voice key transition: {reason}"));
+							return Ok(());
+						}
 					};
 					status.try_send(notice).map_err(|_| ())?;
 					status_wake.request_repaint();

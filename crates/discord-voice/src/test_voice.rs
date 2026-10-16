@@ -438,6 +438,7 @@ async fn close_behaviour(code: Option<u16>) -> Result<(), &'static str> {
 							Status::Speaking(_) => "speaking",
 							Status::TransportOnly => "transport-only",
 							Status::Resuming { .. } => "resuming",
+							Status::Note(_) => "note",
 							Status::Closed { .. } => "closed",
 						});
 					}

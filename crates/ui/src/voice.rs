@@ -4017,6 +4017,8 @@ impl MessagingUi {
 		let own = state.user.as_ref().map(|user| user.id);
 		let channel = call.channel;
 		let watching = call.watching_primary();
+		// Every watched stream shows Stop, not only the primary one.
+		let watched = call.watching_all().to_vec();
 		let mut streamers: Vec<Id> = call
 			.participants
 			.iter()
@@ -4057,7 +4059,7 @@ impl MessagingUi {
 		let watch_label = crate::i18n::text(self.language, "Watch stream");
 		let stop_label = crate::i18n::text(self.language, "Stop watching");
 		for (streamer, name) in rows {
-			let is_watching = watching == Some(streamer);
+			let is_watching = watched.contains(&streamer);
 			ui.horizontal(|ui| {
 				live_badge(ui);
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

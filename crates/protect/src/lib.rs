@@ -16,6 +16,8 @@ mod wg_engine;
 mod wg_inlet;
 mod wireguard;
 pub use wireguard::prepare;
+mod location;
+pub use location::{ExitLocation, exit_location};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 pub struct Profile {
@@ -520,7 +522,7 @@ const TCP_FAILED: &str = "TCP/TLS: failed · UDP: not tested";
 const TCP_REJECTED: &str = "TCP/TLS: ok · Discord rejected the probe · UDP: not tested";
 const UDP_NOT_NEEDED: &str =
 	"TCP/TLS: ok · UDP: not needed for videos and files · No account credentials were sent";
-const UDP_OK: &str = "TCP/TLS: ok · UDP: ok · Voice, camera and streams can use this route";
+const UDP_OK: &str = "TCP/TLS: ok · UDP DNS: ok · Live media not tested";
 const UDP_ASSOCIATION: &str = "TCP/TLS: ok · UDP: SOCKS5 association failed";
 const UDP_SEND: &str = "TCP/TLS: ok · UDP: send failed";
 const UDP_TIMEOUT: &str = "TCP/TLS: ok · UDP: timed out";

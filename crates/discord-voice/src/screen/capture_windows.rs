@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use windows_capture::{
 	capture::{CaptureControl, Context, GraphicsCaptureApiHandler},
 	frame::Frame,
-	graphics_capture_api::InternalCaptureControl,
+	graphics_capture_api::{GraphicsCaptureApi, InternalCaptureControl},
 	monitor::Monitor,
 	settings::{
 		ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
@@ -92,14 +92,17 @@ struct Flags {
 	interval: Duration,
 }
 
-struct Handler(Flags);
+struct Handler(Flags, crate::diagnostics::Metrics);
 
 impl GraphicsCaptureApiHandler for Handler {
 	type Flags = Flags;
 	type Error = &'static str;
 
 	fn new(context: Context<Self::Flags>) -> Result<Self, Self::Error> {
-		Ok(Self(context.flags))
+		Ok(Self(
+			context.flags,
+			crate::diagnostics::Metrics::new(crate::diagnostics::Scope::ScreenVideo),
+		))
 	}
 
 	fn on_frame_arrived(
@@ -139,10 +142,16 @@ impl GraphicsCaptureApiHandler for Handler {
 			control.stop();
 			return Err("Captured frame exceeds the 4K limit");
 		}
-		let mut buffer = frame.buffer().map_err(|_| {
+		// Measure the actual GPU readback, excluding time between compositor callbacks.
+		// Metrics enqueue fixed-size aggregates only; the reporter owns all log I/O.
+		let started = self.1.start();
+		let buffer = frame.buffer().map_err(|_| {
 			self.0.stop.store(true, Ordering::Release);
 			"Captured frame could not be read"
-		})?;
+		});
+		self.1.finish(crate::diagnostics::Stage::Receive, started);
+		let mut buffer = buffer?;
+		let started = self.1.start();
 		let stride = buffer.row_pitch() as usize;
 		let Some(source_len) = stride.checked_mul(height as usize) else {
 			self.0.stop.store(true, Ordering::Release);
@@ -161,7 +170,7 @@ impl GraphicsCaptureApiHandler for Handler {
 		for row in source[..source_len].chunks_exact(stride) {
 			data.extend_from_slice(&row[..row_bytes]);
 		}
-		if self
+		let dropped = self
 			.0
 			.frames
 			.try_send(RawFrame {
@@ -170,10 +179,12 @@ impl GraphicsCaptureApiHandler for Handler {
 				stride: row_bytes,
 				data,
 			})
-			.is_err()
-		{
+			.is_err();
+		if dropped {
 			self.0.pending.store(false, Ordering::Release);
 		}
+		self.1.finish(crate::diagnostics::Stage::Mix, started);
+		self.1.poll(false, u64::from(dropped), false, 0);
 		Ok(())
 	}
 
@@ -294,7 +305,14 @@ where
 		},
 		DrawBorderSettings::WithoutBorder,
 		SecondaryWindowSettings::Default,
-		MinimumUpdateIntervalSettings::Default,
+		// Pace the compositor as well as the consumer. Dropping callbacks alone still
+		// asks Windows to capture at the display's refresh rate (often 144/240 Hz).
+		// Older Windows releases keep the existing callback-side throttle.
+		if GraphicsCaptureApi::is_minimum_update_interval_supported().unwrap_or(false) {
+			MinimumUpdateIntervalSettings::Custom(flags.interval)
+		} else {
+			MinimumUpdateIntervalSettings::Default
+		},
 		DirtyRegionSettings::Default,
 		ColorFormat::Bgra8,
 		flags,

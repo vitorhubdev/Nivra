@@ -2438,7 +2438,7 @@ impl MessagingUi {
 					self.update_banner(ui);
 					divider(ui);
 				}
-				if in_call {
+				if in_call || self.voice_switch.is_some() {
 					self.voice_card_section(ui, state, commands);
 					divider(ui);
 				}

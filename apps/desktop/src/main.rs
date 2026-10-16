@@ -35,6 +35,7 @@ mod notification_sounds;
 mod pointer;
 #[cfg(feature = "demo")]
 mod post_menu_demo;
+mod protect_profiles;
 mod reading_settings;
 #[cfg(feature = "demo")]
 mod rendering_demo;
@@ -905,6 +906,7 @@ struct Desktop {
 	/// Redacted, zeroizing session already owned by Connection; never persisted here.
 	connection_secret: Option<Arc<SessionSecret>>,
 	protect_worker: Option<tokio::task::JoinHandle<()>>,
+	protect_profiles: protect_profiles::Manager,
 	protect_rejoin: Option<ProtectRejoin>,
 	protect_done: Option<std::sync::mpsc::Receiver<ProtectResult>>,
 	protect_scope: Option<u64>,
@@ -2336,6 +2338,7 @@ impl Desktop {
 			connection: None,
 			connection_secret: None,
 			protect_worker: None,
+			protect_profiles: protect_profiles::Manager::default(),
 			protect_rejoin: None,
 			protect_done: None,
 			protect_scope: None,
@@ -2798,6 +2801,11 @@ impl Desktop {
 		})
 	}
 	fn poll_protect(&mut self, ctx: &egui::Context) {
+		if !self.state.demo && !self.fixture_only {
+			self.protect_profiles.scope(self.state.generation);
+			self.protect_profiles
+				.poll(&self.runtime, ctx, &mut self.messaging);
+		}
 		if !self.state.demo
 			&& !self.fixture_only
 			&& protect::has_fallback()
@@ -2943,6 +2951,12 @@ impl Desktop {
 			);
 			return;
 		}
+		let Some(action) =
+			self.protect_profiles
+				.handle(action, &self.runtime, ctx, &mut self.messaging)
+		else {
+			return;
+		};
 		if matches!(action, model::protect::Action::Disable) {
 			let result = self.apply_protect(ctx, None, None);
 			self.messaging.set_protect_operation_status(
@@ -3009,6 +3023,11 @@ impl Desktop {
 						Ok(ProtectChange::Imported(config))
 					}
 					model::protect::Action::Test(draft) => {
+						if draft.protocol == model::protect::Protocol::WireGuard
+							&& protect::enabled()
+						{
+							return Err("Disable PROTECT before testing another WireGuard tunnel");
+						}
 						let profile = protect::prepare(&draft).await?;
 						protect::test(profile).await.map(ProtectChange::Tested)
 					}
@@ -3025,6 +3044,9 @@ impl Desktop {
 						Ok(ProtectChange::Prepared(primary, reserve))
 					}
 					model::protect::Action::Disable => unreachable!(),
+					model::protect::Action::Profiles(_) => {
+						unreachable!("profile actions handled separately")
+					}
 				}
 			};
 			let change = tokio::time::timeout(Duration::from_secs(60), operation)

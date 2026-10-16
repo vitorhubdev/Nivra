@@ -340,6 +340,8 @@ struct CameraTest {
 
 /// A bounded automatic rejoin after a transport drop that preserves the voice session.
 struct Reconnect {
+	generation: u64,
+	request: u64,
 	channel: Id,
 	muted: bool,
 	deafened: bool,
@@ -366,6 +368,8 @@ pub struct Voice {
 	reconnect: Option<Reconnect>,
 	/// Attempts already spent on the current drop, cleared once a call connects.
 	reconnect_attempts: u8,
+	recovery_deadline: Option<Instant>,
+	recovery_scope: Option<(u64, u64)>,
 	retiring: Option<mpsc::Receiver<()>>,
 	device_scan: Option<mpsc::Receiver<Result<discord_voice::audio::DeviceList, &'static str>>>,
 	camera_scan: Option<mpsc::Receiver<Result<discord_voice::camera::DeviceList, &'static str>>>,
@@ -683,6 +687,34 @@ impl Voice {
 		ctx: &egui::Context,
 	) -> Option<Command> {
 		let retry = self.reconnect.as_ref()?;
+		if retry.generation != state.generation
+			|| !state.voice.active.as_ref().is_some_and(|call| {
+				call.channel == retry.channel
+					&& call.request == retry.request
+					&& call.phase == Phase::Failed
+			}) {
+			self.reconnect = None;
+			self.recovery_deadline = None;
+			self.reconnect_attempts = 0;
+			ui.voice_reconnecting = false;
+			return None;
+		}
+		if self
+			.recovery_deadline
+			.is_some_and(|deadline| Instant::now() >= deadline)
+		{
+			self.reconnect = None;
+			self.recovery_deadline = None;
+			ui.voice_reconnecting = false;
+			return self.fail(state, "Connection recovery timed out; rejoin the call");
+		}
+		if !state.gateway_connected || self.retiring.is_some() {
+			if let Some(call) = state.voice.active.as_mut() {
+				call.error = Some("Waiting for connection…");
+			}
+			ctx.request_repaint_after(Duration::from_millis(250));
+			return None;
+		}
 		if Instant::now() < retry.at {
 			ctx.request_repaint_after(retry.at.saturating_duration_since(Instant::now()));
 			return None;
@@ -690,6 +722,14 @@ impl Voice {
 		let retry = self.reconnect.take()?;
 		match state.start_call_with_mute(retry.channel, false, retry.muted, retry.deafened) {
 			Some(command) => {
+				self.recovery_scope = state
+					.voice
+					.active
+					.as_ref()
+					.map(|call| (state.generation, call.request));
+				if let Some(call) = state.voice.active.as_mut() {
+					call.error = Some("Joining call…");
+				}
 				platform::diagnostics::info(&format!(
 					"voice reconnect attempt {}/{} started for channel {}",
 					self.reconnect_attempts, RECONNECT_ATTEMPTS, retry.channel
@@ -726,17 +766,18 @@ impl Voice {
 			// The gateway still owns the failed request until it is released. Releasing it here,
 			// before the scheduled Join, keeps the rejoin from being refused as "still leaving".
 			let release = self.end_control(channel, request);
+			self.recovery_scope = Some((state.generation, request));
+			self.recovery_deadline
+				.get_or_insert_with(|| Instant::now() + Duration::from_secs(90));
 			self.reconnect = Some(Reconnect {
+				generation: state.generation,
+				request,
 				channel,
 				muted,
 				deafened,
 				at: Instant::now() + delay,
 			});
-			let message = match attempt {
-				1 => "Reconnecting… (attempt 1 of 3)",
-				2 => "Reconnecting… (attempt 2 of 3)",
-				_ => "Reconnecting… (attempt 3 of 3)",
-			};
+			let message = "Reconnecting…";
 			// The scheduled rejoin may only replace a call in `Failed`; keep the visible
 			// reconnecting message after the transition.
 			state.apply_voice(client_core::voice::Event::Failed {
@@ -760,6 +801,8 @@ impl Voice {
 			return Some(release);
 		}
 		self.reconnect = None;
+		self.recovery_deadline = None;
+		self.recovery_scope = None;
 		ui.voice_reconnecting = false;
 		let final_message: &'static str = match (attempts, closed) {
 			(0, _) => error,
@@ -781,6 +824,33 @@ impl Voice {
 		));
 		self.fail(state, final_message)
 	}
+	fn expire_recovery(&mut self, state: &mut State, ui: &mut ui::MessagingUi) -> Option<Command> {
+		let scope = self.recovery_scope?;
+		if !state
+			.voice
+			.active
+			.as_ref()
+			.is_some_and(|call| scope == (state.generation, call.request))
+		{
+			self.reconnect = None;
+			self.recovery_deadline = None;
+			self.recovery_scope = None;
+			self.reconnect_attempts = 0;
+			ui.voice_reconnecting = false;
+			return None;
+		}
+		if self
+			.recovery_deadline
+			.is_some_and(|at| Instant::now() >= at)
+		{
+			self.reconnect = None;
+			self.recovery_deadline = None;
+			self.recovery_scope = None;
+			ui.voice_reconnecting = false;
+			return self.fail(state, "Connection recovery timed out; rejoin the call");
+		}
+		None
+	}
 	pub fn poll(
 		&mut self,
 		runtime: &Runtime,
@@ -789,8 +859,13 @@ impl Voice {
 		ctx: &egui::Context,
 	) -> Option<Command> {
 		self.reap();
+		if let Some(command) = self.expire_recovery(state, ui) {
+			return Some(command);
+		}
 		if state.voice.active.is_none() {
 			self.reconnect = None;
+			self.recovery_deadline = None;
+			self.recovery_scope = None;
 			self.reconnect_attempts = 0;
 			ui.voice_reconnecting = false;
 		}
@@ -802,7 +877,11 @@ impl Voice {
 				.filter(|call| call.phase == Phase::Failed)
 		{
 			self.reconnect_attempts = 0;
+			self.recovery_deadline = Some(Instant::now() + Duration::from_secs(90));
+			self.recovery_scope = Some((state.generation, call.request));
 			self.reconnect = Some(Reconnect {
+				generation: state.generation,
+				request: call.request,
 				channel: call.channel,
 				muted: call.muted,
 				deafened: call.deafened,
@@ -1283,10 +1362,19 @@ impl Voice {
 				.voice
 				.active
 				.as_ref()
-				.is_some_and(|call| call.phase == Phase::Connected);
+				.is_some_and(|call| matches!(call.phase, Phase::Connected | Phase::Waiting));
 			if connected && ui.voice_reconnecting {
+				if let Some(call) = state.voice.active.as_mut()
+					&& matches!(
+						call.error,
+						Some("Joining call…" | "Waiting for connection…" | "Reconnecting…")
+					) {
+					call.error = None;
+				}
 				ui.voice_reconnecting = false;
 				self.reconnect = None;
+				self.recovery_deadline = None;
+				self.recovery_scope = None;
 				self.reconnect_attempts = 0;
 				push_membership_cue(&mut ui.notification_cues, Sound::UserJoin);
 				platform::diagnostics::info("voice reconnected; call restored");
@@ -2116,7 +2204,7 @@ mod tests {
 		);
 		assert_eq!(
 			state.voice.active.as_ref().unwrap().error,
-			Some("Reconnecting… (attempt 1 of 3)")
+			Some("Reconnecting…")
 		);
 		assert!(ui.voice_reconnecting);
 		assert!(manager.reconnect.is_some());
@@ -2131,6 +2219,111 @@ mod tests {
 			state.voice.active.as_ref().unwrap().phase,
 			Phase::Connecting
 		);
+	}
+
+	#[test]
+	fn recovery_waits_for_gateway_without_spending_another_attempt() {
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		state.gateway_connected = true;
+		state.start_call(Id(22), false).unwrap();
+		let mut manager = Voice::default();
+		let mut ui = ui::MessagingUi::default();
+		let ctx = egui::Context::default();
+		manager.fail_with_retry(
+			&mut state,
+			&mut ui,
+			&ctx,
+			discord_voice::failure::SOCKET_FAILED,
+			None,
+		);
+		manager.reconnect.as_mut().unwrap().at = Instant::now();
+		state.gateway_connected = false;
+		assert!(manager.poll_reconnect(&mut state, &mut ui, &ctx).is_none());
+		assert_eq!(manager.reconnect_attempts, 1);
+		assert_eq!(
+			state.voice.active.as_ref().unwrap().error,
+			Some("Waiting for connection…")
+		);
+		assert!(manager.reconnect.is_some());
+		state.gateway_connected = true;
+		assert!(matches!(
+			manager.poll_reconnect(&mut state, &mut ui, &ctx),
+			Some(Command::Voice(voice::Command::Join {
+				channel: Id(22),
+				ring: false,
+				..
+			}))
+		));
+		assert!(manager.poll_reconnect(&mut state, &mut ui, &ctx).is_none());
+	}
+
+	#[test]
+	fn recovery_expires_and_never_rejoins_after_leave_or_replacement() {
+		for outcome in 0..4 {
+			let mut state = test_support::demo_state();
+			state.demo = false;
+			state.gateway_connected = true;
+			state.start_call(Id(22), false).unwrap();
+			let mut manager = Voice::default();
+			let mut ui = ui::MessagingUi::default();
+			let ctx = egui::Context::default();
+			manager.fail_with_retry(
+				&mut state,
+				&mut ui,
+				&ctx,
+				discord_voice::failure::SOCKET_FAILED,
+				None,
+			);
+			manager.reconnect.as_mut().unwrap().at = Instant::now();
+			match outcome {
+				0 => {
+					manager.recovery_deadline = Some(Instant::now());
+					state.gateway_connected = false;
+				}
+				1 => {
+					state.leave_call();
+				}
+				2 => {
+					state.generation += 1;
+				}
+				_ => {
+					state.voice.active.as_mut().unwrap().request += 1;
+				}
+			}
+			assert!(!matches!(
+				manager.poll_reconnect(&mut state, &mut ui, &ctx),
+				Some(Command::Voice(voice::Command::Join { .. }))
+			));
+			assert!(manager.reconnect.is_none());
+			assert!(!ui.voice_reconnecting);
+		}
+	}
+
+	#[test]
+	fn recovery_deadline_covers_an_already_sent_join() {
+		let mut state = test_support::demo_state();
+		state.demo = false;
+		state.gateway_connected = true;
+		state.start_call(Id(22), false).unwrap();
+		let mut manager = Voice::default();
+		let mut ui = ui::MessagingUi::default();
+		let ctx = egui::Context::default();
+		manager.fail_with_retry(
+			&mut state,
+			&mut ui,
+			&ctx,
+			discord_voice::failure::SOCKET_FAILED,
+			None,
+		);
+		manager.reconnect.as_mut().unwrap().at = Instant::now();
+		assert!(manager.poll_reconnect(&mut state, &mut ui, &ctx).is_some());
+		assert!(manager.reconnect.is_none());
+		manager.recovery_deadline = Some(Instant::now());
+		assert!(manager.expire_recovery(&mut state, &mut ui).is_some());
+		assert_eq!(state.voice.active.as_ref().unwrap().phase, Phase::Failed);
+		assert!(!ui.voice_reconnecting);
+		assert!(manager.recovery_deadline.is_none());
 	}
 
 	#[test]

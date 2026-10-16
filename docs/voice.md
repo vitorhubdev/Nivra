@@ -12,6 +12,23 @@ Voice is included in every build without a feature flag. Source builds require C
 
 ## Implemented behavior and limits
 
+Local call switches retain one replaceable destination while the old request and audio
+devices leave. A newer click replaces that destination without sending another departure
+or extending the original 30-second switch deadline. Cancel discards the destination;
+late departure events cannot restart it. Temporary Gateway loss preserves an accepted
+switch, but new joins still require authenticated signaling and current access.
+
+Transport recovery waits for the Gateway and local audio teardown inside one 90-second
+recovery deadline, with at most three sent rejoin attempts. Waiting for signaling does not
+spend another attempt. The scheduled request is scoped to the account generation and old
+call request, so leaving or replacing it cancels recovery. The interface distinguishes
+waiting for a connection from joining; counters remain diagnostic information. These are
+offline-tested state transitions, not proof of cross-client live takeover.
+
+The account call card exposes an actionable LIVE notice while a participant streams,
+including when browsing another text channel. Watching and stopping reception never
+leave the call. Compact participant tiles retain these actions as well.
+
 Guild voice channels have a chat icon with a **Show chat / Hide chat** tooltip in the channel header.
 Chat uses the existing message timeline, composer, drafts and permission checks without
 requiring a voice connection. Wide windows place chat beside the stage; narrow windows

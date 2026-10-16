@@ -110,11 +110,70 @@ pub enum Action {
 	Enable(Draft, Option<Draft>),
 	Disable,
 	ImportWireGuard,
+	Profiles(ProfileAction),
+}
+
+/// Saved rows contain no credentials. The host owns bounded persistence and tests.
+#[derive(Clone)]
+pub struct SavedProfile {
+	pub id: String,
+	pub name: String,
+	pub protocol: Protocol,
+	pub scope: Scope,
+	pub result: String,
+	pub location: String,
+}
+pub enum ProfileAction {
+	Save { name: String, draft: Draft },
+	Load(String),
+	Delete(String),
+	TestAll { location: bool },
+	CancelTests,
+}
+
+/// Only recognized public fields are displayed or written to the local copy.
+/// Unknown directives and comments may contain secrets and are omitted.
+pub fn public_wireguard(config: &str) -> String {
+	let mut public = String::new();
+	for line in config.lines() {
+		let line = line.split(['#', ';']).next().unwrap_or_default().trim();
+		if matches!(line, "[Interface]" | "[Peer]") {
+			public.push_str(line);
+			public.push('\n');
+		} else if let Some((key, value)) = line.split_once('=') {
+			let key = key.trim();
+			if matches!(
+				key,
+				"Address"
+					| "DNS" | "MTU" | "PublicKey"
+					| "Endpoint" | "AllowedIPs"
+					| "PersistentKeepalive"
+			) {
+				public.push_str(key);
+				public.push_str(" = ");
+				public.push_str(value.trim());
+				public.push('\n');
+			}
+		}
+	}
+	public
 }
 
 #[cfg(test)]
 mod missing_tests {
 	use super::{Draft, Protocol, Scope};
+
+	#[test]
+	fn public_configuration_excludes_private_keys_comments_and_unknown_directives() {
+		let config = "[Interface]\nPrivateKey = hidden\nAddress = 10.0.0.1/32 # secret comment\nDNS = 1.1.1.1\n[Peer]\nPresharedKey = more-hidden\nPublicKey = public\nEndpoint = example.invalid:51820\nSecret = unknown\n";
+		let public = super::public_wireguard(config);
+		assert!(public.contains("Address = 10.0.0.1/32\n"));
+		assert!(public.contains("DNS = 1.1.1.1"));
+		assert!(public.contains("PublicKey = public"));
+		for hidden in ["hidden", "comment", "unknown", "PrivateKey", "PresharedKey"] {
+			assert!(!public.contains(hidden));
+		}
+	}
 
 	#[test]
 	fn an_unconfigured_route_is_never_reported_ready() {

@@ -2091,3 +2091,60 @@ arithmetic cost is noise at these sizes: the twice-per-row `timestamp` (0.24 µs
 the per-frame row-height sum (~1–3 µs for 1,000 rows) and the gateway's member
 mirror clone (~0.1 ms per network dispatch, not per frame). Avoiding them would
 trade scroll-extent and atomicity correctness for no measurable gain.
+
+## Windows screen conversion and compositor pacing (October 15, 2026)
+
+Baseline: `dbe2d7df`, `crates/discord-voice/src/screen/convert.rs`. Measured on
+Windows x64, Ryzen 9 5900X, Rust 1.98.1, standalone `rustc --edition 2024 -O`
+harness compiling the actual converter source before and after the change. This
+is a synthetic CPU conversion workload, not desktop capture, GPU timing, encoded
+video throughput, call quality, UI latency or whole-process CPU/RSS.
+
+One deterministic 3840×2160 packed BGRA source (`byte[i] = (i * 31) % 251`),
+NV12 destination, four conversion bands, ten warmup conversions, then five
+batches of 30 conversions per size. Table: median milliseconds per frame from
+the first alternating before/after pair; a second pair confirmed the 720p/1080p
+direction. No screen or microphone was opened. The local measurement harness and
+original/final source copies remain under ignored `target/capture-bench/`.
+
+| Destination | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| 854×480 | 1.5373 ms | 1.5479 ms | +0.0106 ms / +0.7%; noise |
+| 1280×720 | 1.7718 ms | 1.6928 ms | −0.0791 ms / −4.5% |
+| 1920×1080 | 7.2349 ms | 5.7958 ms | −1.4391 ms / −19.9% |
+
+Second-pair medians: 480p 1.5406→1.5249 ms; 720p 1.7494→1.6644 ms;
+1080p 7.1670→5.6744 ms. All measured destination byte sums matched the baseline;
+the independent general-bilinear rounding test also checks every sampled channel
+on integral, half-pixel and fractional scales with padded source rows. The
+existing BT.601, chroma-layout, letterbox and band equivalence checks remain.
+
+Integral and half-pixel sampling avoid redundant per-channel weighted
+multiplications. Each screen encoder now retains one geometry/stride plan and
+band scratch, eliminating the two axis plus eight row-scratch allocations per
+frame on this four-band host. These cached vectors retain at most 512,640 bytes
+at the existing 3840×2160 limit; they contain coordinates and scratch RGB rows,
+not a frame history. A resize replaces the plan. Temporary construction may
+overlap the old and new plan. Thread creation remains bounded at three scoped
+workers per frame: the measured single-band alternative was 3.5–3.7× slower and
+was rejected. This does not claim zero allocations per frame.
+
+Windows Graphics Capture additionally requests the selected frame interval from
+the compositor when the native API supports it. Older systems retain the
+callback-side throttle. This removes the request for default compositor cadence;
+the actual GPU/compositor reduction and the reported whole-computer mouse lag
+still require owner-operated measurement. Full-source GPU readback remains;
+no unsupported claim of zero-copy or GPU-side downscaling is made.
+
+Opt-in bounded voice diagnostics now report Windows screen worker stages under
+`ScreenVideo`: `receive` measures `frame.buffer()` GPU readback, `mix` measures
+the raw CPU copy and queue handoff, and `encode` on the separate encoder worker
+measures conversion plus encoding. Time between frames is excluded. Reports
+from the capture and encoder workers are separate aggregate lines. The existing
+bounded nonblocking reporter handles log I/O outside capture/encoding callbacks.
+Use these stages with OS GPU/driver measurements to distinguish readback stalls
+from encoder load during an owner-controlled reproduction.
+
+Package size, process CPU/RSS, live capture/GPU stalls and input latency were not
+measured by this component workload; full-delivery evidence must record them
+separately where available.

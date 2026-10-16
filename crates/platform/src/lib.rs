@@ -13,6 +13,7 @@ pub mod notifications;
 pub mod pointer;
 pub mod priority;
 pub mod processes;
+pub mod protect_profiles;
 pub mod save;
 pub mod shortcut;
 pub mod single_instance;

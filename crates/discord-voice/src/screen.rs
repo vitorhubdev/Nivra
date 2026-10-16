@@ -300,6 +300,7 @@ fn encode_loop(
 	let mut next_frame = Instant::now();
 	let mut next_preview = Instant::now();
 	let mut latest_frame = None;
+	let mut metrics = crate::diagnostics::Metrics::new(crate::diagnostics::Scope::ScreenVideo);
 
 	while !stop.load(Ordering::Acquire) && !send.is_closed() {
 		#[cfg(target_os = "windows")]
@@ -403,10 +404,14 @@ fn encode_loop(
 			});
 		}
 		let force_keyframe = keyframe.swap(false, Ordering::AcqRel);
-		let (data, is_keyframe) = encoding.as_mut().expect("secure screen encoder").encode(
+		let started = metrics.start();
+		let encoded = encoding.as_mut().expect("secure screen encoder").encode(
 			latest_frame.as_ref().expect("latest screen frame"),
 			force_keyframe,
-		)?;
+		);
+		metrics.finish(crate::diagnostics::Stage::Encode, started);
+		metrics.poll(false, 0, false, 0);
+		let (data, is_keyframe) = encoded?;
 		if force_keyframe && (data.is_empty() || !is_keyframe) {
 			keyframe.store(true, Ordering::Release);
 		}
@@ -453,6 +458,7 @@ struct ScreenEncoder {
 	software: Option<Encoder>,
 	/// Reused I420 picture for openh264.
 	i420: Vec<u8>,
+	converter: convert::Converter,
 	hardware: Option<crate::video_encode::hardware::Encoder>,
 	settings: Settings,
 	bitrate: u32,
@@ -486,6 +492,7 @@ impl ScreenEncoder {
 			diagnostics: crate::diagnostics::EncoderRegistration::new(true, hardware.is_some()),
 			software,
 			i420: Vec::new(),
+			converter: convert::Converter::default(),
 			hardware,
 			settings,
 			bitrate,
@@ -533,7 +540,8 @@ impl ScreenEncoder {
 			let encoded = hardware.encode(&frame.data, (width, height), force_keyframe);
 			#[cfg(target_os = "windows")]
 			let encoded = hardware.encode_with(width * height * 3 / 2, force_keyframe, |picture| {
-				convert::bgra_to_yuv420(frame, width, height, convert::Chroma::Interleaved, picture)
+				self.converter
+					.convert(frame, width, height, convert::Chroma::Interleaved, picture)
 			});
 			if let Ok(encoded) = encoded {
 				return Ok(encoded);
@@ -546,7 +554,7 @@ impl ScreenEncoder {
 			software_force = true;
 		}
 		self.i420.resize(width * height * 3 / 2, 0);
-		convert::bgra_to_yuv420(
+		self.converter.convert(
 			frame,
 			width,
 			height,

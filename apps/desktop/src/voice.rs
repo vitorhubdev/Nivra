@@ -11,7 +11,11 @@ use eframe::egui;
 use model::{Id, notification_preferences::Sound};
 use std::{
 	collections::VecDeque,
-	sync::{Arc, OnceLock, mpsc},
+	sync::{
+		Arc, OnceLock,
+		atomic::{AtomicBool, Ordering},
+		mpsc,
+	},
 	time::{Duration, Instant},
 };
 use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
@@ -325,6 +329,12 @@ fn store_camera_frame(picture: &mut CameraPicture, rgb: &[u8]) -> bool {
 	true
 }
 
+/// Whether remote camera pictures reach a visible stage: the call channel is selected
+/// and the window is not minimized.
+fn stage_visible(selected: Option<Id>, channel: Id, minimized: bool) -> bool {
+	selected == Some(channel) && !minimized
+}
+
 struct MicPreview {
 	audio: Audio,
 	devices: Devices,
@@ -373,6 +383,10 @@ pub struct Voice {
 	retiring: Option<mpsc::Receiver<()>>,
 	device_scan: Option<mpsc::Receiver<Result<discord_voice::audio::DeviceList, &'static str>>>,
 	camera_scan: Option<mpsc::Receiver<Result<discord_voice::camera::DeviceList, &'static str>>>,
+	/// Whether remote camera pictures could be seen on the call stage. The decoder
+	/// threads check this before waking the UI, so hidden cameras never schedule
+	/// full-window redraws; their newest pictures stay marked pending meanwhile.
+	camera_visible: Arc<AtomicBool>,
 }
 impl Voice {
 	pub fn stop(&mut self) {
@@ -1264,9 +1278,14 @@ impl Voice {
 			}
 			// Cameras nobody can see (another channel open, or the window minimized) are not
 			// uploaded to the GPU. Their pictures stay marked pending, so the latest one is
-			// sent when the stage is visible again.
-			let stage_visible = state.selected == Some(live.channel)
-				&& !ctx.input(|input| input.viewport().minimized.unwrap_or(false));
+			// sent when the stage is visible again. The decoder threads read the same flag
+			// before waking the UI, so hidden cameras never schedule full-window redraws either.
+			let stage_visible = stage_visible(
+				state.selected,
+				live.channel,
+				ctx.input(|input| input.viewport().minimized.unwrap_or(false)),
+			);
+			self.camera_visible.store(stage_visible, Ordering::Release);
 			let pictures = if stage_visible {
 				live.remote_video
 					.try_lock()
@@ -1804,10 +1823,15 @@ impl Voice {
 			Arc::new(std::sync::Mutex::new(Vec::new()));
 		let pictures = remote_video.clone();
 		let picture_wake = ctx.clone();
+		let picture_visible = self.camera_visible.clone();
+		// A fresh call starts woken: the first poll corrects this flag, while starting
+		// hidden would delay remote cameras until an unrelated repaint.
+		picture_visible.store(true, Ordering::Release);
 		let sink: discord_voice::VideoSink = Arc::new(move |frame: discord_voice::RemoteFrame| {
 			if pictures
 				.lock()
 				.is_ok_and(|mut pictures| store_remote_frame(&mut pictures, frame))
+				&& picture_visible.load(Ordering::Acquire)
 			{
 				picture_wake.request_repaint();
 			}
@@ -2514,6 +2538,23 @@ mod tests {
 		}
 		assert_eq!(queue.len(), 10);
 		assert!(queue.iter().all(|cue| *cue == Sound::UserJoin));
+	}
+
+	#[test]
+	fn camera_visibility_needs_the_selected_unminimized_call_channel() {
+		let channel = Id(20);
+		assert!(stage_visible(Some(channel), channel, false));
+		assert!(!stage_visible(Some(channel), channel, true));
+		assert!(!stage_visible(Some(Id(21)), channel, false));
+		assert!(!stage_visible(None, channel, false));
+	}
+
+	#[test]
+	fn hidden_cameras_start_unwoken_until_poll_marks_them_visible() {
+		let voice = Voice::default();
+		assert!(!voice.camera_visible.load(Ordering::Acquire));
+		voice.camera_visible.store(true, Ordering::Release);
+		assert!(voice.camera_visible.load(Ordering::Acquire));
 	}
 
 	#[test]

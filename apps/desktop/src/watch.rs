@@ -5,7 +5,10 @@ use discord_voice::{Identity, Status};
 use eframe::egui;
 use model::Id;
 use std::{
-	sync::{Arc, Mutex},
+	sync::{
+		Arc, Mutex,
+		atomic::{AtomicBool, Ordering},
+	},
 	time::{Duration, Instant},
 };
 use tokio::{runtime::Runtime, sync::watch, task::JoinHandle};
@@ -70,6 +73,12 @@ fn store_frame(
 	true
 }
 
+/// Whether a decoded stream frame reaches a visible surface: the floating window or the
+/// selected channel of a non-minimized main window.
+fn stream_visible(pip: bool, selected: Option<Id>, channel: Id, minimized: bool) -> bool {
+	pip || (selected == Some(channel) && !minimized)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Context {
 	generation: u64,
@@ -114,6 +123,10 @@ pub(super) struct Watch {
 	/// When the current view was requested, for the local diagnostics timeline.
 	requested_at: Option<Instant>,
 	first_frame_logged: bool,
+	/// Whether the latest decoded frame could be seen (main stage or PiP). The decoder
+	/// thread checks this before waking the UI, so a hidden stream never schedules
+	/// full-window redraws; the bounded slot keeps the newest frame meanwhile.
+	visible: Arc<AtomicBool>,
 }
 impl Watch {
 	pub fn stop(&mut self) {
@@ -334,9 +347,15 @@ impl Watch {
 			let image = live.frames.try_lock().ok().and_then(|mut slot| slot.take());
 			// A stream nobody can see (another channel open, or the window minimized) is not
 			// uploaded to the GPU: the frame is dropped here and the next visible one is shown.
-			let visible = ui.voice_stream_pip
-				|| (state.selected == Some(live.context.channel)
-					&& !ctx.input(|input| input.viewport().minimized.unwrap_or(false)));
+			// The decoder thread reads the same flag before waking the UI, so hidden frames
+			// never schedule full-window redraws either.
+			let visible = stream_visible(
+				ui.voice_stream_pip,
+				state.selected,
+				live.context.channel,
+				ctx.input(|input| input.viewport().minimized.unwrap_or(false)),
+			);
+			self.visible.store(visible, Ordering::Release);
 			if let Some(image) = image.filter(|_| visible) {
 				if let Some(texture) = &mut ui.voice_stream_view {
 					texture.set(image, egui::TextureOptions::LINEAR);
@@ -361,6 +380,7 @@ impl Watch {
 			}
 		} else {
 			ui.voice_stream_view = None;
+			self.visible.store(false, Ordering::Release);
 		}
 		ui.voice_stream_status = if wanted.is_some() {
 			self.status
@@ -392,6 +412,10 @@ impl Watch {
 		let frames = Arc::new(Mutex::new(None));
 		let slot = frames.clone();
 		let wake = ctx.clone();
+		let visible = self.visible.clone();
+		// A fresh view starts woken: the first poll corrects this flag, while starting
+		// hidden would delay the first frame until an unrelated repaint.
+		visible.store(true, Ordering::Release);
 		let streamer = pending.context.streamer.0;
 		let sink: discord_voice::VideoSink = Arc::new(move |frame: discord_voice::RemoteFrame| {
 			if frame.user != streamer {
@@ -400,6 +424,7 @@ impl Watch {
 			if slot
 				.lock()
 				.is_ok_and(|mut slot| store_frame(&mut slot, frame))
+				&& visible.load(Ordering::Acquire)
 			{
 				wake.request_repaint();
 			}
@@ -470,6 +495,25 @@ mod tests {
 			height,
 			rgba,
 		}
+	}
+
+	#[test]
+	fn stream_visibility_needs_pip_or_the_selected_unminimized_channel() {
+		let channel = Id(20);
+		assert!(stream_visible(true, None, channel, true));
+		assert!(stream_visible(true, Some(Id(21)), channel, true));
+		assert!(stream_visible(false, Some(channel), channel, false));
+		assert!(!stream_visible(false, Some(channel), channel, true));
+		assert!(!stream_visible(false, Some(Id(21)), channel, false));
+		assert!(!stream_visible(false, None, channel, false));
+	}
+
+	#[test]
+	fn hidden_views_start_unwoken_until_poll_marks_them_visible() {
+		let watch = Watch::default();
+		assert!(!watch.visible.load(Ordering::Acquire));
+		watch.visible.store(true, Ordering::Release);
+		assert!(watch.visible.load(Ordering::Acquire));
 	}
 
 	#[test]

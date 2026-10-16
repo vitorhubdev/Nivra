@@ -289,15 +289,104 @@ fn save(name: String, draft: Draft) -> Result<(), &'static str> {
 	result
 }
 
+fn snapshot_row(path: &std::path::Path) -> Result<Option<Row>, &'static str> {
+	let file = match std::fs::File::open(path.join("current.json")) {
+		Ok(file) => file,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+		Err(_) => return Err(STORE_ERROR),
+	};
+	let mut bytes = Vec::new();
+	file.take(1025)
+		.read_to_end(&mut bytes)
+		.map_err(|_| STORE_ERROR)?;
+	if bytes.len() > 1024 {
+		return Err(STORE_ERROR);
+	}
+	let row: Row = serde_json::from_slice(&bytes).map_err(|_| STORE_ERROR)?;
+	row.visible()?;
+	Ok(Some(row))
+}
+
+fn remember_in(
+	path: &std::path::Path,
+	draft: &Draft,
+	put: impl Fn(&str, &[u8]) -> Result<(), &'static str>,
+	forget: impl Fn(&str),
+) -> Result<(), &'static str> {
+	use std::io::Write;
+	std::fs::create_dir_all(path).map_err(|_| STORE_ERROR)?;
+	if std::fs::read_dir(path)
+		.map_err(|_| STORE_ERROR)?
+		.take(9)
+		.count()
+		> 8
+	{
+		return Err("Remembered configuration folder exceeds its file limit");
+	}
+	let old = snapshot_row(path)?;
+	let bytes = encode(draft)?;
+	let mut random = [0; 16];
+	getrandom::fill(&mut random).map_err(|_| STORE_ERROR)?;
+	let id: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+	put(&id, &bytes)?;
+	let row = Row {
+		id: id.clone(),
+		name: "Last configuration".into(),
+		protocol: bytes[0],
+		scope: bytes[1],
+		secret_bytes: bytes.len(),
+	};
+	let result = (|| {
+		std::fs::write(
+			path.join(format!("{id}.conf")),
+			model::protect::public_wireguard(&draft.wireguard),
+		)
+		.map_err(|_| STORE_ERROR)?;
+		let mut file = std::fs::File::create(path.join("current.tmp")).map_err(|_| STORE_ERROR)?;
+		file.write_all(&serde_json::to_vec(&row).map_err(|_| STORE_ERROR)?)
+			.map_err(|_| STORE_ERROR)?;
+		file.sync_all().map_err(|_| STORE_ERROR)?;
+		drop(file);
+		std::fs::rename(path.join("current.tmp"), path.join("current.json"))
+			.map_err(|_| STORE_ERROR)
+	})();
+	if result.is_err() {
+		forget(&id);
+		let _ = std::fs::remove_file(path.join(format!("{id}.conf")));
+		let _ = std::fs::remove_file(path.join("current.tmp"));
+	} else if let Some(old) = old {
+		forget(&old.id);
+		let _ = std::fs::remove_file(path.join(format!("{}.conf", old.id)));
+	}
+	result
+}
+
+fn remember(draft: &Draft) -> Result<(), &'static str> {
+	remember_in(
+		&folder()?.join("remembered"),
+		draft,
+		|id, bytes| platform::protect_profiles::save(id, bytes).map_err(|_| STORE_ERROR),
+		|id| {
+			let _ = platform::protect_profiles::forget(id);
+		},
+	)
+}
+
 enum Event {
+	Initial(
+		Result<Vec<SavedProfile>, &'static str>,
+		Result<Option<Draft>, &'static str>,
+	),
 	Rows(Vec<SavedProfile>, &'static str),
-	Loaded(Draft),
+	Loaded(Draft, Result<(), &'static str>),
+	Remembered,
 	Result(String, String),
 	Location(String, String, Option<eframe::egui::ColorImage>),
 	Finished(Result<&'static str, &'static str>),
 }
 #[derive(Default)]
 pub struct Manager {
+	pending_save: Option<Draft>,
 	started: bool,
 	testing: bool,
 	worker: Option<tokio::task::JoinHandle<()>>,
@@ -319,6 +408,7 @@ impl Manager {
 			}
 			self.receive = None;
 			self.started = false;
+			self.pending_save = None;
 			self.testing = false;
 			self.generation = Some(generation);
 		}
@@ -332,6 +422,11 @@ impl Manager {
 		if !self.started {
 			self.started = true;
 			self.start(None, runtime, ctx, ui);
+		}
+		if self.worker.is_none()
+			&& let Some(draft) = self.pending_save.take()
+		{
+			self.start(Some(ProfileAction::Remember(draft)), runtime, ctx, ui);
 		}
 		for _ in 0..64 {
 			let event = match self.receive.as_ref().map(|r| r.try_recv()) {
@@ -350,11 +445,22 @@ impl Manager {
 				_ => None,
 			};
 			match event {
+				Some(Event::Initial(rows, draft)) => {
+					if let Ok(rows) = rows {
+						ui.set_protect_profiles(rows);
+					}
+					if self.pending_save.is_none()
+						&& let Ok(Some(draft)) = draft
+					{
+						ui.set_protect_draft(draft);
+					}
+				}
 				Some(Event::Rows(rows, status)) => {
 					ui.set_protect_profiles(rows);
 					ui.set_protect_profile_status(status, true, self.testing);
 				}
-				Some(Event::Loaded(draft)) => ui.set_protect_draft(draft),
+				Some(Event::Loaded(draft, _)) => ui.set_protect_draft(draft),
+				Some(Event::Remembered) => {}
 				Some(Event::Result(id, result)) => ui.set_protect_profile_result(&id, &result),
 				Some(Event::Location(id, text, flag)) => {
 					ui.set_protect_profile_location(ctx, &id, &text, flag)
@@ -368,6 +474,9 @@ impl Manager {
 				None => break,
 			}
 		}
+	}
+	pub fn remember(&mut self, draft: Draft) {
+		self.pending_save = Some(draft);
 	}
 	pub fn handle(
 		&mut self,
@@ -517,20 +626,32 @@ impl Manager {
 			} else {
 				match bounded_store(move || -> Result<Event, &'static str> {
 					match action {
-						None => Ok(Event::Rows(visible_rows()?, "Saved profiles ready")),
+						None => {
+							let draft = snapshot_row(&folder()?.join("remembered"))
+								.and_then(|row| row.map(|row| load(&row)).transpose());
+							Ok(Event::Initial(visible_rows(), draft))
+						}
+						Some(ProfileAction::Remember(draft)) => {
+							remember(&draft)?;
+							Ok(Event::Remembered)
+						}
 						Some(ProfileAction::Save { name, draft }) => {
-							save(name, draft)?;
-							Ok(Event::Rows(
-								visible_rows()?,
-								"Profile saved in the OS credential store",
-							))
+							save(name, draft.clone())?;
+							let status = if remember(&draft).is_ok() {
+								"Profile saved in the OS credential store"
+							} else {
+								"Named profile saved, but remembering the current configuration failed"
+							};
+							Ok(Event::Rows(visible_rows()?, status))
 						}
 						Some(ProfileAction::Load(id)) => {
 							let row = rows()?
 								.into_iter()
 								.find(|r| r.id == id)
 								.ok_or(STORE_ERROR)?;
-							Ok(Event::Loaded(load(&row)?))
+							let draft = load(&row)?;
+							let remembered = remember(&draft);
+							Ok(Event::Loaded(draft, remembered))
 						}
 						Some(ProfileAction::Delete(id)) => {
 							if !rows()?.iter().any(|r| r.id == id) {
@@ -556,8 +677,19 @@ impl Manager {
 				{
 					Ok(Ok(event)) => {
 						let status = match &event {
+							Event::Initial(_, Err(error)) | Event::Initial(Err(error), _) => *error,
+							Event::Initial(_, Ok(Some(_))) => {
+								"Configuration restored; enable PROTECT to apply it"
+							}
+							Event::Initial(_, Ok(None)) => "Saved profiles ready",
+							Event::Remembered => {
+								"Configuration saved securely; available after restart"
+							}
 							Event::Rows(_, status) => *status,
-							Event::Loaded(_) => "Profile loaded; test before enabling",
+							Event::Loaded(_, Ok(())) => "Profile loaded; test before enabling",
+							Event::Loaded(_, Err(_)) => {
+								"Profile loaded, but remembering it failed; save again before closing"
+							}
 							_ => "Protected profile operation completed",
 						};
 						publish(event);
@@ -575,6 +707,143 @@ impl Manager {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	struct SnapshotDirectory(PathBuf);
+	impl SnapshotDirectory {
+		fn new() -> Self {
+			let mut nonce = [0; 16];
+			getrandom::fill(&mut nonce).unwrap();
+			let name: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+			Self(std::env::temp_dir().join(format!("nivra-protect-test-{name}")))
+		}
+	}
+	impl Drop for SnapshotDirectory {
+		fn drop(&mut self) {
+			let _ = std::fs::remove_dir_all(&self.0);
+		}
+	}
+
+	#[test]
+	fn remembered_configuration_survives_reopen_and_replacement_without_plaintext_secrets() {
+		let directory = SnapshotDirectory::new();
+		let secrets = std::cell::RefCell::new(std::collections::HashMap::<String, Vec<u8>>::new());
+		let mut draft = Draft {
+			protocol: Protocol::WireGuard,
+			scope: Scope::Complete,
+			..Draft::default()
+		};
+		draft.wireguard.push_str("[Interface]\nPrivateKey = synthetic-private\nAddress = 10.0.0.2/32\n[Peer]\nPresharedKey = synthetic-preshared\nEndpoint = example.invalid:51820\n");
+		let store = |id: &str, bytes: &[u8]| {
+			secrets.borrow_mut().insert(id.into(), bytes.to_vec());
+			Ok(())
+		};
+		let forget = |id: &str| {
+			secrets.borrow_mut().remove(id);
+		};
+		remember_in(&directory.0, &draft, store, forget).unwrap();
+		let first = snapshot_row(&directory.0).unwrap().unwrap();
+		let restored = decode(&secrets.borrow()[&first.id]).unwrap();
+		assert_eq!(restored.wireguard.as_str(), draft.wireguard.as_str());
+		assert_eq!(restored.scope, Scope::Complete);
+		for file in std::fs::read_dir(&directory.0).unwrap() {
+			let bytes = std::fs::read(file.unwrap().path()).unwrap();
+			let text = String::from_utf8(bytes).unwrap();
+			assert!(!text.contains("synthetic-private"));
+			assert!(!text.contains("synthetic-preshared"));
+		}
+		draft.scope = Scope::Streams;
+		remember_in(&directory.0, &draft, store, forget).unwrap();
+		let next = snapshot_row(&directory.0).unwrap().unwrap();
+		assert_ne!(first.id, next.id);
+		assert!(!secrets.borrow().contains_key(&first.id));
+		assert!(!directory.0.join(format!("{}.conf", first.id)).exists());
+		assert_eq!(secrets.borrow().len(), 1);
+		assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 2);
+		assert_eq!(
+			decode(&secrets.borrow()[&next.id]).unwrap().scope,
+			Scope::Streams
+		);
+	}
+
+	#[test]
+	fn failed_snapshot_publication_keeps_the_previous_configuration() {
+		let directory = SnapshotDirectory::new();
+		let secrets = std::cell::RefCell::new(std::collections::HashMap::<String, Vec<u8>>::new());
+		let store = |id: &str, bytes: &[u8]| {
+			secrets.borrow_mut().insert(id.into(), bytes.to_vec());
+			Ok(())
+		};
+		let forget = |id: &str| {
+			secrets.borrow_mut().remove(id);
+		};
+		let draft = Draft {
+			host: "example.invalid".into(),
+			..Draft::default()
+		};
+		remember_in(&directory.0, &draft, store, forget).unwrap();
+		let first = snapshot_row(&directory.0).unwrap().unwrap();
+		assert!(remember_in(&directory.0, &draft, |_, _| Err(STORE_ERROR), forget).is_err());
+		assert_eq!(snapshot_row(&directory.0).unwrap().unwrap().id, first.id);
+		std::fs::create_dir(directory.0.join("current.tmp")).unwrap();
+		assert!(remember_in(&directory.0, &draft, store, forget).is_err());
+		assert_eq!(snapshot_row(&directory.0).unwrap().unwrap().id, first.id);
+		assert_eq!(secrets.borrow().len(), 1);
+		assert!(secrets.borrow().contains_key(&first.id));
+		std::fs::remove_dir(directory.0.join("current.tmp")).unwrap();
+		std::fs::write(directory.0.join("current.json"), vec![b' '; 1025]).unwrap();
+		assert!(snapshot_row(&directory.0).is_err());
+	}
+
+	#[test]
+	fn a_broken_named_list_does_not_discard_a_restorable_configuration() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let (send, receive) = mpsc::sync_channel(2);
+		let draft = Draft {
+			host: "restored.invalid".into(),
+			..Draft::default()
+		};
+		send.send(Event::Initial(Err(STORE_ERROR), Ok(Some(draft))))
+			.ok()
+			.unwrap();
+		send.send(Event::Finished(Err(STORE_ERROR))).ok().unwrap();
+		let mut manager = Manager {
+			started: true,
+			receive: Some(receive),
+			pending_save: None,
+			testing: false,
+			worker: None,
+			generation: None,
+		};
+		let mut ui = ui::MessagingUi::default();
+		manager.poll(&runtime, &eframe::egui::Context::default(), &mut ui);
+		assert_eq!(ui.protect_draft().host, "restored.invalid");
+	}
+
+	#[test]
+	fn loading_a_valid_profile_survives_a_failed_remember_operation() {
+		let runtime = tokio::runtime::Runtime::new().unwrap();
+		let (send, receive) = mpsc::sync_channel(2);
+		let draft = Draft {
+			host: "loaded.invalid".into(),
+			..Draft::default()
+		};
+		send.send(Event::Loaded(draft, Err(STORE_ERROR)))
+			.ok()
+			.unwrap();
+		send.send(Event::Finished(Err(STORE_ERROR))).ok().unwrap();
+		let mut manager = Manager {
+			started: true,
+			receive: Some(receive),
+			pending_save: None,
+			testing: false,
+			worker: None,
+			generation: None,
+		};
+		let mut ui = ui::MessagingUi::default();
+		manager.poll(&runtime, &eframe::egui::Context::default(), &mut ui);
+		assert_eq!(ui.protect_draft().host, "loaded.invalid");
+	}
+
 	#[test]
 	fn cancellation_retains_the_blocking_store_slot_until_the_operation_exits() {
 		let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -607,6 +876,7 @@ mod tests {
 	fn route_changes_require_cancelling_the_running_batch_first() {
 		let runtime = tokio::runtime::Runtime::new().unwrap();
 		let mut manager = Manager {
+			pending_save: None,
 			started: false,
 			testing: true,
 			worker: None,

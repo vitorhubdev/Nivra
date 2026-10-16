@@ -24,6 +24,9 @@ use windows_capture::{
 #[path = "audio_windows.rs"]
 mod audio;
 
+#[path = "readback_windows.rs"]
+mod readback;
+
 fn monitor_id(monitor: &Monitor) -> u64 {
 	u64::try_from(monitor.as_raw_hmonitor() as usize).unwrap_or(0)
 }
@@ -92,7 +95,7 @@ struct Flags {
 	interval: Duration,
 }
 
-struct Handler(Flags, crate::diagnostics::Metrics);
+struct Handler(Flags, crate::diagnostics::Metrics, readback::Reader);
 
 impl GraphicsCaptureApiHandler for Handler {
 	type Flags = Flags;
@@ -102,6 +105,7 @@ impl GraphicsCaptureApiHandler for Handler {
 		Ok(Self(
 			context.flags,
 			crate::diagnostics::Metrics::new(crate::diagnostics::Scope::ScreenVideo),
+			readback::Reader::default(),
 		))
 	}
 
@@ -145,12 +149,12 @@ impl GraphicsCaptureApiHandler for Handler {
 		// Measure the actual GPU readback, excluding time between compositor callbacks.
 		// Metrics enqueue fixed-size aggregates only; the reporter owns all log I/O.
 		let started = self.1.start();
-		let buffer = frame.buffer().map_err(|_| {
+		let buffer = self.2.read(frame).map_err(|_| {
 			self.0.stop.store(true, Ordering::Release);
 			"Captured frame could not be read"
 		});
 		self.1.finish(crate::diagnostics::Stage::Receive, started);
-		let mut buffer = buffer?;
+		let buffer = buffer?;
 		let started = self.1.start();
 		let stride = buffer.row_pitch() as usize;
 		let Some(source_len) = stride.checked_mul(height as usize) else {
@@ -161,7 +165,7 @@ impl GraphicsCaptureApiHandler for Handler {
 			self.0.stop.store(true, Ordering::Release);
 			return Err("Captured frame stride exceeds the 4K limit");
 		}
-		let source = buffer.as_raw_buffer();
+		let source = buffer.bytes();
 		if source.len() < source_len {
 			self.0.stop.store(true, Ordering::Release);
 			return Err("Captured frame buffer is incomplete");

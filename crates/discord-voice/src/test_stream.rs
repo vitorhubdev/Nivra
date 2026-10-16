@@ -112,12 +112,19 @@ fn credentials(user: u64) -> VoiceConnection {
 
 #[tokio::test]
 async fn local_stream_sender_and_viewer_deliver_audio_and_video() {
-	timeout(Duration::from_secs(15), exchange())
+	timeout(Duration::from_secs(15), exchange(false))
 		.await
 		.expect("Synthetic Go Live exchange timed out");
 }
 
-async fn exchange() {
+#[tokio::test]
+async fn local_stream_downgrade_keeps_transport_encrypted_audio_and_video() {
+	timeout(Duration::from_secs(15), exchange(true))
+		.await
+		.expect("Synthetic downgraded Go Live exchange timed out");
+}
+
+async fn exchange(downgrade: bool) {
 	let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 	let url = format!("ws://{}", listener.local_addr().unwrap());
 	let (frames_tx, frames) = tokio::sync::mpsc::channel(3);
@@ -142,6 +149,8 @@ async fn exchange() {
 		audio_epoch: epoch.clone(),
 	};
 	let sender_url = url.clone();
+	let transport_only = Arc::new(AtomicBool::new(false));
+	let sender_transport_only = transport_only.clone();
 	let sender = tokio::spawn(async move {
 		run_stream_inner(
 			credentials(1),
@@ -149,7 +158,12 @@ async fn exchange() {
 			Some(video),
 			None,
 			None,
-			|_| Ok(()),
+			move |status| {
+				if matches!(status, Status::TransportOnly) {
+					sender_transport_only.store(true, Ordering::Release);
+				}
+				Ok(())
+			},
 			sender_url,
 			true,
 		)
@@ -286,6 +300,41 @@ async fn exchange() {
 	})
 	.await
 	.expect("Idle viewer stopped maintaining UDP");
+	if downgrade {
+		for (index, ws) in [&mut send_ws, &mut view_ws].into_iter().enumerate() {
+			event(
+				ws,
+				json!({"op":21,"d":{"protocol_version":0,"transition_id":9}}),
+			)
+			.await;
+			let ack = message(ws).await;
+			let ack: Value = serde_json::from_str(ack.to_text().unwrap()).unwrap();
+			assert_eq!(ack, json!({"op":23,"d":{"transition_id":9}}));
+			if index == 0 {
+				assert!(!transport_only.load(Ordering::Acquire));
+				// An unrelated execute cannot apply the pending downgrade.
+				event(ws, json!({"op":22,"d":{"transition_id":8}})).await;
+				ws.send(Message::Ping(b"pending".to_vec().into()))
+					.await
+					.unwrap();
+				assert!(
+					matches!(message(ws).await, Message::Pong(data) if data.as_ref() == b"pending")
+				);
+				assert!(!transport_only.load(Ordering::Acquire));
+			}
+			event(ws, json!({"op":22,"d":{"transition_id":9}})).await;
+			// Fence the transition before supplying/forwarding any media.
+			ws.send(Message::Ping(b"downgraded".to_vec().into()))
+				.await
+				.unwrap();
+			assert!(
+				matches!(message(ws).await, Message::Pong(data) if data.as_ref() == b"downgraded")
+			);
+			if index == 0 {
+				assert!(transport_only.load(Ordering::Acquire));
+			}
+		}
+	}
 	let mut encoder = openh264::encoder::Encoder::with_api_config(
 		openh264::OpenH264API::from_source(),
 		openh264::encoder::EncoderConfig::new(),

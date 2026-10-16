@@ -13,6 +13,17 @@ Loading, removing or testing saved copies never applies or disables the active r
 Use Load, then Enable to change routes; Save a copy also provides duplication with
 a new name. Profiles are local to this installation, shared across its accounts.
 
+Import, Test, Enable, Save a copy and Load also remember the last primary draft
+automatically. On the next launch, it is restored into the editor without applying
+a route or making a network request. Unsaved editor keystrokes and the optional
+reserve draft are session-only. A separate bounded `protect/remembered` directory
+holds the public pointer and reference copy; its original is in the OS credential
+store. A new generation is written before replacing the pointer, so a failed save
+keeps the previously remembered configuration. Actual persistence failures are
+shown in the profile status. A damaged remembered pointer does not hide the
+independent named-profile list. The application never reports success before the
+credential and metadata writes complete.
+
 | Scope | Routed traffic | Supported protocols |
 | --- | --- | --- |
 | Videos and files | Attachment uploads, downloads, audio and video files | HTTP, SOCKS4a, SOCKS5, WireGuard |

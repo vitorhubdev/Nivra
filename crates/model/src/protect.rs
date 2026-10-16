@@ -124,6 +124,7 @@ pub struct SavedProfile {
 	pub location: String,
 }
 pub enum ProfileAction {
+	Remember(Draft),
 	Save { name: String, draft: Draft },
 	Load(String),
 	Delete(String),

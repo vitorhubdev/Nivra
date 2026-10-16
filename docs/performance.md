@@ -2137,7 +2137,7 @@ still require owner-operated measurement. Full-source GPU readback remains;
 no unsupported claim of zero-copy or GPU-side downscaling is made.
 
 Opt-in bounded voice diagnostics now report Windows screen worker stages under
-`ScreenVideo`: `receive` measures `frame.buffer()` GPU readback, `mix` measures
+`ScreenVideo`: `receive` measures D3D11 staging GPU readback, `mix` measures
 the raw CPU copy and queue handoff, and `encode` on the separate encoder worker
 measures conversion plus encoding. Time between frames is excluded. Reports
 from the capture and encoder workers are separate aggregate lines. The existing
@@ -2148,3 +2148,45 @@ from encoder load during an owner-controlled reproduction.
 Package size, process CPU/RSS, live capture/GPU stalls and input latency were not
 measured by this component workload; full-delivery evidence must record them
 separately where available.
+
+## Windows reusable staging readback (October 15, 2026)
+
+The Windows capture callback now owns one reusable D3D11 staging texture, created
+on the capture frame's existing device. Matching device, dimensions and BGRA format
+reuse the allocation; a change releases it before allocating its replacement.
+The source remains capped at 3840×2160. CPU access is read-only and each successful
+Map has a borrowed RAII guard that unmaps on success and validation failure. No
+capture cadence, pending-frame behavior or static-desktop snapshot policy changed.
+This removes per-frame staging creation, not full-source readback or the CPU copy.
+One staging surface remains allocated until resize/device change or capture stop.
+
+Measured on Windows x64, Ryzen 9 5900X, NVIDIA GeForce RTX 4060 Ti, driver
+32.0.15.9186. The debug test harness creates its own synthetic D3D11 source texture;
+it opens no screen, microphone, account or recording. Each size uses BGRA bytes
+`byte[i] = (i * 17 + 3) % 251`. The baseline reproduces the former D3D operations:
+new staging texture with CPU READ|WRITE, CopyResource, Map READ_WRITE, Unmap and
+release per iteration. The candidate reuses staging with CPU READ and Map READ.
+Both wait synchronously for the same full-source copy. Neither measurement copies
+all mapped pixels into a Rust Vec, converts colors, encodes or transmits video.
+
+Six batches of 30 maps per path/size alternate their order, discard the first
+batch as warmup and report the median of the remaining five per-frame batch means.
+Two complete runs were made:
+
+| Source | Run 1 baseline → reusable | Run 2 baseline → reusable | Interpretation |
+| --- | ---: | ---: | --- |
+| 1920×1080 | 0.7292 → 0.6982 ms (−4.25%) | 0.7524 → 0.7255 ms (−3.57%) | Small component improvement |
+| 3840×2160 | 2.6555 → 2.6561 ms (+0.02%) | 2.6766 → 2.6588 ms (−0.66%) | No material throughput improvement |
+
+Reproduce with `cargo test -p discord-voice --locked synthetic_staging_readback_benchmark -- --ignored --nocapture`.
+The benchmark is ignored by default. Default WARP-device tests compare every pixel
+including padded rows, repeated content changes, 1080p/4K, resize, device replacement
+and successful reuse after failed mapped-buffer validation. These test synthetic
+textures, not Windows Graphics Capture session/device-loss interoperability.
+
+`Map` still uses flags 0 and can synchronously wait for the GPU. Whole-source
+readback, BGRA Vec allocation/copy, CPU scaling/conversion, encoder waiting and
+contention with other applications remain. These results do not establish improved
+mouse latency, process CPU/RSS, sustained capture FPS or elimination of the reported
+whole-computer lag. GPU scaling, deferred nonblocking staging and native-surface
+encoding need separate ownership/synchronization work and owner-operated evidence.

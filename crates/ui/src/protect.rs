@@ -151,6 +151,9 @@ impl Settings {
 		ui.add_space(12.0);
 		self.saved_profiles(ui, demo);
 		ui.add_space(12.0);
+		// A pending restore must not overwrite edits made while the OS store opens.
+		// Keep the saved-profile section outside, so batch cancellation stays enabled.
+		ui.add_enabled_ui(!self.profiles_busy, |ui| {
 		ui.strong(crate::tr_ui!(ui, "Configure route"));
 		egui::ComboBox::from_id_salt("protect_scope")
 			.selected_text(crate::tr_ui!(ui, self.draft.scope.label()))
@@ -212,6 +215,7 @@ impl Settings {
 				profile(ui, &mut self.reserve, "reserve", &mut self.reveal);
 			}
 		}
+		});
 		ui.label(crate::tr_ui!(ui,"A failed protected route never silently switches to a direct connection. Changing live media routes requires reconnecting the call."));
 		ui.add_space(12.0);
 		let missing = self.draft.missing();
@@ -340,6 +344,9 @@ fn profile(ui: &mut egui::Ui, draft: &mut Draft, id: &str, reveal: &mut bool) {
 	});
 }
 impl crate::MessagingUi {
+	pub fn protect_draft(&self) -> Draft {
+		self.settings.protect.draft.clone()
+	}
 	pub fn set_protect_profiles(&mut self, profiles: Vec<SavedProfile>) {
 		self.settings.protect.profiles = profiles.into_iter().take(16).collect();
 		self.settings.protect.flags.clear();
@@ -434,6 +441,70 @@ impl crate::MessagingUi {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn batch_cancellation_remains_clickable_while_configuration_fields_are_locked() {
+		fn label_rect(shape: &egui::Shape) -> Option<egui::Rect> {
+			match shape {
+				egui::Shape::Text(text) if text.galley.job.text == "Cancel tests" => {
+					Some(text.galley.rect.translate(text.pos.to_vec2()))
+				}
+				egui::Shape::Vec(shapes) => shapes.iter().find_map(label_rect),
+				_ => None,
+			}
+		}
+		let ctx = egui::Context::default();
+		let mut settings = super::Settings {
+			profiles_busy: true,
+			profiles_testing: true,
+			..Default::default()
+		};
+		let draw = |settings: &mut super::Settings, events| {
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 1100.0),
+					)),
+					events,
+					..Default::default()
+				},
+				|ui| settings.show(ui, false),
+			)
+		};
+		for _ in 0..3 {
+			draw(&mut settings, vec![]).drop_without_applying_deltas();
+		}
+		let output = draw(&mut settings, vec![]);
+		let pos = output
+			.shapes
+			.iter()
+			.find_map(|shape| label_rect(&shape.shape))
+			.expect("visible cancellation button")
+			.center();
+		output.drop_without_applying_deltas();
+		for pressed in [true, false] {
+			draw(
+				&mut settings,
+				vec![
+					egui::Event::PointerMoved(pos),
+					egui::Event::PointerButton {
+						pos,
+						button: egui::PointerButton::Primary,
+						pressed,
+						modifiers: egui::Modifiers::NONE,
+					},
+				],
+			)
+			.drop_without_applying_deltas();
+		}
+		assert!(matches!(
+			settings.action,
+			Some(model::protect::Action::Profiles(
+				model::protect::ProfileAction::CancelTests
+			))
+		));
+	}
+
 	#[test]
 	fn transition_status_keeps_controls_busy_until_host_acknowledgement() {
 		let mut ui = crate::MessagingUi::default();

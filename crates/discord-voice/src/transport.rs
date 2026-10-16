@@ -1384,7 +1384,7 @@ async fn run_stream_inner(
 		if !announced
 			|| !dave.ready
 			|| dave.pending.is_some()
-			|| !dave.session.is_ready()
+			|| (!dave.transport_only && !dave.session.is_ready())
 			|| video
 				.as_ref()
 				.is_none_or(|video| !video.ready.load(Ordering::Acquire))
@@ -1546,7 +1546,9 @@ async fn run_stream_inner(
 				if awaiting_keyframe && !frame.keyframe {continue;}
 				let start=metrics.start();
 				let normalized=crate::video_sps::normalize(&frame.data)?;
-				let encrypted=dave.session.encrypt(davey::MediaType::VIDEO,davey::Codec::H264,&normalized).map_err(|_|"DAVE H264 encryption failed")?;
+				// A server-executed version-0 transition keeps authenticated transport
+				// encryption, but must stop adding the MLS envelope, as stream audio does.
+				let encrypted=if dave.transport_only {std::borrow::Cow::Borrowed(normalized.as_ref())} else {dave.session.encrypt(davey::MediaType::VIDEO,davey::Codec::H264,&normalized).map_err(|_|"DAVE H264 encryption failed")?};
 				let packets=crate::video::packetize(&encrypted,&mut sequence,frame.timestamp,video_ssrc)?;
 				outgoing.queue(packets,Instant::now());
 				outgoing_keyframe=frame.keyframe;
@@ -1655,11 +1657,17 @@ async fn run_stream_inner(
 					};dave.enter_sole_member_waiting()?;deadline=None;}else if was_ready{dave.ready=true;deadline=None;}else if was_group_member{deadline=Some(Instant::now()+Duration::from_secs(30));announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
 					};}}},
-							21=>{let version=number(data,"protocol_version")?;if version>1{return Err("Unsupported stream DAVE version");}else if version==0{dave.downgrade_pending=true;dave.transport_only=true;dave.ready=true;}else{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
+							21=>{let version=number(data,"protocol_version")?;if version>1{return Err("Unsupported stream DAVE version");}else if version==0{
+								let id=transition(data)?;
+								dave.downgrade_pending=true;
+								dave.pending=Some(id);
+								if id==0 {dave.finish_downgrade();emit(Status::TransportOnly).map_err(|_|"Stream interface closed")?;}
+								else {json_send(&mut ws,json!({"op":23,"d":{"transition_id":id}})).await?;}
+							}else{dave.downgrade_pending=false;announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
 					};dave.pending=Some(transition(data)?);if dave.pending==Some(0){if dave.session.is_ready(){dave.execute(0)?;}else if dave.alone(){dave.enter_sole_member_waiting()?;deadline=None;}else{dave.pending=None;dave.ready=false;}}else{json_send(&mut ws,json!({"op":23,"d":{"transition_id":dave.pending}})).await?;}}},
-							22=>{let id=transition(data)?;if dave.downgrade_pending{dave.finish_downgrade();}else{let was_open=dave.transport_only;dave.execute(id)?;if was_open{dave.transport_only=false;}}},
-							24=>{let version=number(data,"protocol_version")?;if version>1{return Err("Unsupported stream DAVE version");}else if version==0{dave.downgrade_pending=true;dave.transport_only=true;dave.ready=true;}else if number(data,"epoch")?==1{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
+							22=>{let id=transition(data)?;if dave.downgrade_pending{if dave.pending==Some(id){dave.finish_downgrade();emit(Status::TransportOnly).map_err(|_|"Stream interface closed")?;}}else{let was_open=dave.transport_only;dave.execute(id)?;if was_open{dave.transport_only=false;}}},
+							24=>{let version=number(data,"protocol_version")?;if version>1{return Err("Unsupported stream DAVE version");}else if version==0{dave.downgrade_pending=true;}else if number(data,"epoch")?==1{announced=false;awaiting_keyframe=true;if let Some(event) = invalidate_stream(&mut video, &mut share_audio, audio_ssrc) {
 						json_send(&mut ws, event).await?;
 					};let stay=dave.ready||dave.transport_only;dave.reinitialize()?;if stay{dave.transport_only=true;dave.ready=true;}send(&mut ws,Message::Binary(dave.key_package()?.into())).await?;}},
 							// Watching a stream receives signaling the sender never does; unknown

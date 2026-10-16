@@ -1724,6 +1724,7 @@ dependencies = [
  "tracing",
  "url",
  "windows 0.61.3",
+ "windows 0.62.2",
  "windows-capture",
  "windows-core 0.61.2",
  "zbus",

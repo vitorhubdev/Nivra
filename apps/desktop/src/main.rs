@@ -2856,9 +2856,11 @@ impl Desktop {
 				let status = match result.change {
 					Ok(ProtectChange::Tested(status)) => Ok(status),
 					Ok(ProtectChange::Imported(config)) => {
-						self.messaging.set_protect_wireguard(&config).map(
-							|_| "WireGuard configuration imported in this session. Test before enabling.",
-						)
+						self.messaging.set_protect_wireguard(&config).map(|_| {
+							self.protect_profiles
+								.remember(self.messaging.protect_draft());
+							"WireGuard imported; saving securely. Test before enabling."
+						})
 					}
 					Ok(ProtectChange::Health(health, epoch)) => {
 						if protect::generation() != epoch {
@@ -2957,6 +2959,11 @@ impl Desktop {
 		else {
 			return;
 		};
+		if let model::protect::Action::Enable(draft, _) | model::protect::Action::Test(draft) =
+			&action
+		{
+			self.protect_profiles.remember(draft.clone());
+		}
 		if matches!(action, model::protect::Action::Disable) {
 			let result = self.apply_protect(ctx, None, None);
 			self.messaging.set_protect_operation_status(

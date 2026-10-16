@@ -434,6 +434,19 @@ fn encode_loop(
 	Ok(())
 }
 
+/// The superseded snapshot's buffer goes back to the capture pool on Windows.
+#[cfg(target_os = "windows")]
+fn recycle_previous(previous: Option<RawFrame>) {
+	if let Some(previous) = previous {
+		capture::recycle_frame(previous.data);
+	}
+}
+
+#[cfg(not(target_os = "windows"))]
+fn recycle_previous(previous: Option<RawFrame>) {
+	drop(previous);
+}
+
 #[cfg(any(test, not(target_os = "linux")))]
 fn retain_screen_frame(
 	latest: &mut Option<RawFrame>,
@@ -444,7 +457,7 @@ fn retain_screen_frame(
 	let fresh = frame.is_some();
 	if let Some(frame) = frame {
 		validate_frame(&frame)?;
-		*latest = Some(frame);
+		recycle_previous(latest.replace(frame));
 	}
 	Ok(ready && latest.is_some() && (fresh || keyframe))
 }

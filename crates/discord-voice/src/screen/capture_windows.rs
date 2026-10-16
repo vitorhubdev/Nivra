@@ -6,7 +6,7 @@ use crate::screen::{AudioChunk, RawFrame, Settings as CaptureSettings, Source, S
 use std::sync::{
 	Arc,
 	atomic::{AtomicBool, AtomicU64, Ordering},
-	mpsc::SyncSender,
+	mpsc::{SyncSender, TrySendError},
 };
 use std::time::{Duration, Instant};
 use windows_capture::{
@@ -97,6 +97,52 @@ struct Flags {
 
 struct Handler(Flags, crate::diagnostics::Metrics, readback::Reader);
 
+/// Frame buffers the encoder has finished with. A full-source BGRA buffer is 33 MB at 4K30;
+/// allocating and faulting one in per captured frame costs more than the copy itself. At
+/// most two spares are kept, and the pool is emptied when the capture closes.
+static SPARE_FRAMES: std::sync::Mutex<Vec<Vec<u8>>> = std::sync::Mutex::new(Vec::new());
+const SPARE_FRAME_LIMIT: usize = 2;
+
+/// Returns a frame buffer for reuse once nothing references it.
+pub(crate) fn recycle_frame(data: Vec<u8>) {
+	if let Ok(mut spare) = SPARE_FRAMES.lock()
+		&& spare.len() < SPARE_FRAME_LIMIT
+	{
+		spare.push(data);
+	}
+}
+
+fn clear_spare_frames() {
+	if let Ok(mut spare) = SPARE_FRAMES.lock() {
+		spare.clear();
+	}
+}
+
+/// An empty buffer with room for `len` bytes. A spare far larger than needed (a resolution
+/// change) is dropped rather than kept at its old size.
+fn take_frame_buffer(len: usize) -> Vec<u8> {
+	let mut data = SPARE_FRAMES
+		.lock()
+		.ok()
+		.and_then(|mut spare| spare.pop())
+		.filter(|spare| spare.capacity() <= len.saturating_mul(2))
+		.unwrap_or_default();
+	data.clear();
+	data.reserve(len);
+	data
+}
+
+/// Copies the visible `row_bytes` of each `stride`-wide source row into `out`.
+fn copy_rows(source: &[u8], stride: usize, row_bytes: usize, out: &mut Vec<u8>) {
+	if stride == row_bytes {
+		out.extend_from_slice(source);
+		return;
+	}
+	for row in source.chunks_exact(stride) {
+		out.extend_from_slice(&row[..row_bytes]);
+	}
+}
+
 impl GraphicsCaptureApiHandler for Handler {
 	type Flags = Flags;
 	type Error = &'static str;
@@ -170,20 +216,21 @@ impl GraphicsCaptureApiHandler for Handler {
 			self.0.stop.store(true, Ordering::Release);
 			return Err("Captured frame buffer is incomplete");
 		}
-		let mut data = Vec::with_capacity(data_len);
-		for row in source[..source_len].chunks_exact(stride) {
-			data.extend_from_slice(&row[..row_bytes]);
-		}
-		let dropped = self
-			.0
-			.frames
-			.try_send(RawFrame {
-				width,
-				height,
-				stride: row_bytes,
-				data,
-			})
-			.is_err();
+		let mut data = take_frame_buffer(data_len);
+		copy_rows(&source[..source_len], stride, row_bytes, &mut data);
+		let dropped = match self.0.frames.try_send(RawFrame {
+			width,
+			height,
+			stride: row_bytes,
+			data,
+		}) {
+			Ok(()) => false,
+			// A refused frame goes back to the pool instead of being freed.
+			Err(TrySendError::Full(frame) | TrySendError::Disconnected(frame)) => {
+				recycle_frame(frame.data);
+				true
+			}
+		};
 		if dropped {
 			self.0.pending.store(false, Ordering::Release);
 		}
@@ -194,6 +241,7 @@ impl GraphicsCaptureApiHandler for Handler {
 
 	fn on_closed(&mut self) -> Result<(), Self::Error> {
 		self.0.stop.store(true, Ordering::Release);
+		clear_spare_frames();
 		Ok(())
 	}
 }
@@ -335,5 +383,112 @@ impl Drop for Capture {
 		if let Some(control) = self.control.take() {
 			let _ = control.stop();
 		}
+	}
+}
+
+#[cfg(test)]
+mod frame_buffer_tests {
+	use super::*;
+
+	fn padded_source(width: usize, height: usize, stride: usize) -> Vec<u8> {
+		let mut source = vec![0xEE; stride * height];
+		for row in 0..height {
+			for column in 0..width * 4 {
+				source[row * stride + column] = (row * 31 + column) as u8;
+			}
+		}
+		source
+	}
+
+	#[test]
+	fn copy_drops_row_padding_and_keeps_visible_pixels() {
+		let (width, height, stride) = (3, 2, 16);
+		let source = padded_source(width, height, stride);
+		let mut out = Vec::new();
+		copy_rows(&source, stride, width * 4, &mut out);
+		assert_eq!(out.len(), width * 4 * height);
+		for row in 0..height {
+			assert_eq!(
+				&out[row * width * 4..(row + 1) * width * 4],
+				&source[row * stride..row * stride + width * 4]
+			);
+		}
+	}
+
+	#[test]
+	fn unpadded_copy_is_a_single_exact_copy() {
+		let (width, height) = (4, 3);
+		let source = padded_source(width, height, width * 4);
+		let mut out = Vec::new();
+		copy_rows(&source, width * 4, width * 4, &mut out);
+		assert_eq!(out, source);
+	}
+
+	#[test]
+	fn recycled_buffer_is_reused_cleared_and_bounded() {
+		clear_spare_frames();
+		let first = take_frame_buffer(1024);
+		let pointer = first.as_ptr();
+		recycle_frame(first);
+		let reused = take_frame_buffer(1024);
+		assert!(reused.is_empty());
+		assert_eq!(reused.as_ptr(), pointer, "the spare allocation is reused");
+		// The pool never keeps more than its limit.
+		for _ in 0..SPARE_FRAME_LIMIT + 3 {
+			recycle_frame(Vec::with_capacity(1024));
+		}
+		assert_eq!(SPARE_FRAMES.lock().unwrap().len(), SPARE_FRAME_LIMIT);
+		clear_spare_frames();
+	}
+
+	#[test]
+	fn a_spare_far_larger_than_the_next_frame_is_not_kept_at_its_old_size() {
+		clear_spare_frames();
+		recycle_frame(Vec::with_capacity(33_177_600));
+		let small = take_frame_buffer(1920 * 1080 * 4);
+		assert!(small.capacity() < 33_177_600);
+		clear_spare_frames();
+	}
+
+	/// Fresh allocation per frame (the previous path) against the pooled path, on the same
+	/// 4K BGRA source. Run: `cargo test -p discord-voice pooled_versus_fresh -- --ignored --nocapture`.
+	#[test]
+	#[ignore = "measurement only"]
+	fn pooled_versus_fresh_frame_copy_4k() {
+		let (width, height) = (3840usize, 2160usize);
+		let stride = width * 4;
+		let source = padded_source(width, height, stride);
+		let data_len = stride * height;
+		let samples = 30;
+		let mut fresh = Vec::new();
+		let mut pooled = Vec::new();
+		for round in 0..samples + 3 {
+			let started = Instant::now();
+			let mut data = Vec::with_capacity(data_len);
+			for row in source.chunks_exact(stride) {
+				data.extend_from_slice(&row[..stride]);
+			}
+			let fresh_ms = started.elapsed().as_secs_f64() * 1000.0;
+			drop(data);
+			let started = Instant::now();
+			let mut data = take_frame_buffer(data_len);
+			copy_rows(&source, stride, stride, &mut data);
+			let pooled_ms = started.elapsed().as_secs_f64() * 1000.0;
+			recycle_frame(data);
+			if round >= 3 {
+				fresh.push(fresh_ms);
+				pooled.push(pooled_ms);
+			}
+		}
+		clear_spare_frames();
+		fresh.sort_by(f64::total_cmp);
+		pooled.sort_by(f64::total_cmp);
+		println!(
+			"4K BGRA copy, debug build, {samples} samples: fresh p50 {:.2} ms p95 {:.2} ms; pooled p50 {:.2} ms p95 {:.2} ms",
+			fresh[samples / 2],
+			fresh[samples * 95 / 100],
+			pooled[samples / 2],
+			pooled[samples * 95 / 100],
+		);
 	}
 }

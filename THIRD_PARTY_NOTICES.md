@@ -49,13 +49,15 @@ gaps. Corresponding MPL sources retain their original terms. Supplied reference 
 declarations and source archives do not resolve missing upstream grants.
 
 
-In-app release updates use **zip 4.6.1** (MIT) for bounded ZIP extraction with only
-flate2/zlib-rs decompression enabled, and the already-resolved **semver 1.0.28**
-(MIT OR Apache-2.0) for release ordering. Their upstream license texts are retained
-under `assets/licenses/files/zip-4.6.1-LICENSE` and
+In-app release updates use **zip 9.0.3** (MIT) for bounded ZIP extraction with only
+flate2/zlib-rs decompression enabled (it pulls in **typed-path 0.12.3**, MIT OR
+Apache-2.0), and the already-resolved **semver 1.0.28** (MIT OR Apache-2.0) for release
+ordering. Their upstream license texts are retained under
+`assets/licenses/files/zip-9.0.3-LICENSE`,
+`assets/licenses/files/typed-path-0.12.3-LICENSE-MIT`,
+`assets/licenses/files/typed-path-0.12.3-LICENSE-APACHE` and
 `assets/licenses/files/semver-1.0.28-LICENSE-MIT`; registry archive checksums are
-recorded in `Cargo.lock`. The ZIP crate's fuzz-only arbitrary dependencies are not
-part of the normal desktop build.
+recorded in `Cargo.lock`. zip 4.x to 8.x were yanked upstream, so 9.0.3 is the supported line.
 
 
 REST gzip decoding adds **async-compression 0.4.42**, **compression-codecs 0.4.38**

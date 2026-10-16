@@ -553,7 +553,12 @@ pub(super) fn unpack(
 		let mut entry = archive
 			.by_index(index)
 			.map_err(|_| "Cannot read an update archive entry.".to_owned())?;
-		let path = safe_path(entry.name())?;
+		// zip 9 validates the name's encoding; a name it cannot decode is rejected like any other
+		// invalid path.
+		let name = entry
+			.name()
+			.map_err(|_| "The update archive contains an invalid path.".to_owned())?;
+		let path = safe_path(&name)?;
 		if entry.encrypted()
 			|| entry.is_symlink()
 			|| entry

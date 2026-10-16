@@ -1,0 +1,374 @@
+//! Turns a `nivra-ultra.log` into a short written analysis, so an exported report starts with
+//! what stood out instead of tens of thousands of lines. It only reads text that is already in
+//! the bounded, redacted log and writes text; nothing here touches the network or the disk.
+
+use std::collections::BTreeMap;
+
+/// Events kept in the written timeline; the full list stays in the log itself.
+const MAX_EVENTS: usize = 60;
+const BUSY_FPS: f64 = 60.0;
+const SLOW_PING_MS: f64 = 300.0;
+
+struct Line<'a> {
+	time: &'a str,
+	scope: &'a str,
+	rest: &'a str,
+}
+
+fn parse(line: &str) -> Option<Line<'_>> {
+	// "2026-10-16 17:40:21 scope message": the date, the time, then the scope.
+	let mut parts = line.splitn(4, ' ');
+	let date = parts.next()?;
+	let time = parts.next()?;
+	let scope = parts.next()?;
+	let rest = parts.next().unwrap_or("");
+	if date.len() != 10 || time.len() != 8 {
+		return None;
+	}
+	Some(Line { time, scope, rest })
+}
+
+/// The number after ` key=` in a line, if there is one.
+fn num(text: &str, key: &str) -> Option<f64> {
+	let marker = format!(" {key}=");
+	let start = text.find(&marker)? + marker.len();
+	let digits: String = text[start..]
+		.chars()
+		.take_while(|c| c.is_ascii_digit() || *c == '.')
+		.collect();
+	digits.parse().ok()
+}
+
+/// The first number of ` key=[calls, total, max]`.
+fn first_of(text: &str, key: &str) -> Option<f64> {
+	let marker = format!(" {key}=[");
+	let start = text.find(&marker)? + marker.len();
+	let digits: String = text[start..]
+		.chars()
+		.take_while(char::is_ascii_digit)
+		.collect();
+	digits.parse().ok()
+}
+
+/// A warning with its numbers replaced by `N`, so "22 frames/s" and "31 frames/s" count together.
+fn generalize(text: &str) -> String {
+	let mut out = String::new();
+	let mut in_number = false;
+	for c in text.chars() {
+		if c.is_ascii_digit() {
+			if !in_number {
+				out.push('N');
+			}
+			in_number = true;
+		} else {
+			in_number = false;
+			out.push(c);
+		}
+	}
+	out
+}
+
+fn percentile(sorted: &[f64], percent: usize) -> f64 {
+	if sorted.is_empty() {
+		return 0.0;
+	}
+	sorted[(sorted.len() - 1) * percent / 100]
+}
+
+fn sorted(mut values: Vec<f64>) -> Vec<f64> {
+	values.sort_by(f64::total_cmp);
+	values
+}
+
+#[derive(Default)]
+struct Audio {
+	windows: usize,
+	with_packets: usize,
+	/// Windows where packets arrived and not one reached the mixer.
+	heard_nothing: usize,
+	reasons: BTreeMap<&'static str, u64>,
+	dave_not_ready: usize,
+	dave_no_members: usize,
+	first_silent: Option<String>,
+	last_silent: Option<String>,
+}
+
+/// The written analysis of one ultra log.
+pub fn analyze(log: &str) -> String {
+	let mut first = None;
+	let mut last = None;
+	let mut pulse_fps = Vec::new();
+	let (mut slow_frames, mut busy_windows, mut hidden_drawing) = (0.0, 0usize, 0usize);
+	let mut anomalies: BTreeMap<String, usize> = BTreeMap::new();
+	let mut events: Vec<String> = Vec::new();
+	let mut dropped_events = 0usize;
+	let mut audio = Audio::default();
+	let (mut idle_share_windows, mut capture_frames) = (0usize, 0.0);
+	let mut pings = Vec::new();
+	let mut lines = 0usize;
+
+	for raw in log.lines() {
+		let Some(line) = parse(raw) else { continue };
+		lines += 1;
+		first.get_or_insert(line.time.to_owned());
+		last = Some(line.time.to_owned());
+		match line.scope {
+			"pulse" => {
+				if let Some(fps) = num(&format!(" {}", line.rest), "fps") {
+					pulse_fps.push(fps);
+					busy_windows += usize::from(fps > BUSY_FPS);
+				}
+				slow_frames += num(&format!(" {}", line.rest), "slow").unwrap_or(0.0);
+			}
+			"anomaly" => {
+				let class = generalize(line.rest);
+				hidden_drawing += usize::from(line.rest.starts_with("hidden window"));
+				*anomalies.entry(class).or_default() += 1;
+			}
+			"event" => {
+				if events.len() < MAX_EVENTS {
+					events.push(format!("{}  {}", line.time, line.rest));
+				} else {
+					dropped_events += 1;
+				}
+			}
+			"voice" => {
+				let text = format!(" {}", line.rest);
+				if let Some(ms) = text
+					.strip_prefix(" heartbeat ping ")
+					.and_then(|rest| rest.split_whitespace().next())
+					.and_then(|value| value.parse::<f64>().ok())
+				{
+					pings.push(ms);
+				} else if line.rest.contains("[Nivra voice Transport]") {
+					audio.windows += 1;
+					let packets = num(&text, "packets").unwrap_or(0.0);
+					// `packets=` also names the video counter; only the audio group carries `pushed=`.
+					if let Some(pushed) = num(&text, "pushed") {
+						let audio_packets = text
+							.split(" audio: ")
+							.nth(1)
+							.and_then(|rest| num(&format!(" {rest}"), "packets"))
+							.unwrap_or(packets);
+						audio.with_packets += 1;
+						if pushed == 0.0 && audio_packets > 0.0 {
+							audio.heard_nothing += 1;
+							audio.first_silent.get_or_insert(line.time.to_owned());
+							audio.last_silent = Some(line.time.to_owned());
+						}
+						for (name, key) in [
+							("sender not in the encrypted group", "not_member"),
+							("encryption not ready", "not_ready"),
+							("unknown sender (SSRC)", "unknown_ssrc"),
+							("deafened", "deafened"),
+							("decryption failed", "decrypt_failed"),
+						] {
+							let part = text.split(" audio: ").nth(1).unwrap_or("");
+							*audio.reasons.entry(name).or_default() +=
+								num(&format!(" {part}"), key).unwrap_or(0.0) as u64;
+						}
+					}
+					if text.contains(" dave: ready=0") {
+						audio.dave_not_ready += 1;
+					}
+					if text.contains(" members=0") {
+						audio.dave_no_members += 1;
+					}
+				} else if line.rest.contains("[Nivra voice StreamSend]") {
+					let waiting = num(&text, "waiting").unwrap_or(0.0);
+					let announced = num(&text, "announced").unwrap_or(0.0);
+					let sent = first_of(&text, "video_send").unwrap_or(0.0);
+					if waiting > 0.0 && announced == 0.0 && sent == 0.0 {
+						idle_share_windows += 1;
+					}
+				} else if line.rest.contains("[Nivra voice ScreenVideo]") {
+					capture_frames += first_of(&text, "mix").unwrap_or(0.0);
+				}
+			}
+			_ => {}
+		}
+	}
+
+	let mut out = String::new();
+	out.push_str("Nivra ultra diagnostics analysis\n");
+	out.push_str(&format!(
+		"Log: {lines} lines, {} to {}\n\n",
+		first.as_deref().unwrap_or("-"),
+		last.as_deref().unwrap_or("-")
+	));
+	let mut findings: Vec<String> = Vec::new();
+
+	if audio.heard_nothing > 0 {
+		let reason = audio
+			.reasons
+			.iter()
+			.filter(|(_, count)| **count > 0)
+			.max_by_key(|(_, count)| **count)
+			.map_or("no single reason", |(name, _)| *name);
+		findings.push(format!(
+			"AUDIO NOT HEARD: in {} of {} voice windows audio packets arrived and none reached the mixer (mostly: {reason}), from {} to {}.",
+			audio.heard_nothing,
+			audio.windows,
+			audio.first_silent.as_deref().unwrap_or("-"),
+			audio.last_silent.as_deref().unwrap_or("-"),
+		));
+	}
+	if audio.dave_not_ready > 0 {
+		findings.push(format!(
+			"ENCRYPTED GROUP NOT READY: {} voice windows reported the end-to-end group as not ready ({} with no members).",
+			audio.dave_not_ready, audio.dave_no_members
+		));
+	}
+	if idle_share_windows > 0 {
+		findings.push(format!(
+			"SHARE WITH NO VIEWER: {idle_share_windows} stream windows were waiting for a viewer with nothing encoded; the capture read {capture_frames:.0} frames in those and nearby windows."
+		));
+	}
+	if busy_windows > 0 {
+		findings.push(format!(
+			"BUSY UI: {busy_windows} of {} pulses drew more than {BUSY_FPS:.0} frames per second. That is normal while the pointer moves over the window; it matters only together with slow frames.",
+			pulse_fps.len()
+		));
+	}
+	if hidden_drawing > 0 {
+		findings.push(format!(
+			"HIDDEN WINDOW DRAWING: {hidden_drawing} pulses with the window hidden drew more than 20 frames per second."
+		));
+	}
+	if slow_frames > 0.0 {
+		findings.push(format!(
+			"SLOW FRAMES: {slow_frames:.0} frames took longer than 250 ms between the start of logic and the end of ui."
+		));
+	}
+	let ping = sorted(pings);
+	if ping.last().is_some_and(|max| *max > SLOW_PING_MS) {
+		findings.push(format!(
+			"SLOW VOICE HEARTBEAT: {} of {} acknowledgements took over {SLOW_PING_MS:.0} ms (max {:.0} ms).",
+			ping.iter().filter(|ms| **ms > SLOW_PING_MS).count(),
+			ping.len(),
+			ping.last().copied().unwrap_or(0.0)
+		));
+	}
+	if findings.is_empty() {
+		out.push_str("FINDINGS\nNothing stood out in this log.\n");
+	} else {
+		out.push_str("FINDINGS\n");
+		for finding in &findings {
+			out.push_str(&format!("- {finding}\n"));
+		}
+	}
+
+	let fps = sorted(pulse_fps);
+	out.push_str(&format!(
+		"\nUI frames per second over {} pulses: median {:.1}, 95th {:.1}, max {:.1}\n",
+		fps.len(),
+		percentile(&fps, 50),
+		percentile(&fps, 95),
+		fps.last().copied().unwrap_or(0.0)
+	));
+	if !ping.is_empty() {
+		out.push_str(&format!(
+			"Voice heartbeat over {} acknowledgements: median {:.0} ms, 95th {:.0} ms, max {:.0} ms\n",
+			ping.len(),
+			percentile(&ping, 50),
+			percentile(&ping, 95),
+			ping.last().copied().unwrap_or(0.0)
+		));
+	}
+	out.push_str(&format!(
+		"Voice windows: {} total, {} with audio counters\n",
+		audio.windows, audio.with_packets
+	));
+	if !anomalies.is_empty() {
+		out.push_str("\nWarnings raised while running\n");
+		for (class, count) in &anomalies {
+			out.push_str(&format!("- {class}: {count}\n"));
+		}
+	}
+	if !events.is_empty() {
+		out.push_str("\nTimeline\n");
+		for event in &events {
+			out.push_str(&format!("{event}\n"));
+		}
+		if dropped_events > 0 {
+			out.push_str(&format!("... and {dropped_events} more in the log\n"));
+		}
+	}
+	out
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	const SAMPLE: &str = "\
+2026-10-16 17:40:00 event call joined, phase Connecting
+2026-10-16 17:40:05 event call phase Connecting -> Connected
+2026-10-16 17:40:10 pulse fps=1.4 slow=0 hidden=false protect=true call=Connected people=3 live=0 watching=0 camera=false
+2026-10-16 17:40:15 pulse fps=97.0 slow=2 hidden=false protect=true call=Connected people=3 live=1 watching=0 camera=false
+2026-10-16 17:40:15 anomaly 2 slow frames, longest 800 ms
+2026-10-16 17:40:20 voice [Nivra voice Transport] window_ms=5000 stages(calls,total_us,max_us): receive=[0, 0, 0] video: packets=0 audio: packets=250 unknown_ssrc=0 not_ready=0 not_member=250 deafened=0 decrypt_failed=0 pushed=0 dave: ready=1 transport_only=0 members=0
+2026-10-16 17:40:25 voice [Nivra voice Transport] window_ms=5000 stages(calls,total_us,max_us): receive=[200, 1, 1] audio: packets=250 unknown_ssrc=0 not_ready=0 not_member=0 deafened=0 decrypt_failed=0 pushed=250 dave: ready=1 transport_only=0 members=3
+2026-10-16 17:40:30 voice [Nivra voice StreamSend] window_ms=5000 video_send=[0, 0, 0] stream_ticks: transport_key=251 dave_ready=0 group_ready=0 pending=0 waiting=251 announced=0 capture_ready=0 audio_enabled=0
+2026-10-16 17:40:30 voice [Nivra voice ScreenVideo] window_ms=5000 stages(calls,total_us,max_us): echo_render=[0, 0, 0] echo_capture=[0, 0, 0] noise=[0, 0, 0] encode=[0, 0, 0] mix=[200, 1, 1] receive=[200, 1, 1]
+2026-10-16 17:40:31 voice heartbeat ping 40 ms
+2026-10-16 17:40:36 voice heartbeat ping 900 ms
+";
+
+	#[test]
+	fn a_silent_call_and_an_idle_share_are_named_in_the_findings() {
+		let report = analyze(SAMPLE);
+		assert!(
+			report.contains("AUDIO NOT HEARD: in 1 of 2 voice windows"),
+			"{report}"
+		);
+		assert!(
+			report.contains("sender not in the encrypted group"),
+			"{report}"
+		);
+		assert!(
+			report.contains("SHARE WITH NO VIEWER: 1 stream windows"),
+			"{report}"
+		);
+		assert!(report.contains("capture read 200 frames"), "{report}");
+		assert!(report.contains("BUSY UI: 1 of 2 pulses"), "{report}");
+		assert!(report.contains("SLOW FRAMES: 2 frames"), "{report}");
+		assert!(report.contains("SLOW VOICE HEARTBEAT: 1 of 2"), "{report}");
+		assert!(
+			report.contains("call phase Connecting -> Connected"),
+			"{report}"
+		);
+		assert!(
+			report.contains("- N slow frames, longest N ms: 1"),
+			"{report}"
+		);
+	}
+
+	#[test]
+	fn a_quiet_log_says_nothing_stood_out_and_junk_lines_are_ignored() {
+		let log = "not a log line\n2026-10-16 17:40:10 pulse fps=1.4 slow=0 hidden=false protect=false call=none\n";
+		let report = analyze(log);
+		assert!(report.contains("Nothing stood out"), "{report}");
+		assert!(report.contains("1 lines"), "{report}");
+		assert!(analyze("").contains("Nothing stood out"));
+	}
+
+	/// Prints the analysis of a real log: `NIVRA_ULTRA_LOG=path cargo test -p platform
+	/// analysis_of_a_real_log -- --ignored --nocapture`.
+	#[test]
+	#[ignore = "reads a log named by NIVRA_ULTRA_LOG"]
+	fn analysis_of_a_real_log() {
+		let path = std::env::var_os("NIVRA_ULTRA_LOG").expect("set NIVRA_ULTRA_LOG");
+		let text = std::fs::read_to_string(path).unwrap();
+		println!("{}", analyze(&text));
+	}
+
+	#[test]
+	fn the_event_list_is_capped() {
+		let log: String = (0..MAX_EVENTS + 5)
+			.map(|i| format!("2026-10-16 17:40:00 event people {i} -> {}\n", i + 1))
+			.collect();
+		let report = analyze(&log);
+		assert!(report.contains("... and 5 more in the log"), "{report}");
+	}
+}

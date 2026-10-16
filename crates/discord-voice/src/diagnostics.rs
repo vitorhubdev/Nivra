@@ -89,6 +89,28 @@ pub(crate) enum Video {
 }
 const VIDEO_SLOTS: usize = 20;
 
+/// Audio packets from other people and the exact place each dropped one was dropped. A call that
+/// is connected but silent shows up here; nothing else counted these drops, so "I cannot hear
+/// anyone" left no trace in a report.
+#[derive(Clone, Copy)]
+pub(crate) enum Audio {
+	/// Audio RTP packets that passed the transport decryption.
+	Packets,
+	/// The SSRC belongs to nobody the mixer knows.
+	UnknownSsrc,
+	/// End-to-end encryption is not ready yet.
+	NotReady,
+	/// The sender is not in the encrypted group this device holds.
+	NotMember,
+	/// This device is deafened.
+	Deafened,
+	/// End-to-end decryption failed.
+	DecryptFailed,
+	/// Handed to the mixer.
+	Pushed,
+}
+const AUDIO_SLOTS: usize = 7;
+
 /// Voice signaling messages, so a handshake that never completes names its own missing step.
 /// Opcodes only; no signaling contents are recorded.
 #[derive(Clone, Copy)]
@@ -204,6 +226,9 @@ struct Report {
 	at_ms: u64,
 	window_ms: u64,
 	video: [u64; VIDEO_SLOTS],
+	audio: [u64; AUDIO_SLOTS],
+	/// Seen, ready, transport only and member count of the encrypted group; kept between windows.
+	dave: [u64; 4],
 	signal: [u64; SIGNAL_SLOTS],
 	/// Application-audio capture (Linux): inputs allowed, captures started, applications
 	/// excluded after a failure, and mixed 20 ms chunks handed to the stream.
@@ -275,6 +300,8 @@ impl Metrics {
 				at_ms: 0,
 				window_ms: 0,
 				video: [0; VIDEO_SLOTS],
+				audio: [0; AUDIO_SLOTS],
+				dave: [0; 4],
 				signal: [0; SIGNAL_SLOTS],
 				capture: [0; 6],
 				stages: [[0; 3]; 11],
@@ -342,6 +369,28 @@ impl Metrics {
 		}
 		let slot = &mut self.report.capture[event as usize];
 		*slot = slot.saturating_add(count);
+	}
+
+	/// Counts one audio packet outcome; ignored while diagnostics are off.
+	pub fn audio(&mut self, event: Audio, count: u64) {
+		if self.send.is_none() {
+			return;
+		}
+		let slot = &mut self.report.audio[event as usize];
+		*slot = slot.saturating_add(count);
+	}
+
+	/// The encrypted group as it is right now; reported with every window.
+	pub fn dave_state(&mut self, ready: bool, transport_only: bool, members: usize) {
+		if self.send.is_none() {
+			return;
+		}
+		self.report.dave = [
+			1,
+			u64::from(ready),
+			u64::from(transport_only),
+			members as u64,
+		];
 	}
 
 	/// Adds to one signaling counter; ignored while diagnostics are off.
@@ -414,6 +463,7 @@ impl Metrics {
 		self.report.stream_ticks = [0; 8];
 		self.report.queued_audio = 0;
 		self.report.video = [0; VIDEO_SLOTS];
+		self.report.audio = [0; AUDIO_SLOTS];
 		self.report.signal = [0; SIGNAL_SLOTS];
 		self.report.capture = [0; 6];
 	}
@@ -496,6 +546,26 @@ fn write_report(report: Report, bytes: &mut usize, writer: &mut impl Write) -> b
 			" video: packets={packets} rtx={rtx} open_failed={open_failed} not_ready={not_ready} unknown_ssrc={unknown_ssrc} incomplete={incomplete} complete={complete} decrypt_failed={decrypt_failed} gated={gated} queue_full={queue_full} keyframes={keyframes} keyframes_without_params={keyframes_without_params} pli_sent={pli_sent} awaiting_ticks={awaiting_ticks} decoder_errors={decoder_errors} pictures={pictures} picture_gap_ms={picture_gap_ms} stall_ticks={stall_ticks} decode_queue_ms={decode_queue_ms} stale_frames={stale_frames}"
 		));
 	}
+	if report.audio.iter().any(|count| *count != 0) {
+		let [
+			packets,
+			unknown_ssrc,
+			not_ready,
+			not_member,
+			deafened,
+			decrypt_failed,
+			pushed,
+		] = report.audio;
+		line.push_str(&format!(
+			" audio: packets={packets} unknown_ssrc={unknown_ssrc} not_ready={not_ready} not_member={not_member} deafened={deafened} decrypt_failed={decrypt_failed} pushed={pushed}"
+		));
+	}
+	if report.dave[0] != 0 {
+		line.push_str(&format!(
+			" dave: ready={} transport_only={} members={}",
+			report.dave[1], report.dave[2], report.dave[3]
+		));
+	}
 	if report.signal.iter().any(|count| *count != 0) {
 		let [
 			text,
@@ -517,7 +587,7 @@ fn write_report(report: Report, bytes: &mut usize, writer: &mut impl Write) -> b
 			sink_wants_sent,
 		] = report.signal;
 		line.push_str(&format!(
-			" signal: text={text} binary={binary} other={other} ready={ready} session={session} clients={clients} sender={sender} prepare_transition={prepare_transition} execute_transition={execute_transition} prepare_epoch={prepare_epoch} external_sender={external_sender} proposals={proposals} commit={commit} key_package_sent={key_package_sent} transition_ready_sent={transition_ready_sent} subscribe_sent={subscribe_sent} sink_wants_sent={sink_wants_sent}"
+			" signal: msgs={text} binary={binary} other={other} ready={ready} sess_desc={session} clients={clients} sender={sender} prepare_transition={prepare_transition} execute_transition={execute_transition} prepare_epoch={prepare_epoch} external_sender={external_sender} proposals={proposals} commit={commit} key_package_sent={key_package_sent} transition_ready_sent={transition_ready_sent} subscribe_sent={subscribe_sent} sink_wants_sent={sink_wants_sent}"
 		));
 	}
 	if matches!(report.scope, Scope::ScreenAudio) {
@@ -549,6 +619,8 @@ mod tests {
 			at_ms: 1234,
 			window_ms: 5000,
 			video: [0; VIDEO_SLOTS],
+			audio: [0; AUDIO_SLOTS],
+			dave: [0; 4],
 			signal: [0; SIGNAL_SLOTS],
 			capture: [0; 6],
 			stages: [[0; 3]; 11],
@@ -581,7 +653,51 @@ mod tests {
 		let mut out = Vec::new();
 		assert!(write_report(report, &mut bytes, &mut out));
 		let line = String::from_utf8(out).unwrap();
-		assert!(line.contains("signal: text=0"));
+		assert!(line.contains("signal: msgs=0"));
+		assert!(
+			!line.contains("session="),
+			"the redaction would mask the count"
+		);
 		assert!(line.contains("execute_transition=2"));
+	}
+
+	#[test]
+	fn audio_drops_and_the_group_state_explain_a_silent_call() {
+		let mut report = Report {
+			scope: Scope::Transport,
+			encoder_counts: [0; 2],
+			decoder_counts: [0; 2],
+			at_ms: 10,
+			window_ms: 5000,
+			video: [0; VIDEO_SLOTS],
+			audio: [0; AUDIO_SLOTS],
+			dave: [0; 4],
+			signal: [0; SIGNAL_SLOTS],
+			capture: [0; 6],
+			stages: [[0; 3]; 11],
+			wakes: 0,
+			resets: 0,
+			drops: 0,
+			stalls: 0,
+			noise_frames: 0,
+			stream_ticks: [0; 8],
+			queued_audio: 0,
+		};
+		let mut bytes = MAX_REPORT_BYTES;
+		let mut out = Vec::new();
+		assert!(write_report(report, &mut bytes, &mut out));
+		let quiet = String::from_utf8(out).unwrap();
+		assert!(!quiet.contains(" audio:") && !quiet.contains(" dave:"));
+
+		// Packets arrived, but the encrypted group did not know the sender: nothing is heard.
+		report.audio[Audio::Packets as usize] = 250;
+		report.audio[Audio::NotMember as usize] = 250;
+		report.dave = [1, 1, 0, 1];
+		let mut out = Vec::new();
+		assert!(write_report(report, &mut bytes, &mut out));
+		let line = String::from_utf8(out).unwrap();
+		assert!(line.contains("audio: packets=250 unknown_ssrc=0 not_ready=0 not_member=250"));
+		assert!(line.contains("pushed=0"));
+		assert!(line.contains("dave: ready=1 transport_only=0 members=1"));
 	}
 }

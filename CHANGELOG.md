@@ -15,6 +15,7 @@
 ### Diagnóstico
 
 - Novo modo `--ultra-diagnostics` (ou `NIVRA_ULTRA_DIAGNOSTICS=1`): liga de uma vez os diagnósticos de voz, gateway, captura e transmissão e os grava em `nivra-ultra.log`, ao lado do log normal. Os diagnósticos por variável de ambiente iam para o `stderr`, que um `.exe` aberto por duplo clique não mostra. O arquivo é local, gira em 4 arquivos de 4 MiB, mascara segredos e entra no ZIP exportado. Nada é enviado para fora do computador.
+- O modo ultra agora também conta cada pacote de áudio recebido de outras pessoas pelo motivo de descarte (remetente desconhecido, criptografia não pronta, remetente fora do grupo, surdo, falha ao decriptar) junto com o estado do grupo criptografado, porque "estou na chamada e não ouço ninguém" não deixava rastro. Também registra uma linha do tempo de eventos (entrar e sair da chamada, fase, pessoas, transmissões, câmera, janela oculta, PROTECT), o ambiente (CPUs, janela, monitor e taxa de atualização), cada confirmação do heartbeat de voz e o adaptador de GPU. O ZIP exportado traz `ultra-analysis.txt` com um resumo escrito dos achados.
 - A cada 5 s o modo ultra grava um pulso com quadros por segundo, quadros lentos, janela oculta, PROTECT e o estado da chamada, e marca com `WARN` o que costuma passar despercebido: janela oculta que continua desenhando, interface parada em velocidade máxima, quadros lentos e chamada presa numa fase de conexão.
 
 ## Nivra 1.0.18

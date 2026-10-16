@@ -1,7 +1,7 @@
 use crate::{
 	CloseDisposition, Controls, Frame, Status, close_disposition,
 	crypto::{Dave, Encryption, Identity, MAX_PACKET, MAX_SIGNAL, MODE},
-	diagnostics::{Signal, Video},
+	diagnostics::{Audio, Signal, Video},
 	failure,
 	heartbeat::{Echo, Ledger},
 	video_receive::{
@@ -636,6 +636,7 @@ async fn run_inner(
 					if let Some(frame)=frame {drops = u64::from(playback.try_send(frame).is_err());}
 					if !heard && remote_audio {heard=true;emit(Status::RemoteAudio).map_err(|_|"Call interface closed")?;}
 				} else {mixer.clear();if let Some(aux)=&stream_audio {let _=stream_playout.next(aux,0,false,false);}}
+				metrics.dave_state(dave.ready, dave.transport_only, dave.member_count());
 				metrics.poll(false, drops, stalled, 0);
 				if now >= speakers_at {
 					let mut snapshot = crate::SpeakingState::default();
@@ -684,11 +685,15 @@ async fn run_inner(
 					continue;
 				}
 				if rtp.payload_type!=120 {continue;}
+				metrics.audio(Audio::Packets,1);
 				let (source,seq,frame)=(rtp.ssrc,rtp.sequence,rtp.payload);
-				let Some(user)=mixer.user(source) else{continue;};
-				if !dave.ready || !dave.contains(user) || controls.borrow().deafened {continue;}
-				let opus=if dave.transport_only {frame} else {let Ok(opus)=dave.session.decrypt(user,davey::MediaType::AUDIO,&frame) else{continue;};opus};
+				let Some(user)=mixer.user(source) else{metrics.audio(Audio::UnknownSsrc,1);continue;};
+				if !dave.ready {metrics.audio(Audio::NotReady,1);continue;}
+				if !dave.contains(user) {metrics.audio(Audio::NotMember,1);continue;}
+				if controls.borrow().deafened {metrics.audio(Audio::Deafened,1);continue;}
+				let opus=if dave.transport_only {frame} else {let Ok(opus)=dave.session.decrypt(user,davey::MediaType::AUDIO,&frame) else{metrics.audio(Audio::DecryptFailed,1);continue;};opus};
 				mixer.push(source,seq,opus);
+				metrics.audio(Audio::Pushed,1);
 				metrics.finish(crate::diagnostics::Stage::Receive, start);
 			},
 			event=ws.next()=>{
@@ -1591,15 +1596,17 @@ async fn run_stream_inner(
 				let Some(mut rtp)=crypto.open(&packet[..length]) else {metrics.video(Video::OpenFailed,1);continue;};
 				if rtp.payload_type==102 {metrics.video(Video::Rtx,1);let Some((media,sequence))=receivers.restore_rtx(rtp.ssrc,&mut rtp.payload) else{continue;};rtp.ssrc=media;rtp.sequence=sequence;rtp.payload_type=101;}
 				if rtp.payload_type==101 {metrics.video(Video::Packets,1);}
-				if !dave.ready {if rtp.payload_type==101 {metrics.video(Video::NotReady,1);}continue;}
+				if !dave.ready {if rtp.payload_type==101 {metrics.video(Video::NotReady,1);}else if rtp.payload_type==120 {metrics.audio(Audio::Packets,1);metrics.audio(Audio::NotReady,1);}continue;}
 				if rtp.payload_type==120 {
+					metrics.audio(Audio::Packets,1);
 					if audio.is_none() {continue;}
-					let Some(user)=mixer.user(rtp.ssrc) else {continue;};
-					if !dave.contains(user) {continue;}
+					let Some(user)=mixer.user(rtp.ssrc) else {metrics.audio(Audio::UnknownSsrc,1);continue;};
+					if !dave.contains(user) {metrics.audio(Audio::NotMember,1);continue;}
 					let start=metrics.start();
-					let opus=if dave.transport_only {rtp.payload} else {let Ok(opus)=dave.session.decrypt(user,davey::MediaType::AUDIO,&rtp.payload) else {metrics.poll(false,1,false,0);continue;};opus};
+					let opus=if dave.transport_only {rtp.payload} else {let Ok(opus)=dave.session.decrypt(user,davey::MediaType::AUDIO,&rtp.payload) else {metrics.audio(Audio::DecryptFailed,1);metrics.poll(false,1,false,0);continue;};opus};
 					metrics.finish(crate::diagnostics::Stage::Receive,start);
 					mixer.push(rtp.ssrc,rtp.sequence,opus);
+					metrics.audio(Audio::Pushed,1);
 					continue;
 				}
 				let Some(decoder)=&decoder else {continue;};

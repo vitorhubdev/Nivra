@@ -786,7 +786,15 @@ because the rotation already bounds the disk. Every five seconds a pulse line re
 second, slow frames (over 250 ms between the start of `logic` and the end of `ui`), whether the
 window is hidden, whether PROTECT is on and, during a call, its phase and the counts of people,
 live streams and watched streams; a `WARN` marks a hidden window that keeps drawing, an idle UI at
-full speed, slow frames and a call that stays in one setup phase for 20 seconds. While ultra mode
+full speed, slow frames and a call that stays in one setup phase for 20 seconds. Changes between two
+pulses are recorded as `event` lines (call joined or left, phase changes, people, live and watched
+streams, camera, window hidden, PROTECT), the first frame records the CPU count, window size, scale
+and monitor size and refresh rate, every voice heartbeat acknowledgement is kept, and the voice
+reports count each audio packet from other people by where it was dropped (unknown sender,
+encryption not ready, sender outside the encrypted group, deafened, decryption failed) together with
+the state of that group. When the diagnostics ZIP is exported, `ultra-analysis.txt` summarizes the log
+from the same lines: audio that arrived without being heard, a group that was not ready, a share
+encoding nothing, busy or slow frames and slow heartbeats. While ultra mode
 runs the window asks for a repaint every five seconds so the pulse keeps ticking. Nothing is sent
 off the computer; the diagnostics ZIP the user exports includes `nivra-ultra.log` only when it exists.
 

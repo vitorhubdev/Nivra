@@ -1160,6 +1160,9 @@ impl Voice {
 						ui.voice_unencrypted = true;
 					}
 					Notice::Ping(ms) => {
+						// Ultra diagnostics keep every acknowledgement: latency spikes between the
+						// once-a-minute lines below are exactly what a bad call is made of.
+						platform::diagnostics::trace("voice", &format!("heartbeat ping {ms} ms"));
 						// Logged once a minute: a line every 5 s would push the crash lines out of the rotated log.
 						static LAST_PING_LOG: std::sync::Mutex<Option<Instant>> =
 							std::sync::Mutex::new(None);

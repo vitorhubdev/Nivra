@@ -360,6 +360,10 @@ impl Dave {
 	pub fn contains(&self, user: u64) -> bool {
 		self.participants.contains(&user)
 	}
+	/// How many people this device currently exchanges media keys with.
+	pub fn member_count(&self) -> usize {
+		self.participants.len()
+	}
 	/// Only this device remains announced in the call.
 	pub fn alone(&self) -> bool {
 		self.announced.len() == 1

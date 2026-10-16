@@ -88,6 +88,7 @@ pub fn select(
 		});
 	};
 	eprintln!("[Nivra] GPU adapter: {}", describe(&adapter.get_info()));
+	platform::diagnostics::info(&format!("GPU adapter: {}", describe(&adapter.get_info())));
 	Ok((*adapter).clone())
 }
 

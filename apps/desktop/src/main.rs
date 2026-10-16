@@ -994,6 +994,8 @@ struct Desktop {
 	frame_metrics: FrameMetrics,
 	frame_stats: frame_stats::FrameStats,
 	ultra_pulse: Option<ultra::Pulse>,
+	ultra_timeline: ultra::Timeline,
+	ultra_environment_logged: bool,
 	#[cfg(feature = "demo")]
 	rendering_demo: Option<rendering_demo::RenderingDemo>,
 	avatars: Option<avatars::AvatarWorker>,
@@ -1268,6 +1270,11 @@ fn write_diagnostics_zip(
 		// Only present when the app ran with `--ultra-diagnostics`; bounded by its own rotation.
 		let ultra = platform::diagnostics::ultra_log();
 		if !ultra.is_empty() {
+			// The written analysis first: it names what stood out before anyone reads the log.
+			write(
+				"ultra-analysis.txt",
+				platform::ultra_report::analyze(&ultra).as_bytes(),
+			)?;
 			write("nivra-ultra.log", ultra.as_bytes())?;
 		}
 	}
@@ -2442,6 +2449,8 @@ impl Desktop {
 			monitor_period: None,
 			frame_metrics: FrameMetrics::new(frame_sample),
 			frame_stats: frame_stats::FrameStats::default(),
+			ultra_timeline: ultra::Timeline::default(),
+			ultra_environment_logged: false,
 			ultra_pulse: platform::diagnostics::ultra()
 				.then(|| ultra::Pulse::new(std::time::Instant::now())),
 			#[cfg(feature = "demo")]
@@ -7308,6 +7317,36 @@ impl eframe::App for Desktop {
 			let hidden = self.window.is_minimized().unwrap_or(false)
 				|| !self.window.is_visible().unwrap_or(true);
 			let state = &self.state;
+			let call = state.voice.active.as_ref();
+			for line in self.ultra_timeline.observe(ultra::Observed {
+				phase: call.map(|call| ultra::phase_name(call.phase)),
+				people: call.map_or(0, |call| call.participants.len()),
+				live: call.map_or(0, |call| {
+					call.participants.iter().filter(|p| p.streaming).count()
+				}),
+				watching: call.map_or(0, |call| call.watching.len()),
+				camera: call.is_some_and(|call| call.camera),
+				hidden,
+				protect: protect::enabled(),
+			}) {
+				platform::diagnostics::trace("event", &line);
+			}
+			if !std::mem::replace(&mut self.ultra_environment_logged, true) {
+				let monitor = self.window.current_monitor();
+				platform::diagnostics::trace(
+					"env",
+					&format!(
+						"cpus={} window={:?} scale={:.2} monitor={:?} refresh_mhz={:?}",
+						std::thread::available_parallelism().map_or(0, usize::from),
+						self.window.inner_size(),
+						self.window.scale_factor(),
+						monitor.as_ref().map(|monitor| monitor.size()),
+						monitor
+							.as_ref()
+							.and_then(|monitor| monitor.refresh_rate_millihertz()),
+					),
+				);
+			}
 			let now = std::time::Instant::now();
 			pulse.frame_started(now);
 			if let Some(report) = pulse.tick(now, || ultra::snapshot(state, hidden)) {

@@ -31,11 +31,81 @@ pub struct Snapshot {
 	pub call: Option<CallView>,
 }
 
+/// A call phase as a fixed word, so watching it every frame never allocates.
+pub fn phase_name(phase: client_core::voice::Phase) -> &'static str {
+	use client_core::voice::Phase;
+	match phase {
+		Phase::Connecting => "Connecting",
+		Phase::ConnectingTransport => "ConnectingTransport",
+		Phase::Discovering => "Discovering",
+		Phase::OpeningAudio => "OpeningAudio",
+		Phase::Ringing => "Ringing",
+		Phase::Securing => "Securing",
+		Phase::Connected => "Connected",
+		Phase::Waiting => "Waiting",
+		Phase::Failed => "Failed",
+	}
+}
+
+/// What changes the story of a session: the pulse samples every few seconds, but a phase that
+/// lasts two seconds or a stream that starts and stops between two pulses must still be on record.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Observed {
+	pub phase: Option<&'static str>,
+	pub people: usize,
+	pub live: usize,
+	pub watching: usize,
+	pub camera: bool,
+	pub hidden: bool,
+	pub protect: bool,
+}
+
+#[derive(Default)]
+pub struct Timeline {
+	last: Option<Observed>,
+}
+
+impl Timeline {
+	/// One line per thing that changed since the previous call. The first call records a baseline
+	/// and says nothing, so a run does not start with a burst of "changes".
+	pub fn observe(&mut self, now: Observed) -> Vec<String> {
+		let Some(before) = self.last.replace(now) else {
+			return Vec::new();
+		};
+		let mut lines = Vec::new();
+		match (before.phase, now.phase) {
+			(None, Some(phase)) => lines.push(format!("call joined, phase {phase}")),
+			(Some(_), None) => lines.push("call left".to_owned()),
+			(Some(from), Some(to)) if from != to => {
+				lines.push(format!("call phase {from} -> {to}"));
+			}
+			_ => {}
+		}
+		let mut count = |name: &str, from: usize, to: usize| {
+			if from != to {
+				lines.push(format!("{name} {from} -> {to}"));
+			}
+		};
+		count("people", before.people, now.people);
+		count("live streams", before.live, now.live);
+		count("watching", before.watching, now.watching);
+		let mut flag = |name: &str, from: bool, to: bool| {
+			if from != to {
+				lines.push(format!("{name} {}", if to { "on" } else { "off" }));
+			}
+		};
+		flag("camera", before.camera, now.camera);
+		flag("window hidden", before.hidden, now.hidden);
+		flag("PROTECT", before.protect, now.protect);
+		lines
+	}
+}
+
 /// What the pulse reports about the app right now. Reads existing state only.
 pub fn snapshot(state: &client_core::State, hidden: bool) -> Snapshot {
 	use client_core::voice::Phase;
 	let call = state.voice.active.as_ref().map(|call| CallView {
-		phase: format!("{:?}", call.phase),
+		phase: phase_name(call.phase).to_owned(),
 		settled: matches!(call.phase, Phase::Connected | Phase::Waiting),
 		people: call.participants.len(),
 		live: call.participants.iter().filter(|p| p.streaming).count(),
@@ -157,6 +227,65 @@ impl Pulse {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn the_timeline_records_each_change_once_and_stays_silent_when_nothing_changes() {
+		let mut timeline = Timeline::default();
+		let idle = Observed::default();
+		assert!(
+			timeline.observe(idle).is_empty(),
+			"the first call is a baseline"
+		);
+		assert!(timeline.observe(idle).is_empty());
+		let joining = Observed {
+			phase: Some("Connecting"),
+			people: 1,
+			..idle
+		};
+		assert_eq!(
+			timeline.observe(joining),
+			["call joined, phase Connecting", "people 0 -> 1"]
+		);
+		let connected = Observed {
+			phase: Some("Connected"),
+			people: 4,
+			live: 1,
+			camera: true,
+			protect: true,
+			..joining
+		};
+		assert_eq!(
+			timeline.observe(connected),
+			[
+				"call phase Connecting -> Connected",
+				"people 1 -> 4",
+				"live streams 0 -> 1",
+				"camera on",
+				"PROTECT on",
+			]
+		);
+		let minimized = Observed {
+			hidden: true,
+			watching: 2,
+			..connected
+		};
+		assert_eq!(
+			timeline.observe(minimized),
+			["watching 0 -> 2", "window hidden on"]
+		);
+		assert_eq!(
+			timeline.observe(Observed::default()),
+			[
+				"call left",
+				"people 4 -> 0",
+				"live streams 1 -> 0",
+				"watching 2 -> 0",
+				"camera off",
+				"window hidden off",
+				"PROTECT off",
+			]
+		);
+	}
 
 	fn snapshot(hidden: bool, call: Option<CallView>) -> Snapshot {
 		Snapshot {

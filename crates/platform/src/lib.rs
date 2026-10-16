@@ -19,6 +19,7 @@ pub mod shortcut;
 pub mod single_instance;
 pub mod startup;
 pub mod tray;
+pub mod ultra_report;
 pub mod video;
 #[cfg(target_os = "macos")]
 pub mod window;

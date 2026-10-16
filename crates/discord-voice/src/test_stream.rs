@@ -46,6 +46,22 @@ async fn message(ws: &mut TestSocket) -> Message {
 	}
 }
 
+async fn transition_message(ws: &mut TestSocket) -> Message {
+	loop {
+		let next = message(ws).await;
+		if let Message::Text(text) = &next {
+			let value: Value = serde_json::from_str(text).unwrap();
+			if value["op"] == 15 {
+				// A viewer refreshes its subscription independently of DAVE signaling.
+				// Validate that traffic, then keep waiting for the mandatory ACK or Pong.
+				assert_eq!(value, json!({"op":15,"d":{"any":100}}));
+				continue;
+			}
+		}
+		return next;
+	}
+}
+
 async fn connect(
 	listener: &TcpListener,
 	delivery: &crate::test_mls::Delivery,
@@ -307,7 +323,7 @@ async fn exchange(downgrade: bool) {
 				json!({"op":21,"d":{"protocol_version":0,"transition_id":9}}),
 			)
 			.await;
-			let ack = message(ws).await;
+			let ack = transition_message(ws).await;
 			let ack: Value = serde_json::from_str(ack.to_text().unwrap()).unwrap();
 			assert_eq!(ack, json!({"op":23,"d":{"transition_id":9}}));
 			if index == 0 {
@@ -318,7 +334,7 @@ async fn exchange(downgrade: bool) {
 					.await
 					.unwrap();
 				assert!(
-					matches!(message(ws).await, Message::Pong(data) if data.as_ref() == b"pending")
+					matches!(transition_message(ws).await, Message::Pong(data) if data.as_ref() == b"pending")
 				);
 				assert!(!transport_only.load(Ordering::Acquire));
 			}
@@ -328,7 +344,7 @@ async fn exchange(downgrade: bool) {
 				.await
 				.unwrap();
 			assert!(
-				matches!(message(ws).await, Message::Pong(data) if data.as_ref() == b"downgraded")
+				matches!(transition_message(ws).await, Message::Pong(data) if data.as_ref() == b"downgraded")
 			);
 			if index == 0 {
 				assert!(transport_only.load(Ordering::Acquire));

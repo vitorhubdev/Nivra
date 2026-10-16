@@ -28,8 +28,8 @@ impl Scope {
 pub enum Protocol {
 	Http,
 	Socks4,
-	#[default]
 	Socks5,
+	#[default]
 	WireGuard,
 }
 impl Protocol {

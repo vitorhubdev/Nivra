@@ -838,7 +838,7 @@ struct ProtectRejoin {
 const PROTECT_REJOIN_WINDOW: Duration = Duration::from_secs(90);
 enum ProtectChange {
 	Tested(&'static str),
-	Imported(Zeroizing<String>),
+	Imported(Zeroizing<String>, String),
 	Health(protect::Health, u64),
 	Prepared(Arc<protect::Profile>, Option<Arc<protect::Profile>>),
 	TransportStopped {
@@ -912,6 +912,11 @@ struct Desktop {
 	protect_scope: Option<u64>,
 	protect_shutdown: ProtectShutdown,
 	protect_next_health: std::time::Instant,
+	/// While PROTECT is being turned back on at launch, the saved login waits for it (until
+	/// this time at most), so nothing goes out directly first.
+	protect_startup_wait: Option<std::time::Instant>,
+	/// The enable action that restores PROTECT at launch, applied when the worker is free.
+	protect_startup_action: Option<model::protect::Action>,
 	state: State,
 	messaging: ui::MessagingUi,
 	/// Last invite counter a local Rich Presence client published, so it opens exactly once.
@@ -2344,6 +2349,9 @@ impl Desktop {
 			protect_scope: None,
 			protect_shutdown: ProtectShutdown::Idle,
 			protect_next_health: std::time::Instant::now() + Duration::from_secs(60),
+			protect_startup_wait: protect_profiles::startup_enabled()
+				.then(|| std::time::Instant::now() + Duration::from_secs(25)),
+			protect_startup_action: None,
 			state,
 			messaging,
 			rpc_invite_seen: 0,
@@ -2516,9 +2524,13 @@ impl Desktop {
 	}
 
 	fn connect(&mut self, secret: SessionSecret, save: bool, ctx: &egui::Context) {
-		if self.presence_load_pending {
+		if self.presence_load_pending || self.protect_startup_wait.is_some() {
 			self.deferred_connect = Some((secret, save));
-			self.credential_status = "Connecting to Discord…";
+			self.credential_status = if self.protect_startup_wait.is_some() {
+				"Turning PROTECT on before connecting…"
+			} else {
+				"Connecting to Discord…"
+			};
 			return;
 		}
 		self.role_icon.cancel();
@@ -2779,6 +2791,10 @@ impl Desktop {
 			self.state.status = reason;
 			return Err(reason);
 		}
+		// Remember the choice, so the next launch turns PROTECT on (or leaves it off) again.
+		if !self.state.demo && !self.fixture_only {
+			protect_profiles::set_startup_enabled(enabled);
+		}
 		if let Some(secret) = reconnect {
 			self.state.generation = self.state.generation.wrapping_add(1);
 			self.state.auth = AuthState::Authenticating;
@@ -2800,12 +2816,49 @@ impl Desktop {
 			"PROTECT disabled after the previous connection stopped; signaling is reconnecting."
 		})
 	}
+	/// Launch-time restore: PROTECT comes back on before the saved login connects, and a
+	/// failure or a timeout is shown instead of silently continuing without it.
+	fn poll_protect_startup(&mut self, ctx: &egui::Context) {
+		let Some(deadline) = self.protect_startup_wait else {
+			return;
+		};
+		if self.state.demo || self.fixture_only {
+			self.protect_startup_wait = None;
+			return;
+		}
+		match self.protect_profiles.take_startup() {
+			Some(Some(draft)) => {
+				self.messaging.set_protect_draft(draft.clone());
+				self.protect_startup_action = Some(model::protect::Action::Enable(draft, None));
+			}
+			Some(None) => {
+				self.protect_startup_wait = None;
+				self.messaging.protect_alert(
+					"PROTECT was on when Nivra closed, but its saved configuration could not be restored. Import it again.",
+				);
+				self.flush_deferred_connect(ctx);
+				return;
+			}
+			None => {}
+		}
+		let now = std::time::Instant::now();
+		if now >= deadline {
+			self.protect_startup_wait = None;
+			self.messaging.protect_alert(
+				"PROTECT took too long to turn on. Nivra is connecting without it; open PROTECT to retry.",
+			);
+			self.flush_deferred_connect(ctx);
+		} else {
+			ctx.request_repaint_after(deadline - now);
+		}
+	}
 	fn poll_protect(&mut self, ctx: &egui::Context) {
 		if !self.state.demo && !self.fixture_only {
 			self.protect_profiles.scope(self.state.generation);
 			self.protect_profiles
 				.poll(&self.runtime, ctx, &mut self.messaging);
 		}
+		self.poll_protect_startup(ctx);
 		if !self.state.demo
 			&& !self.fixture_only
 			&& protect::has_fallback()
@@ -2853,13 +2906,21 @@ impl Desktop {
 			self.cancel_protect();
 			if result.generation == self.state.generation && !self.state.demo && !self.fixture_only
 			{
+				let activated = matches!(
+					&result.change,
+					Ok(ProtectChange::TransportStopped {
+						primary: Some(_),
+						..
+					})
+				);
 				let status = match result.change {
 					Ok(ProtectChange::Tested(status)) => Ok(status),
-					Ok(ProtectChange::Imported(config)) => {
+					Ok(ProtectChange::Imported(config, name)) => {
 						self.messaging.set_protect_wireguard(&config).map(|_| {
+							// Saved without asking, then tested for country and ping.
 							self.protect_profiles
-								.remember(self.messaging.protect_draft());
-							"WireGuard imported; saving securely. Test before enabling."
+								.save_named(name, self.messaging.protect_draft());
+							"WireGuard imported and saved. Click it in the list to connect."
 						})
 					}
 					Ok(ProtectChange::Health(health, epoch)) => {
@@ -2902,6 +2963,25 @@ impl Desktop {
 						Err(reason)
 					}
 				};
+				if self.protect_startup_wait.is_some() {
+					match &status {
+						Err(reason) => {
+							self.protect_startup_wait = None;
+							self.messaging.protect_alert(&format!(
+								"PROTECT did not turn on: {reason}. Nivra is connecting without it."
+							));
+							self.flush_deferred_connect(ctx);
+						}
+						Ok(_) if protect::enabled() => {
+							self.protect_startup_wait = None;
+							self.flush_deferred_connect(ctx);
+						}
+						Ok(_) => {}
+					}
+				}
+				if activated && status.is_ok() && protect::enabled() {
+					self.messaging.mark_protect_active();
+				}
 				self.messaging.set_protect_operation_status(
 					status.unwrap_or_else(|reason| reason),
 					protect::enabled(),
@@ -2913,7 +2993,11 @@ impl Desktop {
 		if self.protect_worker.is_some() {
 			return;
 		}
-		let Some(action) = self.messaging.take_protect_action() else {
+		let action = self
+			.protect_startup_action
+			.take()
+			.or_else(|| self.messaging.take_protect_action());
+		let Some(action) = action else {
 			if !self.state.demo
 				&& !self.fixture_only
 				&& protect::has_fallback()
@@ -3003,6 +3087,15 @@ impl Desktop {
 						else {
 							return Ok(ProtectChange::Tested("WireGuard import cancelled"));
 						};
+						// The profile is saved under the file's name.
+						let name: String = path
+							.file_stem()
+							.and_then(|stem| stem.to_str())
+							.unwrap_or("WireGuard")
+							.chars()
+							.filter(|c| !c.is_control())
+							.take(64)
+							.collect();
 						if !path
 							.extension()
 							.and_then(|extension| extension.to_str())
@@ -3027,7 +3120,7 @@ impl Desktop {
 						})
 						.await
 						.map_err(|_| "WireGuard import worker stopped")??;
-						Ok(ProtectChange::Imported(config))
+						Ok(ProtectChange::Imported(config, name))
 					}
 					model::protect::Action::Test(draft) => {
 						if draft.protocol == model::protect::Protocol::WireGuard
@@ -3671,7 +3764,7 @@ impl Desktop {
 		}
 	}
 	fn flush_deferred_connect(&mut self, ctx: &egui::Context) {
-		if self.presence_load_pending {
+		if self.presence_load_pending || self.protect_startup_wait.is_some() {
 			return;
 		}
 		if let Some((secret, save)) = self.deferred_connect.take() {
@@ -7493,8 +7586,6 @@ impl eframe::App for Desktop {
 		// PROTECT markers appear only for the route that is live right now.
 		self.messaging
 			.set_protect_active_scope(protect::active_scope());
-		self.messaging
-			.set_protect_call_active(self.state.voice.active.is_some());
 		// Change native hints before drawing, so the clear color and panel alpha
 		// agree for the whole frame. OS calls happen only when an effect changes.
 		self.sync_window_effects();

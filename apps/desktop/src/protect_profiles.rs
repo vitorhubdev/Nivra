@@ -223,6 +223,50 @@ fn load(row: &Row) -> Result<Draft, &'static str> {
 	}
 	decode(&bytes)
 }
+/// Removes one saved profile: its secret, its metadata and its public copy.
+fn delete_row(id: &str) -> Result<(), &'static str> {
+	if !rows()?.iter().any(|r| r.id == id) {
+		return Err(STORE_ERROR);
+	}
+	platform::protect_profiles::forget(id).map_err(|_| STORE_ERROR)?;
+	let path = folder()?;
+	std::fs::remove_file(path.join(format!("{id}.json"))).map_err(|_| STORE_ERROR)?;
+	let conf = path.join(format!("{id}.conf"));
+	if conf.exists() {
+		std::fs::remove_file(conf).map_err(|_| STORE_ERROR)?;
+	}
+	Ok(())
+}
+/// Importing the same file again replaces its profile instead of filling the list with copies.
+fn remove_named(name: &str) -> Result<(), &'static str> {
+	let name: String = name
+		.trim()
+		.chars()
+		.filter(|c| !c.is_control())
+		.take(64)
+		.collect();
+	for row in rows()?.into_iter().filter(|row| row.name == name) {
+		delete_row(&row.id)?;
+	}
+	Ok(())
+}
+/// Present while PROTECT was on when Nivra last closed, so the next launch turns it on again.
+fn startup_marker() -> Result<PathBuf, &'static str> {
+	Ok(folder()?.join("start-enabled"))
+}
+pub fn startup_enabled() -> bool {
+	startup_marker().is_ok_and(|path| path.exists())
+}
+pub fn set_startup_enabled(on: bool) {
+	if let Ok(path) = startup_marker() {
+		if on {
+			let _ = std::fs::write(&path, b"1");
+		} else {
+			let _ = std::fs::remove_file(path);
+		}
+	}
+}
+
 fn save(name: String, draft: Draft) -> Result<(), &'static str> {
 	if rows()?.len() >= MAX_PROFILES {
 		return Err("At most 16 profiles can be saved; remove one first");
@@ -392,6 +436,12 @@ pub struct Manager {
 	worker: Option<tokio::task::JoinHandle<()>>,
 	receive: Option<mpsc::Receiver<Event>>,
 	generation: Option<u64>,
+	/// An imported profile waiting for the store to be free, saved under its file name.
+	pending_named: Option<(String, Draft)>,
+	/// Test the saved profiles (country, ping) once the current store operation ends.
+	auto_test: bool,
+	/// What the last launch left on: the configuration to turn on again, or none restorable.
+	startup: Option<Option<Draft>>,
 }
 impl Drop for Manager {
 	fn drop(&mut self) {
@@ -409,6 +459,8 @@ impl Manager {
 			self.receive = None;
 			self.started = false;
 			self.pending_save = None;
+			self.pending_named = None;
+			self.auto_test = false;
 			self.testing = false;
 			self.generation = Some(generation);
 		}
@@ -422,6 +474,13 @@ impl Manager {
 		if !self.started {
 			self.started = true;
 			self.start(None, runtime, ctx, ui);
+		}
+		if self.worker.is_none()
+			&& let Some((name, draft)) = self.pending_named.take()
+		{
+			// Saving also remembers it, and the new profile is tested right after.
+			self.auto_test = true;
+			self.start(Some(ProfileAction::Save { name, draft }), runtime, ctx, ui);
 		}
 		if self.worker.is_none()
 			&& let Some(draft) = self.pending_save.take()
@@ -446,13 +505,23 @@ impl Manager {
 			};
 			match event {
 				Some(Event::Initial(rows, draft)) => {
+					let has_rows = rows.as_ref().is_ok_and(|rows| !rows.is_empty());
 					if let Ok(rows) = rows {
 						ui.set_protect_profiles(rows);
+					}
+					let startup = startup_enabled();
+					if startup {
+						self.startup = Some(draft.as_ref().ok().and_then(|draft| draft.clone()));
 					}
 					if self.pending_save.is_none()
 						&& let Ok(Some(draft)) = draft
 					{
 						ui.set_protect_draft(draft);
+					}
+					// Country and ping are collected without being asked, unless PROTECT is
+					// about to come back on (WireGuard tests need it off).
+					if !startup && has_rows {
+						self.auto_test = true;
 					}
 				}
 				Some(Event::Rows(rows, status)) => {
@@ -470,6 +539,10 @@ impl Manager {
 					self.worker = None;
 					self.receive = None;
 					self.testing = false;
+					if std::mem::take(&mut self.auto_test) && !protect::enabled() {
+						let location = ui.protect_locate();
+						self.start(Some(ProfileAction::TestAll { location }), runtime, ctx, ui);
+					}
 				}
 				None => break,
 			}
@@ -477,6 +550,14 @@ impl Manager {
 	}
 	pub fn remember(&mut self, draft: Draft) {
 		self.pending_save = Some(draft);
+	}
+	/// Saves an imported configuration as a profile named after its file.
+	pub fn save_named(&mut self, name: String, draft: Draft) {
+		self.pending_named = Some((name, draft));
+	}
+	/// The launch-time outcome, once: the configuration to enable, or `None` if there is none.
+	pub fn take_startup(&mut self) -> Option<Option<Draft>> {
+		self.startup.take()
 	}
 	pub fn handle(
 		&mut self,
@@ -636,6 +717,7 @@ impl Manager {
 							Ok(Event::Remembered)
 						}
 						Some(ProfileAction::Save { name, draft }) => {
+							remove_named(&name)?;
 							save(name, draft.clone())?;
 							let status = if remember(&draft).is_ok() {
 								"Profile saved in the OS credential store"
@@ -654,17 +736,7 @@ impl Manager {
 							Ok(Event::Loaded(draft, remembered))
 						}
 						Some(ProfileAction::Delete(id)) => {
-							if !rows()?.iter().any(|r| r.id == id) {
-								return Err(STORE_ERROR);
-							}
-							platform::protect_profiles::forget(&id).map_err(|_| STORE_ERROR)?;
-							let path = folder()?;
-							std::fs::remove_file(path.join(format!("{id}.json")))
-								.map_err(|_| STORE_ERROR)?;
-							let conf = path.join(format!("{id}.conf"));
-							if conf.exists() {
-								std::fs::remove_file(conf).map_err(|_| STORE_ERROR)?;
-							}
+							delete_row(&id)?;
 							Ok(Event::Rows(
 								visible_rows()?,
 								"Saved profile removed; active route unchanged",
@@ -813,6 +885,9 @@ mod tests {
 			testing: false,
 			worker: None,
 			generation: None,
+			pending_named: None,
+			auto_test: false,
+			startup: None,
 		};
 		let mut ui = ui::MessagingUi::default();
 		manager.poll(&runtime, &eframe::egui::Context::default(), &mut ui);
@@ -838,6 +913,9 @@ mod tests {
 			testing: false,
 			worker: None,
 			generation: None,
+			pending_named: None,
+			auto_test: false,
+			startup: None,
 		};
 		let mut ui = ui::MessagingUi::default();
 		manager.poll(&runtime, &eframe::egui::Context::default(), &mut ui);
@@ -882,6 +960,9 @@ mod tests {
 			worker: None,
 			receive: None,
 			generation: None,
+			pending_named: None,
+			auto_test: false,
+			startup: None,
 		};
 		let mut ui = ui::MessagingUi::default();
 		assert!(

@@ -51,6 +51,15 @@ fn close_message(code: Option<u16>, disposition: CloseDisposition) -> &'static s
 }
 /// Time a sole member gives the roster announcement before waiting for a peer.
 const PEER_GRACE: Duration = Duration::from_millis(500);
+/// A resumed socket that stays up this long earns its resume budget back. Without this a long call
+/// died on its third network blip even when the connection was healthy in between.
+const RESUME_STABLE: Duration = Duration::from_secs(60);
+
+fn settle_resume_budget(attempts: &mut u8, resumed_at: Option<Instant>) {
+	if resumed_at.is_some_and(|at| at.elapsed() >= RESUME_STABLE) {
+		*attempts = 0;
+	}
+}
 
 fn announced_media(dave: &Dave) -> Status {
 	if dave.transport_only {
@@ -444,6 +453,7 @@ async fn run_inner(
 	let mut resuming = false;
 	let mut resume_attempts = 0u8;
 	let mut resume_since: Option<Instant> = None;
+	let mut resumed_at: Option<Instant> = None;
 	let mut heard = false;
 	let mut speaking = false;
 	let mut silence = 0u8;
@@ -498,7 +508,7 @@ async fn run_inner(
 					// One late ack stays in the call. Three missed acks on a socket that
 					// still accepts writes is a half-open connection: resume, do not hang up.
 					if heartbeat.interval_elapsed() {
-						if encryption.is_none() || resume_attempts>=2 {return Err(failure::SOCKET_FAILED);}
+						settle_resume_budget(&mut resume_attempts,resumed_at);if encryption.is_none() || resume_attempts>=2 {return Err(failure::SOCKET_FAILED);}
 						video.clear();video.announced=false;
 						resume_attempts+=1;resuming=true;resume_since=Some(Instant::now());capture_reset=true;
 						deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;heartbeat=Ledger::default();
@@ -693,7 +703,7 @@ async fn run_inner(
 					_ => true,
 				};
 				if resumable {
-					if encryption.is_none() || resume_attempts>=2 {return Err(failure::SOCKET_FAILED);}
+					settle_resume_budget(&mut resume_attempts,resumed_at);if encryption.is_none() || resume_attempts>=2 {return Err(failure::SOCKET_FAILED);}
 					video.clear();video.announced=false;
 					resume_attempts+=1;resuming=true;resume_since=Some(Instant::now());capture_reset=true;
 					deadline=Some(Instant::now()+Duration::from_secs(30));heartbeat_ms=None;heartbeat=Ledger::default();
@@ -908,7 +918,7 @@ async fn run_inner(
 								if camera.is_some(){json_send(&mut ws,video.announcement(ssrc,false)).await?;}
 								json_send(&mut ws,json!({"op":5,"d":{"speaking":0,"delay":0,"ssrc":ssrc}})).await?;
 								speaking=false;silence=0;
-								resuming=false;resume_since=None;ready_announced=true;
+								resuming=false;resume_since=None;resumed_at=Some(Instant::now());ready_announced=true;
 								// The 30s resume deadline guards a resume that never finishes. A resume that
 								// finishes inside 5s never clears it through the tick (ready_announced is
 								// already set), so a healthy secured session would die 30s later.
@@ -1693,6 +1703,20 @@ mod tests {
 	use crate::diagnostics::Signal;
 	use crate::video_receive::Receivers;
 	use opus2::Decoder;
+
+	#[test]
+	fn a_resume_that_held_for_a_minute_gives_the_budget_back() {
+		let held = Instant::now().checked_sub(RESUME_STABLE + Duration::from_secs(1));
+		let mut attempts = 2;
+		settle_resume_budget(&mut attempts, held);
+		assert_eq!(attempts, 0);
+		let mut attempts = 2;
+		settle_resume_budget(&mut attempts, Some(Instant::now()));
+		assert_eq!(attempts, 2, "a socket that keeps dying still gives up");
+		let mut attempts = 2;
+		settle_resume_budget(&mut attempts, None);
+		assert_eq!(attempts, 2);
+	}
 
 	#[tokio::test]
 	async fn udp_send_errors_drop_datagrams_without_waiting_and_recover() {

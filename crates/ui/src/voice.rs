@@ -1369,6 +1369,7 @@ impl MessagingUi {
 		let Some(call) = ready else {
 			if expired {
 				self.live_watch = None;
+				state.status = "Could not open that stream; the call did not connect.";
 			}
 			return;
 		};
@@ -6419,6 +6420,26 @@ mod tests {
 		view.apply_live_watch(&mut state);
 		assert!(view.live_watch.is_none());
 		assert_eq!(state.status, "That stream has ended.");
+	}
+
+	#[test]
+	fn a_live_watch_whose_call_never_connects_says_so() {
+		let mut state = test_support::voice_demo_state();
+		let other = Id(state.voice.active.as_ref().unwrap().channel.0 + 1);
+		let mut view = MessagingUi {
+			live_watch: Some(LiveWatch {
+				channel: other,
+				streamer: Id(2),
+				until: std::time::Instant::now() - std::time::Duration::from_millis(1),
+			}),
+			..MessagingUi::default()
+		};
+		view.apply_live_watch(&mut state);
+		assert!(view.live_watch.is_none());
+		assert_eq!(
+			state.status,
+			"Could not open that stream; the call did not connect."
+		);
 	}
 
 	#[test]

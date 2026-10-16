@@ -2,7 +2,12 @@
 //! All filesystem/keyring operations run on a blocking worker; tests never apply a route.
 use model::protect::{Action, Draft, ProfileAction, Protocol, SavedProfile, Scope};
 use serde::{Deserialize, Serialize};
-use std::{io::Read, path::PathBuf, sync::mpsc, time::Duration};
+use std::{
+	io::Read,
+	path::{Path, PathBuf},
+	sync::mpsc,
+	time::Duration,
+};
 use zeroize::Zeroizing;
 
 const MAX_PROFILES: usize = 16;
@@ -108,8 +113,13 @@ fn folder() -> Result<PathBuf, &'static str> {
 	Ok(path)
 }
 fn rows() -> Result<Vec<Row>, &'static str> {
+	rows_in(&folder()?)
+}
+/// One unreadable or tampered profile file is skipped, never fatal: otherwise it would hide every
+/// other profile and block deleting it from the app.
+fn rows_in(directory: &Path) -> Result<Vec<Row>, &'static str> {
 	let mut rows = Vec::new();
-	for (index, entry) in std::fs::read_dir(folder()?)
+	for (index, entry) in std::fs::read_dir(directory)
 		.map_err(|_| STORE_ERROR)?
 		.enumerate()
 	{
@@ -123,24 +133,29 @@ fn rows() -> Result<Vec<Row>, &'static str> {
 		if rows.len() >= MAX_PROFILES {
 			return Err("At most 16 saved PROTECT profiles are supported");
 		}
-		let mut bytes = Vec::new();
-		std::fs::File::open(&path)
-			.map_err(|_| STORE_ERROR)?
-			.take(1025)
-			.read_to_end(&mut bytes)
-			.map_err(|_| STORE_ERROR)?;
-		if bytes.len() > 1024 {
-			return Err(STORE_ERROR);
+		if let Ok(row) = read_row(&path) {
+			rows.push(row);
 		}
-		let row: Row = serde_json::from_slice(&bytes).map_err(|_| STORE_ERROR)?;
-		row.visible()?;
-		if path.file_stem().and_then(|s| s.to_str()) != Some(&row.id) {
-			return Err(STORE_ERROR);
-		}
-		rows.push(row);
 	}
 	rows.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
 	Ok(rows)
+}
+fn read_row(path: &Path) -> Result<Row, &'static str> {
+	let mut bytes = Vec::new();
+	std::fs::File::open(path)
+		.map_err(|_| STORE_ERROR)?
+		.take(1025)
+		.read_to_end(&mut bytes)
+		.map_err(|_| STORE_ERROR)?;
+	if bytes.len() > 1024 {
+		return Err(STORE_ERROR);
+	}
+	let row: Row = serde_json::from_slice(&bytes).map_err(|_| STORE_ERROR)?;
+	row.visible()?;
+	if path.file_stem().and_then(|s| s.to_str()) != Some(&row.id) {
+		return Err(STORE_ERROR);
+	}
+	Ok(row)
 }
 fn visible_rows() -> Result<Vec<SavedProfile>, &'static str> {
 	rows()?.iter().map(Row::visible).collect()
@@ -793,6 +808,29 @@ mod tests {
 		fn drop(&mut self) {
 			let _ = std::fs::remove_dir_all(&self.0);
 		}
+	}
+
+	#[test]
+	fn one_corrupt_profile_file_does_not_hide_the_others() {
+		let directory = SnapshotDirectory::new();
+		std::fs::create_dir_all(&directory.0).unwrap();
+		let id = "0123456789abcdef0123456789abcdef";
+		let good = serde_json::json!({
+			"id": id, "name": "work", "protocol": 0, "scope": 0, "secret_bytes": 10
+		});
+		std::fs::write(directory.0.join(format!("{id}.json")), good.to_string()).unwrap();
+		std::fs::write(
+			directory.0.join("ffffffffffffffffffffffffffffffff.json"),
+			b"not json",
+		)
+		.unwrap();
+		let rows = rows_in(&directory.0).unwrap();
+		assert_eq!(
+			rows.len(),
+			1,
+			"the corrupt file is skipped, the good one listed"
+		);
+		assert_eq!(rows[0].id, id);
 	}
 
 	#[test]

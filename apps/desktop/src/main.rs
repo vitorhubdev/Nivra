@@ -2847,6 +2847,9 @@ impl Desktop {
 		let now = std::time::Instant::now();
 		if now >= deadline {
 			self.protect_startup_wait = None;
+			// The alert promises a manual retry; a queued Enable must not turn it on later and
+			// reconnect the login that is about to open without it.
+			self.protect_startup_action = None;
 			self.messaging.protect_alert(
 				"PROTECT took too long to turn on. Nivra is connecting without it; open PROTECT to retry.",
 			);
@@ -7481,7 +7484,11 @@ impl eframe::App for Desktop {
 			watchdog::step("voice");
 			self.poll_voice(ctx);
 			// A hidden window runs `logic` without `ui`, so nothing else would close this
-			// frame: the watchdog would report an endless "stall" and an open step.
+			// frame: the watchdog would report an endless "stall" and an open step. The same goes
+			// for the frame stats, which would otherwise count hidden frames with no time spent.
+			if let Some(report) = self.frame_stats.end() {
+				platform::diagnostics::info(&report);
+			}
 			watchdog::frame_end();
 		}
 		self.pump_call_cues(ctx);

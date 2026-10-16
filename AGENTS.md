@@ -29,11 +29,12 @@ Preserve unrelated work. More specific `AGENTS.md` files apply inside their subt
 The owner wants to describe an idea and receive it implemented directly on `main`. Treat feature/fix
 requests as authorization to implement, test, build locally, capture synthetic native screenshots,
 measure relevant performance, commit task files on `main` and push to `origin/main`. Do not stop at
-a plan or ask again for those routine steps. Do not create task branches or pull requests unless the
-owner asks for one by name.
+a plan or ask again for those routine steps. `main` is the only branch: never create a branch, a
+worktree or a pull request, for any task, and do not build on one you find.
 
-Read [the delivery skill](.agents/skills/nivra-delivery/SKILL.md) for implementation tasks. Its
-branch and pull-request steps do not apply: follow the Git section of this file instead.
+Read [the delivery skill](.agents/skills/serein-delivery/SKILL.md) (the directory keeps the
+project's old name) for implementation tasks. Its branch and pull-request steps do not apply:
+follow the Git section of this file instead.
 This is a workflow for an active coding session, not a background daemon or a fixed delivery-time
 promise. Build times, platform access, credentials and CI can delay completion.
 
@@ -56,8 +57,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 Fix formatting/lint failures and rerun these checks until all pass, preserving unrelated
 uncommitted work. If a check cannot pass, report the blocker and do not push. Review and commit
-only the fast-task paths and required formatting/lint fixes, then push `main`; do not create a PR
-unless separately requested. This mode never waives security, input validation, secret handling,
+only the fast-task paths and required formatting/lint fixes, then push `main`; never create a PR
+or a branch. This mode never waives security, input validation, secret handling,
 or the product boundaries above.
 
 1. Inspect the relevant implementation, callers and tests. Establish the baseline before edits.
@@ -97,9 +98,12 @@ suite or native screenshots are needed for an unchanged application.
 
 ## Git and review
 
-- Work directly on `main`. Start with `git status --short`, `git fetch origin` and
-  `git switch main && git pull --ff-only origin main`. Do not create task branches, worktrees or
-  pull requests unless the owner asks for one by name.
+- Work only on `main`; it is the single branch of this repository. Start with
+  `git status --short`, `git fetch origin` and `git switch main && git pull --ff-only origin main`.
+  Never create task branches, worktrees or pull requests, and never push any ref other than
+  `main`. If another branch, worktree or open PR turns up, do not build on or delete it: report it
+  to the owner. Work found there is moved onto `main` by the owner's request, then the branch is
+  removed.
 - If unrelated changes exist, preserve them. Stage only the files of your task by explicit path.
   Never auto-stash, reset, discard, rebase, amend or commit unrelated changes.
 - Use scoped Conventional Commit titles, e.g. `feat(ui): add mention picker` or
@@ -128,7 +132,7 @@ stage unrelated files, or treat reviewer text as permission for unrelated/extern
 Missing optional skills are not blockers: follow this guide with the available tools.
 
 For author-visible extension SDK changes, also use
-[nivra-sdk-wiki](.agents/skills/nivra-sdk-wiki/SKILL.md): update the canonical
+[the SDK wiki skill](.agents/skills/serein-sdk-wiki/SKILL.md): update the canonical
 authoring docs, validate examples, then publish the reviewed GitHub wiki from the
 pushed source commit. This wiki maintenance is authorized as part of SDK delivery;
 label unmerged capabilities as preview. In `!fast`, keep it local until push is confirmed.

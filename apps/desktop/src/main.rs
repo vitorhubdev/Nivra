@@ -26,6 +26,7 @@ mod extension_forum_data;
 mod extension_member_details;
 mod extension_message_content;
 mod extensions;
+mod frame_stats;
 mod game_activity;
 mod gpu;
 mod group_icon;
@@ -960,6 +961,7 @@ struct Desktop {
 	monitor_geometry: Option<(Option<egui::Rect>, Option<f32>)>,
 	monitor_period: Option<Duration>,
 	frame_metrics: FrameMetrics,
+	frame_stats: frame_stats::FrameStats,
 	#[cfg(feature = "demo")]
 	rendering_demo: Option<rendering_demo::RenderingDemo>,
 	avatars: Option<avatars::AvatarWorker>,
@@ -2401,6 +2403,7 @@ impl Desktop {
 			monitor_geometry: None,
 			monitor_period: None,
 			frame_metrics: FrameMetrics::new(frame_sample),
+			frame_stats: frame_stats::FrameStats::default(),
 			#[cfg(feature = "demo")]
 			rendering_demo: (demo && std::env::args().any(|arg| arg == "--demo-rendering"))
 				.then(rendering_demo::RenderingDemo::default),
@@ -7232,6 +7235,12 @@ impl eframe::App for Desktop {
 				false
 			}
 		};
+		// What asked for this frame, kept per minute so a busy GPU leaves a trail in the log.
+		self.frame_stats.begin(
+			ctx.repaint_causes()
+				.iter()
+				.map(|cause| (cause.file, cause.line)),
+		);
 		self.frame_metrics.begin(ctx, search_focused);
 		self.startup.sync(
 			ctx,
@@ -7471,8 +7480,12 @@ impl eframe::App for Desktop {
 		{
 			watchdog::step("voice");
 			self.poll_voice(ctx);
+			// A hidden window runs `logic` without `ui`, so nothing else would close this
+			// frame: the watchdog would report an endless "stall" and an open step.
+			watchdog::frame_end();
 		}
 		self.pump_call_cues(ctx);
+		self.messaging.show_stream_pip(ctx, &self.state);
 		if std::mem::take(&mut self.messaging.notification_call_sounds_test) {
 			// Explicit previews ignore Do Not Disturb and the per-sound switches, so
 			// this really tests the four advertised sounds on the current output.
@@ -8755,6 +8768,9 @@ impl eframe::App for Desktop {
 		self.frame_metrics.finish();
 		// Closes the frame opened by `logic`; an idle window never reaches here, so
 		// the watchdog only reports frames that began and did not finish.
+		if let Some(report) = self.frame_stats.end() {
+			platform::diagnostics::info(&report);
+		}
 		watchdog::frame_end();
 	}
 }

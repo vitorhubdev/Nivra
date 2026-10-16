@@ -406,6 +406,7 @@ use egui::{RichText, TextEdit};
 use model::{Freshness, Id};
 pub use verification::VerificationUi;
 pub use voice::StageFocus;
+pub use voice::stream_pip_viewport;
 pub use voice::voice_server_place;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -777,6 +778,9 @@ pub struct MessagingUi {
 	pub voice_chat_open: bool,
 	/// Tile click to start (`Some(user)`) or stop (`None`) watching, applied by the stage.
 	watch_request: Option<Option<Id>>,
+	/// Picture-in-picture: the watched stream in its own small always-on-top window.
+	pub voice_stream_pip: bool,
+	voice_stream_pip_shared: Option<std::sync::Arc<voice::PipShared>>,
 	/// A LIVE click waiting to open that stream: (voice channel, streamer).
 	live_open: Option<(Id, Id)>,
 	/// The stream to start watching once its call is connected, with its give-up time.
@@ -4618,6 +4622,7 @@ impl MessagingUi {
 		let mut commands = Vec::new();
 		self.apply_live_open(state, &mut commands);
 		self.apply_live_watch(state);
+		self.apply_stream_shortcuts(ui.ctx(), state);
 		if self.timeline.batch_restore_notice {
 			self.timeline.batch_restore_notice = false;
 			self.toasts.push(

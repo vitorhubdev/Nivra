@@ -680,6 +680,7 @@ impl MessagingUi {
 						.color(STAGE_MUTED),
 					);
 				}
+				self.stage_counter(&mut body_ui, &entries);
 				self.live_switcher(&mut body_ui, state, channel, &entries);
 				self.participant_tiles(&mut body_ui, state, channel, &entries, false);
 			}
@@ -963,6 +964,10 @@ impl MessagingUi {
 			} else {
 				format!("{hint} · {label}")
 			};
+			if response.double_clicked() && matches!(tile, Tile::Stream(_)) {
+				self.enter_voice_stream_fullscreen(ui.ctx());
+				return None;
+			}
 			if response.clicked() {
 				return Some(tile.focus());
 			}
@@ -994,6 +999,98 @@ impl MessagingUi {
 
 	pub fn take_voice_fullscreen_request(&mut self) -> Option<bool> {
 		self.voice_stream_fullscreen_request.take()
+	}
+
+	fn enter_voice_stream_fullscreen(&mut self, ctx: &egui::Context) {
+		if !self.voice_stream_fullscreen {
+			self.voice_stream_fullscreen_previous =
+				ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+			self.voice_stream_fullscreen = true;
+			self.voice_stream_fullscreen_request = Some(true);
+			ctx.request_repaint();
+		}
+	}
+
+	/// The floating stream window (picture-in-picture). It lives while a stream is watched and
+	/// the person has not closed it; closing it (double-click, Esc or the window's own close)
+	/// returns the stream to the main window. Called every frame, also while minimized.
+	pub fn show_stream_pip(&mut self, ctx: &egui::Context, state: &State) {
+		use std::sync::atomic::Ordering;
+		let shared = self
+			.voice_stream_pip_shared
+			.get_or_insert_with(|| std::sync::Arc::new(PipShared::default()))
+			.clone();
+		if shared.close.swap(false, Ordering::AcqRel) {
+			self.voice_stream_pip = false;
+		}
+		let watching = state.voice.active.as_ref().is_some_and(|call| {
+			call.watching.is_some() && matches!(call.phase, Phase::Connected | Phase::Waiting)
+		});
+		if !watching {
+			self.voice_stream_pip = false;
+		}
+		if !self.voice_stream_pip {
+			return;
+		}
+		if let Ok(mut picture) = shared.picture.lock() {
+			*picture = self
+				.voice_stream_view
+				.as_ref()
+				.map(|texture| (texture.id(), texture.size_vec2()));
+		}
+		let builder = egui::ViewportBuilder::default()
+			.with_title("Nivra · LIVE")
+			.with_inner_size([480.0, 270.0])
+			.with_min_inner_size([240.0, 135.0])
+			.with_resizable(true)
+			.with_always_on_top();
+		ctx.show_viewport_deferred(stream_pip_viewport(), builder, move |ui, _class| {
+			let closing = ui.input(|input| {
+				input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
+			});
+			if closing {
+				shared.close.store(true, Ordering::Release);
+				ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+				return;
+			}
+			let area = ui.max_rect();
+			ui.painter().rect_filled(area, 0.0, egui::Color32::BLACK);
+			let picture = shared.picture.lock().ok().and_then(|picture| *picture);
+			if let Some((texture, size)) = picture {
+				let fitted = fit_rect(area, size);
+				egui::Image::from_texture((texture, fitted.size())).paint_at(ui, fitted);
+			}
+			// Double-click anywhere puts the stream back in the main window.
+			let surface = ui.interact(
+				area,
+				egui::Id::unique("stream-pip-surface"),
+				egui::Sense::click(),
+			);
+			if surface.double_clicked() {
+				shared.close.store(true, Ordering::Release);
+				ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+			}
+		});
+	}
+
+	/// F toggles full screen for the stream being watched, unless a text field has the keys.
+	pub(super) fn apply_stream_shortcuts(&mut self, ctx: &egui::Context, state: &State) {
+		let watching = state.voice.active.as_ref().is_some_and(|call| {
+			call.watching.is_some() && matches!(call.phase, Phase::Connected | Phase::Waiting)
+		}) && self.voice_stream_view.is_some();
+		if !watching || ctx.egui_wants_keyboard_input() {
+			return;
+		}
+		if ctx.input(|input| input.key_pressed(egui::Key::P) && !input.modifiers.any()) {
+			self.voice_stream_pip = !self.voice_stream_pip;
+		}
+		if ctx.input(|input| input.key_pressed(egui::Key::F) && !input.modifiers.any()) {
+			if self.voice_stream_fullscreen {
+				self.exit_voice_stream_fullscreen(ctx);
+			} else {
+				self.enter_voice_stream_fullscreen(ctx);
+			}
+		}
 	}
 
 	fn exit_voice_stream_fullscreen(&mut self, ctx: &egui::Context) {
@@ -1155,8 +1252,13 @@ impl MessagingUi {
 			return;
 		}
 		name_badge(ui, content, &format!("{name}'s screen"), None);
+		// "Stop watching" sits in the corner; the other two stack under it so none hides another.
 		let full_rect = egui::Rect::from_min_size(
-			content.right_top() + egui::vec2(-118.0, 8.0),
+			content.right_top() + egui::vec2(-118.0, 42.0),
+			egui::vec2(110.0_f32.min(content.width().max(1.0)), 28.0),
+		);
+		let pip_rect = egui::Rect::from_min_size(
+			content.right_top() + egui::vec2(-118.0, 76.0),
 			egui::vec2(110.0_f32.min(content.width().max(1.0)), 28.0),
 		);
 		if ui
@@ -1169,10 +1271,22 @@ impl MessagingUi {
 			.on_hover_text(crate::tr_ui!(ui, "Watch this screen share in full screen"))
 			.clicked()
 		{
-			self.voice_stream_fullscreen_previous =
-				ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
-			self.voice_stream_fullscreen = true;
-			self.voice_stream_fullscreen_request = Some(true);
+			self.enter_voice_stream_fullscreen(ui.ctx());
+		}
+		if ui
+			.put(
+				pip_rect,
+				egui::Button::new(crate::tr_ui!(ui, "Picture-in-picture"))
+					.fill(egui::Color32::from_black_alpha(170))
+					.corner_radius(6),
+			)
+			.on_hover_text(crate::tr_ui!(
+				ui,
+				"Keep this stream in a small window that stays on top"
+			))
+			.clicked()
+		{
+			self.voice_stream_pip = !self.voice_stream_pip;
 			ui.ctx().request_repaint();
 		}
 		if tile_button(
@@ -1262,6 +1376,26 @@ impl MessagingUi {
 			self.live_watch = None;
 			state.status = "That stream has ended.";
 		}
+	}
+
+	/// How many people are in the call and how many of them are streaming.
+	fn stage_counter(&self, ui: &mut egui::Ui, entries: &[RosterEntry]) {
+		let people = entries.len();
+		let live = entries
+			.iter()
+			.filter(|entry| entry.participant.streaming)
+			.count();
+		let mut text = format!(
+			"{people} {}",
+			crate::i18n::text(self.language, "in the call")
+		);
+		if live > 0 {
+			text.push_str(&format!(
+				" · {live} {}",
+				crate::i18n::text(self.language, "live")
+			));
+		}
+		ui.label(RichText::new(text).small().color(STAGE_MUTED));
 	}
 
 	/// One-click choice among several streams of the connected call, shown from two streams
@@ -3416,7 +3550,6 @@ impl MessagingUi {
 		}
 	}
 
-	/// Gateway backoff indicator; appears only after a short disconnect delay.
 	/// A sweeping segment for work with no measurable end. Reduced motion holds a static
 	/// segment instead, and the repaint is requested only while the banner is visible.
 	fn indeterminate_bar(ui: &mut egui::Ui, fill: egui::Color32, track: egui::Color32) {
@@ -3445,6 +3578,7 @@ impl MessagingUi {
 		}
 	}
 
+	/// Gateway reconnect indicator; appears only after a short disconnect delay.
 	pub(super) fn gateway_reconnect_banner(&mut self, ui: &mut egui::Ui, state: &State) {
 		let Some(disconnected_at) = state.gateway_disconnected_at else {
 			return;
@@ -4833,6 +4967,19 @@ const HANG_UP: f32 = 64.0;
 const BAR_GAP: f32 = 12.0;
 
 /// Green ring like Discord's speaking indicator; the accessible label still names the state.
+/// What the floating stream window needs from the main window, shared so it keeps drawing
+/// even while the main window is minimized.
+#[derive(Default)]
+pub(crate) struct PipShared {
+	picture: std::sync::Mutex<Option<(egui::TextureId, egui::Vec2)>>,
+	close: std::sync::atomic::AtomicBool,
+}
+
+/// The id of the floating stream window, so the host can wake it when a frame arrives.
+pub fn stream_pip_viewport() -> egui::ViewportId {
+	egui::ViewportId::from_hash_of("nivra-stream-pip")
+}
+
 /// A LIVE click that is still opening: the stream to watch once its call is connected.
 #[derive(Clone, Copy)]
 pub(crate) struct LiveWatch {
@@ -6041,6 +6188,77 @@ mod tests {
 		view.apply_live_open(&mut state, &mut Vec::new());
 		view.apply_live_watch(&mut state);
 		assert_eq!(state.voice.active.as_ref().unwrap().watching, Some(Id(3)));
+	}
+
+	#[test]
+	fn the_floating_stream_window_follows_watching_and_closes_on_request() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::voice_demo_state();
+		state.voice.active.as_mut().unwrap().watching = Some(Id(3));
+		let mut view = MessagingUi {
+			voice_stream_pip: true,
+			..MessagingUi::default()
+		};
+		let run = |view: &mut MessagingUi, state: &State| {
+			ctx.run_ui(egui::RawInput::default(), |_ui| {
+				view.show_stream_pip(&ctx, state)
+			})
+			.drop_without_applying_deltas();
+		};
+		run(&mut view, &state);
+		assert!(
+			view.voice_stream_pip,
+			"stays open while a stream is watched"
+		);
+		// Closing the window (double-click, Esc or its own close) returns the stream.
+		view.voice_stream_pip_shared
+			.as_ref()
+			.unwrap()
+			.close
+			.store(true, std::sync::atomic::Ordering::Release);
+		run(&mut view, &state);
+		assert!(!view.voice_stream_pip);
+		// It cannot outlive the stream: nothing watched, nothing floating.
+		view.voice_stream_pip = true;
+		state.voice.active.as_mut().unwrap().watching = None;
+		run(&mut view, &state);
+		assert!(!view.voice_stream_pip);
+	}
+
+	#[test]
+	fn the_f_and_p_keys_toggle_fullscreen_and_pip_only_while_watching() {
+		let ctx = egui::Context::default();
+		let mut state = test_support::voice_demo_state();
+		let mut view = MessagingUi::default();
+		let press = |view: &mut MessagingUi, state: &State, key: egui::Key| {
+			let input = egui::RawInput {
+				events: vec![egui::Event::Key {
+					key,
+					physical_key: None,
+					pressed: true,
+					repeat: false,
+					modifiers: egui::Modifiers::NONE,
+				}],
+				..Default::default()
+			};
+			ctx.run_ui(input, |_ui| view.apply_stream_shortcuts(&ctx, state))
+				.drop_without_applying_deltas();
+		};
+		// Not watching: the keys do nothing.
+		press(&mut view, &state, egui::Key::P);
+		assert!(!view.voice_stream_pip);
+		state.voice.active.as_mut().unwrap().watching = Some(Id(3));
+		view.voice_stream_view = Some(ctx.load_texture(
+			"test-stream",
+			egui::ColorImage::example(),
+			egui::TextureOptions::LINEAR,
+		));
+		press(&mut view, &state, egui::Key::P);
+		assert!(view.voice_stream_pip);
+		press(&mut view, &state, egui::Key::F);
+		assert!(view.voice_stream_fullscreen);
+		press(&mut view, &state, egui::Key::F);
+		assert!(!view.voice_stream_fullscreen);
 	}
 
 	#[test]

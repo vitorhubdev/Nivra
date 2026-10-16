@@ -332,7 +332,12 @@ impl Watch {
 				self.ended = Some("The stream connection ended");
 			}
 			let image = live.frames.try_lock().ok().and_then(|mut slot| slot.take());
-			if let Some(image) = image {
+			// A stream nobody can see (another channel open, or the window minimized) is not
+			// uploaded to the GPU: the frame is dropped here and the next visible one is shown.
+			let visible = ui.voice_stream_pip
+				|| (state.selected == Some(live.context.channel)
+					&& !ctx.input(|input| input.viewport().minimized.unwrap_or(false)));
+			if let Some(image) = image.filter(|_| visible) {
 				if let Some(texture) = &mut ui.voice_stream_view {
 					texture.set(image, egui::TextureOptions::LINEAR);
 				} else {
@@ -343,6 +348,9 @@ impl Watch {
 					));
 				}
 				self.status = "Watching the stream";
+				if ui.voice_stream_pip {
+					ctx.request_repaint_of(ui::stream_pip_viewport());
+				}
 				if !self.first_frame_logged {
 					self.first_frame_logged = true;
 					platform::diagnostics::info(&format!(

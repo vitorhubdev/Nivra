@@ -1,5 +1,25 @@
 # Changelog
 
+## Não publicado
+
+### Chamadas e LIVE
+
+- Duas pessoas entrando juntas na chamada ou na transmissão deixam de derrubar a mídia: as transições de chave pendentes ficam em fila, em vez de a segunda apagar a primeira. A transmissão também passa a aplicar o commit guardado ao executar. Cada transição recusada fica no log com o motivo.
+- O LIVE na lista de canais é um botão: um clique abre o palco do canal, entra na chamada se preciso, assiste e abre a transmissão ampliada. O aviso da barra inferior lista todas as transmissões (não só a primeira), e o palco ganha uma faixa para trocar de transmissão a partir de duas. O palco mostra quantas pessoas estão na chamada e quantas ao vivo.
+- Tela cheia: os botões Full screen e Stop watching ocupavam o mesmo canto e o segundo cobria o primeiro; agora ficam empilhados. Atalho F e clique duplo na transmissão. Nova janela flutuante (imagem em imagem, atalho P) que continua com a janela principal minimizada; fecha com clique duplo ou Esc.
+- O assistir registra no log pedido, negociação, primeiro quadro e motivo do fim.
+
+### PROTECT
+
+- A aba é uma lista de perfis: clicar conecta e ativa, sem confirmação (a chamada reconecta sozinha), e o erro aparece se falhar. Importar um .conf já o salva com o nome do arquivo e coleta país e ping. Bandeiras e país vêm ligados, com um botão para removê-los. WireGuard é o tipo padrão. O restante fica em "Avançado".
+- Ao reabrir, o PROTECT volta ativo antes de o login sair. Falha, erro ou prazo de 25 s mostram um alerta e o app conecta sem ele.
+
+### Desempenho e diagnóstico
+
+- Transmissão e câmeras remotas não sobem textura para a GPU enquanto a janela está minimizada ou outro canal está aberto.
+- Um quadro que nunca fechava com a janela oculta gerava travamentos falsos de ~2 s e etapas de 20 s no log; corrigido.
+- O log passa a registrar, uma vez por minuto de uso intenso, os quadros por segundo e as linhas de código que pediram repintura.
+
 ## Nivra 1.0.17
 
 Melhora a recuperação de chamadas, a interface do LIVE e o PROTECT, com WireGuard nativo e perfis persistentes.

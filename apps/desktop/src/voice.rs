@@ -1262,17 +1262,25 @@ impl Voice {
 					ctx.request_repaint();
 				}
 			}
-			let pictures = live
-				.remote_video
-				.try_lock()
-				.map(|mut slot| {
-					slot.iter_mut()
-						.filter_map(|(user, image, dirty)| {
-							std::mem::take(dirty).then(|| (*user, image.clone()))
-						})
-						.collect::<Vec<_>>()
-				})
-				.unwrap_or_default();
+			// Cameras nobody can see (another channel open, or the window minimized) are not
+			// uploaded to the GPU. Their pictures stay marked pending, so the latest one is
+			// sent when the stage is visible again.
+			let stage_visible = state.selected == Some(live.channel)
+				&& !ctx.input(|input| input.viewport().minimized.unwrap_or(false));
+			let pictures = if stage_visible {
+				live.remote_video
+					.try_lock()
+					.map(|mut slot| {
+						slot.iter_mut()
+							.filter_map(|(user, image, dirty)| {
+								std::mem::take(dirty).then(|| (*user, image.clone()))
+							})
+							.collect::<Vec<_>>()
+					})
+					.unwrap_or_default()
+			} else {
+				Vec::new()
+			};
 			for (user, image) in pictures {
 				if let Some((_, texture)) = ui
 					.voice_remote_video

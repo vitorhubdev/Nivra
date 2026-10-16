@@ -442,7 +442,9 @@ fn recycle_previous(previous: Option<RawFrame>) {
 	}
 }
 
-#[cfg(not(target_os = "windows"))]
+// Compiled wherever `retain_screen_frame` is (not Linux outside tests), so Linux builds carry
+// no unused function.
+#[cfg(all(not(target_os = "windows"), any(test, not(target_os = "linux"))))]
 fn recycle_previous(previous: Option<RawFrame>) {
 	drop(previous);
 }

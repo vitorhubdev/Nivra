@@ -20,9 +20,11 @@ pub(super) fn x11_session() -> bool {
 }
 
 fn note(event: &str, value: &str) {
-	if std::env::var_os("NIVRA_VOICE_DIAGNOSTICS").is_some_and(|set| set == "1") {
-		eprintln!("[Nivra voice Screen] {event}={value}");
-	}
+	platform::diagnostics::debug_line(
+		"NIVRA_VOICE_DIAGNOSTICS",
+		"voice Screen",
+		&format!("{event}={value}"),
+	);
 }
 
 use gst::prelude::*;

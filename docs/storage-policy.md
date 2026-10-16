@@ -774,6 +774,22 @@ fixed-label terminal session-failure line per enabled scope (less than 256 bytes
 partial writes consume the attempted record's budget; a closed stderr never fails the session.
 No diagnostic strings, raw events, queue, archive, database entries or telemetry are retained.
 
+#### Ultra diagnostics (`--ultra-diagnostics`)
+
+Starting Nivra with `--ultra-diagnostics` (or `NIVRA_ULTRA_DIAGNOSTICS=1`) turns every debug trace
+above on at once and, unlike them, writes to files instead of stderr, which a windowed build never
+shows. It is off by default and lasts one run. The lines go to `nivra-ultra.log` beside `nivra.log`
+and rotate across four files of at most 4 MiB each (16 MiB in all, oldest dropped first); a line is
+at most 2 KiB and passes the same redaction as the normal log (tokens, signed URLs, e-mail addresses
+and snowflake ids). The ultra budget replaces the 64-record and 8 MiB caps of the opt-in scopes,
+because the rotation already bounds the disk. Every five seconds a pulse line records frames per
+second, slow frames (over 250 ms between the start of `logic` and the end of `ui`), whether the
+window is hidden, whether PROTECT is on and, during a call, its phase and the counts of people,
+live streams and watched streams; a `WARN` marks a hidden window that keeps drawing, an idle UI at
+full speed, slow frames and a call that stays in one setup phase for 20 seconds. While ultra mode
+runs the window asks for a repaint every five seconds so the pulse keeps ticking. Nothing is sent
+off the computer; the diagnostics ZIP the user exports includes `nivra-ultra.log` only when it exists.
+
 Member labels distinguish subscription/cancellation, empty or populated SYNC, identity mismatch,
 decode/range/capacity failure and timeout. Gateway labels distinguish an unsupported dispatch,
 a missing/empty dispatch name, and an unsupported opcode that stops the connection. Unsupported

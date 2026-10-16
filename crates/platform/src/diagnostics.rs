@@ -6,6 +6,7 @@
 //! the log is safe to paste into a bug report.
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// One rotated file plus the live one; oldest is `nivra.4.log`.
@@ -15,6 +16,13 @@ const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_LINE_BYTES: usize = 2 * 1024;
 const CRASH_FILE: &str = "last-crash.txt";
 
+/// Ultra diagnostics write to their own rotating files so a long session of detailed lines can
+/// never push the normal log, the one users attach to reports, out of its own budget.
+const ULTRA_STEM: &str = "nivra-ultra";
+const ULTRA_FILES: usize = 4;
+const ULTRA_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+static ULTRA: AtomicBool = AtomicBool::new(false);
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 /// Set exactly once by [`init_app_logging`]; anything else (tests, helper binaries)
 /// keeps the user's log untouched and writes to a scratch directory instead.
@@ -108,6 +116,115 @@ pub fn info(message: &str) {
 	append(Level::Info, message);
 }
 
+/// Turns ultra diagnostics on for this run (`--ultra-diagnostics` or `NIVRA_ULTRA_DIAGNOSTICS=1`).
+/// Everything stays on this computer: bounded local files, redacted, never sent anywhere.
+pub fn set_ultra(on: bool) {
+	ULTRA.store(on, Ordering::Relaxed);
+}
+
+pub fn ultra() -> bool {
+	ULTRA.load(Ordering::Relaxed)
+}
+
+/// A debug switch is on when its own environment variable is `1` or ultra mode is on.
+pub fn flag(name: &str) -> bool {
+	ultra() || std::env::var_os(name).is_some_and(|value| value == "1")
+}
+
+/// One debug line for a switch named `name`. Without ultra mode it goes to stderr as before
+/// (invisible in a windowed build); in ultra mode it also lands in the bounded ultra log.
+pub fn debug_line(name: &str, scope: &str, message: &str) {
+	if std::env::var_os(name).is_some_and(|value| value == "1") {
+		eprintln!("[Nivra {scope}] {message}");
+	}
+	trace(scope, message);
+}
+
+/// Writes one detailed line to the ultra log. A no-op unless ultra mode is on.
+pub fn trace(scope: &str, message: &str) {
+	if ultra() {
+		trace_in(&log_dir(), scope, message, ULTRA_FILE_BYTES);
+	}
+}
+
+fn trace_in(dir: &Path, scope: &str, message: &str, file_bytes: u64) {
+	let _guard = WRITE_LOCK
+		.lock()
+		.unwrap_or_else(|poison| poison.into_inner());
+	let _ = std::fs::create_dir_all(dir);
+	let path = dir.join(format!("{ULTRA_STEM}.log"));
+	if std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0) >= file_bytes {
+		rotate_named(dir, ULTRA_STEM, ULTRA_FILES);
+	}
+	let line = truncate_line(format!("{} {scope} {}\n", timestamp(), redact(message)));
+	if let Ok(mut file) = std::fs::OpenOptions::new()
+		.create(true)
+		.append(true)
+		.open(&path)
+	{
+		let _ = file.write_all(line.as_bytes());
+	}
+}
+
+/// The ultra log, oldest first and redacted again; empty when ultra mode never ran.
+pub fn ultra_log() -> String {
+	let dir = log_dir();
+	let mut files = vec![dir.join(format!("{ULTRA_STEM}.log"))];
+	files.extend((1..ULTRA_FILES).map(|index| dir.join(format!("{ULTRA_STEM}.{index}.log"))));
+	files.reverse();
+	files
+		.iter()
+		.filter_map(|file| std::fs::read_to_string(file).ok())
+		.flat_map(|text| text.lines().map(redact).collect::<Vec<_>>())
+		.collect::<Vec<_>>()
+		.join("\n")
+}
+
+/// Adapts a `Write` consumer (the voice report printer) to the ultra log, one line per \n.
+pub struct TraceWriter {
+	scope: &'static str,
+	line: Vec<u8>,
+}
+
+impl TraceWriter {
+	pub fn new(scope: &'static str) -> Self {
+		Self {
+			scope,
+			line: Vec::new(),
+		}
+	}
+
+	fn emit(&mut self) {
+		if !self.line.is_empty() {
+			trace(self.scope, &String::from_utf8_lossy(&self.line));
+			self.line.clear();
+		}
+	}
+}
+
+impl Write for TraceWriter {
+	fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+		for &byte in bytes {
+			if byte == b'\n' {
+				self.emit();
+			} else if self.line.len() < MAX_LINE_BYTES {
+				self.line.push(byte);
+			}
+		}
+		Ok(bytes.len())
+	}
+
+	fn flush(&mut self) -> std::io::Result<()> {
+		Ok(())
+	}
+}
+
+impl Drop for TraceWriter {
+	fn drop(&mut self) {
+		self.emit();
+	}
+}
+
 /// Caps a log line at MAX_LINE_BYTES without splitting a multibyte character.
 /// Byte truncation panics on a split character, so logging must never do it.
 fn truncate_line(mut line: String) -> String {
@@ -159,15 +276,23 @@ pub fn timestamp() -> String {
 }
 
 fn rotate(dir: &Path) {
-	// Drop the oldest first, then shift up so the live file becomes `nivra.1.log`.
-	let _ = std::fs::remove_file(dir.join(format!("nivra.{}.log", MAX_FILES - 1)));
-	for index in (1..MAX_FILES - 1).rev() {
-		let from = dir.join(format!("nivra.{index}.log"));
+	rotate_named(dir, "nivra", MAX_FILES);
+}
+
+/// Drops the oldest of `files` rotated files, then shifts the rest up so the live file becomes
+/// `<stem>.1.log`.
+fn rotate_named(dir: &Path, stem: &str, files: usize) {
+	let _ = std::fs::remove_file(dir.join(format!("{stem}.{}.log", files - 1)));
+	for index in (1..files - 1).rev() {
+		let from = dir.join(format!("{stem}.{index}.log"));
 		if from.exists() {
-			let _ = std::fs::rename(&from, dir.join(format!("nivra.{}.log", index + 1)));
+			let _ = std::fs::rename(&from, dir.join(format!("{stem}.{}.log", index + 1)));
 		}
 	}
-	let _ = std::fs::rename(dir.join("nivra.log"), dir.join("nivra.1.log"));
+	let _ = std::fs::rename(
+		dir.join(format!("{stem}.log")),
+		dir.join(format!("{stem}.1.log")),
+	);
 }
 
 /// The newest `lines` lines of the log, redacted again, oldest first.
@@ -511,6 +636,50 @@ fn mask_snowflakes(line: &str) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn the_ultra_log_stays_inside_its_file_budget_and_masks_secrets() {
+		let mut nonce = [0; 8];
+		getrandom::fill(&mut nonce).unwrap();
+		let name: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+		let dir = std::env::temp_dir().join(format!("nivra-ultra-test-{name}"));
+		for index in 0..400 {
+			trace_in(
+				&dir,
+				"voice",
+				&format!(
+					"tick {index} Authorization: Bearer hunter2 {}",
+					"x".repeat(200)
+				),
+				2048,
+			);
+		}
+		let mut total = 0;
+		let mut files = 0;
+		for entry in std::fs::read_dir(&dir).unwrap() {
+			let entry = entry.unwrap();
+			let text = std::fs::read_to_string(entry.path()).unwrap();
+			assert!(!text.contains("hunter2"), "secrets never reach the file");
+			total += text.len();
+			files += 1;
+		}
+		let _ = std::fs::remove_dir_all(&dir);
+		assert!(
+			files <= ULTRA_FILES,
+			"rotation keeps at most {ULTRA_FILES} files"
+		);
+		// Each file may pass its bound by one line before the next write rotates it.
+		assert!(
+			total <= ULTRA_FILES * (2048 + MAX_LINE_BYTES),
+			"{total} bytes written"
+		);
+		assert!(total > 0);
+	}
+
+	#[test]
+	fn a_debug_switch_follows_its_variable_unless_ultra_is_on() {
+		assert!(!flag("NIVRA_DOES_NOT_EXIST_FOR_TESTS"));
+	}
 
 	#[test]
 	fn secrets_headers_signed_urls_emails_and_ids_are_masked() {

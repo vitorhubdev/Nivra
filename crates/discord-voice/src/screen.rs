@@ -189,12 +189,14 @@ impl Worker {
 				finished_ready.store(false, Ordering::Release);
 				// The desktop only shows the latest status, which a later stop overwrites.
 				// Name the cause once so a share that ends by itself is never a mystery.
-				if std::env::var_os("NIVRA_VOICE_DIAGNOSTICS").is_some_and(|value| value == "1") {
-					match &result {
-						Ok(()) => eprintln!("[Nivra voice Screen] capture_stopped=ok"),
-						Err(reason) => eprintln!("[Nivra voice Screen] capture_stopped={reason}"),
-					}
-				}
+				platform::diagnostics::debug_line(
+					"NIVRA_VOICE_DIAGNOSTICS",
+					"voice Screen",
+					&match &result {
+						Ok(()) => "capture_stopped=ok".to_owned(),
+						Err(reason) => format!("capture_stopped={reason}"),
+					},
+				);
 				let _ = complete.try_send(result);
 				wake();
 			})

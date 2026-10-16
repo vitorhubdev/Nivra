@@ -239,16 +239,25 @@ impl Metrics {
 	pub fn new(scope: Scope) -> Self {
 		static REPORTER: OnceLock<Option<mpsc::SyncSender<Report>>> = OnceLock::new();
 		let send = REPORTER.get_or_init(|| {
-			if std::env::var_os("NIVRA_VOICE_DIAGNOSTICS").is_none_or(|v| v != "1") {
+			if !platform::diagnostics::flag("NIVRA_VOICE_DIAGNOSTICS") {
 				return None;
 			}
 			let (send, receive) = mpsc::sync_channel::<Report>(8);
 			std::thread::Builder::new()
 				.name("voice-diagnostics".into())
 				.spawn(move || {
-					let mut bytes = MAX_REPORT_BYTES;
-					for report in receive.iter().take(MAX_REPORTS) {
-						if !write_report(report, &mut bytes, &mut std::io::stderr()) {
+					// Ultra mode writes to its own rotating files, which bound the disk use
+					// by themselves, so a long session is not cut off after 8 MiB of reports.
+					let ultra = platform::diagnostics::ultra();
+					let mut bytes = if ultra { usize::MAX } else { MAX_REPORT_BYTES };
+					let mut writer: Box<dyn Write> = if ultra {
+						Box::new(platform::diagnostics::TraceWriter::new("voice"))
+					} else {
+						Box::new(std::io::stderr())
+					};
+					let limit = if ultra { usize::MAX } else { MAX_REPORTS };
+					for report in receive.iter().take(limit) {
+						if !write_report(report, &mut bytes, &mut writer) {
 							break;
 						}
 					}

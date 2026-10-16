@@ -1089,9 +1089,11 @@ fn deletion_reason(raw: Option<&str>) -> Option<&'static str> {
 	if raw.len() > 64 {
 		return Some("Discord ended the stream");
 	}
-	if std::env::var_os("NIVRA_VOICE_DIAGNOSTICS").is_some_and(|v| v == "1") {
-		eprintln!("[Nivra voice Stream] discord_delete_reason={raw}");
-	}
+	crate::debug_line(
+		"NIVRA_VOICE_DIAGNOSTICS",
+		"voice Stream",
+		&format!("discord_delete_reason={raw}"),
+	);
 	Some(match raw {
 		"user_requested" => return None,
 		"stream_ended" => "Discord reported the stream as ended",

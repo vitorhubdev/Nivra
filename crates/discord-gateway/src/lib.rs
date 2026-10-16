@@ -213,6 +213,36 @@ fn connection_log(message: &str) {
 	}
 }
 
+/// Ultra diagnostics: detailed gateway and voice-signaling labels go to the app's bounded local
+/// ultra log through this sink, which the app sets at startup. Labels are fixed strings, never
+/// tokens, ids or payloads.
+static TRACE_SINK: std::sync::OnceLock<fn(&str, &str)> = std::sync::OnceLock::new();
+static ULTRA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_trace_sink(sink: fn(&str, &str)) {
+	let _ = TRACE_SINK.set(sink);
+}
+
+pub fn set_ultra(on: bool) {
+	ULTRA.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn ultra() -> bool {
+	ULTRA.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// One debug label: to stderr under its own variable, and to the ultra log in ultra mode.
+fn debug_line(variable: &str, scope: &str, message: &str) {
+	if std::env::var_os(variable).is_some_and(|value| value == "1") {
+		eprintln!("[Nivra {scope}] {message}");
+	}
+	if ultra()
+		&& let Some(sink) = TRACE_SINK.get()
+	{
+		sink(scope, message);
+	}
+}
+
 fn reconnect_delay_ms(attempt: u32) -> u64 {
 	(1000_u64 << attempt.min(5)) + jitter_ms(1000)
 }
@@ -249,18 +279,31 @@ fn emit_gateway_loss(
 // Static labels never contain received event names, credentials, IDs or payloads.
 struct Diagnostics {
 	scope: &'static str,
-	remaining: u8,
+	remaining: u32,
 	bytes: usize,
 }
 impl Diagnostics {
 	fn new(scope: &'static str, enabled: bool) -> Self {
+		// Ultra mode lifts the small opt-in budget: the ultra log rotates by itself.
+		let (remaining, bytes) = match (ultra(), enabled) {
+			(true, _) => (u32::MAX, usize::MAX),
+			(false, true) => (64, 8 * 1024),
+			(false, false) => (0, 8 * 1024),
+		};
 		Self {
 			scope,
-			remaining: if enabled { 64 } else { 0 },
-			bytes: 8 * 1024,
+			remaining,
+			bytes,
 		}
 	}
 	fn record(&mut self, label: &'static str) {
+		if ultra() {
+			if self.remaining > 0 {
+				self.remaining -= 1;
+				debug_line("NIVRA_NEVER_SET", self.scope, label);
+			}
+			return;
+		}
 		self.record_to(label, &mut std::io::stderr());
 	}
 	fn record_to(&mut self, label: &'static str, writer: &mut impl std::io::Write) {

@@ -1,5 +1,12 @@
 # Changelog
 
+## Não publicado
+
+### Diagnóstico
+
+- Novo modo `--ultra-diagnostics` (ou `NIVRA_ULTRA_DIAGNOSTICS=1`): liga de uma vez os diagnósticos de voz, gateway, captura e transmissão e os grava em `nivra-ultra.log`, ao lado do log normal. Os diagnósticos por variável de ambiente iam para o `stderr`, que um `.exe` aberto por duplo clique não mostra. O arquivo é local, gira em 4 arquivos de 4 MiB, mascara segredos e entra no ZIP exportado. Nada é enviado para fora do computador.
+- A cada 5 s o modo ultra grava um pulso com quadros por segundo, quadros lentos, janela oculta, PROTECT e o estado da chamada, e marca com `WARN` o que costuma passar despercebido: janela oculta que continua desenhando, interface parada em velocidade máxima, quadros lentos e chamada presa numa fase de conexão.
+
 ## Nivra 1.0.18
 
 Assiste a várias transmissões ao mesmo tempo, transforma o PROTECT em uma lista de perfis de um clique e corrige a chamada que morria na terceira queda de rede. Tudo foi validado por testes automáticos; nada foi exercitado numa chamada real do Discord, e a causa do uso alto de GPU ao compartilhar tela continua sem medição.

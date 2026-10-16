@@ -286,6 +286,9 @@ NIVRA_VOICE_DIAGNOSTICS=1 NIVRA_FRAME_DIAGNOSTICS=1 /Applications/Nivra.app/Cont
 On Windows PowerShell, set `$env:NIVRA_VOICE_DIAGNOSTICS="1"` and
 `$env:NIVRA_FRAME_DIAGNOSTICS="1"`, then launch `nivra.exe 2> nivra-voice.log`.
 On Linux, use the same environment assignments as macOS with the installed executable.
+To capture all of these at once, without a terminal, start Nivra with `--ultra-diagnostics`: the
+traces go to `nivra-ultra.log` in the log folder and into the exported diagnostics ZIP (see
+[ultra diagnostics](storage-policy.md#ultra-diagnostics---ultra-diagnostics)).
 Quit an already-running instance first. Join/leave the call yourself; diagnostics never
 enable capture, join a call or send media. Quit normally to obtain the existing UI frame
 summary. Remove the environment variables to disable diagnostics on the next launch.

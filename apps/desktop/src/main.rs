@@ -50,6 +50,7 @@ mod startup;
 mod sticker_upload;
 mod toggle_setting;
 mod tray_window;
+mod ultra;
 mod updater;
 mod uploads;
 mod video;
@@ -77,6 +78,23 @@ fn log_connection(message: &str) {
 	platform::diagnostics::info(message);
 }
 
+/// `--ultra-diagnostics` (or `NIVRA_ULTRA_DIAGNOSTICS=1`) turns on every debug trace at once and
+/// writes them to bounded local files next to the normal log. Nothing leaves this computer, secrets
+/// are redacted, and the files rotate inside a fixed budget.
+fn enable_ultra_diagnostics() {
+	let asked = std::env::args().any(|arg| arg == "--ultra-diagnostics")
+		|| std::env::var_os("NIVRA_ULTRA_DIAGNOSTICS").is_some_and(|value| value == "1");
+	if !asked {
+		return;
+	}
+	platform::diagnostics::set_ultra(true);
+	discord_gateway::set_ultra(true);
+	discord_gateway::set_trace_sink(platform::diagnostics::trace);
+	platform::diagnostics::info(
+		"ULTRA diagnostics on: detailed traces go to nivra-ultra*.log beside this log (16 MiB at most, secrets redacted, local only)",
+	);
+}
+
 fn main() -> eframe::Result {
 	discord_gateway::set_connection_log(log_connection);
 	// Before any runtime LoadLibrary: imports and runtime loads resolve from System32 only.
@@ -94,6 +112,7 @@ fn main() -> eframe::Result {
 		std::env::consts::ARCH,
 		option_env!("NIVRA_BUILD_COMMIT").unwrap_or("unknown")
 	));
+	enable_ultra_diagnostics();
 	discord_api::ensure_tls_provider();
 	// Parse locale tables before the first frame so a translated language
 	// never pays table parsing inside the render path.
@@ -962,6 +981,7 @@ struct Desktop {
 	monitor_period: Option<Duration>,
 	frame_metrics: FrameMetrics,
 	frame_stats: frame_stats::FrameStats,
+	ultra_pulse: Option<ultra::Pulse>,
 	#[cfg(feature = "demo")]
 	rendering_demo: Option<rendering_demo::RenderingDemo>,
 	avatars: Option<avatars::AvatarWorker>,
@@ -1177,7 +1197,7 @@ fn start_export_diagnostics(
 	let processing = ui.voice_processing.effective();
 	let push_to_mute = format!("{:?}", ui.keybinds.push_to_mute);
 	let report = format!(
-		"Nivra {}\nOS: {} {}\nBuild: {}\n\nVoice input: {}\nVoice output: {}\nPush to talk: {}\nPush to mute key: {}\nGain in/out: {}% / {}%\nNoise suppression: {:?}\nEcho cancellation: {}\n",
+		"Nivra {}\nOS: {} {}\nBuild: {}\n\nVoice input: {}\nVoice output: {}\nPush to talk: {}\nPush to mute key: {}\nGain in/out: {}% / {}%\nNoise suppression: {:?}\nEcho cancellation: {}\nUltra diagnostics: {}\n",
 		env!("CARGO_PKG_VERSION"),
 		std::env::consts::OS,
 		std::env::consts::ARCH,
@@ -1190,6 +1210,7 @@ fn start_export_diagnostics(
 		ui.voice_gain.output_percent,
 		processing.suppression,
 		processing.echo_cancellation,
+		platform::diagnostics::ultra(),
 	);
 	let (send, receive) = std::sync::mpsc::sync_channel(1);
 	std::thread::Builder::new()
@@ -1232,6 +1253,11 @@ fn write_diagnostics_zip(
 		let freeze = std::fs::read(platform::diagnostics::log_dir().join("nivra-freeze.log"))
 			.unwrap_or_default();
 		write("nivra-freeze.log", &freeze)?;
+		// Only present when the app ran with `--ultra-diagnostics`; bounded by its own rotation.
+		let ultra = platform::diagnostics::ultra_log();
+		if !ultra.is_empty() {
+			write("nivra-ultra.log", ultra.as_bytes())?;
+		}
 	}
 	archive
 		.finish()
@@ -2404,6 +2430,8 @@ impl Desktop {
 			monitor_period: None,
 			frame_metrics: FrameMetrics::new(frame_sample),
 			frame_stats: frame_stats::FrameStats::default(),
+			ultra_pulse: platform::diagnostics::ultra()
+				.then(|| ultra::Pulse::new(std::time::Instant::now())),
 			#[cfg(feature = "demo")]
 			rendering_demo: (demo && std::env::args().any(|arg| arg == "--demo-rendering"))
 				.then(rendering_demo::RenderingDemo::default),
@@ -6991,15 +7019,12 @@ impl Desktop {
 				("NIVRA_MEMBER_DIAGNOSTICS", "members"),
 				("NIVRA_GATEWAY_DIAGNOSTICS", "gateway"),
 			] {
-				if std::env::var_os(setting).as_deref() == Some(std::ffi::OsStr::new("1")) {
-					use std::io::Write;
-					// One extra fixed-label terminal line per enabled scope; closed stderr is OK.
-					let _ = writeln!(
-						std::io::stderr(),
-						"[Nivra {scope}] Session stopped: {}",
-						failure.label()
-					);
-				}
+				// One fixed-label terminal line per enabled scope; in ultra mode it also reaches the log.
+				platform::diagnostics::debug_line(
+					setting,
+					scope,
+					&format!("Session stopped: {}", failure.label()),
+				);
 			}
 			self.connection = None;
 			self.pending_save = None;
@@ -7238,6 +7263,22 @@ impl eframe::App for Desktop {
 				false
 			}
 		};
+		if let Some(pulse) = self.ultra_pulse.as_mut() {
+			// egui only draws on demand: without this an idle window would never reach the next pulse.
+			ctx.request_repaint_after(Duration::from_secs(5));
+			let hidden = self.window.is_minimized().unwrap_or(false)
+				|| !self.window.is_visible().unwrap_or(true);
+			let state = &self.state;
+			let now = std::time::Instant::now();
+			pulse.frame_started(now);
+			if let Some(report) = pulse.tick(now, || ultra::snapshot(state, hidden)) {
+				platform::diagnostics::trace("pulse", &report.line);
+				for warning in report.warnings {
+					platform::diagnostics::trace("anomaly", &warning);
+					platform::diagnostics::warn(&format!("ULTRA anomaly: {warning}"));
+				}
+			}
+		}
 		// What asked for this frame, kept per minute so a busy GPU leaves a trail in the log.
 		self.frame_stats.begin(
 			ctx.repaint_causes()
@@ -8773,6 +8814,9 @@ impl eframe::App for Desktop {
 		ui::design::window_resize(&ctx);
 		self.frame_metrics.reflows = self.messaging.timeline_reflows();
 		self.frame_metrics.finish();
+		if let Some(pulse) = self.ultra_pulse.as_mut() {
+			pulse.frame_finished(std::time::Instant::now());
+		}
 		// Closes the frame opened by `logic`; an idle window never reaches here, so
 		// the watchdog only reports frames that began and did not finish.
 		if let Some(report) = self.frame_stats.end() {

@@ -11,6 +11,8 @@ use tokio::{
 	net::{TcpStream, UdpSocket},
 };
 use zeroize::Zeroizing;
+mod trace;
+pub use trace::{set_trace_sink, set_ultra};
 mod wg_dns;
 mod wg_engine;
 mod wg_inlet;
@@ -145,6 +147,14 @@ pub fn apply(
 	}
 	let mut state = routes().write().map_err(|_| "Route state unavailable")?;
 	state.generation = state.generation.wrapping_add(1);
+	trace::line(&format!(
+		"route applied: generation {} primary={} reserve={}",
+		state.generation,
+		primary
+			.as_ref()
+			.map_or("none".to_owned(), |profile| format!("{:?}", profile.scope)),
+		reserve.is_some()
+	));
 	state.primary = primary;
 	state.reserve = reserve;
 	state.failures = 0;
@@ -377,6 +387,11 @@ pub struct Datagram {
 impl Datagram {
 	fn current(&self) -> io::Result<()> {
 		if self.epoch.is_some_and(|e| ensure_current(e).is_err()) {
+			trace::line(&format!(
+				"datagram ended: opened on generation {:?}, route is now generation {}",
+				self.epoch,
+				generation()
+			));
 			return Err(io::Error::new(
 				io::ErrorKind::ConnectionAborted,
 				"PROTECT route changed; reconnect live media",

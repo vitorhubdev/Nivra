@@ -794,7 +794,12 @@ reports count each audio packet from other people by where it was dropped (unkno
 encryption not ready, sender outside the encrypted group, deafened, decryption failed) together with
 the state of that group. When the diagnostics ZIP is exported, `ultra-analysis.txt` summarizes the log
 from the same lines: audio that arrived without being heard, a group that was not ready, a share
-encoding nothing, busy or slow frames and slow heartbeats. While ultra mode
+encoding nothing, busy or slow frames and slow heartbeats. The PROTECT route and its in-process
+tunnel write `protect` lines: every route change with its generation and scope, the moment a media
+socket opened on an older route is closed, why a UDP association ended, why the tunnel stopped, and
+a five-second tunnel summary (handshake age, bytes, estimated loss, datagrams sent and received,
+decryption errors by kind, full queues, dropped and refused packets, open TCP and UDP sockets).
+The summary holds counts and error kinds only, never keys, endpoints or addresses. While ultra mode
 runs the window asks for a repaint every five seconds so the pulse keeps ticking. Nothing is sent
 off the computer; the diagnostics ZIP the user exports includes `nivra-ultra.log` only when it exists.
 

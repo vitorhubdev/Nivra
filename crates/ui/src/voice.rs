@@ -2744,19 +2744,38 @@ impl MessagingUi {
 								)
 							})
 							.collect();
-						ui.horizontal_wrapped(|ui| {
-							ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-							for (id, face, name) in sounds {
+						// Two fixed-width columns: a button in a wrapped row shrinks to one letter
+						// per line when its row is nearly full.
+						let gap = 6.0;
+						let width = ((ui.available_width() - gap) / 2.0).floor();
+						egui::ScrollArea::vertical()
+							.max_height(280.0)
+							.auto_shrink([false, true])
+							.show(ui, |ui| {
+								ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
 								ui.add_enabled_ui(unavailable.is_none(), |ui| {
-									if ui.button(format!("{face} {name}")).clicked()
-										&& let Some(command) = state.play_sound(channel, id)
-									{
-										commands.push(command);
-										ui.close();
+									for pair in sounds.chunks(2) {
+										ui.horizontal(|ui| {
+											for (id, face, name) in pair {
+												let response = ui
+													.add_sized(
+														[width, 32.0],
+														egui::Button::new(format!("{face} {name}"))
+															.truncate(),
+													)
+													.on_hover_text(name);
+												if response.clicked()
+													&& let Some(command) =
+														state.play_sound(channel, *id)
+												{
+													commands.push(command);
+													ui.close();
+												}
+											}
+										});
 									}
 								});
-							}
-						});
+							});
 					}
 				}
 			});

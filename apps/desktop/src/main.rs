@@ -90,6 +90,8 @@ fn enable_ultra_diagnostics() {
 	platform::diagnostics::set_ultra(true);
 	discord_gateway::set_ultra(true);
 	discord_gateway::set_trace_sink(platform::diagnostics::trace);
+	protect::set_ultra(true);
+	protect::set_trace_sink(platform::diagnostics::trace);
 	platform::diagnostics::info(
 		"ULTRA diagnostics on: detailed traces go to nivra-ultra*.log beside this log (16 MiB at most, secrets redacted, local only)",
 	);

@@ -2,6 +2,7 @@
 //! requires the session's random username and password, and serves CONNECT and UDP ASSOCIATE.
 //! Targets are IPv4 addresses or names; names resolve through the tunnel. Nothing is
 //! forwarded directly, so a refused or failed tunnel never falls back to the local network path.
+use super::trace;
 use super::wg_engine::{Handle, UdpBridge};
 use std::{
 	io,
@@ -214,6 +215,8 @@ async fn associate(mut client: TcpStream, handle: Handle) -> io::Result<()> {
 	let mut peer: Option<SocketAddr> = None;
 	let mut buffer = vec![0u8; 65_535];
 	let mut control = [0u8; 1];
+	let mut uplink_dropped = 0u64;
+	let ended;
 	loop {
 		tokio::select! {
 			received = relay.recv_from(&mut buffer) => {
@@ -225,12 +228,15 @@ async fn associate(mut client: TcpStream, handle: Handle) -> io::Result<()> {
 					Some(known) if known != from => continue,
 					Some(_) => {}
 				}
-				if let Some((destination, payload)) = parse_datagram(&buffer[..count]) {
-					let _ = tx.try_send((destination, payload.to_vec()));
+				if let Some((destination, payload)) = parse_datagram(&buffer[..count])
+					&& tx.try_send((destination, payload.to_vec())).is_err()
+				{
+					uplink_dropped += 1;
 				}
 			}
 			incoming = rx.recv() => {
 				let Some((source, payload)) = incoming else {
+					ended = "the tunnel closed it";
 					break;
 				};
 				if let Some(peer) = peer {
@@ -240,11 +246,17 @@ async fn associate(mut client: TcpStream, handle: Handle) -> io::Result<()> {
 				}
 			}
 			read = client.read(&mut control) => match read {
-				Ok(0) | Err(_) => break,
+				Ok(0) | Err(_) => {
+					ended = "the app closed it";
+					break;
+				}
 				Ok(_) => {}
 			},
 		}
 	}
+	trace::line(&format!(
+		"udp association ended: {ended}; uplink_dropped={uplink_dropped}"
+	));
 	Ok(())
 }
 

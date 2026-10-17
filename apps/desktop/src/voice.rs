@@ -2180,6 +2180,11 @@ mod tests {
 		use discord_voice::CloseDisposition;
 		// Socket drops and failed resumes are network trouble: bounded rejoin applies.
 		assert!(reconnectable(discord_voice::failure::SOCKET_FAILED, None));
+		// A media socket that stopped delivering (changed or failed route) is rejoined too, bounded.
+		assert!(reconnectable(
+			discord_voice::failure::UDP_RECEIVE_FAILED,
+			None
+		));
 		assert!(reconnectable(
 			discord_voice::failure::RESUME_TIMED_OUT,
 			None

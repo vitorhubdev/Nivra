@@ -2,6 +2,7 @@
 //! smoltcp runs the guest TCP/IP stack. Nothing here touches system routes, adapters or DNS:
 //! protected traffic leaves the process only as encrypted datagrams to the configured endpoint.
 //! Every queue, socket buffer and socket count is bounded.
+use super::trace;
 use boringtun::{
 	noise::{Tunn, TunnResult},
 	x25519::{PublicKey, StaticSecret},
@@ -28,6 +29,8 @@ use tokio::{
 
 const DEADLINE: Duration = super::DEADLINE;
 const TICK: Duration = Duration::from_millis(250);
+/// How often ultra diagnostics summarize the tunnel.
+const SUMMARY: Duration = Duration::from_secs(5);
 /// Longest the driver sleeps without new work, so timers and retransmissions stay on time.
 const MAX_IDLE: Duration = Duration::from_millis(20);
 const CHUNK: usize = 16 * 1024;
@@ -187,6 +190,20 @@ struct UdpConn {
 	from_app: mpsc::Receiver<Datagram>,
 }
 
+/// What the tunnel did since the last ultra summary. Counts and error kinds only.
+#[derive(Default)]
+struct Counters {
+	sent: u64,
+	send_failed: u64,
+	received: u64,
+	decrypt_errors: u64,
+	last_error: Option<String>,
+	inbound_full: u64,
+	downlink_dropped: u64,
+	uplink_blocked: u64,
+	tcp_aborted: u64,
+}
+
 /// Guest IP stack and tunnel state. Only the driver task touches it.
 pub(super) struct Stack {
 	tunn: Tunn,
@@ -203,6 +220,8 @@ pub(super) struct Stack {
 	outbound: Vec<Vec<u8>>,
 	scratch: Vec<u8>,
 	wake: Arc<Notify>,
+	counters: Counters,
+	next_summary: std::time::Instant,
 }
 
 impl Stack {
@@ -244,6 +263,8 @@ impl Stack {
 			outbound: Vec::new(),
 			scratch: vec![0; 65_535],
 			wake,
+			counters: Counters::default(),
+			next_summary: std::time::Instant::now() + SUMMARY,
 		})
 	}
 
@@ -265,16 +286,26 @@ impl Stack {
 	/// drained in the same bounded loop, as boringtun requires.
 	pub(super) fn receive(&mut self, datagram: &[u8]) {
 		let mut input = datagram;
+		self.counters.received += 1;
 		for _ in 0..64 {
 			match self.tunn.decapsulate(None, input, &mut self.scratch) {
 				TunnResult::WriteToNetwork(reply) => self.outbound.push(reply.to_vec()),
 				TunnResult::WriteToTunnelV4(packet, _) => {
 					if self.link.rx.len() < MAX_QUEUED {
 						self.link.rx.push_back(packet.to_vec());
+					} else {
+						self.counters.inbound_full += 1;
 					}
 				}
 				TunnResult::WriteToTunnelV6(..) => {}
-				TunnResult::Done | TunnResult::Err(_) => break,
+				TunnResult::Done => break,
+				TunnResult::Err(error) => {
+					self.counters.decrypt_errors += 1;
+					if trace::enabled() {
+						self.counters.last_error = Some(format!("{error:?}"));
+					}
+					break;
+				}
 			}
 			input = &[];
 		}
@@ -284,6 +315,35 @@ impl Stack {
 		if let TunnResult::WriteToNetwork(datagram) = self.tunn.update_timers(&mut self.scratch) {
 			self.outbound.push(datagram.to_vec());
 		}
+		self.summarize();
+	}
+
+	/// One ultra line every few seconds: what crossed the tunnel and what was lost or refused.
+	fn summarize(&mut self) {
+		if !trace::enabled() || std::time::Instant::now() < self.next_summary {
+			return;
+		}
+		self.next_summary = std::time::Instant::now() + SUMMARY;
+		let (handshake, tx_bytes, rx_bytes, loss, rtt) = self.tunn.stats();
+		let counters = std::mem::take(&mut self.counters);
+		trace::line(&format!(
+			"tunnel: handshake_age={} tx_bytes={tx_bytes} rx_bytes={rx_bytes} loss={loss:.2} rtt_ms={} \r
+			 datagrams sent={} send_failed={} received={} decrypt_errors={} last_error={} \r
+			 inbound_queue_full={} downlink_dropped={} uplink_blocked={} tcp_aborted={} tcp={} udp={}",
+			handshake.map_or("never".to_owned(), |age| format!("{}s", age.as_secs())),
+			rtt.map_or("none".to_owned(), |rtt| rtt.to_string()),
+			counters.sent,
+			counters.send_failed,
+			counters.received,
+			counters.decrypt_errors,
+			counters.last_error.as_deref().unwrap_or("none"),
+			counters.inbound_full,
+			counters.downlink_dropped,
+			counters.uplink_blocked,
+			counters.tcp_aborted,
+			self.tcp.len(),
+			self.udp.len()
+		));
 	}
 
 	fn send_ip(&mut self, packet: &[u8]) {
@@ -318,7 +378,11 @@ impl Stack {
 	fn flush(&mut self, socket: &UdpSocket) {
 		for datagram in self.outbound.drain(..) {
 			// Losing a datagram is what UDP does; WireGuard and TCP recover from it.
-			let _ = socket.try_send(&datagram);
+			if socket.try_send(&datagram).is_ok() {
+				self.counters.sent += 1;
+			} else {
+				self.counters.send_failed += 1;
+			}
 		}
 	}
 
@@ -418,6 +482,7 @@ impl Stack {
 			scratch,
 			allowed,
 			mtu,
+			counters,
 			..
 		} = self;
 		let mut finished_tcp = Vec::new();
@@ -463,6 +528,7 @@ impl Stack {
 					.as_ref()
 					.is_some_and(|to_app| to_app.try_send(scratch[..read].to_vec()).is_ok());
 				if !delivered {
+					counters.tcp_aborted += 1;
 					socket.abort();
 					finished_tcp.push(index);
 					continue;
@@ -511,6 +577,7 @@ impl Stack {
 				// Only IPv4 is enabled in smoltcp for this crate, so the address is always IPv4.
 				let IpAddress::Ipv4(source) = meta.endpoint.addr;
 				if conn.to_app.capacity() == 0 {
+					counters.downlink_dropped += 1;
 					continue;
 				}
 				let source = SocketAddrV4::new(Ipv4Addr::from(source.octets()), meta.endpoint.port);
@@ -526,6 +593,7 @@ impl Stack {
 						if payload.len() + IPV4_UDP_OVERHEAD > *mtu
 							|| !allowed.iter().any(|cidr| cidr.contains(*destination.ip()))
 						{
+							counters.uplink_blocked += 1;
 							continue;
 						}
 						let endpoint = IpEndpoint::new(
@@ -633,6 +701,7 @@ pub(super) async fn run(
 		stack.step();
 		stack.flush(&socket);
 	}
+	trace::line("tunnel stopped: the endpoint reader ended");
 }
 
 /// Handle used by the inlet and by the DNS resolver. Cloning it is cheap.
@@ -881,6 +950,55 @@ mod tests {
 		io::{AsyncReadExt, AsyncWriteExt},
 		net::UdpSocket as TestUdp,
 	};
+
+	/// The ultra summary names the counters the written analysis reads, and counts what happened.
+	#[test]
+	fn the_ultra_summary_carries_the_counters_the_analysis_reads() {
+		use std::sync::Mutex;
+		static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+		fn sink(scope: &str, message: &str) {
+			if scope == "protect" && message.starts_with("tunnel: ") {
+				LINES
+					.lock()
+					.unwrap_or_else(|poison| poison.into_inner())
+					.push(message.to_owned());
+			}
+		}
+		trace::set_trace_sink(sink);
+		trace::set_ultra(true);
+		let (client, remote_public, ..) = keys();
+		let mut stack = Stack::new(
+			params(client, remote_public, REMOTE),
+			9,
+			Arc::new(Notify::new()),
+		)
+		.expect("stack");
+		// Garbage is a decrypt error: it is counted and named, not silently dropped.
+		stack.receive(&[0xde, 0xad, 0xbe, 0xef, 1, 2, 3, 4]);
+		stack.counters.downlink_dropped = 5;
+		stack.next_summary = std::time::Instant::now() - Duration::from_secs(1);
+		stack.timers();
+		let lines = LINES.lock().unwrap_or_else(|poison| poison.into_inner());
+		let line = lines
+			.iter()
+			.find(|line| line.contains(" decrypt_errors=1 "))
+			.expect("a summary that counted the bad datagram");
+		for key in [
+			" handshake_age=",
+			" loss=",
+			" sent=",
+			" send_failed=",
+			" received=1 ",
+			" last_error=",
+			" inbound_queue_full=",
+			" downlink_dropped=5 ",
+			" uplink_blocked=",
+			" tcp_aborted=",
+		] {
+			assert!(line.contains(key), "{key:?} missing from {line}");
+		}
+		assert!(!line.contains("last_error=none"), "{line}");
+	}
 
 	/// Forwards between the client and the remote and drops every `every`-th datagram. Returns
 	/// the address the client connects to and the address the remote connects to.

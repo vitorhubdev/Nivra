@@ -73,6 +73,8 @@ pub enum CloseDisposition {
 /// identity here, never by searching the wording, so a reworded message cannot change the outcome.
 pub mod failure {
 	pub const SOCKET_FAILED: &str = "Voice socket failed; rejoin the call";
+	/// The media socket stopped delivering (a changed or failed route). A rejoin opens a new one.
+	pub const UDP_RECEIVE_FAILED: &str = "Voice UDP receive failed; rejoin the call";
 	pub const RESUME_FAILED: &str = "Voice resume failed; rejoin the call";
 	pub const RESUME_TIMED_OUT: &str = "Voice resume timed out; rejoin the call";
 	pub const RESUME_ACK_TIMED_OUT: &str =
@@ -86,7 +88,11 @@ pub mod failure {
 	pub fn recoverable(error: &str) -> bool {
 		matches!(
 			error,
-			SOCKET_FAILED | RESUME_FAILED | RESUME_TIMED_OUT | RESUME_ACK_TIMED_OUT
+			SOCKET_FAILED
+				| UDP_RECEIVE_FAILED
+				| RESUME_FAILED
+				| RESUME_TIMED_OUT
+				| RESUME_ACK_TIMED_OUT
 		)
 	}
 }

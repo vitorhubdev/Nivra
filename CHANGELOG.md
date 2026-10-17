@@ -18,6 +18,15 @@
 - O modo ultra agora também conta cada pacote de áudio recebido de outras pessoas pelo motivo de descarte (remetente desconhecido, criptografia não pronta, remetente fora do grupo, surdo, falha ao decriptar) junto com o estado do grupo criptografado, porque "estou na chamada e não ouço ninguém" não deixava rastro. Também registra uma linha do tempo de eventos (entrar e sair da chamada, fase, pessoas, transmissões, câmera, janela oculta, PROTECT), o ambiente (CPUs, janela, monitor e taxa de atualização), cada confirmação do heartbeat de voz e o adaptador de GPU. O ZIP exportado traz `ultra-analysis.txt` com um resumo escrito dos achados.
 - A cada 5 s o modo ultra grava um pulso com quadros por segundo, quadros lentos, janela oculta, PROTECT e o estado da chamada, e marca com `WARN` o que costuma passar despercebido: janela oculta que continua desenhando, interface parada em velocidade máxima, quadros lentos e chamada presa numa fase de conexão.
 
+### Chamadas com PROTECT
+
+- Uma chamada cuja conexão de mídia (UDP) cai agora tenta voltar sozinha, no mesmo limite de tentativas das outras quedas de rede. Antes, "Voice UDP receive failed" encerrava a chamada com zero tentativas (aconteceu duas vezes, cerca de 65 s depois de conectar, em um teste real). A causa dessas duas quedas ainda não foi provada: um teste de 150 s com o seu provedor e uma associação UDP longa passou sem falha (750 de 751 respostas), então o túnel isolado não é o suspeito. O modo ultra agora registra o que faltava para provar.
+- O modo ultra grava as linhas `protect`: cada troca de rota, o momento em que um socket aberto numa rota antiga é fechado, o motivo de uma associação UDP terminar, a parada do túnel e um resumo a cada 5 s do túnel (idade do handshake, bytes, perda estimada, datagramas, erros de decifragem por tipo, filas cheias e pacotes descartados). O `ultra-analysis.txt` do ZIP traz achados para isso.
+
+### Soundboard
+
+- A lista de sons deixou de quebrar o texto letra por letra: os botões ficam em duas colunas de largura fixa, com o nome truncado (o nome inteiro aparece ao passar o mouse) e rolagem quando há muitos sons.
+
 ## Nivra 1.0.18
 
 Assiste a várias transmissões ao mesmo tempo, transforma o PROTECT em uma lista de perfis de um clique e corrige a chamada que morria na terceira queda de rede. Tudo foi validado por testes automáticos; nada foi exercitado numa chamada real do Discord, e a causa do uso alto de GPU ao compartilhar tela continua sem medição.

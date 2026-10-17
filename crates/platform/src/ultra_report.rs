@@ -93,6 +93,139 @@ struct Audio {
 	last_silent: Option<String>,
 }
 
+/// What the `protect` lines say about the route and the in-process tunnel.
+#[derive(Default)]
+struct Tunnel {
+	summaries: usize,
+	/// Summaries where datagrams left and nothing came back.
+	one_way: usize,
+	first_one_way: Option<String>,
+	decrypt_errors: u64,
+	errors: BTreeMap<String, u64>,
+	inbound_full: u64,
+	downlink_dropped: u64,
+	uplink_blocked: u64,
+	uplink_dropped: u64,
+	tcp_aborted: u64,
+	send_failed: u64,
+	worst_loss: f64,
+	route_changes: usize,
+	last_route_change: Option<String>,
+	datagrams_ended: usize,
+	first_datagram_end: Option<String>,
+	stopped: Option<String>,
+	association_ends: BTreeMap<String, usize>,
+}
+
+impl Tunnel {
+	fn observe(&mut self, time: &str, rest: &str) {
+		let text = format!(" {rest}");
+		if rest.starts_with("tunnel: ") {
+			self.summaries += 1;
+			let received = num(&text, "received").unwrap_or(0.0);
+			if num(&text, "sent").unwrap_or(0.0) > 0.0 && received == 0.0 {
+				self.one_way += 1;
+				self.first_one_way.get_or_insert(time.to_owned());
+			}
+			let count = |key| num(&text, key).unwrap_or(0.0) as u64;
+			self.decrypt_errors += count("decrypt_errors");
+			self.inbound_full += count("inbound_queue_full");
+			self.downlink_dropped += count("downlink_dropped");
+			self.uplink_blocked += count("uplink_blocked");
+			self.tcp_aborted += count("tcp_aborted");
+			self.send_failed += count("send_failed");
+			self.worst_loss = self.worst_loss.max(num(&text, "loss").unwrap_or(0.0));
+			if let Some(error) = text
+				.split(" last_error=")
+				.nth(1)
+				.and_then(|tail| tail.split_whitespace().next())
+				.filter(|error| *error != "none")
+			{
+				*self.errors.entry(error.to_owned()).or_default() += 1;
+			}
+		} else if rest.starts_with("route applied") {
+			self.route_changes += 1;
+			self.last_route_change = Some(time.to_owned());
+		} else if rest.starts_with("datagram ended") {
+			self.datagrams_ended += 1;
+			self.first_datagram_end.get_or_insert(time.to_owned());
+		} else if rest.starts_with("tunnel stopped") {
+			self.stopped.get_or_insert(time.to_owned());
+		} else if let Some(tail) = rest.strip_prefix("udp association ended: ") {
+			let reason = tail.split(';').next().unwrap_or("").to_owned();
+			*self.association_ends.entry(reason).or_default() += 1;
+			self.uplink_dropped += num(&text, "uplink_dropped").unwrap_or(0.0) as u64;
+		}
+	}
+
+	fn findings(&self) -> Vec<String> {
+		let mut out = Vec::new();
+		if self.datagrams_ended > 0 {
+			out.push(format!(
+				"ROUTE CHANGED UNDER A LIVE SOCKET: {} media socket(s) opened on an older PROTECT route were closed, first at {} ({} route changes in this log, the last at {}). A call on that socket fails and rejoins.",
+				self.datagrams_ended,
+				self.first_datagram_end.as_deref().unwrap_or("-"),
+				self.route_changes,
+				self.last_route_change.as_deref().unwrap_or("-")
+			));
+		}
+		if let Some(time) = &self.stopped {
+			out.push(format!(
+				"TUNNEL STOPPED at {time}: the in-process WireGuard engine ended, so everything routed through it failed at once."
+			));
+		}
+		if self.one_way > 0 {
+			out.push(format!(
+				"TUNNEL ONE-WAY: in {} of {} five-second summaries datagrams were sent and none came back, first at {}. That is a dead or blocked endpoint, not a busy one.",
+				self.one_way,
+				self.summaries,
+				self.first_one_way.as_deref().unwrap_or("-")
+			));
+		}
+		let lost = self.decrypt_errors
+			+ self.inbound_full
+			+ self.downlink_dropped
+			+ self.uplink_blocked
+			+ self.uplink_dropped
+			+ self.tcp_aborted
+			+ self.send_failed;
+		if lost > 0 || self.worst_loss > 0.2 {
+			let errors = self
+				.errors
+				.iter()
+				.map(|(error, windows)| format!("{error} x{windows}"))
+				.collect::<Vec<_>>()
+				.join(", ");
+			out.push(format!(
+				"TUNNEL LOSS: decrypt_errors={} inbound_queue_full={} downlink_dropped={} uplink_dropped={} uplink_blocked={} send_failed={} tcp_aborted={} worst_estimated_loss={:.2}{}.",
+				self.decrypt_errors,
+				self.inbound_full,
+				self.downlink_dropped,
+				self.uplink_dropped,
+				self.uplink_blocked,
+				self.send_failed,
+				self.tcp_aborted,
+				self.worst_loss,
+				if errors.is_empty() {
+					String::new()
+				} else {
+					format!("; decrypt errors seen: {errors}")
+				}
+			));
+		}
+		if !self.association_ends.is_empty() {
+			let ends = self
+				.association_ends
+				.iter()
+				.map(|(reason, count)| format!("{reason} x{count}"))
+				.collect::<Vec<_>>()
+				.join(", ");
+			out.push(format!("UDP ASSOCIATIONS ENDED: {ends}."));
+		}
+		out
+	}
+}
+
 /// The written analysis of one ultra log.
 pub fn analyze(log: &str) -> String {
 	let mut first = None;
@@ -104,6 +237,7 @@ pub fn analyze(log: &str) -> String {
 	let mut dropped_events = 0usize;
 	let mut audio = Audio::default();
 	let (mut idle_share_windows, mut capture_frames) = (0usize, 0.0);
+	let mut tunnel = Tunnel::default();
 	let mut pings = Vec::new();
 	let mut lines = 0usize;
 
@@ -120,6 +254,7 @@ pub fn analyze(log: &str) -> String {
 				}
 				slow_frames += num(&format!(" {}", line.rest), "slow").unwrap_or(0.0);
 			}
+			"protect" => tunnel.observe(line.time, line.rest),
 			"anomaly" => {
 				let class = generalize(line.rest);
 				hidden_drawing += usize::from(line.rest.starts_with("hidden window"));
@@ -240,6 +375,7 @@ pub fn analyze(log: &str) -> String {
 			"SLOW FRAMES: {slow_frames:.0} frames took longer than 250 ms between the start of logic and the end of ui."
 		));
 	}
+	findings.extend(tunnel.findings());
 	let ping = sorted(pings);
 	if ping.last().is_some_and(|max| *max > SLOW_PING_MS) {
 		findings.push(format!(
@@ -342,6 +478,45 @@ mod tests {
 			report.contains("- N slow frames, longest N ms: 1"),
 			"{report}"
 		);
+	}
+
+	#[test]
+	fn tunnel_trouble_is_named_with_its_numbers() {
+		let log = "\
+2026-10-16 22:46:17 protect route applied: generation 2 primary=Complete reserve=false
+2026-10-16 22:46:22 protect tunnel: handshake_age=4s tx_bytes=900 rx_bytes=800 loss=0.00 rtt_ms=40 datagrams sent=10 send_failed=0 received=10 decrypt_errors=0 last_error=none inbound_queue_full=0 downlink_dropped=0 uplink_blocked=0 tcp_aborted=0 tcp=1 udp=1
+2026-10-16 22:46:27 protect tunnel: handshake_age=9s tx_bytes=9000 rx_bytes=800 loss=0.40 rtt_ms=none datagrams sent=250 send_failed=2 received=0 decrypt_errors=3 last_error=InvalidMac inbound_queue_full=4 downlink_dropped=5 uplink_blocked=6 tcp_aborted=1 tcp=1 udp=1
+2026-10-16 22:47:27 protect datagram ended: opened on generation Some(1), route is now generation 2
+2026-10-16 22:47:28 protect udp association ended: the app closed it; uplink_dropped=7
+2026-10-16 22:47:29 protect tunnel stopped: the endpoint reader ended
+";
+		let report = analyze(log);
+		assert!(
+			report.contains("ROUTE CHANGED UNDER A LIVE SOCKET: 1 media socket"),
+			"{report}"
+		);
+		assert!(report.contains("TUNNEL STOPPED at 22:47:29"), "{report}");
+		assert!(
+			report.contains("TUNNEL ONE-WAY: in 1 of 2 five-second summaries"),
+			"{report}"
+		);
+		assert!(
+			report.contains(
+				"decrypt_errors=3 inbound_queue_full=4 downlink_dropped=5 uplink_dropped=7"
+			),
+			"{report}"
+		);
+		assert!(report.contains("InvalidMac x1"), "{report}");
+		assert!(report.contains("the app closed it x1"), "{report}");
+	}
+
+	#[test]
+	fn a_healthy_tunnel_adds_no_finding() {
+		let log = "\
+2026-10-16 22:46:22 protect tunnel: handshake_age=4s tx_bytes=900 rx_bytes=800 loss=0.00 rtt_ms=40 datagrams sent=10 send_failed=0 received=10 decrypt_errors=0 last_error=none inbound_queue_full=0 downlink_dropped=0 uplink_blocked=0 tcp_aborted=0 tcp=1 udp=1
+";
+		let report = analyze(log);
+		assert!(report.contains("Nothing stood out"), "{report}");
 	}
 
 	#[test]

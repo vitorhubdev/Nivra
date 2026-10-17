@@ -1446,6 +1446,9 @@ impl Formatted {
 									);
 								},
 							);
+							// The quote is a vertical block inside a wrapping row: without ending the row, the next
+							// run's first line is placed at the top of the block and paints over its text.
+							ui.end_row();
 						}
 						start += count;
 						continue;
@@ -4450,6 +4453,85 @@ mod tests {
 			}
 			output.drop_without_applying_deltas();
 		}
+	}
+	/// A quoted list (`> • item`) inside a paragraph flow: the run after the quote must start
+	/// below the quote's text, not at its top. This is the LunaBot announcement embed.
+	#[test]
+	fn a_run_after_a_quote_block_starts_below_it() {
+		let ctx = egui::Context::default();
+		let source = "You're currently using the free version of **LunaBot**.\n\nUpgrade to [LunaBot Premium](https://example.com/join) to unlock:\n\n> \u{2022} Faster playback speed\n> \u{2022} Powerful autoplay system\n> \u{2022} Smart song suggestions\n> \u{2022} Premium-only commands\n> \u{2022} Better audio performance\n> \u{2022} Exclusive upcoming features\n\n\u{1f381} Claim your **FREE 3-Day Premium Trial** and experience LunaBot without limits.\n\nOnce you try [LunaBot Premium](https://example.com/join), you won\u{2019}t want to go back \u{1f49b}";
+		let parsed = Formatted::parse(source);
+		let mut profile = crate::profiles::ProfileSession::default();
+		let mut opening = None;
+		let mut run = || {
+			ctx.run_ui(Default::default(), |ui| {
+				ui.set_width(480.0);
+				egui::Frame::new().inner_margin(12).show(ui, |ui| {
+					ui.set_width(456.0);
+					egui::ScrollArea::vertical()
+						.id_salt("embed-content")
+						.max_height(640.0)
+						.auto_shrink([false, true])
+						.show(ui, |ui| {
+							let body_width = ui.available_width();
+							ui.horizontal_top(|ui| {
+								ui.vertical(|ui| {
+									ui.set_width(body_width);
+									let mut images = crate::avatars::Avatars::default();
+									parsed.show_with_images(
+										ui,
+										&mut opening,
+										&[],
+										None,
+										&mut profile,
+										(&mut images, false, &[]),
+									);
+								});
+							});
+						});
+				});
+			})
+		};
+		run().drop_without_applying_deltas();
+		let output = run();
+		fn walk(shape: &egui::Shape, out: &mut Vec<(f32, f32, String)>) {
+			match shape {
+				egui::Shape::Text(text) => out.push((
+					text.pos.y,
+					text.pos.y + text.galley.rect.height(),
+					text.galley.job.text.clone(),
+				)),
+				egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
+				_ => {}
+			}
+		}
+		let mut texts = Vec::new();
+		for shape in &output.shapes {
+			walk(&shape.shape, &mut texts);
+		}
+		output.drop_without_applying_deltas();
+		let quote = texts
+			.iter()
+			.find(|(.., text)| text.starts_with('\u{2022}'))
+			.expect("the quoted list is drawn");
+		let claim = texts
+			.iter()
+			.find(|(.., text)| text.contains("Claim your"))
+			.expect("the paragraph after the quote is drawn");
+		let last = texts
+			.iter()
+			.find(|(.., text)| text.contains("go back"))
+			.expect("the closing line is drawn");
+		assert!(
+			claim.0 >= quote.1 - 0.5,
+			"the paragraph after the quote starts at {} inside the quote, which ends at {}",
+			claim.0,
+			quote.1
+		);
+		assert!(
+			last.0 >= claim.0,
+			"the closing line sits below the paragraph before it: {last:?} against {claim:?}"
+		);
 	}
 	#[test]
 	fn plain_messages_keep_the_body_line_height() {

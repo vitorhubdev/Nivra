@@ -2,6 +2,10 @@
 
 ## Não publicado
 
+### Mensagens
+
+- Uma citação (`> • item`) no meio de uma mensagem ou de um embed não é mais desenhada por cima do texto seguinte. O bloco da citação entrava na linha corrente do fluxo e o parágrafo depois dela começava no topo do bloco, sobrepondo os itens (foi o que aconteceu no anúncio do LunaBot, com a lista de benefícios e o parágrafo "Claim your FREE 3-Day Premium Trial" no mesmo lugar). A linha agora é encerrada depois da citação.
+
 ### Anexos
 
 - Um anexo `.html` (ou `.htm`, `.xhtml`, ou `text/html`) agora abre como página renderizada, não só como código. A prévia é estática: scripts, estilos, frames, objetos e comentários são descartados, uma imagem vira o texto `[image: …]` e nada é baixado (o endereço da imagem nunca é pedido), e só links `http(s)` continuam clicáveis, pelo mesmo caminho de confirmação dos links de mensagens. Títulos, parágrafos, listas, citações, tabelas, negrito, itálico, código e blocos `<pre>` aparecem formatados; todo o texto é escapado, então uma página não consegue injetar formatação, menções nem spoilers, e caracteres de controle e de inversão de direção são removidos. O botão **Código-fonte / Renderizado** do diálogo alterna para o arquivo original. Copiar texto copia sempre o código-fonte. A conversão é limitada (512 KiB de entrada, 200 mil caracteres de saída) e roda fora da thread de desenho.

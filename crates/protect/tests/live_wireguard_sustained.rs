@@ -38,6 +38,9 @@ async fn live_wireguard_survives_a_long_udp_association() {
 		wireguard: text,
 		..Draft::default()
 	};
+	// Ultra mode on, printing what the tunnel reports, so the run also shows the monitoring itself.
+	protect::set_trace_sink(|scope, message| println!("[{scope}] {message}"));
+	protect::set_ultra(true);
 	let profile = protect::prepare(&draft).await.expect("prepare route");
 	protect::apply(Some(profile), None).expect("apply route");
 	let destination: SocketAddr = DNS.parse().unwrap();

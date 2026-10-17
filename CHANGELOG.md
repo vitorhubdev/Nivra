@@ -23,6 +23,14 @@
 - Uma chamada cuja conexão de mídia (UDP) cai agora tenta voltar sozinha, no mesmo limite de tentativas das outras quedas de rede. Antes, "Voice UDP receive failed" encerrava a chamada com zero tentativas (aconteceu duas vezes, cerca de 65 s depois de conectar, em um teste real). A causa dessas duas quedas ainda não foi provada: um teste de 150 s com o seu provedor e uma associação UDP longa passou sem falha (750 de 751 respostas), então o túnel isolado não é o suspeito. O modo ultra agora registra o que faltava para provar.
 - O modo ultra grava as linhas `protect`: cada troca de rota, o momento em que um socket aberto numa rota antiga é fechado, o motivo de uma associação UDP terminar, a parada do túnel e um resumo a cada 5 s do túnel (idade do handshake, bytes, perda estimada, datagramas, erros de decifragem por tipo, filas cheias e pacotes descartados). O `ultra-analysis.txt` do ZIP traz achados para isso.
 
+### Diagnóstico (mais monitoramento no modo ultra)
+
+- O pulso de 5 s agora traz a memória, o número de handles e a CPU do próprio app (em % de um núcleo), e avisa quando a CPU passa de 60%, quando a memória cresce mais de 150 MB num pulso ou quando os handles crescem mais de 100. É a medida que faltava para um PC que "trava" com CPU e RAM aparentemente baixas. No Windows; nos outros sistemas o pulso segue sem esses campos.
+- Os erros de socket de mídia deixam de ser engolidos: a falha que encerra o UDP da voz ou do stream grava o tipo e o código do erro do sistema, e os erros tolerados (por exemplo resets) são contados e resumidos uma vez por segundo.
+- O túnel WireGuard tem um canário no modo ultra: a cada 10 s resolve um nome por dentro dele e registra a latência ou a falha. Quando uma chamada cair, o log diz se o túnel ainda respondia naquele instante.
+- O servidor SOCKS5 local registra o que antes sumia: clientes recusados por falta de slot, conexões e consultas de nome que falharam (com o motivo), e conexões longas ou quebradas no meio, com duração e bytes.
+- O `ultra-analysis.txt` ganhou achados para tudo isso: crescimento de memória e de handles, CPU alta, erros de socket de mídia, canário sem resposta, túnel lento, inlet cheio, conexões recusadas e relays quebrados.
+
 ### Soundboard
 
 - A lista de sons deixou de quebrar o texto letra por letra: os botões ficam em duas colunas de largura fixa, com o nome truncado (o nome inteiro aparece ao passar o mouse) e rolagem quando há muitos sons.

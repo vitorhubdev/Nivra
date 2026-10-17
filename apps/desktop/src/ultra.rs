@@ -13,6 +13,11 @@ const STUCK_AFTER: Duration = Duration::from_secs(20);
 const STALL_GAP: Duration = Duration::from_millis(250);
 const HIDDEN_FPS: f32 = 20.0;
 const IDLE_FPS: f32 = 40.0;
+/// Process CPU above this share of one core, over a pulse, is reported.
+const HIGH_CPU: f32 = 60.0;
+/// Memory or handle growth inside one pulse that looks like a leak or a burst worth a look.
+const GROWTH_KIB: i64 = 150 * 1024;
+const GROWTH_HANDLES: i64 = 100;
 
 /// The part of a call the pulse reports.
 pub struct CallView {
@@ -29,6 +34,8 @@ pub struct Snapshot {
 	pub hidden: bool,
 	pub protect: bool,
 	pub call: Option<CallView>,
+	/// Memory, handles and CPU time of this process, where the OS gives them cheaply.
+	pub process: Option<platform::process_stats::ProcessStats>,
 }
 
 /// A call phase as a fixed word, so watching it every frame never allocates.
@@ -116,6 +123,7 @@ pub fn snapshot(state: &client_core::State, hidden: bool) -> Snapshot {
 		hidden,
 		protect: protect::enabled(),
 		call,
+		process: platform::process_stats::read(),
 	}
 }
 
@@ -126,6 +134,7 @@ pub struct Pulse {
 	stalls: u32,
 	longest_gap: Duration,
 	phase: Option<(String, Instant)>,
+	process: Option<platform::process_stats::ProcessStats>,
 }
 
 pub struct Report {
@@ -142,6 +151,7 @@ impl Pulse {
 			stalls: 0,
 			longest_gap: Duration::ZERO,
 			phase: None,
+			process: None,
 		}
 	}
 
@@ -212,8 +222,49 @@ impl Pulse {
 				"call=none".to_owned()
 			}
 		};
+		let process = match snapshot.process {
+			Some(stats) => {
+				let mut text = format!(
+					" ram={}MB private={}MB handles={}",
+					stats.working_set_kib / 1024,
+					stats.private_kib / 1024,
+					stats.handles
+				);
+				if let Some(previous) = self.process {
+					let delta = platform::process_stats::delta(
+						&previous,
+						&stats,
+						elapsed.as_millis() as u64,
+					);
+					text.push_str(&format!(" cpu={:.0}%", delta.cpu_percent));
+					if delta.cpu_percent > HIGH_CPU {
+						warnings.push(format!(
+							"process CPU is at {:.0}% of one core",
+							delta.cpu_percent
+						));
+					}
+					if delta.working_set_growth_kib > GROWTH_KIB {
+						warnings.push(format!(
+							"memory grew {} MB in {} s",
+							delta.working_set_growth_kib / 1024,
+							elapsed.as_secs()
+						));
+					}
+					if delta.handle_growth > GROWTH_HANDLES {
+						warnings.push(format!(
+							"handles grew by {} in {} s",
+							delta.handle_growth,
+							elapsed.as_secs()
+						));
+					}
+				}
+				self.process = Some(stats);
+				text
+			}
+			None => String::new(),
+		};
 		let line = format!(
-			"fps={fps:.1} slow={} hidden={} protect={} {call}",
+			"fps={fps:.1} slow={} hidden={} protect={} {call}{process}",
 			self.stalls, snapshot.hidden, snapshot.protect
 		);
 		self.window = now;
@@ -292,6 +343,7 @@ mod tests {
 			hidden,
 			protect: false,
 			call,
+			process: None,
 		}
 	}
 
@@ -435,6 +487,57 @@ mod tests {
 				!report.warnings.iter().any(|w| w.contains("phase")),
 				"{phase}: {:?}",
 				report.warnings
+			);
+		}
+	}
+
+	#[test]
+	fn the_pulse_reports_process_numbers_and_warns_on_cpu_and_growth() {
+		use platform::process_stats::ProcessStats;
+		let stats = |ws_mb: u64, handles: u32, cpu_ms: u64| ProcessStats {
+			working_set_kib: ws_mb * 1024,
+			private_kib: ws_mb * 1024,
+			handles,
+			cpu_ms,
+		};
+		let start = Instant::now();
+		let mut pulse = Pulse::new(start);
+		let first = report_after(&mut pulse, start, Duration::from_millis(100), || Snapshot {
+			process: Some(stats(200, 500, 1_000)),
+			..snapshot(false, Some(call("Connected", true)))
+		});
+		assert!(
+			first.line.contains(" ram=200MB private=200MB handles=500"),
+			"{}",
+			first.line
+		);
+		assert!(
+			!first.line.contains(" cpu="),
+			"the first window has nothing to compare with"
+		);
+		// The next window: 4 s of CPU in about 5 s, 300 MB and 150 handles more.
+		let second = report_after(
+			&mut pulse,
+			start + Duration::from_secs(5),
+			Duration::from_millis(100),
+			|| Snapshot {
+				process: Some(stats(500, 650, 5_000)),
+				..snapshot(false, Some(call("Connected", true)))
+			},
+		);
+		assert!(second.line.contains(" cpu="), "{}", second.line);
+		for expected in [
+			"process CPU is at",
+			"memory grew 300 MB",
+			"handles grew by 150",
+		] {
+			assert!(
+				second
+					.warnings
+					.iter()
+					.any(|warning| warning.contains(expected)),
+				"{expected}: {:?}",
+				second.warnings
 			);
 		}
 	}

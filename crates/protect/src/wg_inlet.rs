@@ -57,6 +57,7 @@ fn invalid(message: &'static str) -> io::Error {
 /// Accepts sessions until the listener is dropped with its task. Each session holds one slot.
 pub(super) async fn serve(listener: TcpListener, handle: Handle, credentials: Arc<Credentials>) {
 	let slots = Arc::new(Semaphore::new(MAX_CLIENTS));
+	let mut refused = 0u64;
 	loop {
 		let Ok((client, peer)) = listener.accept().await else {
 			tokio::time::sleep(Duration::from_millis(10)).await;
@@ -66,14 +67,51 @@ pub(super) async fn serve(listener: TcpListener, handle: Handle, credentials: Ar
 			continue;
 		}
 		let Ok(permit) = slots.clone().try_acquire_owned() else {
+			refused += 1;
+			if refused.is_power_of_two() {
+				trace::line(&format!(
+					"inlet refused a client: all {MAX_CLIENTS} slots are busy ({refused} refused so far)"
+				));
+			}
 			continue;
 		};
 		let handle = handle.clone();
 		let credentials = credentials.clone();
 		tokio::spawn(async move {
 			let _permit = permit;
-			let _ = session(client, handle, credentials).await;
+			if let Err(error) = session(client, handle, credentials).await {
+				note_session_error(&error);
+			}
 		});
+	}
+}
+
+/// Ultra diagnostics for a session that ended in an error. Normal closes are errors too, so only
+/// the first few are written.
+fn note_session_error(error: &io::Error) {
+	static SEEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+	if super::trace::enabled() && SEEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 100 {
+		trace::line(&format!("inlet session ended: kind={:?}", error.kind()));
+	}
+}
+
+/// Ultra diagnostics for a relayed TCP connection: long ones and failures only, with how long it
+/// lived and how many bytes crossed. A short, clean connection is routine and stays out.
+fn note_relay(port: u16, lived: Duration, result: &io::Result<(u64, u64)>) {
+	if !super::trace::enabled() {
+		return;
+	}
+	match result {
+		Ok((up, down)) if lived >= Duration::from_secs(5) => trace::line(&format!(
+			"relay to port {port} closed after {} s: up_bytes={up} down_bytes={down}",
+			lived.as_secs()
+		)),
+		Ok(_) => {}
+		Err(error) => trace::line(&format!(
+			"relay to port {port} failed after {} s: kind={:?}",
+			lived.as_secs(),
+			error.kind()
+		)),
 	}
 }
 
@@ -189,16 +227,25 @@ async fn connect(
 		Target::Ip(ip) => ip,
 		Target::Name(name) => match handle.resolve(&name).await {
 			Ok(ip) => ip,
-			Err(_) => return reply(&mut client, 4, UNSPECIFIED).await,
+			Err(reason) => {
+				trace::line(&format!("name lookup failed: {reason}"));
+				return reply(&mut client, 4, UNSPECIFIED).await;
+			}
 		},
 	};
 	match handle.tcp(SocketAddrV4::new(ip, port)).await {
 		Ok(mut stream) => {
 			reply(&mut client, 0, UNSPECIFIED).await?;
-			tokio::io::copy_bidirectional(&mut client, &mut stream).await?;
+			let began = std::time::Instant::now();
+			let relayed = tokio::io::copy_bidirectional(&mut client, &mut stream).await;
+			note_relay(port, began.elapsed(), &relayed);
+			relayed?;
 			Ok(())
 		}
-		Err(_) => reply(&mut client, 1, UNSPECIFIED).await,
+		Err(reason) => {
+			trace::line(&format!("connect to port {port} failed: {reason}"));
+			reply(&mut client, 1, UNSPECIFIED).await
+		}
 	}
 }
 

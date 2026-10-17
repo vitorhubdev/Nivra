@@ -12,6 +12,7 @@ pub mod migration;
 pub mod notifications;
 pub mod pointer;
 pub mod priority;
+pub mod process_stats;
 pub mod processes;
 pub mod protect_profiles;
 pub mod save;

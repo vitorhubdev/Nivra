@@ -93,6 +93,126 @@ struct Audio {
 	last_silent: Option<String>,
 }
 
+/// What the pulses say about this process: CPU, memory and handles.
+#[derive(Default)]
+struct Process {
+	ram_mb: Vec<f64>,
+	handles: Vec<f64>,
+	cpu: Vec<f64>,
+}
+
+impl Process {
+	fn observe(&mut self, text: &str) {
+		if let Some(ram) = num(text, "ram") {
+			self.ram_mb.push(ram);
+		}
+		if let Some(handles) = num(text, "handles") {
+			self.handles.push(handles);
+		}
+		if let Some(cpu) = num(text, "cpu") {
+			self.cpu.push(cpu);
+		}
+	}
+
+	fn findings(&self) -> Vec<String> {
+		let mut out = Vec::new();
+		let (Some(first), Some(last)) = (self.ram_mb.first(), self.ram_mb.last()) else {
+			return out;
+		};
+		if last - first > 300.0 {
+			out.push(format!(
+				"MEMORY GROWTH: the app went from {first:.0} MB to {last:.0} MB resident over this log."
+			));
+		}
+		if let (Some(first), Some(last)) = (self.handles.first(), self.handles.last())
+			&& last - first > 300.0
+		{
+			out.push(format!(
+				"HANDLE GROWTH: open handles went from {first:.0} to {last:.0}, which usually means something is not being closed."
+			));
+		}
+		let hot = self.cpu.iter().filter(|cpu| **cpu > 60.0).count();
+		if hot > 0 {
+			out.push(format!(
+				"HIGH PROCESS CPU: {hot} of {} pulses used more than 60% of one core (max {:.0}%).",
+				self.cpu.len(),
+				self.cpu.iter().copied().fold(0.0, f64::max)
+			));
+		}
+		out
+	}
+
+	fn summary(&self) -> String {
+		let (Some(first), Some(last)) = (self.ram_mb.first(), self.ram_mb.last()) else {
+			return String::new();
+		};
+		let ram = sorted(self.ram_mb.clone());
+		let cpu = sorted(self.cpu.clone());
+		format!(
+			"Process over {} pulses: resident {first:.0} -> {last:.0} MB (max {:.0}), handles {:.0} -> {:.0}, CPU median {:.0}% / 95th {:.0}% / max {:.0}% of one core\n",
+			ram.len(),
+			ram.last().copied().unwrap_or(0.0),
+			self.handles.first().copied().unwrap_or(0.0),
+			self.handles.last().copied().unwrap_or(0.0),
+			percentile(&cpu, 50),
+			percentile(&cpu, 95),
+			cpu.last().copied().unwrap_or(0.0)
+		)
+	}
+}
+
+/// Receive errors on the media sockets, as the transport reports them.
+#[derive(Default)]
+struct Media {
+	tolerated: u64,
+	kinds: BTreeMap<String, u64>,
+	fatal: Vec<String>,
+}
+
+impl Media {
+	fn observe(&mut self, time: &str, rest: &str) {
+		if let Some((_, tail)) = rest.split_once(": ")
+			&& rest.contains(" tolerated receive error(s)")
+		{
+			let count = tail
+				.split_whitespace()
+				.next()
+				.and_then(|value| value.parse::<u64>().ok())
+				.unwrap_or(1);
+			self.tolerated += count;
+			if let Some(kind) = tail
+				.split("kind=")
+				.nth(1)
+				.and_then(|k| k.split_whitespace().next())
+			{
+				*self.kinds.entry(kind.to_owned()).or_default() += count;
+			}
+		} else if rest.contains(" receive failed: ") && self.fatal.len() < 5 {
+			self.fatal.push(format!("{time} {rest}"));
+		}
+	}
+
+	fn findings(&self) -> Vec<String> {
+		let mut out = Vec::new();
+		for failure in &self.fatal {
+			out.push(format!("MEDIA SOCKET FAILED: {failure}."));
+		}
+		if self.tolerated > 0 {
+			let kinds = self
+				.kinds
+				.iter()
+				.map(|(kind, count)| format!("{kind} x{count}"))
+				.collect::<Vec<_>>()
+				.join(", ");
+			out.push(format!(
+				"MEDIA SOCKET ERRORS TOLERATED: {} receive errors were skipped ({kinds}). A burst of resets points at a route that refuses the media port.",
+				self.tolerated
+			));
+		}
+		out
+	}
+}
+
 /// What the `protect` lines say about the route and the in-process tunnel.
 #[derive(Default)]
 struct Tunnel {
@@ -115,6 +235,14 @@ struct Tunnel {
 	first_datagram_end: Option<String>,
 	stopped: Option<String>,
 	association_ends: BTreeMap<String, usize>,
+	canary_ok: usize,
+	canary_failed: usize,
+	canary_worst_ms: f64,
+	first_canary_failure: Option<String>,
+	refused_lines: usize,
+	connect_failures: BTreeMap<String, usize>,
+	relays_failed: usize,
+	first_relay_failure: Option<String>,
 }
 
 impl Tunnel {
@@ -151,6 +279,26 @@ impl Tunnel {
 			self.first_datagram_end.get_or_insert(time.to_owned());
 		} else if rest.starts_with("tunnel stopped") {
 			self.stopped.get_or_insert(time.to_owned());
+		} else if let Some(tail) = rest.strip_prefix("canary: dns ok in ") {
+			self.canary_ok += 1;
+			let ms = tail
+				.split_whitespace()
+				.next()
+				.and_then(|value| value.parse::<f64>().ok())
+				.unwrap_or(0.0);
+			self.canary_worst_ms = self.canary_worst_ms.max(ms);
+		} else if rest.starts_with("canary: dns failed") {
+			self.canary_failed += 1;
+			self.first_canary_failure.get_or_insert(time.to_owned());
+		} else if rest.starts_with("inlet refused a client") {
+			self.refused_lines += 1;
+		} else if rest.starts_with("connect to port ") || rest.starts_with("name lookup failed") {
+			// "connect to port 443 failed: <reason>" and "name lookup failed: <reason>".
+			let reason = rest.rsplit(": ").next().unwrap_or(rest).to_owned();
+			*self.connect_failures.entry(reason).or_default() += 1;
+		} else if rest.starts_with("relay to port ") && rest.contains(" failed after ") {
+			self.relays_failed += 1;
+			self.first_relay_failure.get_or_insert(time.to_owned());
 		} else if let Some(tail) = rest.strip_prefix("udp association ended: ") {
 			let reason = tail.split(';').next().unwrap_or("").to_owned();
 			*self.association_ends.entry(reason).or_default() += 1;
@@ -213,6 +361,42 @@ impl Tunnel {
 				}
 			));
 		}
+		if self.canary_failed > 0 {
+			out.push(format!(
+				"TUNNEL CANARY FAILED: {} of {} name lookups sent through the tunnel got no answer, first at {} (slowest answer {:.0} ms). When a call dies near that time the tunnel was already dead.",
+				self.canary_failed,
+				self.canary_failed + self.canary_ok,
+				self.first_canary_failure.as_deref().unwrap_or("-"),
+				self.canary_worst_ms
+			));
+		} else if self.canary_ok > 0 && self.canary_worst_ms > 1500.0 {
+			out.push(format!(
+				"TUNNEL SLOW: the slowest of {} name lookups through the tunnel took {:.0} ms.",
+				self.canary_ok, self.canary_worst_ms
+			));
+		}
+		if self.refused_lines > 0 {
+			out.push(
+				"INLET FULL: the local SOCKS5 server refused clients because every slot was busy."
+					.to_owned(),
+			);
+		}
+		if !self.connect_failures.is_empty() {
+			let reasons = self
+				.connect_failures
+				.iter()
+				.map(|(reason, count)| format!("{reason} x{count}"))
+				.collect::<Vec<_>>()
+				.join(", ");
+			out.push(format!("TUNNEL CONNECTIONS REFUSED: {reasons}."));
+		}
+		if self.relays_failed > 0 {
+			out.push(format!(
+				"TUNNEL RELAYS FAILED: {} proxied connection(s) broke mid-stream, first at {}.",
+				self.relays_failed,
+				self.first_relay_failure.as_deref().unwrap_or("-")
+			));
+		}
 		if !self.association_ends.is_empty() {
 			let ends = self
 				.association_ends
@@ -238,6 +422,8 @@ pub fn analyze(log: &str) -> String {
 	let mut audio = Audio::default();
 	let (mut idle_share_windows, mut capture_frames) = (0usize, 0.0);
 	let mut tunnel = Tunnel::default();
+	let mut process = Process::default();
+	let mut media = Media::default();
 	let mut pings = Vec::new();
 	let mut lines = 0usize;
 
@@ -253,6 +439,7 @@ pub fn analyze(log: &str) -> String {
 					busy_windows += usize::from(fps > BUSY_FPS);
 				}
 				slow_frames += num(&format!(" {}", line.rest), "slow").unwrap_or(0.0);
+				process.observe(&format!(" {}", line.rest));
 			}
 			"protect" => tunnel.observe(line.time, line.rest),
 			"anomaly" => {
@@ -268,6 +455,7 @@ pub fn analyze(log: &str) -> String {
 				}
 			}
 			"voice" => {
+				media.observe(line.time, line.rest);
 				let text = format!(" {}", line.rest);
 				if let Some(ms) = text
 					.strip_prefix(" heartbeat ping ")
@@ -375,7 +563,9 @@ pub fn analyze(log: &str) -> String {
 			"SLOW FRAMES: {slow_frames:.0} frames took longer than 250 ms between the start of logic and the end of ui."
 		));
 	}
+	findings.extend(media.findings());
 	findings.extend(tunnel.findings());
+	findings.extend(process.findings());
 	let ping = sorted(pings);
 	if ping.last().is_some_and(|max| *max > SLOW_PING_MS) {
 		findings.push(format!(
@@ -402,6 +592,7 @@ pub fn analyze(log: &str) -> String {
 		percentile(&fps, 95),
 		fps.last().copied().unwrap_or(0.0)
 	));
+	out.push_str(&process.summary());
 	if !ping.is_empty() {
 		out.push_str(&format!(
 			"Voice heartbeat over {} acknowledgements: median {:.0} ms, 95th {:.0} ms, max {:.0} ms\n",
@@ -508,6 +699,39 @@ mod tests {
 		);
 		assert!(report.contains("InvalidMac x1"), "{report}");
 		assert!(report.contains("the app closed it x1"), "{report}");
+	}
+
+	#[test]
+	fn process_media_and_tunnel_probes_are_named_in_the_findings() {
+		let log = "\
+2026-10-16 22:46:20 pulse fps=60.0 slow=0 hidden=false protect=true call=Connected people=2 live=0 watching=0 camera=false ram=400MB private=450MB handles=800
+2026-10-16 22:46:25 pulse fps=60.0 slow=0 hidden=false protect=true call=Connected people=2 live=0 watching=0 camera=false ram=900MB private=950MB handles=1300 cpu=85%
+2026-10-16 22:46:26 voice voice udp: 4 tolerated receive error(s), latest kind=ConnectionReset os=10054
+2026-10-16 22:46:27 voice voice udp receive failed: kind=ConnectionAborted os=none
+2026-10-16 22:46:30 protect canary: dns ok in 150 ms
+2026-10-16 22:46:40 protect canary: dns failed (DNS lookup timed out) after 10001 ms
+2026-10-16 22:46:41 protect inlet refused a client: all 64 slots are busy (1 refused so far)
+2026-10-16 22:46:42 protect connect to port 443 failed: TCP connection timed out
+2026-10-16 22:46:43 protect relay to port 443 failed after 31 s: kind=ConnectionReset
+";
+		let report = analyze(log);
+		for expected in [
+			"MEMORY GROWTH: the app went from 400 MB to 900 MB",
+			"HANDLE GROWTH: open handles went from 800 to 1300",
+			"HIGH PROCESS CPU: 1 of 1 pulses",
+			"MEDIA SOCKET ERRORS TOLERATED: 4 receive errors were skipped (ConnectionReset x4)",
+			"MEDIA SOCKET FAILED: 22:46:27 voice udp receive failed: kind=ConnectionAborted",
+			"TUNNEL CANARY FAILED: 1 of 2 name lookups",
+			"INLET FULL",
+			"TUNNEL CONNECTIONS REFUSED: TCP connection timed out x1",
+			"TUNNEL RELAYS FAILED: 1 proxied connection(s)",
+			"Process over 2 pulses: resident 400 -> 900 MB",
+		] {
+			assert!(
+				report.contains(expected),
+				"{expected:?} missing from:\n{report}"
+			);
+		}
 	}
 
 	#[test]

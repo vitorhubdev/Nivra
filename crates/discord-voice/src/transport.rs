@@ -234,6 +234,64 @@ fn transient_receive(error: &std::io::Error) -> bool {
 			| std::io::ErrorKind::Interrupted
 	) || (cfg!(windows) && error.raw_os_error() == Some(WSAEMSGSIZE))
 }
+/// A socket error as kind and OS code only, so the text of a message never reaches a log.
+fn describe(error: &std::io::Error) -> String {
+	format!(
+		"kind={:?} os={}",
+		error.kind(),
+		error
+			.raw_os_error()
+			.map_or("none".to_owned(), |code| code.to_string())
+	)
+}
+/// What the last second of tolerated receive errors looked like: how many, and the latest.
+#[derive(Default)]
+struct TransientErrors {
+	count: u64,
+	reported: Option<std::time::Instant>,
+}
+impl TransientErrors {
+	/// Counts one tolerated error; at most once a second returns a line saying how many there were.
+	fn note(
+		&mut self,
+		what: &str,
+		error: &std::io::Error,
+		now: std::time::Instant,
+	) -> Option<String> {
+		self.count += 1;
+		if self
+			.reported
+			.is_some_and(|at| now.saturating_duration_since(at) < Duration::from_secs(1))
+		{
+			return None;
+		}
+		self.reported = Some(now);
+		let count = std::mem::take(&mut self.count);
+		Some(format!(
+			"{what}: {count} tolerated receive error(s), latest {}",
+			describe(error)
+		))
+	}
+}
+/// Ultra diagnostics for a tolerated receive error. A no-op outside ultra mode.
+fn note_transient(what: &str, error: &std::io::Error) {
+	static STATE: std::sync::Mutex<Option<TransientErrors>> = std::sync::Mutex::new(None);
+	if !platform::diagnostics::ultra() {
+		return;
+	}
+	let mut state = STATE.lock().unwrap_or_else(|poison| poison.into_inner());
+	if let Some(line) = state.get_or_insert_with(TransientErrors::default).note(
+		what,
+		error,
+		std::time::Instant::now(),
+	) {
+		platform::diagnostics::trace("voice", &line);
+	}
+}
+/// Ultra diagnostics for the receive error that ends a media socket.
+fn note_fatal(what: &str, error: &std::io::Error) {
+	platform::diagnostics::trace("voice", &format!("{what}: {}", describe(error)));
+}
 // Native voice UDP ping: signaling heartbeats alone do not maintain an idle
 // media path (notably a receive-only stream or a muted call).
 fn udp_keepalive(
@@ -660,7 +718,7 @@ async fn run_inner(
 				}
 			},
 			result=async {match &udp {Some(socket)=>socket.recv(&mut packet).await,None=>std::future::pending().await}}=>{
-				let length=match result {Ok(length)=>length,Err(error) if transient_receive(&error)=>continue,Err(_)=>return Err(failure::UDP_RECEIVE_FAILED)};
+				let length=match result {Ok(length)=>length,Err(error) if transient_receive(&error)=>{note_transient("voice udp",&error);continue},Err(error)=>{note_fatal("voice udp receive failed",&error);return Err(failure::UDP_RECEIVE_FAILED)}};
 				if length>MAX_PACKET {continue;}
 				if discovering {
 					let (address,port)=discovery(&packet[..length],ssrc)?;
@@ -1572,7 +1630,7 @@ async fn run_stream_inner(
 				metrics.finish(crate::diagnostics::Stage::VideoSend,start);
 			},
 			result=async {match &udp {Some(socket)=>socket.recv(&mut packet).await,_=>std::future::pending().await}}=>{
-				let length=match result {Ok(length)=>length,Err(error) if transient_receive(&error)=>continue,Err(_)=>return Err("Stream UDP receive failed")};
+				let length=match result {Ok(length)=>length,Err(error) if transient_receive(&error)=>{note_transient("stream udp",&error);continue},Err(error)=>{note_fatal("stream udp receive failed",&error);return Err("Stream UDP receive failed")}};
 				if discovering {
 					let (address,port)=discovery(&packet[..length],audio_ssrc)?;
 					json_send(&mut ws,json!({"op":1,"d":{"protocol":"udp","data":{"address":address.to_string(),"port":port,"mode":MODE},"codecs":[{"name":"opus","type":"audio","priority":1000,"payload_type":120},{"name":"H264","type":"video","priority":1000,"payload_type":101,"rtx_payload_type":102,"encode":video.is_some(),"decode":decoder.is_some()}]}})).await?;
@@ -1706,6 +1764,34 @@ async fn run_stream_inner(
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn tolerated_receive_errors_are_summarized_once_a_second_without_their_text() {
+		let mut errors = TransientErrors::default();
+		let error = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+		let start = std::time::Instant::now();
+		let first = errors
+			.note("voice udp", &error, start)
+			.expect("the first is reported");
+		assert!(first.contains("1 tolerated receive error(s)"), "{first}");
+		assert!(first.contains("kind=ConnectionReset"), "{first}");
+		for step in 1..5 {
+			assert!(
+				errors
+					.note(
+						"voice udp",
+						&error,
+						start + Duration::from_millis(100 * step)
+					)
+					.is_none(),
+				"inside the same second nothing more is written"
+			);
+		}
+		let next = errors
+			.note("voice udp", &error, start + Duration::from_millis(1_200))
+			.expect("a second later the count is reported");
+		assert!(next.contains("5 tolerated receive error(s)"), "{next}");
+	}
+
 	use super::*;
 	use crate::diagnostics::Signal;
 	use crate::video_receive::Receivers;

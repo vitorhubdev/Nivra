@@ -31,6 +31,9 @@ const DEADLINE: Duration = super::DEADLINE;
 const TICK: Duration = Duration::from_millis(250);
 /// How often ultra diagnostics summarize the tunnel.
 const SUMMARY: Duration = Duration::from_secs(5);
+/// How often ultra diagnostics look up a name through the tunnel to prove it is alive.
+const CANARY: Duration = Duration::from_secs(10);
+const CANARY_HOST: &str = "discord.com";
 /// Longest the driver sleeps without new work, so timers and retransmissions stay on time.
 const MAX_IDLE: Duration = Duration::from_millis(20);
 const CHUNK: usize = 16 * 1024;
@@ -767,6 +770,23 @@ impl Handle {
 	}
 }
 
+/// Ultra diagnostics only: a name lookup through the tunnel every few seconds. When a call or a
+/// stream dies this says whether the tunnel itself was still answering at that moment.
+async fn canary(handle: Handle) {
+	let mut every = tokio::time::interval(CANARY);
+	every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+	loop {
+		every.tick().await;
+		let begin = std::time::Instant::now();
+		let outcome = handle.resolve(CANARY_HOST).await;
+		let ms = begin.elapsed().as_millis();
+		match outcome {
+			Ok(_) => trace::line(&format!("canary: dns ok in {ms} ms")),
+			Err(reason) => trace::line(&format!("canary: dns failed ({reason}) after {ms} ms")),
+		}
+	}
+}
+
 /// A running tunnel. Dropping it aborts every task it owns, which closes every bridge.
 pub(super) struct Engine {
 	handle: Handle,
@@ -801,10 +821,12 @@ impl Engine {
 		let (inbound_tx, inbound_rx) = mpsc::channel(INBOUND);
 		let reader = tokio::spawn(read(socket.clone(), inbound_tx));
 		let driver = tokio::spawn(run(stack, socket, command_rx, inbound_rx, |_| {}));
-		Ok(Self {
-			handle: Handle { commands },
-			tasks: vec![reader, driver],
-		})
+		let handle = Handle { commands };
+		let mut tasks = vec![reader, driver];
+		if trace::enabled() {
+			tasks.push(tokio::spawn(canary(handle.clone())));
+		}
+		Ok(Self { handle, tasks })
 	}
 
 	pub(super) fn handle(&self) -> Handle {

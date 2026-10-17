@@ -799,7 +799,13 @@ tunnel write `protect` lines: every route change with its generation and scope, 
 socket opened on an older route is closed, why a UDP association ended, why the tunnel stopped, and
 a five-second tunnel summary (handshake age, bytes, estimated loss, datagrams sent and received,
 decryption errors by kind, full queues, dropped and refused packets, open TCP and UDP sockets).
-The summary holds counts and error kinds only, never keys, endpoints or addresses. While ultra mode
+The summary holds counts and error kinds only, never keys, endpoints or addresses. In ultra mode the
+tunnel also resolves one name through itself every ten seconds (a canary: one DNS query to the
+user's own route, answer or failure and its latency), the local SOCKS5 server writes why a client or
+connection was refused and how long and how large a long or broken relay was (the port, never the
+host), the voice transport writes the kind and OS code of the error that ends a media socket and a
+once-a-second count of the errors it tolerated, and each pulse carries the process's resident and
+private memory, handle count and CPU share (Windows only). While ultra mode
 runs the window asks for a repaint every five seconds so the pulse keeps ticking. Nothing is sent
 off the computer; the diagnostics ZIP the user exports includes `nivra-ultra.log` only when it exists.
 

@@ -1,6 +1,8 @@
 # Changelog
 
-## Não publicado
+## Nivra 1.0.19
+
+Mantém a chamada de pé quando a conexão de mídia cai, troca de rota do PROTECT sem derrubar a chamada de voz e traz o modo `--ultra-diagnostics`, que registra áudio descartado, túnel, proxy local, processo e sockets de mídia. Validado por testes automáticos e por um teste de 150 s do túnel com um provedor real; nada foi exercitado numa chamada real do Discord, e a causa das quedas de mídia e do uso alto de GPU ao compartilhar tela continua sem prova.
 
 ### Compartilhamento de tela
 

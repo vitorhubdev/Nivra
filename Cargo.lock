@@ -1002,7 +1002,7 @@ dependencies = [
 
 [[package]]
 name = "client-core"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "model",
  "session-cache",
@@ -1608,7 +1608,7 @@ dependencies = [
 
 [[package]]
 name = "discord-api"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "client-core",
  "discord-protocol",
@@ -1625,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "discord-gateway"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "bytes",
  "client-core",
@@ -1646,7 +1646,7 @@ dependencies = [
 
 [[package]]
 name = "discord-protocol"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "base64 0.22.1",
  "model",
@@ -1659,7 +1659,7 @@ dependencies = [
 
 [[package]]
 name = "discord-voice"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "block2 0.6.2",
  "chacha20poly1305",
@@ -2211,7 +2211,7 @@ checksum = "af9673d8203fcb076b19dfd17e38b3d4ae9f44959416ea532ce72415a6020365"
 
 [[package]]
 name = "extensions"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "nivra-extension-sdk",
  "serde",
@@ -4040,7 +4040,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "local-store"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "dirs",
  "model",
@@ -4217,7 +4217,7 @@ dependencies = [
 
 [[package]]
 name = "model"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "serde",
  "zeroize",
@@ -4338,7 +4338,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nivra"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "arboard",
  "client-core",
@@ -5549,7 +5549,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "platform"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "ashpd",
  "client-core",
@@ -5795,7 +5795,7 @@ dependencies = [
 
 [[package]]
 name = "protect"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "base64 0.22.1",
  "boringtun",
@@ -6110,7 +6110,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "replay-bench"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "client-core",
  "model",
@@ -6672,7 +6672,7 @@ dependencies = [
 
 [[package]]
 name = "session-cache"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "model",
 ]
@@ -7374,7 +7374,7 @@ dependencies = [
 
 [[package]]
 name = "test-support"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "client-core",
  "model",
@@ -7930,7 +7930,7 @@ dependencies = [
 
 [[package]]
 name = "tray-debug"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "egui",
  "image",
@@ -8022,7 +8022,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "client-core",
  "egui",
@@ -9544,7 +9544,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "serde_json",
 ]

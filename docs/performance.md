@@ -2205,3 +2205,18 @@ contention with other applications remain. These results do not establish improv
 mouse latency, process CPU/RSS, sustained capture FPS or elimination of the reported
 whole-computer lag. GPU scaling, deferred nonblocking staging and native-surface
 encoding need separate ownership/synchronization work and owner-operated evidence.
+
+# HTML attachment preview - October 2026
+
+An `.html` attachment opens as a statically rendered page, with a Source switch.
+`ui::html_preview` converts the already-bounded body (at most 256 KiB fetched, 512 KiB
+read) to markdown for the existing preview renderer. It never executes or fetches
+anything: scripts, styles, frames, objects, comments and templates are dropped, an
+image is a text placeholder, only `http(s)` links survive, and all text is escaped.
+Output is capped at 200,000 characters, so "Show more" always ends. The conversion
+runs in the fetch task, not on the render thread. Local debug build, 261,876 bytes of
+mixed markup (headings, lists, tables, links, scripts): 60.5 ms to convert to 116,806
+characters and 9.7 ms to parse the first 8,000-character window. The hostile-input
+test (100,000 unclosed tags, 50,000 nested lists or quotes, 2 MB in one paragraph, an
+unterminated script) finishes in well under a second. This is a single-machine
+in-memory check, not native RSS or frame time, and no real page layout was compared.

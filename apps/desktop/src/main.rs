@@ -1318,6 +1318,10 @@ fn start_text_preview(
 				bytes.len(),
 				text.chars().count()
 			));
+			// An HTML page is converted here, off the render thread, so the dialog only lays it out.
+			let rendered = (format == ui::text_preview::PreviewFormat::Html)
+				.then(|| ui::html_preview::to_markdown(&text))
+				.filter(|markdown| !markdown.trim().is_empty());
 			Ok(ui::text_preview::TextPreview {
 				filename,
 				format,
@@ -1326,6 +1330,8 @@ fn start_text_preview(
 				shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
 				maximized: false,
 				copied: false,
+				rendered,
+				view_source: false,
 			})
 		}
 		.await;
@@ -9452,6 +9458,8 @@ mod tests {
 			shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
 			maximized: false,
 			copied: false,
+			rendered: None,
+			view_source: false,
 		});
 		let mut settings = loaded_settings();
 		settings.current.notices_accepted = true;
@@ -9777,6 +9785,75 @@ mod tests {
 		] {
 			preview_round_trip(filename, content_type, &body, sentinel);
 		}
+	}
+
+	/// An HTML attachment is rendered statically: the page reads as text, nothing in a
+	/// script or an image source reaches the dialog, and Source shows the file itself.
+	#[test]
+	fn html_attachment_preview_is_static_and_can_show_its_source() {
+		use egui_kittest::kittest::Queryable as _;
+		discord_api::ensure_tls_provider();
+		let body = b"<html><head><title>PvHtmlTitle</title><script>PvHtmlScript()</script></head>\
+			<body><h1>PvHtmlHeading</h1><p>Read <b>this</b> page.</p>\
+			<img src=\"https://tracker.example/pixel.gif\" alt=\"PvHtmlAlt\"></body></html>"
+			.to_vec();
+		let (base, _server) = serve_preview(body.clone(), "text/html", None);
+		let url = format!("{base}/attachments/1/700/page.html?ex=1&is=1&hm=1");
+		let runtime = tokio::runtime::Builder::new_multi_thread()
+			.worker_threads(1)
+			.enable_all()
+			.build()
+			.expect("preview runtime");
+		let (receive, _task) = start_text_preview(
+			runtime.handle(),
+			"page.html".into(),
+			Some("text/html".into()),
+			url::Url::parse(url.as_str()).expect("preview url"),
+			None,
+			body.len() as u64,
+			std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+		);
+		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+		let preview = loop {
+			match receive.try_recv() {
+				Ok(result) => break result.expect("preview fetch"),
+				Err(std::sync::mpsc::TryRecvError::Empty)
+					if std::time::Instant::now() < deadline =>
+				{
+					std::thread::sleep(std::time::Duration::from_millis(20));
+				}
+				Err(error) => panic!("html preview worker did not answer: {error:?}"),
+			}
+		};
+		let rendered = preview.rendered.clone().expect("an HTML body is rendered");
+		assert!(rendered.contains("PvHtmlHeading") && rendered.contains("PvHtmlTitle"));
+		assert!(!rendered.contains("PvHtmlScript") && !rendered.contains("tracker.example"));
+		let mut view = ui::MessagingUi::default();
+		view.set_preview(preview);
+		let mut settings = loaded_settings();
+		settings.current.notices_accepted = true;
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui(|ui| {
+				frame_dialogs(&mut view, false, &mut settings, false, ui.ctx());
+			});
+		harness.run_steps(2);
+		assert!(harness.query_by_label_contains("PvHtmlHeading").is_some());
+		assert!(harness.query_by_label_contains("PvHtmlScript").is_none());
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Source")
+			.click();
+		harness.run_steps(2);
+		assert!(
+			harness.query_by_label_contains("PvHtmlScript").is_some(),
+			"Source shows the file as it is"
+		);
+		assert!(
+			harness
+				.query_by_role_and_label(egui::Role::Button, "Rendered")
+				.is_some(),
+			"the footer now offers the way back"
+		);
 	}
 
 	#[test]

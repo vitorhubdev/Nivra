@@ -687,6 +687,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 					shown: ui::text_preview::PREVIEW_WINDOW_CHARS,
 					maximized: false,
 					copied: false,
+					rendered: None,
+					view_source: false,
 				});
 			} else if page == "image-viewer" {
 				messaging.preview_image_viewer(model::Id(500), model::Id(700));

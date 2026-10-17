@@ -3,6 +3,7 @@
 mod account_badge;
 mod account_menu;
 pub mod anim;
+pub mod html_preview;
 mod protect;
 pub mod text_preview;
 
@@ -19,6 +20,8 @@ mod preview_tests {
 			shown: text_preview::PREVIEW_WINDOW_CHARS,
 			maximized: false,
 			copied: false,
+			rendered: None,
+			view_source: false,
 		}
 	}
 
@@ -4082,13 +4085,14 @@ impl MessagingUi {
 		let mut more = false;
 		let mut copy = false;
 		let mut toggle_maximized = false;
+		let mut switch_view = false;
 		// Move the pending external link out so the shared borrow of `preview`
 		// cannot overlap a mutable borrow of the timeline.
 		let mut opening = self.timeline.opening.take();
 		let Some(preview) = self.preview.as_ref() else {
 			return false;
 		};
-		if preview.format == text_preview::PreviewFormat::Markdown
+		if preview.shows_markdown()
 			&& self
 				.preview_formatted
 				.as_ref()
@@ -4101,6 +4105,9 @@ impl MessagingUi {
 		}
 		let maximized = preview.maximized;
 		let copied = preview.copied;
+		let can_switch_view = preview.can_switch_view();
+		let viewing_source = preview.view_source;
+		let static_page = preview.shows_markdown() && preview.can_switch_view();
 		// A maximized preview fills the viewport (the dialog clamps to it) and
 		// grows the scroll body, so long `.md`/`.txt` files are easier to read.
 		let available_body_height = (ctx.content_rect().height() - 200.0).max(1.0);
@@ -4120,12 +4127,23 @@ impl MessagingUi {
 						);
 						ui.add_space(4.0);
 					}
+					if static_page {
+						ui.label(
+							RichText::new(crate::i18n::text(
+								language,
+								"Static preview: scripts, styles and images are not loaded.",
+							))
+							.size(12.0)
+							.color(design::palette(ui).muted),
+						);
+						ui.add_space(4.0);
+					}
 					egui::ScrollArea::vertical()
 						.max_height(max_body_height)
 						.auto_shrink([false, false])
 						.show(ui, |ui| {
 							ui.set_width(ui.available_width());
-							if preview.format == text_preview::PreviewFormat::Markdown {
+							if preview.shows_markdown() {
 								let mut images = crate::avatars::Avatars::default();
 								let mut profile = crate::profiles::ProfileSession::default();
 								self.preview_formatted
@@ -4191,6 +4209,19 @@ impl MessagingUi {
 					{
 						toggle_maximized = true;
 					}
+					if can_switch_view
+						&& crate::dialog::action(
+							ui,
+							crate::i18n::text(
+								language,
+								if viewing_source { "Rendered" } else { "Source" },
+							),
+							crate::dialog::Action::Neutral,
+						)
+						.clicked()
+					{
+						switch_view = true;
+					}
 				});
 			});
 		close |= response.close;
@@ -4206,6 +4237,10 @@ impl MessagingUi {
 		}
 		if toggle_maximized && let Some(preview) = self.preview.as_mut() {
 			preview.maximized = !preview.maximized;
+		}
+		if switch_view && let Some(preview) = self.preview.as_mut() {
+			preview.switch_view();
+			self.preview_formatted = None;
 		}
 		if close {
 			self.close_preview();

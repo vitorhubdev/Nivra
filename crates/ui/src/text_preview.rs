@@ -16,6 +16,8 @@ const BINARY_SNIFF_BYTES: usize = 8192;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PreviewFormat {
 	Markdown,
+	/// An HTML page: shown rendered (statically) or as source.
+	Html,
 	Code,
 	Plain,
 }
@@ -43,13 +45,17 @@ pub fn preview_format(filename: &str, content_type: Option<&str>) -> Option<Prev
 		.unwrap_or_default();
 	match extension.as_str() {
 		"md" | "markdown" => return Some(PreviewFormat::Markdown),
-		"rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "json" | "toml" | "yaml" | "yml" | "html"
-		| "css" | "c" | "h" | "cpp" | "hpp" | "java" | "kt" | "swift" | "go" | "rb" | "sh"
-		| "xml" | "sql" => return Some(PreviewFormat::Code),
+		"html" | "htm" | "xhtml" => return Some(PreviewFormat::Html),
+		"rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "json" | "toml" | "yaml" | "yml" | "css"
+		| "c" | "h" | "cpp" | "hpp" | "java" | "kt" | "swift" | "go" | "rb" | "sh" | "xml"
+		| "sql" => return Some(PreviewFormat::Code),
 		_ => {}
 	}
 	if mime == "text/markdown" {
 		return Some(PreviewFormat::Markdown);
+	}
+	if mime == "text/html" || mime == "application/xhtml+xml" {
+		return Some(PreviewFormat::Html);
 	}
 	Some(PreviewFormat::Plain)
 }
@@ -179,19 +185,49 @@ pub struct TextPreview {
 	pub maximized: bool,
 	/// The full body was copied to the clipboard at least once.
 	pub copied: bool,
+	/// Markdown made from an HTML body by `html_preview`, or `None` for anything else.
+	pub rendered: Option<String>,
+	/// An HTML body is shown as source instead of rendered.
+	pub view_source: bool,
 }
 
 impl TextPreview {
+	/// What the dialog shows: the rendered page for HTML, otherwise the body itself.
+	fn body(&self) -> &str {
+		match &self.rendered {
+			Some(rendered) if !self.view_source => rendered,
+			_ => &self.text,
+		}
+	}
+
+	/// The body is markdown (a `.md` file or a rendered HTML page).
+	pub fn shows_markdown(&self) -> bool {
+		self.format == PreviewFormat::Markdown || (self.rendered.is_some() && !self.view_source)
+	}
+
+	/// An HTML body can be flipped between its rendered page and its source.
+	pub fn can_switch_view(&self) -> bool {
+		self.rendered.is_some()
+	}
+
+	pub fn switch_view(&mut self) {
+		if self.can_switch_view() {
+			self.view_source = !self.view_source;
+			self.shown = PREVIEW_WINDOW_CHARS;
+		}
+	}
+
 	/// The slice laid out this frame.
 	pub fn visible_text(&self) -> &str {
-		match self.text.char_indices().nth(self.shown) {
-			Some((index, _)) => &self.text[..index],
-			None => self.text.as_str(),
+		let body = self.body();
+		match body.char_indices().nth(self.shown) {
+			Some((index, _)) => &body[..index],
+			None => body,
 		}
 	}
 
 	pub fn has_more(&self) -> bool {
-		self.text.chars().nth(self.shown).is_some()
+		self.body().chars().nth(self.shown).is_some()
 	}
 
 	pub fn show_more(&mut self) {
@@ -221,6 +257,57 @@ mod tests {
 		assert_eq!(preview_format("clip.mp4", Some("video/mp4")), None);
 		assert_eq!(preview_format("photo.png", None), None);
 		assert_eq!(preview_format("report.pdf", Some("application/pdf")), None);
+	}
+
+	#[test]
+	fn html_pages_have_their_own_format() {
+		for name in ["page.html", "PAGE.HTM", "doc.xhtml"] {
+			assert_eq!(
+				preview_format(name, None),
+				Some(PreviewFormat::Html),
+				"{name}"
+			);
+		}
+		assert_eq!(
+			preview_format("download", Some("text/html; charset=utf-8")),
+			Some(PreviewFormat::Html)
+		);
+		assert_eq!(preview_format("style.css", None), Some(PreviewFormat::Code));
+	}
+
+	#[test]
+	fn an_html_preview_switches_between_page_and_source() {
+		let mut preview = TextPreview {
+			filename: "page.html".into(),
+			format: PreviewFormat::Html,
+			text: "<h1>Hi</h1>".into(),
+			truncated: false,
+			shown: PREVIEW_WINDOW_CHARS,
+			maximized: false,
+			copied: false,
+			rendered: Some("# Hi".into()),
+			view_source: false,
+		};
+		assert!(preview.shows_markdown() && preview.can_switch_view());
+		assert_eq!(preview.visible_text(), "# Hi");
+		preview.shown = 2;
+		preview.switch_view();
+		assert!(!preview.shows_markdown());
+		assert_eq!(preview.visible_text(), "<h1>Hi</h1>");
+		assert_eq!(
+			preview.shown, PREVIEW_WINDOW_CHARS,
+			"a switch restarts the window"
+		);
+		preview.switch_view();
+		assert_eq!(preview.visible_text(), "# Hi");
+		preview.rendered = None;
+		assert!(!preview.can_switch_view() && !preview.shows_markdown());
+		preview.switch_view();
+		assert_eq!(
+			preview.visible_text(),
+			"<h1>Hi</h1>",
+			"no page to switch to"
+		);
 	}
 
 	#[test]
@@ -318,6 +405,8 @@ mod tests {
 			shown: PREVIEW_WINDOW_CHARS,
 			maximized: false,
 			copied: false,
+			rendered: None,
+			view_source: false,
 		};
 		assert_eq!(preview.visible_text().chars().count(), PREVIEW_WINDOW_CHARS);
 		assert!(preview.has_more());

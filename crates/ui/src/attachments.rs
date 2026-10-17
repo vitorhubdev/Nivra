@@ -49,8 +49,8 @@ pub fn file_kind(filename: &str, content_type: Option<&str>) -> FileKind {
 		}
 		"txt" | "md" | "rtf" | "log" | "csv" | "doc" | "docx" | "odt" => return FileKind::Text,
 		"rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "json" | "toml" | "yaml" | "yml" | "html"
-		| "css" | "c" | "h" | "cpp" | "hpp" | "java" | "kt" | "swift" | "go" | "rb" | "sh"
-		| "xml" | "sql" => return FileKind::Code,
+		| "htm" | "xhtml" | "css" | "c" | "h" | "cpp" | "hpp" | "java" | "kt" | "swift" | "go"
+		| "rb" | "sh" | "xml" | "sql" => return FileKind::Code,
 		"mp3" | "wav" | "ogg" | "flac" | "m4a" | "aac" | "opus" => return FileKind::Audio,
 		"mp4" | "mov" | "webm" | "mkv" | "avi" | "m4v" => return FileKind::Video,
 		_ => {}

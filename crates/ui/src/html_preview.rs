@@ -48,9 +48,6 @@ const BLOCKS: &[&str] = &[
 	"dt",
 	"dd",
 	"table",
-	"thead",
-	"tbody",
-	"tfoot",
 	"caption",
 	"center",
 	"menu",
@@ -253,7 +250,13 @@ impl Converter {
 				self.block_break();
 				self.pre = Some(String::new());
 			}
-			"tr" => self.block_break(),
+			"tr" => self.hard_break(),
+			"th" | "summary" | "dt" => {
+				if name != "th" {
+					self.block_break_open();
+				}
+				self.open_span(Mark::Strong);
+			}
 			"a" => {
 				if let Some(url) = attributes
 					.href
@@ -320,11 +323,17 @@ impl Converter {
 				if self.out.ends_with(" |") {
 					self.out.truncate(self.out.len() - 2);
 				}
-				self.block_break();
 			}
 			"td" | "th" => {
+				if name == "th" {
+					self.close_span(&Mark::Strong);
+				}
 				self.trim_trailing_spaces();
 				self.write(" | ");
+			}
+			"summary" | "dt" => {
+				self.close_span(&Mark::Strong);
+				self.block_break();
 			}
 			"a" => self.close_span(&Mark::Link(String::new())),
 			"strong" | "b" => self.close_span(&Mark::Strong),
@@ -963,7 +972,23 @@ mod tests {
 		let markdown = to_markdown(
 			"<table><tr><th>a</th><th>b</th></tr><tr><td>1</td><td>2</td></tr></table>",
 		);
-		assert_eq!(markdown, "a | b\n\n1 | 2");
+		assert_eq!(markdown, "**a** | **b**  \n1 | 2");
+	}
+
+	#[test]
+	fn table_groups_keep_the_table_together_and_terms_are_bold() {
+		let table = to_markdown(concat!(
+			"<table><thead><tr><th>Name</th><th>Qty</th></tr></thead>",
+			"<tbody><tr><td>Tea</td><td>2</td></tr><tr><td>Milk</td><td>1</td></tr></tbody></table>",
+			"<p>After</p>"
+		));
+		assert_eq!(table, "**Name** | **Qty**  \nTea | 2  \nMilk | 1\n\nAfter");
+		let details = to_markdown("<details><summary>More</summary>Hidden text</details>");
+		assert_eq!(details, "**More**\n\nHidden text");
+		let terms = to_markdown("<dl><dt>Term</dt><dd>Meaning</dd></dl>");
+		assert_eq!(terms, "**Term**\n\nMeaning");
+		// Markup characters in a header cell stay escaped inside the bold span.
+		assert!(to_markdown("<table><tr><th>*x*</th></tr></table>").starts_with("**\\*x\\***"));
 	}
 
 	#[test]

@@ -29,4 +29,12 @@ ignore = [
     # <- nnnoiseless) and does not replace this edge. Recorded 2026-10-02;
     # re-check when the DeepFilterNet rev moves.
     "RUSTSEC-2026-0319",
+    # zbus_names, zvariant and zvariant_derive were flagged unmaintained on 2026-10-16 because
+    # the upstream project merged them into zbus (informational, not vulnerabilities). They arrive
+    # only on Linux, through accesskit_unix (the pinned egui revision) and ashpd/ksni (platform),
+    # which resolve a single zbus line, so there is no independent update path. Re-check when the
+    # egui pin or the zbus line moves. Recorded 2026-10-17.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]

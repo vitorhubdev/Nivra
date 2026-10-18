@@ -1,6 +1,8 @@
 # Changelog
 
-## Não publicado
+## Nivra 1.0.20
+
+Anexos `.html` abrem como página renderizada e uma citação no meio de uma mensagem deixa de ser desenhada por cima do texto seguinte. Validado por testes automáticos; nada foi exercitado numa chamada real do Discord, e a causa das quedas de mídia e do uso alto de GPU ao compartilhar tela continua sem prova.
 
 ### Mensagens
 
@@ -8,7 +10,7 @@
 
 ### Anexos
 
-- Um anexo `.html` (ou `.htm`, `.xhtml`, ou `text/html`) agora abre como página renderizada, não só como código. A prévia é estática: scripts, estilos, frames, objetos e comentários são descartados, uma imagem vira o texto `[image: …]` e nada é baixado (o endereço da imagem nunca é pedido), e só links `http(s)` continuam clicáveis, pelo mesmo caminho de confirmação dos links de mensagens. Títulos, parágrafos, listas, citações, tabelas, negrito, itálico, código e blocos `<pre>` aparecem formatados; todo o texto é escapado, então uma página não consegue injetar formatação, menções nem spoilers, e caracteres de controle e de inversão de direção são removidos. O botão **Código-fonte / Renderizado** do diálogo alterna para o arquivo original. Copiar texto copia sempre o código-fonte. A conversão é limitada (512 KiB de entrada, 200 mil caracteres de saída) e roda fora da thread de desenho.
+- Um anexo `.html` (ou `.htm`, `.xhtml`, ou `text/html`) agora abre como página renderizada, não só como código. A prévia é estática: scripts, estilos, frames, objetos e comentários são descartados, uma imagem vira o texto `[image: …]` e nada é baixado (o endereço da imagem nunca é pedido), e só links `http(s)` continuam clicáveis, pelo mesmo caminho de confirmação dos links de mensagens. Títulos, parágrafos, listas, citações, negrito, itálico, código e blocos `<pre>` aparecem formatados; uma tabela fica com as linhas coladas e o cabeçalho em negrito (sem linhas em branco entre o cabeçalho e o corpo), e `<summary>` e `<dt>` aparecem em negrito; todo o texto é escapado, então uma página não consegue injetar formatação, menções nem spoilers, e caracteres de controle e de inversão de direção são removidos. O botão **Código-fonte / Renderizado** do diálogo alterna para o arquivo original. Copiar texto copia sempre o código-fonte. A conversão é limitada (512 KiB de entrada, 200 mil caracteres de saída) e roda fora da thread de desenho.
 
 ## Nivra 1.0.19
 

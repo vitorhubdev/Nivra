@@ -121,7 +121,7 @@ jobs:
       - name: Package app
         run: |
           cargo xtask package
-          mkdir release-assets
+          mkdir -p release-assets
           echo "ASSET=nivra-$TAG-$RUNNER_OS-$RUNNER_ARCH" >> "$GITHUB_ENV"
       - name: Sign, notarize and verify Mac app
         if: runner.os == 'macOS'
@@ -140,7 +140,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory release-assets | Out-Null
+          New-Item -ItemType Directory -Force release-assets | Out-Null
           Copy-Item -LiteralPath "$env:PACKAGE_ROOT/Nivra.exe" -Destination "release-assets/Nivra-$env:TAG-$env:RUNNER_OS-$env:RUNNER_ARCH.exe"
           Get-ChildItem -Path release-assets
       - uses: actions/upload-artifact@v7.0.1

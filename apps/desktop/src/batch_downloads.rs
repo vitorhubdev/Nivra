@@ -17,7 +17,7 @@ use tokio::sync::Notify;
 /// Selection cap enforced by the floating bar before requests reach here.
 const MAX_FILES: usize = 15;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileStatus {
 	Queued,
 	Active,
@@ -49,6 +49,43 @@ struct Shared {
 	/// Folder pick cancelled before any transfer.
 	closed: bool,
 }
+impl Shared {
+	fn fail_pending(&mut self, error: &'static str) {
+		for file in &mut self.files {
+			if matches!(file.status, FileStatus::Queued | FileStatus::Active) {
+				file.status = FileStatus::Failed;
+				file.error = Some(error);
+			}
+		}
+		self.active = false;
+		self.finished = true;
+		self.announced = false;
+	}
+
+	fn prepare_retry(&mut self) -> Vec<usize> {
+		let indices: Vec<usize> = self
+			.files
+			.iter_mut()
+			.enumerate()
+			.filter_map(|(index, file)| {
+				if file.status != FileStatus::Failed {
+					return None;
+				}
+				file.status = FileStatus::Queued;
+				file.received = 0;
+				file.error = None;
+				Some(index)
+			})
+			.collect();
+		if !indices.is_empty() {
+			self.active = true;
+			self.finished = false;
+			self.announced = false;
+		}
+		indices
+	}
+}
+
 #[derive(Default)]
 pub struct BatchDownloads {
 	shared: Arc<std::sync::Mutex<Shared>>,
@@ -96,8 +133,7 @@ fn resolve_item_url(attachment: &Attachment) -> Option<(url::Url, String, u64)> 
 	}
 }
 
-/// Download stored items at `indices` into `folder`, one at a time, updating the
-/// shared snapshot. Reuses the `downloads` transfer, client limits and size caps.
+/// Both the initial transfer and retries use this same bounded transfer path.
 async fn run_indices(
 	shared: &Arc<std::sync::Mutex<Shared>>,
 	cancelled: &Arc<AtomicBool>,
@@ -115,18 +151,12 @@ async fn run_indices(
 		.read_timeout(Duration::from_secs(30))
 		.timeout(Duration::from_secs(300))
 		.build()
-		.map_err(|_| "Download unavailable")
 		.ok();
 	let Some(client) = client else {
-		let mut shared = shared.lock().expect("batch download state");
-		for index in &indices {
-			if shared.files[*index].status == FileStatus::Queued {
-				shared.files[*index].status = FileStatus::Failed;
-				shared.files[*index].error = Some("Download unavailable");
-			}
-		}
-		shared.active = false;
-		shared.finished = true;
+		shared
+			.lock()
+			.expect("batch download state")
+			.fail_pending("Download unavailable");
 		context.request_repaint();
 		return;
 	};
@@ -134,8 +164,8 @@ async fn run_indices(
 	for index in indices {
 		if cancelled.load(Ordering::Acquire) {
 			let mut shared = shared.lock().expect("batch download state");
-			for file in shared.files.iter_mut() {
-				if file.status == FileStatus::Queued || file.status == FileStatus::Active {
+			for file in &mut shared.files {
+				if matches!(file.status, FileStatus::Queued | FileStatus::Active) {
 					file.status = FileStatus::Cancelled;
 				}
 			}
@@ -181,10 +211,11 @@ async fn run_indices(
 				Ok(()) => {
 					shared.files[index].status = FileStatus::Done;
 					shared.files[index].received = shared.files[index].total;
+					shared.files[index].error = None;
 				}
 				Err("Cancelled") => {
 					shared.files[index].status = FileStatus::Cancelled;
-					for file in shared.files.iter_mut() {
+					for file in &mut shared.files {
 						if file.status == FileStatus::Queued {
 							file.status = FileStatus::Cancelled;
 						}
@@ -211,6 +242,30 @@ impl BatchDownloads {
 	fn locked(&self) -> std::sync::MutexGuard<'_, Shared> {
 		self.shared.lock().expect("batch download state")
 	}
+
+	fn reset_cancellation(&mut self) {
+		// Notify retains a permit when Cancel is clicked during the folder picker
+		// or between transfers. Resetting only the boolean cancels the next batch.
+		// A fresh pair also isolates a late cancellation from the previous worker.
+		self.cancelled = Arc::new(AtomicBool::new(false));
+		self.wake_cancel = Arc::new(Notify::new());
+	}
+
+	fn accept_worker(&mut self, worker: std::io::Result<std::thread::JoinHandle<()>>) {
+		match worker {
+			Ok(worker) => {
+				if let Some(previous) = self.worker.replace(worker)
+					&& previous.is_finished()
+				{
+					let _ = previous.join();
+				}
+				// A previous worker may have published its terminal state but still
+				// be leaving request_repaint. Never wait for it on the render thread.
+			}
+			Err(_) => self.locked().fail_pending("Download unavailable"),
+		}
+	}
+
 	pub fn is_active(&self) -> bool {
 		self.locked().active
 	}
@@ -241,8 +296,7 @@ impl BatchDownloads {
 	pub fn folder(&self) -> Option<PathBuf> {
 		self.locked().folder.clone()
 	}
-	/// Start a batch; at most one runs at a time. Folder is picked once on the
-	/// native UI thread, then files download sequentially off-thread.
+	/// Pick one folder and download sequentially off-thread, with at most one active batch.
 	pub fn start(
 		&mut self,
 		attachments: Vec<Attachment>,
@@ -254,10 +308,10 @@ impl BatchDownloads {
 			return;
 		}
 		let attachments: Vec<Attachment> = attachments.into_iter().take(MAX_FILES).collect();
+		let count = attachments.len();
 		{
 			let mut shared = self.locked();
 			shared.folder = None;
-			shared.items = attachments.clone();
 			shared.files = attachments
 				.iter()
 				.map(|attachment| FileState {
@@ -268,12 +322,13 @@ impl BatchDownloads {
 					error: None,
 				})
 				.collect();
+			shared.items = attachments;
 			shared.active = true;
 			shared.finished = false;
 			shared.announced = false;
 			shared.closed = false;
 		}
-		self.cancelled.store(false, Ordering::Release);
+		self.reset_cancellation();
 		let shared = self.shared.clone();
 		let cancelled = self.cancelled.clone();
 		let wake_cancel = self.wake_cancel.clone();
@@ -291,163 +346,35 @@ impl BatchDownloads {
 						worker_context.request_repaint();
 						return;
 					};
-					{
-						let mut shared = shared.lock().expect("batch download state");
-						shared.folder = Some(folder.clone());
-					}
+					shared.lock().expect("batch download state").folder = Some(folder.clone());
 					worker_context.request_repaint();
-					let client = reqwest::Client::builder()
-						.no_proxy()
-						.pool_max_idle_per_host(0)
-						.proxy(protect::proxy(model::protect::Scope::Videos))
-						.redirect(reqwest::redirect::Policy::none())
-						.connect_timeout(Duration::from_secs(15))
-						.read_timeout(Duration::from_secs(30))
-						.timeout(Duration::from_secs(300))
-						.build()
-						.map_err(|_| "Download unavailable")
-						.ok();
-					let Some(client) = client else {
-						let mut shared = shared.lock().expect("batch download state");
-						for file in &mut shared.files {
-							if file.status == FileStatus::Queued {
-								file.status = FileStatus::Failed;
-								file.error = Some("Download unavailable");
-							}
-						}
-						shared.active = false;
-						shared.finished = true;
-						worker_context.request_repaint();
-						return;
-					};
-					let mut reserved = Vec::new();
-					for (index, attachment) in attachments.iter().enumerate() {
-						if cancelled.load(Ordering::Acquire) {
-							let mut shared = shared.lock().expect("batch download state");
-							for file in shared.files.iter_mut().skip(index) {
-								if file.status == FileStatus::Queued
-									|| file.status == FileStatus::Active
-								{
-									file.status = FileStatus::Cancelled;
-								}
-							}
-							break;
-						}
-						{
-							let mut shared = shared.lock().expect("batch download state");
-							shared.files[index].status = FileStatus::Active;
-						}
-						worker_context.request_repaint();
-						let result = match resolve_item_url(attachment) {
-							None => Err("Attachment download unavailable"),
-							Some((url, filename, size)) => {
-								let (destination, named) =
-									unique_dest(&folder, &filename, &mut reserved);
-								{
-									let mut shared = shared.lock().expect("batch download state");
-									shared.files[index].name = named;
-								}
-								super::downloads::download(
-									&client,
-									url,
-									&destination,
-									size,
-									false,
-									&cancelled,
-									&wake_cancel,
-									&|status| {
-										if let super::downloads::Status::Downloading {
-											received,
-											total,
-										} = status
-										{
-											let mut shared =
-												shared.lock().expect("batch download state");
-											shared.files[index].received = received;
-											shared.files[index].total = total;
-											worker_context.request_repaint();
-										}
-									},
-								)
-								.await
-							}
-						};
-						{
-							let mut shared = shared.lock().expect("batch download state");
-							match result {
-								Ok(()) => {
-									shared.files[index].status = FileStatus::Done;
-									shared.files[index].received = shared.files[index].total;
-								}
-								Err("Cancelled") => {
-									shared.files[index].status = FileStatus::Cancelled;
-									for file in shared.files.iter_mut().skip(index + 1) {
-										if file.status == FileStatus::Queued {
-											file.status = FileStatus::Cancelled;
-										}
-									}
-									break;
-								}
-								Err(error) => {
-									shared.files[index].status = FileStatus::Failed;
-									shared.files[index].error = Some(error);
-								}
-							}
-						}
-						worker_context.request_repaint();
-					}
-					{
-						let mut shared = shared.lock().expect("batch download state");
-						shared.active = false;
-						shared.finished = true;
-					}
-					worker_context.request_repaint();
+					run_indices(
+						&shared,
+						&cancelled,
+						&wake_cancel,
+						&worker_context,
+						&folder,
+						(0..count).collect(),
+					)
+					.await;
 				});
 			});
-		if let Ok(worker) = worker {
-			// Reap a previous finished worker; only one batch runs at a time.
-			if let Some(previous) = self.worker.take() {
-				let _ = previous.join();
-			}
-			self.worker = Some(worker);
-		} else {
-			let mut shared = self.locked();
-			shared.active = false;
-			shared.finished = true;
-		}
+		self.accept_worker(worker);
 		context.request_repaint();
 	}
 	/// Retry failed files with the already-picked folder; picks nothing new.
 	pub fn retry(&mut self, runtime: &tokio::runtime::Handle, context: &eframe::egui::Context) {
-		let folder = self.folder();
-		let Some(folder) = folder else {
+		let Some(folder) = self.folder() else {
 			return;
 		};
 		if self.is_active() {
 			return;
 		}
-		let indices: Vec<usize> = {
-			let mut shared = self.locked();
-			let indices: Vec<usize> = shared
-				.files
-				.iter()
-				.enumerate()
-				.filter(|(_, file)| file.status == FileStatus::Failed)
-				.map(|(index, _)| index)
-				.collect();
-			if indices.is_empty() {
-				return;
-			}
-			for index in &indices {
-				shared.files[*index].status = FileStatus::Queued;
-				shared.files[*index].received = 0;
-			}
-			shared.active = true;
-			shared.finished = false;
-			shared.announced = false;
-			indices
-		};
-		self.cancelled.store(false, Ordering::Release);
+		let indices = self.locked().prepare_retry();
+		if indices.is_empty() {
+			return;
+		}
+		self.reset_cancellation();
 		let shared = self.shared.clone();
 		let cancelled = self.cancelled.clone();
 		let wake_cancel = self.wake_cancel.clone();
@@ -468,16 +395,7 @@ impl BatchDownloads {
 					.await;
 				});
 			});
-		if let Ok(worker) = worker {
-			if let Some(previous) = self.worker.take() {
-				let _ = previous.join();
-			}
-			self.worker = Some(worker);
-		} else {
-			let mut shared = self.locked();
-			shared.active = false;
-			shared.finished = true;
-		}
+		self.accept_worker(worker);
 		context.request_repaint();
 	}
 	pub fn cancel(&mut self) {
@@ -489,14 +407,38 @@ impl BatchDownloads {
 		if self.is_active() {
 			return;
 		}
-		let mut shared = self.locked();
-		*shared = Shared::default();
+		*self.locked() = Shared::default();
+	}
+}
+
+impl Drop for BatchDownloads {
+	fn drop(&mut self) {
+		self.cancel();
 	}
 }
 
 #[cfg(test)]
 mod tests {
-	use super::unique_dest;
+	use super::*;
+	use std::{future::Future, task::Context};
+
+	fn notification_ready(notify: &Notify) -> bool {
+		let mut future = std::pin::pin!(notify.notified());
+		future
+			.as_mut()
+			.poll(&mut Context::from_waker(std::task::Waker::noop()))
+			.is_ready()
+	}
+
+	fn file(status: FileStatus) -> FileState {
+		FileState {
+			name: "test.bin".into(),
+			received: 42,
+			total: 100,
+			status,
+			error: None,
+		}
+	}
 
 	#[test]
 	fn batch_names_stay_unique_before_any_file_exists() {
@@ -510,5 +452,100 @@ mod tests {
 		assert_eq!(first_name, "pasted-image.png");
 		assert_eq!(second_name, "pasted-image (1).png");
 		let _ = std::fs::remove_dir_all(&folder);
+	}
+
+	#[test]
+	fn cancel_before_a_waiter_does_not_cancel_the_next_batch() {
+		let mut batch = BatchDownloads::default();
+		let old_flag = batch.cancelled.clone();
+		let old_wake = batch.wake_cancel.clone();
+		batch.cancel();
+		batch.reset_cancellation();
+		assert!(old_flag.load(Ordering::Acquire));
+		assert!(notification_ready(&old_wake));
+		assert!(!batch.cancelled.load(Ordering::Acquire));
+		assert!(!notification_ready(&batch.wake_cancel));
+	}
+
+	#[test]
+	fn late_previous_cancellation_is_isolated_from_the_new_transfer() {
+		let mut batch = BatchDownloads::default();
+		let old_flag = batch.cancelled.clone();
+		let old_wake = batch.wake_cancel.clone();
+		batch.reset_cancellation();
+		old_flag.store(true, Ordering::Release);
+		old_wake.notify_one();
+		assert!(!batch.cancelled.load(Ordering::Acquire));
+		assert!(!notification_ready(&batch.wake_cancel));
+		batch.cancel();
+		assert!(notification_ready(&batch.wake_cancel));
+	}
+
+	#[test]
+	fn spawn_failure_finishes_pending_files_and_announces_once() {
+		let mut batch = BatchDownloads::default();
+		{
+			let mut shared = batch.locked();
+			shared.active = true;
+			shared.files = vec![
+				file(FileStatus::Queued),
+				file(FileStatus::Active),
+				file(FileStatus::Done),
+				file(FileStatus::Cancelled),
+			];
+		}
+		batch.accept_worker(Err(std::io::Error::other("synthetic spawn failure")));
+		let (_, files, active, finished) = batch.snapshot();
+		assert!(!active);
+		assert!(finished);
+		assert_eq!(files[0].status, FileStatus::Failed);
+		assert_eq!(files[1].status, FileStatus::Failed);
+		assert_eq!(files[0].error, Some("Download unavailable"));
+		assert_eq!(files[2].status, FileStatus::Done);
+		assert_eq!(files[3].status, FileStatus::Cancelled);
+		assert!(batch.take_finished());
+		assert!(!batch.take_finished());
+	}
+
+	#[test]
+	fn retry_clears_old_errors_and_progress_without_repeating_completed_files() {
+		let mut shared = Shared {
+			files: vec![file(FileStatus::Failed), file(FileStatus::Done)],
+			finished: true,
+			announced: true,
+			..Shared::default()
+		};
+		shared.files[0].error = Some("Attachment download failed");
+		assert_eq!(shared.prepare_retry(), vec![0]);
+		assert_eq!(shared.files[0].status, FileStatus::Queued);
+		assert_eq!(shared.files[0].received, 0);
+		assert_eq!(shared.files[0].error, None);
+		assert_eq!(shared.files[1].status, FileStatus::Done);
+		assert_eq!(shared.files[1].received, 42);
+		assert!(shared.active);
+		assert!(!shared.finished);
+		assert!(!shared.announced);
+	}
+
+	#[test]
+	fn retry_without_failed_files_does_not_start_a_worker() {
+		let mut shared = Shared {
+			files: vec![file(FileStatus::Done), file(FileStatus::Cancelled)],
+			finished: true,
+			..Shared::default()
+		};
+		assert!(shared.prepare_retry().is_empty());
+		assert!(!shared.active);
+		assert!(shared.finished);
+	}
+
+	#[test]
+	fn dropping_the_owner_cancels_the_transfer_without_joining_it() {
+		let batch = BatchDownloads::default();
+		let cancelled = batch.cancelled.clone();
+		let wake = batch.wake_cancel.clone();
+		drop(batch);
+		assert!(cancelled.load(Ordering::Acquire));
+		assert!(notification_ready(&wake));
 	}
 }

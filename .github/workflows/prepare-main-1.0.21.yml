@@ -1,0 +1,105 @@
+name: Prepare Nivra 1.0.21 on main
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/prepare-main-1.0.21.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nivra-prepare-main-1.0.21
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'vitorhubdev/Nivra' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt
+      - name: Prepare requested version and patched Markdown dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "BASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import pathlib
+          import subprocess
+          import tomllib
+
+          root = pathlib.Path('Cargo.toml')
+          version = tomllib.loads(root.read_text())['workspace']['package']['version']
+          if version == '1.0.20':
+              subprocess.run(['python3', '.github/release/version.py', '1.0.21'], check=True)
+          elif version != '1.0.21':
+              raise SystemExit(f'Refusing to replace unexpected workspace version: {version}')
+
+          manifest = pathlib.Path('crates/ui/Cargo.toml')
+          source = manifest.read_text()
+          previous = 'pulldown-cmark = { version = "=0.13.4", default-features = false }'
+          corrected = 'pulldown-cmark = { version = "=0.13.5", default-features = false }'
+          if source.count(previous) == 1:
+              manifest.write_text(source.replace(previous, corrected, 1))
+          elif source.count(corrected) != 1:
+              raise SystemExit('Unexpected Markdown dependency declaration; review manually')
+          PY
+          cargo update -p pulldown-cmark --precise 0.13.5
+          rustfmt --edition 2024 apps/desktop/src/batch_downloads.rs crates/ui/tests/markdown_parser_limits.rs
+          cargo fmt --all -- --check
+          cargo metadata --no-deps --locked --format-version 1 > /tmp/nivra-metadata.json
+          python3 - <<'PY'
+          import pathlib
+          import tomllib
+          root = tomllib.loads(pathlib.Path('Cargo.lock').read_text())
+          assert any(p['name'] == 'pulldown-cmark' and p['version'] == '0.13.5' for p in root['package'])
+          assert any(p['name'] == 'nivra' and p['version'] == '1.0.21' for p in root['package'])
+          PY
+      - name: Commit only reviewed preparation paths directly to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess
+          allowed = {
+              'Cargo.toml', 'Cargo.lock', 'fuzz/Cargo.lock', 'packaging/macos/Info.plist',
+              'crates/ui/Cargo.toml', 'apps/desktop/src/batch_downloads.rs',
+              'crates/ui/tests/markdown_parser_limits.rs',
+          }
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          if changed - allowed:
+              raise SystemExit(f'Refusing unrelated changes: {sorted(changed - allowed)}')
+          PY
+          git diff --check
+          git add Cargo.toml Cargo.lock fuzz/Cargo.lock packaging/macos/Info.plist crates/ui/Cargo.toml apps/desktop/src/batch_downloads.rs crates/ui/tests/markdown_parser_limits.rs
+          git fetch origin main --depth=1
+          test "$(git rev-parse origin/main)" = "$BASE_SHA" || { echo 'Main advanced; refusing to overwrite it.'; exit 1; }
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'fix(release): prepare 1.0.21 and update the vulnerable Markdown parser' -m 'Update only the requested workspace version, pulldown-cmark 0.13.5 and formatter output. Strict security checks remain enabled; this commit does not publish a release.'
+            git push origin HEAD:main
+          fi
+          echo "Prepared main commit $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Explicitly start the full CI on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A push made with GITHUB_TOKEN does not trigger another push workflow.
+          # Dispatch explicitly so the actual committed source is tested and packaged.
+          gh workflow run ci.yml --ref main
+          echo 'Dispatched native-client on main. Release publication still requires passing checks.' >> "$GITHUB_STEP_SUMMARY"

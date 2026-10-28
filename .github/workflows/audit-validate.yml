@@ -31,7 +31,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.146
-      - name: Decode the reviewed patch and record the baseline
+      - name: Decode reviewed patches and record the baseline
         run: |
           set -euo pipefail
           mkdir -p audit-out
@@ -39,12 +39,15 @@ jobs:
           rustc --version > audit-out/TOOLCHAIN.txt
           python - <<'PY'
           import base64, hashlib, lzma, pathlib
-          encoded = ''.join(pathlib.Path(f'.github/audit/patch-{i}.b64').read_text().strip() for i in range(1, 5))
-          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
-          assert hashlib.sha256(patch).hexdigest() == 'cb15f7bfdb88733be678bf130187367b5a9762dab96e27d2318a93a1593ae332'
-          pathlib.Path('audit-out/proposed.patch').write_bytes(patch)
+          patches = [('patch', 4, 'cb15f7bfdb88733be678bf130187367b5a9762dab96e27d2318a93a1593ae332'), ('followup', 2, 'bd80f8008f8e9d866e1b6ec6a2b726f245fc92b4b75d1f48bcd0500fcf13afe2'), ('offthread', 1, '0958f83d9c6c46339cc4d6f21a27c8708c807bbe3aac87a2bf9ddb1113214737')]
+          for name, count, digest in patches:
+              encoded = ''.join(pathlib.Path(f'.github/audit/{name}-{i}.b64').read_text().strip() for i in range(1, count + 1))
+              patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+              assert hashlib.sha256(patch).hexdigest() == digest, name
+              pathlib.Path(f'audit-out/{name}.patch').write_bytes(patch)
+          pathlib.Path('audit-out/baseline-capture.rs').write_bytes(pathlib.Path('crates/discord-voice/src/capture.rs').read_bytes())
           PY
-          git apply --check audit-out/proposed.patch
+          git apply --check audit-out/patch.patch
       - name: Build baseline native offline capture
         run: cargo build --locked -p nivra --features demo --example profile_preview
       - name: Capture baseline PROTECT
@@ -56,7 +59,11 @@ jobs:
       - name: Apply reviewed source and format
         run: |
           set -euo pipefail
-          git apply audit-out/proposed.patch
+          git apply audit-out/patch.patch
+          git apply --check audit-out/followup.patch
+          git apply audit-out/followup.patch
+          git apply --check audit-out/offthread.patch
+          git apply audit-out/offthread.patch
           git add -N apps/desktop/src/protect_startup.rs
           cargo fmt --all
           cargo fmt --all -- --check
@@ -76,6 +83,42 @@ jobs:
           cargo check -p nivra --no-default-features --locked 2>&1 | tee audit-out/release-features.log
           cargo xtask policy 2>&1 | tee audit-out/policy.log
           node tests/login-handoff.cjs 2>&1 | tee audit-out/login-handoff.log
+          cargo run --locked -p discord-voice --example stream_playback 2>&1 | tee audit-out/stream-playback.log
+      - name: Compare bounded microphone queue behavior offline
+        run: |
+          python - <<'PY'
+          import json, pathlib, subprocess
+          out = pathlib.Path('audit-out')
+          driver = '''#![allow(dead_code)]
+          type Frame = [f32; 960];
+          #[path = "{source}"] mod capture;
+          fn main() {{
+              let (send, receive) = std::sync::mpsc::sync_channel(8);
+              let mut pacer = capture::CapturePacer::default();
+              let mut delivered = Vec::new();
+              for tick in 0..100 {{
+                  if tick % 2 == 0 {{ for id in tick..tick+2 {{ send.try_send([id as f32; 960]).unwrap(); }} }}
+                  if let Some(frame) = pacer.next(&receive, true, false) {{ delivered.push(frame[0] as u32); }}
+              }}
+              if let Some(frame) = pacer.next(&receive, true, false) {{ delivered.push(frame[0] as u32); }}
+              assert_eq!(delivered, (0..100).collect::<Vec<_>>());
+              let (send, receive) = std::sync::mpsc::sync_channel(8);
+              let mut pacer = capture::CapturePacer::default();
+              for id in 0..8 {{ send.try_send([id as f32; 960]).unwrap(); }}
+              let burst: Vec<_> = (0..10).filter_map(|tick| pacer.next(&receive, true, false).map(|frame| (tick, frame[0] as u32))).collect();
+              println!("normal_frames={{}}, burst_tick_and_frame_id={{:?}}", delivered.len(), burst);
+          }}
+          '''
+          results = {}
+          for name, source in [('before', out/'baseline-capture.rs'), ('after', pathlib.Path('crates/discord-voice/src/capture.rs'))]:
+              src = out/f'queue_{name}.rs'; exe = out/f'queue_{name}.exe'
+              src.write_text(driver.format(source=source.resolve().as_posix()))
+              subprocess.run(['rustc','--edition=2024','-O',str(src),'-o',str(exe)],check=True,timeout=60)
+              results[name] = subprocess.check_output([str(exe.resolve())],text=True,timeout=30).strip()
+          results['limits'] = 'Deterministic 20 ms PCM queue behavior only; not CPU, GPU, network latency, lip-sync or live hardware performance.'
+          (out/'queue-comparison.json').write_text(json.dumps(results,indent=2))
+          print(json.dumps(results,indent=2))
+          PY
       - name: Build changed native offline capture
         run: cargo build --locked -p nivra --features demo --example profile_preview
       - name: Capture revised PROTECT and voice
@@ -94,20 +137,19 @@ jobs:
           python - <<'PY'
           import hashlib, json, os, pathlib, subprocess, urllib.request
           paths = subprocess.check_output(['git','diff','--name-only'], text=True).splitlines()
-          allowed = {'apps/desktop/src/main.rs','apps/desktop/src/protect_startup.rs','apps/desktop/src/voice.rs','crates/discord-voice/src/audio.rs','crates/discord-voice/src/audio/echo.rs','crates/discord-voice/src/capture.rs','crates/discord-voice/src/transport.rs','crates/model/src/protect.rs','crates/protect/src/lib.rs','crates/ui/src/lib.rs','crates/ui/src/protect.rs','crates/ui/src/voice.rs','crates/ui/locales/en.ftl','crates/ui/locales/pt-BR.ftl','crates/ui/locales/es.ftl'}
+          allowed = {'apps/desktop/src/main.rs','apps/desktop/src/protect_startup.rs','apps/desktop/src/protect_profiles.rs','apps/desktop/src/screen.rs','apps/desktop/src/watch.rs','apps/desktop/src/voice.rs','crates/discord-voice/src/audio.rs','crates/discord-voice/src/audio/echo.rs','crates/discord-voice/src/capture.rs','crates/discord-voice/src/transport.rs','crates/model/src/protect.rs','crates/protect/src/lib.rs','crates/protect/src/wireguard.rs','crates/ui/src/lib.rs','crates/ui/src/protect.rs','crates/ui/src/voice.rs','crates/ui/locales/en.ftl','crates/ui/locales/pt-BR.ftl','crates/ui/locales/es.ftl'}
           assert set(paths) == allowed, f'Unexpected changed paths: {set(paths) ^ allowed}'
-          repo = os.environ['GITHUB_REPOSITORY']
-          head = os.environ['GITHUB_SHA']
+          repo = os.environ['GITHUB_REPOSITORY']; head = os.environ['GITHUB_SHA']
           def api(method, path, payload=None):
               data = None if payload is None else json.dumps(payload).encode()
               req = urllib.request.Request(f'https://api.github.com/repos/{repo}/{path}', data=data, method=method, headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'Accept':'application/vnd.github+json','Content-Type':'application/json','X-GitHub-Api-Version':'2022-11-28'})
               with urllib.request.urlopen(req, timeout=45) as response:
                   return json.load(response)
           entries = [{'path':p,'mode':'100644','type':'blob','content':pathlib.Path(p).read_text(encoding='utf-8')} for p in paths]
-          cleanup = ['.github/workflows/audit-source.yml','.github/workflows/audit-validate.yml'] + [f'.github/audit/patch-{i}.b64' for i in range(1,5)]
+          cleanup = ['.github/workflows/audit-source.yml','.github/workflows/audit-validate.yml'] + [f'.github/audit/{name}-{i}.b64' for name,count in [('patch',4),('followup',2),('offthread',1)] for i in range(1,count+1)]
           entries += [{'path':p,'mode':'100644','type':'blob','sha':None} for p in cleanup]
           tree = api('POST','git/trees',{'base_tree':api('GET','git/commits/'+head)['tree']['sha'],'tree':entries})
-          commit = api('POST','git/commits',{'message':'fix(media): isolate PROTECT routes and bound audio latency\n\nPartial startup waits for Discord READY, complete startup fails closed. Preserve chosen profile scope, make recovery reachable before login, separate mute/PTT from remote playback, discard stale PCM with bounded hysteresis, reset queued DeepFilterNet history, and expose local playback health.\n\nValidated by scoped-media-audit on '+head+'. Synthetic/offline checks only; no live Discord, VPN-provider or hardware performance claims.','tree':tree['sha'],'parents':[head]})
+          commit = api('POST','git/commits',{'message':'fix(media): isolate PROTECT routes and recover scoped media safely\n\nDiscord-first partial startup, fail-closed complete startup, distinct applied profile persistence, render-thread-safe storage, cancellable screen/watch recovery, independent capture/playback gates, bounded PCM catch-up and local queue metrics.\n\nValidated by scoped-media-audit on '+head+'. Synthetic/offline checks only; no live Discord, VPN-provider, CPU/GPU speedup or hardware compatibility claims.','tree':tree['sha'],'parents':[head]})
           result = {'candidate_sha':commit['sha'],'base_sha':head,'run_id':os.environ['GITHUB_RUN_ID'],'files':paths,'patch_sha256':hashlib.sha256(pathlib.Path('audit-out/formatted.patch').read_bytes()).hexdigest(),'ref_updated':False}
           pathlib.Path('audit-out/CANDIDATE.json').write_text(json.dumps(result,indent=2))
           print(json.dumps(result,indent=2))

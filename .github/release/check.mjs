@@ -7,6 +7,7 @@ import { analyzeCommits } from '@semantic-release/commit-analyzer';
 import { generateNotes } from '@semantic-release/release-notes-generator';
 import getLastRelease from './node_modules/semantic-release/lib/get-last-release.js';
 import { generateReleaseNotes } from './notes.mjs';
+import { testSecurityGate } from './security-gate.mjs';
 
 const logger = { log() {} };
 for (const [message, expected] of [
@@ -55,6 +56,7 @@ assert(!nightlyNotes.includes('notification sounds'));
 const workflow = load(readFileSync('.github/workflows/release.yml', 'utf8'));
 assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
 assert(workflow.jobs.build.strategy.matrix.os.includes('windows-11-arm'));
+testSecurityGate(workflow);
 for (const job of Object.values(workflow.jobs)) {
   for (const step of job.steps ?? []) {
     if (step.run && step.shell !== 'pwsh') execFileSync('bash', ['-n'], { input: step.run });
@@ -86,4 +88,4 @@ with tempfile.TemporaryDirectory() as directory:
     import plistlib
     assert plistlib.loads(pathlib.Path('packaging/macos/Info.plist').read_bytes())['CFBundleShortVersionString'] == '1.2.3'
 `], { stdio: 'inherit' });
-console.log('Release smoke passed: semantic bumps/notes, nightly isolation, manifest/lock versions, YAML and shell syntax.');
+console.log('Release smoke passed: semantic bumps/notes, nightly isolation, manifest/lock versions, mandatory security gate, YAML and shell syntax.');

@@ -1,0 +1,40 @@
+name: Release policy checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/release/**'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/release-policy.yml'
+      - 'packaging/macos/sign-release.sh'
+      - 'packaging/macos/test_sign_release.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.4.2
+      - uses: actions/cache@v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ runner.arch }}-1.4.2-${{ hashFiles('.github/release/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-${{ runner.arch }}-1.4.2-
+      - run: bun install --cwd .github/release --frozen-lockfile --ignore-scripts
+      - name: Validate release planning and mandatory security checks without publishing
+        run: bun .github/release/check.mjs

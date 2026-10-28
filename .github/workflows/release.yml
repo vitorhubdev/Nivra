@@ -158,8 +158,35 @@ jobs:
       release: true
       tag: ${{ needs.prepare.outputs.tag }}
 
+  security:
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: release-manifests
+          path: .
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: release-cargo-audit-0.22.2
+          cache-targets: false
+          cache-on-failure: true
+      - run: cargo install cargo-audit --version 0.22.2 --locked --no-default-features
+      - name: Audit exact release dependencies
+        id: audit-root
+        run: cargo audit --deny warnings --file Cargo.lock
+      - name: Audit fuzz dependencies
+        id: audit-fuzz
+        run: cargo audit --deny warnings --file fuzz/Cargo.lock
+
   publish:
-    needs: [prepare, build, linux]
+    needs: [prepare, build, linux, security]
     runs-on: ubuntu-latest
     permissions:
       contents: write

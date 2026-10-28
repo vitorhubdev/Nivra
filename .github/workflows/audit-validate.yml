@@ -1,0 +1,133 @@
+name: scoped-media-audit
+on:
+  push:
+    branches: [main]
+    paths: ['.github/audit/**', '.github/workflows/audit-validate.yml']
+  workflow_dispatch:
+concurrency:
+  group: scoped-media-audit-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          cache-on-failure: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
+      - name: Decode the reviewed patch and record the baseline
+        run: |
+          set -euo pipefail
+          mkdir -p audit-out
+          git rev-parse HEAD > audit-out/BASE_COMMIT.txt
+          rustc --version > audit-out/TOOLCHAIN.txt
+          python - <<'PY'
+          import base64, hashlib, lzma, pathlib
+          encoded = ''.join(pathlib.Path(f'.github/audit/patch-{i}.b64').read_text().strip() for i in range(1, 5))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'cb15f7bfdb88733be678bf130187367b5a9762dab96e27d2318a93a1593ae332'
+          pathlib.Path('audit-out/proposed.patch').write_bytes(patch)
+          PY
+          git apply --check audit-out/proposed.patch
+      - name: Build baseline native offline capture
+        run: cargo build --locked -p nivra --features demo --example profile_preview
+      - name: Capture baseline PROTECT
+        env:
+          WGPU_BACKEND: dx12
+        run: |
+          set -euo pipefail
+          target/debug/examples/profile_preview.exe --demo --page=protect --width=1120 --height=760 --output=audit-out/before-protect.png
+      - name: Apply reviewed source and format
+        run: |
+          set -euo pipefail
+          git apply audit-out/proposed.patch
+          git add -N apps/desktop/src/protect_startup.rs
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path fuzz/Cargo.toml --all -- --check
+          git diff --check
+          git diff --binary > audit-out/formatted.patch
+      - name: Strict workspace lint
+        run: |
+          set -euo pipefail
+          cargo clippy --workspace --all-targets --locked -- -D warnings 2>&1 | tee audit-out/clippy.log
+      - name: Workspace behavioral regression tests
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          cargo nextest run --workspace --locked --profile ci 2>&1 | tee audit-out/tests.log
+          cargo test --workspace --locked --doc 2>&1 | tee audit-out/doctests.log
+          cargo check -p nivra --no-default-features --locked 2>&1 | tee audit-out/release-features.log
+          cargo xtask policy 2>&1 | tee audit-out/policy.log
+          node tests/login-handoff.cjs 2>&1 | tee audit-out/login-handoff.log
+      - name: Build changed native offline capture
+        run: cargo build --locked -p nivra --features demo --example profile_preview
+      - name: Capture revised PROTECT and voice
+        env:
+          WGPU_BACKEND: dx12
+        run: |
+          set -euo pipefail
+          target/debug/examples/profile_preview.exe --demo --page=protect --width=1120 --height=760 --output=audit-out/after-protect.png
+          target/debug/examples/profile_preview.exe --demo --page=protect --light --width=840 --height=760 --output=audit-out/after-protect-light.png
+          target/debug/examples/profile_preview.exe --demo --page=voice --width=1120 --height=760 --output=audit-out/after-voice.png
+      - name: Prepare a tested candidate without changing main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, urllib.request
+          paths = subprocess.check_output(['git','diff','--name-only'], text=True).splitlines()
+          allowed = {'apps/desktop/src/main.rs','apps/desktop/src/protect_startup.rs','apps/desktop/src/voice.rs','crates/discord-voice/src/audio.rs','crates/discord-voice/src/audio/echo.rs','crates/discord-voice/src/capture.rs','crates/discord-voice/src/transport.rs','crates/model/src/protect.rs','crates/protect/src/lib.rs','crates/ui/src/lib.rs','crates/ui/src/protect.rs','crates/ui/src/voice.rs','crates/ui/locales/en.ftl','crates/ui/locales/pt-BR.ftl','crates/ui/locales/es.ftl'}
+          assert set(paths) == allowed, f'Unexpected changed paths: {set(paths) ^ allowed}'
+          repo = os.environ['GITHUB_REPOSITORY']
+          head = os.environ['GITHUB_SHA']
+          def api(method, path, payload=None):
+              data = None if payload is None else json.dumps(payload).encode()
+              req = urllib.request.Request(f'https://api.github.com/repos/{repo}/{path}', data=data, method=method, headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'Accept':'application/vnd.github+json','Content-Type':'application/json','X-GitHub-Api-Version':'2022-11-28'})
+              with urllib.request.urlopen(req, timeout=45) as response:
+                  return json.load(response)
+          entries = [{'path':p,'mode':'100644','type':'blob','content':pathlib.Path(p).read_text(encoding='utf-8')} for p in paths]
+          cleanup = ['.github/workflows/audit-source.yml','.github/workflows/audit-validate.yml'] + [f'.github/audit/patch-{i}.b64' for i in range(1,5)]
+          entries += [{'path':p,'mode':'100644','type':'blob','sha':None} for p in cleanup]
+          tree = api('POST','git/trees',{'base_tree':api('GET','git/commits/'+head)['tree']['sha'],'tree':entries})
+          commit = api('POST','git/commits',{'message':'fix(media): isolate PROTECT routes and bound audio latency\n\nPartial startup waits for Discord READY, complete startup fails closed. Preserve chosen profile scope, make recovery reachable before login, separate mute/PTT from remote playback, discard stale PCM with bounded hysteresis, reset queued DeepFilterNet history, and expose local playback health.\n\nValidated by scoped-media-audit on '+head+'. Synthetic/offline checks only; no live Discord, VPN-provider or hardware performance claims.','tree':tree['sha'],'parents':[head]})
+          result = {'candidate_sha':commit['sha'],'base_sha':head,'run_id':os.environ['GITHUB_RUN_ID'],'files':paths,'patch_sha256':hashlib.sha256(pathlib.Path('audit-out/formatted.patch').read_bytes()).hexdigest(),'ref_updated':False}
+          pathlib.Path('audit-out/CANDIDATE.json').write_text(json.dumps(result,indent=2))
+          print(json.dumps(result,indent=2))
+          PY
+      - name: Preserve formatted source even when checks fail
+        if: always()
+        run: |
+          python - <<'PY'
+          import pathlib, subprocess, tarfile
+          out = pathlib.Path('audit-out'); out.mkdir(exist_ok=True)
+          paths = subprocess.check_output(['git','diff','--name-only'], text=True).splitlines()
+          if paths:
+              with tarfile.open(out/'changed-source.tar.gz','w:gz') as tar:
+                  for p in paths:
+                      if pathlib.Path(p).is_file(): tar.add(p,arcname=p)
+          PY
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: nivra-scoped-media-audit
+          path: audit-out/
+          if-no-files-found: error
+          retention-days: 7

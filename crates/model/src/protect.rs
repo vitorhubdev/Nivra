@@ -20,6 +20,10 @@ impl Scope {
 	pub fn contains(self, traffic: Self) -> bool {
 		self == Self::Complete || self == traffic
 	}
+	/// Only the complete route carries the account gateway and must precede login.
+	pub fn protects_login(self) -> bool {
+		self == Self::Complete
+	}
 	pub fn needs_udp(self) -> bool {
 		self != Self::Videos
 	}
@@ -52,6 +56,40 @@ impl Protocol {
 	}
 }
 
+/// Shared bounded proxy-field validation. URL parsing and connection probes remain in the host.
+pub fn proxy_problem(
+	protocol: Protocol,
+	host: &str,
+	port: u16,
+	username: &str,
+	password: &str,
+) -> Option<&'static str> {
+	if host.trim().is_empty() {
+		return Some("Enter the proxy server");
+	}
+	if host.len() > 253
+		|| host
+			.chars()
+			.any(|c| c.is_whitespace() || c.is_control() || matches!(c, '/' | '@' | '?' | '#'))
+	{
+		return Some("Enter a hostname or IP address without a URL or spaces");
+	}
+	if port == 0 {
+		return Some("Port must be between 1 and 65535");
+	}
+	if username.len() > 255
+		|| password.len() > 255
+		|| username.contains('\0')
+		|| password.contains('\0')
+	{
+		return Some("Proxy credentials must fit in 255 bytes and contain no null characters");
+	}
+	if protocol == Protocol::Socks4 && !password.is_empty() {
+		return Some("SOCKS4 has no password authentication; use SOCKS5");
+	}
+	None
+}
+
 pub struct Draft {
 	pub protocol: Protocol,
 	pub scope: Scope,
@@ -78,11 +116,20 @@ impl Draft {
 	/// Why this draft cannot be tested or enabled yet, if anything is still missing.
 	pub fn missing(&self) -> Option<&'static str> {
 		if self.protocol == Protocol::WireGuard {
+			if self.wireguard.len() > 4096 {
+				return Some("WireGuard configuration exceeds 4 KiB");
+			}
 			if self.wireguard.trim().is_empty() {
 				return Some("Import a WireGuard configuration first");
 			}
-		} else if self.host.trim().is_empty() {
-			return Some("Enter the proxy server");
+		} else if let Some(reason) = proxy_problem(
+			self.protocol,
+			&self.host,
+			self.port,
+			&self.username,
+			&self.password,
+		) {
+			return Some(reason);
 		}
 		if self.scope.needs_udp()
 			&& !matches!(self.protocol, Protocol::Socks5 | Protocol::WireGuard)
@@ -125,10 +172,20 @@ pub struct SavedProfile {
 }
 pub enum ProfileAction {
 	Remember(Draft),
-	Save { name: String, draft: Draft },
+	/// Host-only committed route snapshot; editing and testing cannot replace it.
+	RememberActive {
+		activation: String,
+		draft: Draft,
+	},
+	Save {
+		name: String,
+		draft: Draft,
+	},
 	Load(String),
 	Delete(String),
-	TestAll { location: bool },
+	TestAll {
+		location: bool,
+	},
 	CancelTests,
 }
 
@@ -205,5 +262,49 @@ mod missing_tests {
 		assert!(draft.missing().is_some());
 		draft.scope = Scope::Videos;
 		assert_eq!(draft.missing(), None);
+	}
+}
+
+#[cfg(test)]
+mod route_validation_tests {
+	use super::*;
+	#[test]
+	fn only_complete_routes_gate_discord_login() {
+		for scope in Scope::ALL {
+			assert_eq!(scope.protects_login(), scope == Scope::Complete);
+		}
+	}
+	#[test]
+	fn proxy_validation_rejects_invalid_fields_before_connecting() {
+		let mut draft = Draft {
+			protocol: Protocol::Socks5,
+			host: "127.0.0.1".into(),
+			..Draft::default()
+		};
+		assert!(draft.missing().is_none());
+		draft.port = 0;
+		assert_eq!(draft.missing(), Some("Port must be between 1 and 65535"));
+		draft.port = 1080;
+		for host in [
+			"https://proxy.invalid",
+			"proxy.invalid/path",
+			"proxy.invalid ",
+			"proxy@invalid",
+			"proxy\0invalid",
+		] {
+			draft.host = host.into();
+			assert!(draft.missing().is_some(), "{host:?}");
+		}
+		draft.host = "::1".into();
+		assert!(draft.missing().is_none());
+		draft.password.push_str(&"é".repeat(128));
+		assert!(
+			draft.missing().is_some(),
+			"limits are bytes, not Unicode character counts"
+		);
+		draft.password.clear();
+		draft.protocol = Protocol::Socks4;
+		draft.password.push_str("secret");
+		assert!(draft.missing().is_some());
 	}
 }

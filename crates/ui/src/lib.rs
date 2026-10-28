@@ -839,6 +839,8 @@ pub struct MessagingUi {
 	pub voice_rejoin_requested: bool,
 	/// Latest voice-server heartbeat round trip, when a call is connected.
 	pub voice_ping_ms: Option<u32>,
+	/// Local decoded playback queue and skipped 20 ms frames; never end-to-end latency.
+	pub voice_playback_health: Option<(u16, u64)>,
 	/// English place name for the connected voice server, translated at draw time.
 	pub voice_server_place: String,
 	/// Latest media activity, capped at 64 IDs (512 bytes) by the voice host.

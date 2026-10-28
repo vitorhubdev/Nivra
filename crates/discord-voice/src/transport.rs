@@ -678,7 +678,7 @@ async fn run_inner(
 					if active {silence=0;}
 				}
 				timestamp=timestamp.wrapping_add(960);
-				let mut drops = 0;
+				let mut drops = capture_pacer.take_dropped();
 				if enabled && !control.deafened {
 					let start = metrics.start();
 					discard_stale_mix(&mut mixer, stalled);
@@ -691,7 +691,7 @@ async fn run_inner(
 						}
 					}
 					metrics.finish(crate::diagnostics::Stage::Mix, start);
-					if let Some(frame)=frame {drops = u64::from(playback.try_send(frame).is_err());}
+					if let Some(frame)=frame {drops += u64::from(playback.try_send(frame).is_err());}
 					if !heard && remote_audio {heard=true;emit(Status::RemoteAudio).map_err(|_|"Call interface closed")?;}
 				} else {mixer.clear();if let Some(aux)=&stream_audio {let _=stream_playout.next(aux,0,false,false);}}
 				metrics.dave_state(dave.ready, dave.transport_only, dave.member_count());

@@ -2502,6 +2502,25 @@ impl MessagingUi {
 		} else {
 			self.camera_settings_content(ui, demo);
 		}
+		if active && let Some((queue_ms, trimmed)) = self.voice_playback_health {
+			design::group(
+				ui,
+				crate::i18n::text(self.language, "Live audio health"),
+				|ui| {
+					ui.label(format!(
+						"{}: {queue_ms} ms",
+						crate::i18n::text(self.language, "Local playback queue")
+					));
+					ui.label(format!(
+						"{}: {trimmed}",
+						crate::i18n::text(self.language, "Stale audio frames skipped")
+					));
+					ui.label(crate::i18n::text(self.language, "Local decoded audio only, not network ping or end-to-end delay. Corrections keep playback close to live."));
+				},
+			);
+			ui.ctx()
+				.request_repaint_after(std::time::Duration::from_millis(500));
+		}
 		if active && let Some(code) = &self.voice_privacy_code {
 			egui::CollapsingHeader::new(crate::i18n::text(self.language, "Voice privacy code"))
 				.show(ui, |ui| {

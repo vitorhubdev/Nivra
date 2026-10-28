@@ -37,6 +37,7 @@ mod pointer;
 #[cfg(feature = "demo")]
 mod post_menu_demo;
 mod protect_profiles;
+mod protect_startup;
 mod reading_settings;
 #[cfg(feature = "demo")]
 mod rendering_demo;
@@ -858,14 +859,14 @@ struct ProtectRejoin {
 }
 /// Longest a route change may take before the call is left for the user to rejoin.
 const PROTECT_REJOIN_WINDOW: Duration = Duration::from_secs(90);
-/// Whether a route change between these scopes has to take the session down: only a route that
-/// carries the gateway (complete connection) or the voice transport (voice and camera) does.
+/// Only a change involving the complete route retires the account gateway.
+/// Scoped UDP epochs reconnect affected media independently of account signaling.
 fn scopes_touch_session(
 	current: Option<model::protect::Scope>,
 	new: Option<model::protect::Scope>,
 ) -> bool {
 	use model::protect::Scope;
-	let carries = |scope: Scope| matches!(scope, Scope::Complete | Scope::Voice);
+	let carries = Scope::protects_login;
 	current.is_some_and(carries) || new.is_some_and(carries)
 }
 enum ProtectChange {
@@ -878,8 +879,10 @@ enum ProtectChange {
 		reserve: Option<Arc<protect::Profile>>,
 		reconnect: Option<Arc<SessionSecret>>,
 		epoch: u64,
-		/// The route does not carry the gateway or the call, so both stayed up.
+		/// Only the account session stayed up; scoped media may reconnect.
 		kept_session: bool,
+		/// Reserved off the render thread after successful transport teardown.
+		activation: Result<Option<String>, &'static str>,
 	},
 }
 struct ProtectResult {
@@ -946,9 +949,8 @@ struct Desktop {
 	protect_scope: Option<u64>,
 	protect_shutdown: ProtectShutdown,
 	protect_next_health: std::time::Instant,
-	/// While PROTECT is being turned back on at launch, the saved login waits for it (until
-	/// this time at most), so nothing goes out directly first.
-	protect_startup_wait: Option<std::time::Instant>,
+	/// Controls whether saved login waits for PROTECT or PROTECT waits for Discord.
+	protect_startup: protect_startup::Restore,
 	/// The enable action that restores PROTECT at launch, applied when the worker is free.
 	protect_startup_action: Option<model::protect::Action>,
 	state: State,
@@ -2404,8 +2406,10 @@ impl Desktop {
 			protect_scope: None,
 			protect_shutdown: ProtectShutdown::Idle,
 			protect_next_health: std::time::Instant::now() + Duration::from_secs(60),
-			protect_startup_wait: protect_profiles::startup_enabled()
-				.then(|| std::time::Instant::now() + Duration::from_secs(25)),
+			protect_startup: protect_startup::Restore::new(
+				protect_profiles::startup_enabled(),
+				std::time::Instant::now(),
+			),
 			protect_startup_action: None,
 			state,
 			messaging,
@@ -2584,9 +2588,9 @@ impl Desktop {
 	}
 
 	fn connect(&mut self, secret: SessionSecret, save: bool, ctx: &egui::Context) {
-		if self.presence_load_pending || self.protect_startup_wait.is_some() {
+		if self.presence_load_pending || self.protect_startup.blocks_login() {
 			self.deferred_connect = Some((secret, save));
-			self.credential_status = if self.protect_startup_wait.is_some() {
+			self.credential_status = if self.protect_startup.blocks_login() {
 				"Turning PROTECT on before connecting…"
 			} else {
 				"Connecting to Discord…"
@@ -2684,9 +2688,8 @@ impl Desktop {
 		self.protect_done = None;
 		self.protect_scope = None;
 	}
-	/// Only a route that carries the gateway (complete connection) or the voice transport
-	/// (voice and camera) has to take the session down. Videos, files and screen streams open their
-	/// own new connections, so changing them leaves the gateway and a running call untouched.
+	/// Partial media routes must not restart login, message history or presence.
+	/// The scoped transport epoch retires affected UDP sockets for bounded media recovery.
 	fn protect_touches_session(primary: Option<&protect::Profile>) -> bool {
 		scopes_touch_session(
 			protect::active_scope(),
@@ -2808,6 +2811,7 @@ impl Desktop {
 		};
 		let generation = self.state.generation;
 		let epoch = protect::generation();
+		let reserve_activation = primary.is_some() && !self.state.demo && !self.fixture_only;
 		let (send, receive) = std::sync::mpsc::sync_channel(1);
 		let wake = ctx.clone();
 		self.protect_shutdown = ProtectShutdown::Waiting;
@@ -2825,12 +2829,20 @@ impl Desktop {
 				avatar_cleanup,
 			)
 			.await;
+			// Even a failed credential-store reservation acknowledges completed teardown;
+			// the old route stays selected and the user can retry without a shutdown latch.
+			let activation = if stopped.is_ok() && reserve_activation {
+				protect_profiles::begin_active().await.map(Some)
+			} else {
+				Ok(None)
+			};
 			let change = stopped.map(|()| ProtectChange::TransportStopped {
 				primary,
 				reserve,
 				reconnect,
 				epoch,
 				kept_session: keeps_session,
+				activation,
 			});
 			let _ = send.try_send(ProtectResult { generation, change });
 			wake.request_repaint();
@@ -2840,14 +2852,17 @@ impl Desktop {
 	fn finish_protect(
 		&mut self,
 		ctx: &egui::Context,
-		primary: Option<Arc<protect::Profile>>,
-		reserve: Option<Arc<protect::Profile>>,
+		profiles: (Option<Arc<protect::Profile>>, Option<Arc<protect::Profile>>),
 		reconnect: Option<Arc<SessionSecret>>,
 		epoch: u64,
 		kept_session: bool,
+		activation: Result<Option<String>, &'static str>,
 	) -> Result<&'static str, &'static str> {
+		let (primary, reserve) = profiles;
 		if protect::generation() != epoch {
-			self.state.auth = AuthState::Failed;
+			if !kept_session {
+				self.state.auth = AuthState::Failed;
+			}
 			self.state.status = "PROTECT route changed while the previous connection was closing";
 			return Err(self.state.status);
 		}
@@ -2858,21 +2873,41 @@ impl Desktop {
 			self.protect_change_blocked()
 		};
 		if blocked {
-			self.state.auth = AuthState::Failed;
+			if !kept_session {
+				self.state.auth = AuthState::Failed;
+			}
 			self.state.status =
 				"Pending activity prevented the PROTECT route change; reconnect your session";
 			return Err(
 				"Pending activity prevented the PROTECT route change; reconnect your session",
 			);
 		}
+		let applied_snapshot = activation?
+			.zip(primary.as_ref())
+			.map(|(activation, profile)| (activation, profile.configuration()));
+		let stream_route_changed = kept_session
+			&& [
+				protect::active_scope(),
+				primary.as_ref().map(|profile| profile.scope),
+			]
+			.into_iter()
+			.flatten()
+			.any(|scope| scope.contains(model::protect::Scope::Streams));
 		if let Err(reason) = protect::apply(primary, reserve) {
-			self.state.auth = AuthState::Failed;
+			if !kept_session {
+				self.state.auth = AuthState::Failed;
+			}
 			self.state.status = reason;
 			return Err(reason);
 		}
+		if stream_route_changed {
+			self.voice.stream_route_changed();
+		}
 		// Remember the choice, so the next launch turns PROTECT on (or leaves it off) again.
-		if !self.state.demo && !self.fixture_only {
-			protect_profiles::set_startup_enabled(enabled);
+		if let Some((activation, draft)) = applied_snapshot {
+			self.protect_profiles.remember_active(activation, draft);
+		} else if !self.state.demo && !self.fixture_only && !enabled {
+			protect_profiles::set_startup_enabled(false);
 		}
 		if let Some(secret) = reconnect {
 			self.state.generation = self.state.generation.wrapping_add(1);
@@ -2891,9 +2926,9 @@ impl Desktop {
 		self.protect_next_health = std::time::Instant::now() + Duration::from_secs(60);
 		if kept_session {
 			return Ok(if enabled {
-				"PROTECT is on for new connections. The call and your session were not interrupted."
+				"PROTECT updated. Discord stays connected; affected media may briefly reconnect."
 			} else {
-				"PROTECT is off. The call and your session were not interrupted."
+				"PROTECT disabled. Discord stays connected; affected media may briefly reconnect."
 			});
 		}
 		Ok(if enabled {
@@ -2902,44 +2937,51 @@ impl Desktop {
 			"PROTECT disabled after the previous connection stopped; signaling is reconnecting."
 		})
 	}
-	/// Launch-time restore: PROTECT comes back on before the saved login connects, and a
-	/// failure or a timeout is shown instead of silently continuing without it.
+	/// Resolve saved scope first. Partial modes wait for READY; complete mode gates login.
 	fn poll_protect_startup(&mut self, ctx: &egui::Context) {
-		let Some(deadline) = self.protect_startup_wait else {
-			return;
-		};
 		if self.state.demo || self.fixture_only {
-			self.protect_startup_wait = None;
+			self.protect_startup.finish();
+			self.protect_startup_action = None;
 			return;
-		}
-		match self.protect_profiles.take_startup() {
-			Some(Some(draft)) => {
-				self.messaging.set_protect_draft(draft.clone());
-				self.protect_startup_action = Some(model::protect::Action::Enable(draft, None));
-			}
-			Some(None) => {
-				self.protect_startup_wait = None;
-				self.messaging.protect_alert(
-					"PROTECT was on when Nivra closed, but its saved configuration could not be restored. Import it again.",
-				);
-				self.flush_deferred_connect(ctx);
-				return;
-			}
-			None => {}
 		}
 		let now = std::time::Instant::now();
-		if now >= deadline {
-			self.protect_startup_wait = None;
-			// The alert promises a manual retry; a queued Enable must not turn it on later and
-			// reconnect the login that is about to open without it.
-			self.protect_startup_action = None;
-			self.messaging.protect_alert(
-				"PROTECT took too long to turn on. Nivra is connecting without it; open PROTECT to retry.",
-			);
+		if self.protect_startup.loading()
+			&& let Some(draft) = self.protect_profiles.take_startup()
+		{
+			self.protect_startup
+				.loaded(draft.as_ref().map(|draft| draft.scope), now);
+			if let Some(draft) = draft {
+				self.messaging.set_protect_draft(draft.clone());
+				self.protect_startup_action = Some(model::protect::Action::Enable(draft, None));
+			} else {
+				self.messaging.protect_alert("Saved PROTECT configuration is unavailable. Retry a profile or explicitly disable PROTECT to connect Discord.");
+			}
 			self.flush_deferred_connect(ctx);
-		} else {
-			ctx.request_repaint_after(deadline - now);
 		}
+		self.protect_startup.discord_ready(
+			self.state.gateway_connected && self.state.auth == AuthState::Authenticated,
+			now,
+		);
+		if self.protect_startup.expired(now) {
+			if self.protect_startup.restoring() {
+				self.cancel_protect();
+			}
+			self.protect_startup_action = None;
+			self.protect_startup.fail();
+			let reason = if self.protect_startup.blocks_login() {
+				"PROTECT timed out. Discord remains paused; retry a profile or explicitly disable PROTECT."
+			} else {
+				"PROTECT timed out. Discord stays connected; open PROTECT to retry."
+			};
+			self.messaging.protect_alert(reason);
+			self.messaging
+				.set_protect_operation_status(reason, protect::enabled(), false);
+			self.flush_deferred_connect(ctx);
+		} else if let Some(deadline) = self.protect_startup.deadline() {
+			ctx.request_repaint_after(deadline.saturating_duration_since(now));
+		}
+		self.messaging
+			.set_protect_login_blocked(self.protect_startup.blocks_login());
 	}
 	fn poll_protect(&mut self, ctx: &egui::Context) {
 		if !self.state.demo && !self.fixture_only {
@@ -2995,6 +3037,8 @@ impl Desktop {
 			self.cancel_protect();
 			if result.generation == self.state.generation && !self.state.demo && !self.fixture_only
 			{
+				let route_applied =
+					matches!(&result.change, Ok(ProtectChange::TransportStopped { .. }));
 				let activated = matches!(
 					&result.change,
 					Ok(ProtectChange::TransportStopped {
@@ -3041,7 +3085,15 @@ impl Desktop {
 						reconnect,
 						epoch,
 						kept_session,
-					}) => self.finish_protect(ctx, primary, reserve, reconnect, epoch, kept_session),
+						activation,
+					}) => self.finish_protect(
+						ctx,
+						(primary, reserve),
+						reconnect,
+						epoch,
+						kept_session,
+						activation,
+					),
 					Err(reason) => {
 						if self.connection.is_none()
 							&& self.connection_secret.is_some()
@@ -3053,22 +3105,20 @@ impl Desktop {
 						Err(reason)
 					}
 				};
-				if self.protect_startup_wait.is_some() {
-					match &status {
-						Err(reason) => {
-							self.protect_startup_wait = None;
-							self.messaging.protect_alert(&format!(
-								"PROTECT did not turn on: {reason}. Nivra is connecting without it."
-							));
-							self.flush_deferred_connect(ctx);
-						}
-						Ok(_) if protect::enabled() => {
-							self.protect_startup_wait = None;
-							self.flush_deferred_connect(ctx);
-						}
-						Ok(_) => {}
-					}
+				if route_applied && status.is_ok() {
+					self.protect_startup.finish();
+					self.protect_startup_action = None;
+					self.flush_deferred_connect(ctx);
+				} else if self.protect_startup.restoring()
+					&& let Err(reason) = &status
+				{
+					self.protect_startup.fail();
+					self.protect_startup_action = None;
+					self.messaging.protect_alert(reason);
+					self.flush_deferred_connect(ctx);
 				}
+				self.messaging
+					.set_protect_login_blocked(self.protect_startup.blocks_login());
 				if activated && status.is_ok() && protect::enabled() {
 					self.messaging.mark_protect_active();
 				}
@@ -3083,10 +3133,20 @@ impl Desktop {
 		if self.protect_worker.is_some() {
 			return;
 		}
-		let action = self
-			.protect_startup_action
-			.take()
-			.or_else(|| self.messaging.take_protect_action());
+		// An explicit choice replaces queued startup intent; never apply an obsolete profile later.
+		let manual = self.messaging.take_protect_action();
+		if let Some(model::protect::Action::Enable(..)) = &manual {
+			self.protect_startup_action = None;
+		} else if matches!(&manual, Some(model::protect::Action::Disable)) {
+			self.protect_startup_action = None;
+		}
+		let action = manual.or_else(|| {
+			if self.protect_startup.restoring() {
+				self.protect_startup_action.take()
+			} else {
+				None
+			}
+		});
 		let Some(action) = action else {
 			if !self.state.demo
 				&& !self.fixture_only
@@ -3159,6 +3219,23 @@ impl Desktop {
 				self.protect_worker.is_some(),
 			);
 			return;
+		}
+		if let model::protect::Action::Enable(draft, _) = &action {
+			let now = std::time::Instant::now();
+			if !draft.scope.protects_login()
+				&& (!self.state.gateway_connected || self.state.auth != AuthState::Authenticated)
+			{
+				self.protect_startup.loaded(Some(draft.scope), now);
+				self.protect_startup_action = Some(action);
+				self.flush_deferred_connect(ctx);
+				self.messaging.set_protect_operation_status(
+					"Waiting for Discord before activating this partial route",
+					protect::enabled(),
+					false,
+				);
+				return;
+			}
+			self.protect_startup.begin(draft.scope, now);
 		}
 		let generation = self.state.generation;
 		let import = matches!(action, model::protect::Action::ImportWireGuard)
@@ -3251,6 +3328,8 @@ impl Desktop {
 	fn end_session(&mut self, ctx: &egui::Context, intent: SessionEnd) {
 		self.cancel_preview();
 		self.cancel_protect();
+		self.protect_startup.finish();
+		self.protect_startup_action = None;
 		self.connection_secret = None;
 		self.messaging.clear_protect();
 		self.captcha.close();
@@ -3854,7 +3933,7 @@ impl Desktop {
 		}
 	}
 	fn flush_deferred_connect(&mut self, ctx: &egui::Context) {
-		if self.presence_load_pending || self.protect_startup_wait.is_some() {
+		if self.presence_load_pending || self.protect_startup.blocks_login() {
 			return;
 		}
 		if let Some((secret, save)) = self.deferred_connect.take() {
@@ -5811,6 +5890,11 @@ impl Desktop {
 	}
 	/// One banner, only while something is happening or went wrong.
 	fn sign_in_status(&mut self, ui: &mut egui::Ui) {
+		if self.protect_startup.blocks_login() {
+			ui.add_space(14.0);
+			self.messaging.show_protect_recovery(ui);
+			return;
+		}
 		let p = ui::design::palette(ui);
 		let attention = matches!(
 			self.state.auth,
@@ -8915,19 +8999,19 @@ impl eframe::App for Desktop {
 #[cfg(test)]
 mod tests {
 	#[test]
-	fn only_routes_that_carry_the_gateway_or_the_voice_take_the_session_down() {
+	fn only_complete_routes_take_the_discord_session_down() {
 		use model::protect::Scope::{Complete, Streams, Videos, Voice};
 		// Screen streams and files open their own connections: the call and the gateway stay up.
 		assert!(!scopes_touch_session(None, Some(Streams)));
 		assert!(!scopes_touch_session(None, Some(Videos)));
 		assert!(!scopes_touch_session(Some(Streams), None));
 		assert!(!scopes_touch_session(Some(Videos), Some(Streams)));
-		// Voice and the complete connection are carried by the session itself.
-		assert!(scopes_touch_session(None, Some(Voice)));
+		// Voice recovers its own transport; it does not restart the account gateway.
+		assert!(!scopes_touch_session(None, Some(Voice)));
 		assert!(scopes_touch_session(None, Some(Complete)));
 		// Turning off or leaving a session-level route also needs the teardown.
 		assert!(scopes_touch_session(Some(Complete), None));
-		assert!(scopes_touch_session(Some(Voice), Some(Streams)));
+		assert!(!scopes_touch_session(Some(Voice), Some(Streams)));
 	}
 
 	#[test]

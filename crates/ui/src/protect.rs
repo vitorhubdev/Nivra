@@ -25,6 +25,9 @@ pub(crate) struct Settings {
 	flags: std::collections::BTreeMap<String, egui::TextureHandle>,
 	/// A row was clicked: enable that profile as soon as the host has loaded it.
 	activate_on_load: bool,
+	activation_scope: Option<Scope>,
+	login_blocked: bool,
+	pending_remove: Option<String>,
 	/// The profile being connected from the list, then the one that is live.
 	activating: Option<String>,
 	active_profile: Option<String>,
@@ -41,11 +44,17 @@ impl Settings {
 			return;
 		}
 		self.activate_on_load = true;
+		self.activation_scope = Some(self.draft.scope);
 		self.activating = Some(id.to_owned());
 		self.status = "Connecting…".into();
 		self.action = Some(Action::Profiles(ProfileAction::Load(id.to_owned())));
 	}
 	fn request_enable(&mut self) {
+		if let Some(reason) = self.draft.missing() {
+			self.status = reason.into();
+			self.activating = None;
+			return;
+		}
 		self.action = Some(Action::Enable(
 			self.draft.clone(),
 			(self.fallback && self.draft.protocol != Protocol::WireGuard)
@@ -57,39 +66,62 @@ impl Settings {
 	/// What is routed now, and the one control that turns it off.
 	fn status_header(&mut self, ui: &mut egui::Ui, demo: bool) {
 		let colors = crate::design::palette(ui);
-		ui.horizontal(|ui| {
-			match self.active.filter(|_| self.enabled) {
-				Some(applied) => {
-					let name = self
-						.active_profile
-						.as_deref()
-						.and_then(|id| self.profiles.iter().find(|row| row.id == id))
-						.map(|row| row.name.clone())
-						.unwrap_or_else(|| crate::tr_ui!(ui, "Route active").to_string());
-					ui.label(
-						egui::RichText::new(format!(
-							"● {name} · {}",
-							crate::tr_ui!(ui, applied.label())
-						))
-						.strong()
-						.color(colors.positive),
-					);
+		crate::design::card(ui, |ui| {
+			ui.strong(crate::tr_ui!(ui, "Protected connection"));
+			ui.horizontal_wrapped(|ui| {
+				if self.busy {
+					ui.spinner();
 				}
-				None => {
-					ui.label(
-						egui::RichText::new(format!(
-							"○ {}",
-							crate::tr_ui!(ui, "Route inactive: nothing is routed through PROTECT")
-						))
-						.color(colors.muted),
-					);
+				match self.active.filter(|_| self.enabled) {
+					Some(applied) => {
+						let name = self
+							.active_profile
+							.as_deref()
+							.and_then(|id| self.profiles.iter().find(|row| row.id == id))
+							.map(|row| row.name.clone())
+							.unwrap_or_else(|| crate::tr_ui!(ui, "Route active").to_string());
+						ui.label(
+							egui::RichText::new(format!(
+								"{} · {name}",
+								crate::tr_ui!(ui, "Connected")
+							))
+							.strong()
+							.color(colors.positive),
+						);
+						ui.label(crate::tr_ui!(ui, applied.label()));
+					}
+					None => {
+						ui.label(crate::tr_ui!(ui, "Not connected"));
+					}
 				}
+			});
+			// A failed profile switch must stay visible even while the previous route is active.
+			if !self.status.is_empty() {
+				ui.add(egui::Label::new(crate::tr_str!(ui, &self.status)).wrap());
 			}
-			if self.enabled
+			if self.login_blocked {
+				crate::design::notice(
+					ui,
+					crate::design::Level::Warning,
+					crate::tr_ui!(
+						ui,
+						"Discord is paused until protection is ready. Retry a profile or choose to connect without PROTECT."
+					),
+				);
+			}
+			if (self.enabled || self.login_blocked)
 				&& ui
 					.add_enabled(
 						!demo && !self.busy,
-						egui::Button::new(crate::tr_ui!(ui, "Disable")),
+						egui::Button::new(crate::tr_ui!(
+							ui,
+							if self.enabled {
+								"Disable"
+							} else {
+								"Connect without PROTECT"
+							}
+						))
+						.min_size(egui::vec2(0.0, 32.0)),
 					)
 					.clicked()
 			{
@@ -97,14 +129,7 @@ impl Settings {
 				self.busy = true;
 				self.status = "Stopping…".into();
 			}
-			if self.busy {
-				ui.spinner();
-			}
 		});
-		// A live route already says everything in the line above; only progress and errors need words.
-		if !self.status.is_empty() && (self.busy || !self.enabled) {
-			ui.label(crate::tr_str!(ui, &self.status));
-		}
 		if demo {
 			ui.label(crate::tr_ui!(
 				ui,
@@ -169,31 +194,62 @@ impl Settings {
 								label = label.strong().color(colors.accent_text);
 							}
 							let button = egui::Button::new(label)
-								.min_size(egui::vec2(
-									(ui.available_width() - 40.0).max(120.0),
-									28.0,
-								))
+								.truncate()
+								.min_size(egui::vec2((ui.available_width() - 40.0).max(1.0), 36.0))
 								.fill(if live { colors.accent } else { colors.raised });
-							let clickable = !demo && !self.busy && !live;
+							let clickable = !demo
+								&& !self.busy && (!self.profiles_busy
+								|| self.profiles_testing)
+								&& (!live || self.active != Some(self.draft.scope));
 							if ui
 								.add_enabled(clickable, button)
-								.on_hover_text(crate::tr_ui!(ui, "Connect this profile"))
+								.on_hover_text(format!(
+									"{} · {}",
+									crate::tr_ui!(ui, "Connect this profile"),
+									row.name
+								))
 								.clicked()
 							{
 								self.activate(&row.id);
 							}
 							if ui
-								.add_enabled(
-									!demo && !self.busy,
-									egui::Button::new("✕").min_size(egui::vec2(28.0, 28.0)),
-								)
-								.on_hover_text(crate::tr_ui!(ui, "Remove saved copy"))
+								.add_enabled_ui(!demo && !self.busy && !self.profiles_busy, |ui| {
+									crate::icons::button(
+										ui,
+										crate::icons::Icon::Trash,
+										32.0,
+										crate::tr_ui!(ui, "Remove saved copy"),
+									)
+								})
+								.inner
 								.clicked()
 							{
-								self.action =
-									Some(Action::Profiles(ProfileAction::Delete(row.id.clone())));
+								self.pending_remove = Some(row.id.clone());
 							}
 						});
+						if self.pending_remove.as_deref() == Some(row.id.as_str()) {
+							ui.label(crate::tr_ui!(
+								ui,
+								"Remove only this saved profile? The active connection is not changed."
+							));
+							ui.horizontal_wrapped(|ui| {
+								if ui
+									.add_enabled(
+										!demo && !self.busy && !self.profiles_busy,
+										egui::Button::new(crate::tr_ui!(ui, "Remove")),
+									)
+									.clicked()
+								{
+									self.action = Some(Action::Profiles(ProfileAction::Delete(
+										row.id.clone(),
+									)));
+									self.pending_remove = None;
+								}
+								if ui.button(crate::tr_ui!(ui, "Cancel")).clicked() {
+									self.pending_remove = None;
+								}
+							});
+						}
 						let detail = Self::row_detail(ui, row, self.flags_removed);
 						if !detail.is_empty() {
 							ui.label(egui::RichText::new(detail).small().color(colors.muted));
@@ -201,7 +257,7 @@ impl Settings {
 					});
 				}
 			});
-		if !self.profile_status.is_empty() && (self.profiles_busy || self.profiles_testing) {
+		if !self.profile_status.is_empty() {
 			ui.label(
 				egui::RichText::new(crate::tr_str!(ui, &self.profile_status))
 					.small()
@@ -246,7 +302,7 @@ impl Settings {
 			}
 			if ui
 				.add_enabled(
-					!demo && !self.profiles.is_empty() && !self.profiles_busy,
+					!demo && !self.busy && !self.profiles.is_empty() && !self.profiles_busy,
 					egui::Button::new(crate::tr_ui!(ui, "Test all")),
 				)
 				.clicked()
@@ -259,9 +315,9 @@ impl Settings {
 	}
 	/// What to route, chosen before connecting: it decides whether the call is touched at all.
 	fn scope_row(&mut self, ui: &mut egui::Ui) {
-		ui.add_enabled_ui(!self.profiles_busy, |ui| {
-			ui.horizontal(|ui| {
-				ui.label(crate::tr_ui!(ui, "Configure route"));
+		ui.add_enabled_ui(!self.busy && !self.profiles_busy, |ui| {
+			ui.horizontal_wrapped(|ui| {
+				ui.label(crate::tr_ui!(ui, "What to protect"));
 				egui::ComboBox::from_id_salt("protect_scope")
 					.selected_text(crate::tr_ui!(ui, self.draft.scope.label()))
 					.show_ui(ui, |ui| {
@@ -282,6 +338,11 @@ impl Settings {
 				Scope::Complete => crate::tr_ui!(ui, "Routes account signaling, messages, downloads and live media. Official login and external apps are separate.").to_string(),
 			};
 			ui.label(egui::RichText::new(explanation).small().color(colors.muted));
+			ui.label(egui::RichText::new(crate::tr_ui!(ui, if self.draft.scope.protects_login() {
+				"Startup: PROTECT first, then Discord. No automatic direct fallback."
+			} else {
+				"Startup: Discord first, then PROTECT. Messages stay connected during media route changes."
+			})).small().color(colors.muted));
 			if self
 				.active
 				.filter(|_| self.enabled)
@@ -293,7 +354,7 @@ impl Settings {
 	}
 	/// What most people never need, folded away: manual proxies, reserve, keys.
 	fn advanced(&mut self, ui: &mut egui::Ui, demo: bool) {
-		ui.add_enabled_ui(!self.profiles_busy, |ui| {
+		ui.add_enabled_ui(!self.busy && !self.profiles_busy, |ui| {
 			profile(ui, &mut self.draft, "primary", &mut self.reveal);
 			if self.draft.protocol != Protocol::WireGuard {
 				ui.checkbox(
@@ -350,14 +411,14 @@ impl Settings {
 			self.flags_removed = true;
 			self.flags.clear();
 		}
-		ui.label(crate::tr_ui!(ui,"A failed protected route never silently switches to a direct connection. Changing live media routes reconnects the call automatically."));
+		ui.label(crate::tr_ui!(ui,"A failed protected route never silently switches to a direct connection. Only media covered by the changed route is affected."));
 	}
 	pub(crate) fn show(&mut self, ui: &mut egui::Ui, demo: bool) {
 		// The window already carries the PROTECT title.
 		self.status_header(ui, demo);
 		ui.add_space(6.0);
 		self.scope_row(ui);
-		ui.add_space(10.0);
+		ui.add_space(12.0);
 		self.profile_list(ui, demo);
 		ui.add_space(8.0);
 		self.import_row(ui, demo);
@@ -395,6 +456,12 @@ fn profile(ui: &mut egui::Ui, draft: &mut Draft, id: &str, reveal: &mut bool) {
 	});
 }
 impl crate::MessagingUi {
+	/// Recovery is available before login, even when the complete route failed closed.
+	pub fn show_protect_recovery(&mut self, ui: &mut egui::Ui) {
+		ui.push_id("startup-protect-recovery", |ui| {
+			self.settings.protect.show(ui, false)
+		});
+	}
 	pub fn protect_draft(&self) -> Draft {
 		self.settings.protect.draft.clone()
 	}
@@ -448,6 +515,12 @@ impl crate::MessagingUi {
 	}
 	pub fn set_protect_draft(&mut self, draft: Draft) {
 		let protect = &mut self.settings.protect;
+		let mut draft = draft;
+		if protect.activate_on_load
+			&& let Some(scope) = protect.activation_scope.take()
+		{
+			draft.scope = scope;
+		}
 		protect.draft = draft;
 		protect.reveal = false;
 		// A row click loaded this profile to connect it: enabling is the next step.
@@ -466,6 +539,7 @@ impl crate::MessagingUi {
 		// The load finished without producing a profile: say why instead of staying silent.
 		if std::mem::take(&mut protect.activate_on_load) {
 			protect.activating = None;
+			protect.activation_scope = None;
 			protect.status = status.chars().take(512).collect();
 		}
 		// A row clicked during a test run connects as soon as the tests have stopped.
@@ -512,6 +586,9 @@ impl crate::MessagingUi {
 		self.settings.protect.action.take()
 	}
 	/// The host reports the live route's scope every frame; `None` means nothing is routed.
+	pub fn set_protect_login_blocked(&mut self, blocked: bool) {
+		self.settings.protect.login_blocked = blocked;
+	}
 	pub fn set_protect_active_scope(&mut self, scope: Option<Scope>) {
 		self.settings.protect.active = scope;
 	}
@@ -675,7 +752,11 @@ mod tests {
 			)) if id == "a"
 		));
 		// The host loaded the profile: connecting is the next step, with no dialog between.
-		ui.set_protect_draft(model::protect::Draft::default());
+		ui.set_protect_draft(model::protect::Draft {
+			protocol: model::protect::Protocol::Socks5,
+			host: "127.0.0.1".into(),
+			..model::protect::Draft::default()
+		});
 		assert!(matches!(
 			ui.take_protect_action(),
 			Some(model::protect::Action::Enable(..))
@@ -694,7 +775,11 @@ mod tests {
 		ui.set_protect_profiles(vec![saved("a")]);
 		ui.settings.protect.activate("a");
 		ui.take_protect_action();
-		ui.set_protect_draft(model::protect::Draft::default());
+		ui.set_protect_draft(model::protect::Draft {
+			protocol: model::protect::Protocol::Socks5,
+			host: "127.0.0.1".into(),
+			..model::protect::Draft::default()
+		});
 		ui.take_protect_action();
 		ui.set_protect_operation_status("WireGuard handshake timed out", false, false);
 		assert!(ui.settings.protect.active_profile.is_none());
@@ -751,6 +836,51 @@ mod tests {
 		assert!(!ui.protect_locate());
 		ui.set_protect_profile_location(&ctx, "a", "1.2.3.4 · Brazil (BR)", None);
 		assert!(ui.settings.protect.profiles[0].location.is_empty());
+	}
+
+	#[test]
+	fn chosen_scope_survives_loading_a_saved_profile() {
+		let mut ui = crate::MessagingUi::default();
+		ui.settings.protect.draft.scope = model::protect::Scope::Streams;
+		ui.settings.protect.activate("fixture");
+		ui.take_protect_action();
+		ui.set_protect_draft(model::protect::Draft {
+			protocol: model::protect::Protocol::Socks5,
+			host: "127.0.0.1".into(),
+			scope: model::protect::Scope::Complete,
+			..model::protect::Draft::default()
+		});
+		assert!(
+			matches!(ui.take_protect_action(), Some(model::protect::Action::Enable(draft, _)) if draft.scope == model::protect::Scope::Streams)
+		);
+	}
+	#[test]
+	fn invalid_drafts_do_not_queue_an_enable_operation() {
+		let mut settings = super::Settings::default();
+		settings.request_enable();
+		assert!(settings.action.is_none());
+		assert!(!settings.status.is_empty());
+		assert!(!settings.busy);
+	}
+	#[test]
+	fn failed_switch_remains_visible_while_old_route_is_active() {
+		let mut settings = super::Settings {
+			enabled: true,
+			active: Some(model::protect::Scope::Videos),
+			status: "Synthetic route failure".into(),
+			..Default::default()
+		};
+		let ctx = egui::Context::default();
+		fn contains(shape: &egui::Shape) -> bool {
+			match shape {
+				egui::Shape::Text(text) => text.galley.job.text.contains("Synthetic route failure"),
+				egui::Shape::Vec(shapes) => shapes.iter().any(contains),
+				_ => false,
+			}
+		}
+		let output = ctx.run_ui(Default::default(), |ui| settings.status_header(ui, false));
+		assert!(output.shapes.iter().any(|shape| contains(&shape.shape)));
+		output.drop_without_applying_deltas();
 	}
 
 	#[test]

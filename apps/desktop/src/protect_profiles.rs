@@ -63,6 +63,8 @@ struct Row {
 	protocol: u8,
 	scope: u8,
 	secret_bytes: usize,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	activation: Option<String>,
 }
 impl Row {
 	fn visible(&self) -> Result<SavedProfile, &'static str> {
@@ -269,6 +271,50 @@ fn remove_named(name: &str) -> Result<(), &'static str> {
 fn startup_marker() -> Result<PathBuf, &'static str> {
 	Ok(folder()?.join("start-enabled"))
 }
+/// Reserve a startup generation before changing the route. It contains no credentials.
+/// A cancelled or failed vault write leaves an unmatched generation and fails closed.
+pub async fn begin_active() -> Result<String, &'static str> {
+	bounded_store(|| begin_active_in(&startup_marker()?))
+		.await
+		.map_err(|_| STORE_ERROR)?
+}
+fn begin_active_in(path: &Path) -> Result<String, &'static str> {
+	use std::io::Write;
+	let mut random = [0; 16];
+	getrandom::fill(&mut random).map_err(|_| STORE_ERROR)?;
+	let activation: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+	let temporary = path.with_extension("tmp");
+	let mut file = std::fs::File::create(&temporary).map_err(|_| STORE_ERROR)?;
+	file.write_all(activation.as_bytes())
+		.map_err(|_| STORE_ERROR)?;
+	file.sync_all().map_err(|_| STORE_ERROR)?;
+	drop(file);
+	std::fs::rename(&temporary, path).map_err(|_| STORE_ERROR)?;
+	Ok(activation)
+}
+fn active_row(path: &Path, activation: &str) -> Result<Row, &'static str> {
+	if !valid_id(activation) {
+		return Err("Select a saved profile once to confirm startup protection");
+	}
+	let row = snapshot_row(path)?.ok_or(STORE_ERROR)?;
+	if row.activation.as_deref() != Some(activation) {
+		return Err(STORE_ERROR);
+	}
+	Ok(row)
+}
+fn active_configuration() -> Result<Option<Draft>, &'static str> {
+	let marker = startup_marker()?;
+	let file = match std::fs::File::open(marker) {
+		Ok(file) => file,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+		Err(_) => return Err(STORE_ERROR),
+	};
+	let mut activation = String::new();
+	file.take(33)
+		.read_to_string(&mut activation)
+		.map_err(|_| STORE_ERROR)?;
+	load(&active_row(&folder()?.join("active"), &activation)?).map(Some)
+}
 pub fn startup_enabled() -> bool {
 	startup_marker().is_ok_and(|path| path.exists())
 }
@@ -307,6 +353,7 @@ fn save(name: String, draft: Draft) -> Result<(), &'static str> {
 		protocol: bytes[0],
 		scope: bytes[1],
 		secret_bytes: bytes.len(),
+		activation: None,
 	};
 	let result = (|| {
 		use std::io::Write;
@@ -372,6 +419,19 @@ fn remember_in(
 	put: impl Fn(&str, &[u8]) -> Result<(), &'static str>,
 	forget: impl Fn(&str),
 ) -> Result<(), &'static str> {
+	remember_in_tagged(path, draft, None, put, forget)
+}
+
+fn remember_in_tagged(
+	path: &std::path::Path,
+	draft: &Draft,
+	activation: Option<&str>,
+	put: impl Fn(&str, &[u8]) -> Result<(), &'static str>,
+	forget: impl Fn(&str),
+) -> Result<(), &'static str> {
+	if activation.is_some_and(|value| !valid_id(value)) {
+		return Err(STORE_ERROR);
+	}
 	use std::io::Write;
 	std::fs::create_dir_all(path).map_err(|_| STORE_ERROR)?;
 	if std::fs::read_dir(path)
@@ -394,6 +454,7 @@ fn remember_in(
 		protocol: bytes[0],
 		scope: bytes[1],
 		secret_bytes: bytes.len(),
+		activation: activation.map(str::to_owned),
 	};
 	let result = (|| {
 		std::fs::write(
@@ -435,6 +496,7 @@ enum Event {
 	Initial(
 		Result<Vec<SavedProfile>, &'static str>,
 		Result<Option<Draft>, &'static str>,
+		Result<Option<Draft>, &'static str>,
 	),
 	Rows(Vec<SavedProfile>, &'static str),
 	Loaded(Draft, Result<(), &'static str>),
@@ -450,6 +512,7 @@ enum Event {
 #[derive(Default)]
 pub struct Manager {
 	pending_save: Option<Draft>,
+	pending_active: Option<(String, Draft)>,
 	started: bool,
 	testing: bool,
 	worker: Option<tokio::task::JoinHandle<()>>,
@@ -476,6 +539,9 @@ impl Drop for Manager {
 	}
 }
 impl Manager {
+	pub fn remember_active(&mut self, activation: String, draft: Draft) {
+		self.pending_active = Some((activation, draft));
+	}
 	pub fn scope(&mut self, generation: u64) {
 		if self.generation != Some(generation) {
 			if let Some(worker) = self.worker.take() {
@@ -499,6 +565,16 @@ impl Manager {
 		if !self.started {
 			self.started = true;
 			self.start(None, runtime, ctx, ui);
+		}
+		if self.worker.is_none()
+			&& let Some((activation, draft)) = self.pending_active.take()
+		{
+			self.start(
+				Some(ProfileAction::RememberActive { activation, draft }),
+				runtime,
+				ctx,
+				ui,
+			);
 		}
 		if self.worker.is_none()
 			&& let Some((name, draft)) = self.pending_named.take()
@@ -529,14 +605,14 @@ impl Manager {
 				_ => None,
 			};
 			match event {
-				Some(Event::Initial(rows, draft)) => {
+				Some(Event::Initial(rows, draft, active)) => {
 					let has_rows = rows.as_ref().is_ok_and(|rows| !rows.is_empty());
 					if let Ok(rows) = rows {
 						ui.set_protect_profiles(rows);
 					}
 					let startup = startup_enabled();
 					if startup {
-						self.startup = Some(draft.as_ref().ok().and_then(|draft| draft.clone()));
+						self.startup = Some(active.ok().flatten());
 					}
 					if self.pending_save.is_none()
 						&& let Ok(Some(draft)) = draft
@@ -763,7 +839,26 @@ impl Manager {
 						None => {
 							let draft = snapshot_row(&folder()?.join("remembered"))
 								.and_then(|row| row.map(|row| load(&row)).transpose());
-							Ok(Event::Initial(visible_rows(), draft))
+							Ok(Event::Initial(
+								visible_rows(),
+								draft,
+								active_configuration(),
+							))
+						}
+						Some(ProfileAction::RememberActive { activation, draft }) => {
+							remember_in_tagged(
+								&folder()?.join("active"),
+								&draft,
+								Some(&activation),
+								|id, bytes| {
+									platform::protect_profiles::save(id, bytes)
+										.map_err(|_| STORE_ERROR)
+								},
+								|id| {
+									let _ = platform::protect_profiles::forget(id);
+								},
+							)?;
+							Ok(Event::Remembered)
 						}
 						Some(ProfileAction::Remember(draft)) => {
 							remember(&draft)?;
@@ -802,11 +897,13 @@ impl Manager {
 				{
 					Ok(Ok(event)) => {
 						let status = match &event {
-							Event::Initial(_, Err(error)) | Event::Initial(Err(error), _) => *error,
-							Event::Initial(_, Ok(Some(_))) => {
+							Event::Initial(_, Err(error), _)
+							| Event::Initial(Err(error), _, _)
+							| Event::Initial(_, _, Err(error)) => *error,
+							Event::Initial(_, Ok(Some(_)), _) => {
 								"Configuration restored; enable PROTECT to apply it"
 							}
-							Event::Initial(_, Ok(None)) => "Saved profiles ready",
+							Event::Initial(_, Ok(None), _) => "Saved profiles ready",
 							Event::Remembered => {
 								"Configuration saved securely; available after restart"
 							}
@@ -914,6 +1011,51 @@ mod tests {
 	}
 
 	#[test]
+	fn startup_uses_the_applied_snapshot_not_the_last_editor_or_test_profile() {
+		let directory = SnapshotDirectory::new();
+		std::fs::create_dir_all(&directory.0).unwrap();
+		let secrets = std::cell::RefCell::new(std::collections::HashMap::<String, Vec<u8>>::new());
+		let put = |id: &str, bytes: &[u8]| {
+			secrets.borrow_mut().insert(id.into(), bytes.to_vec());
+			Ok(())
+		};
+		let forget = |id: &str| {
+			secrets.borrow_mut().remove(id);
+		};
+		let marker = directory.0.join("start-enabled");
+		let activation = begin_active_in(&marker).unwrap();
+		let active = directory.0.join("active");
+		assert!(
+			active_row(&active, &activation).is_err(),
+			"pending storage must not restore an older route"
+		);
+		let mut draft = Draft {
+			protocol: Protocol::Socks5,
+			scope: Scope::Complete,
+			host: "active.invalid".into(),
+			..Draft::default()
+		};
+		remember_in_tagged(&active, &draft, Some(&activation), put, forget).unwrap();
+		draft.scope = Scope::Videos;
+		draft.host = "edited.invalid".into();
+		remember_in(&directory.0.join("remembered"), &draft, put, forget).unwrap();
+		let row = active_row(&active, &activation).unwrap();
+		let saved = decode(&secrets.borrow()[&row.id]).unwrap();
+		assert_eq!(saved.scope, Scope::Complete);
+		assert_eq!(saved.host, "active.invalid");
+		let newer = begin_active_in(&marker).unwrap();
+		assert_ne!(activation, newer);
+		assert!(
+			active_row(&active, &newer).is_err(),
+			"stale writer cannot confirm a later activation"
+		);
+		assert!(
+			active_row(&active, "1").is_err(),
+			"legacy editor state requires one explicit profile choice"
+		);
+	}
+
+	#[test]
 	fn failed_snapshot_publication_keeps_the_previous_configuration() {
 		let directory = SnapshotDirectory::new();
 		let secrets = std::cell::RefCell::new(std::collections::HashMap::<String, Vec<u8>>::new());
@@ -950,7 +1092,7 @@ mod tests {
 			host: "restored.invalid".into(),
 			..Draft::default()
 		};
-		send.send(Event::Initial(Err(STORE_ERROR), Ok(Some(draft))))
+		send.send(Event::Initial(Err(STORE_ERROR), Ok(Some(draft)), Ok(None)))
 			.ok()
 			.unwrap();
 		send.send(Event::Finished(Err(STORE_ERROR))).ok().unwrap();
@@ -958,6 +1100,7 @@ mod tests {
 			started: true,
 			receive: Some(receive),
 			pending_save: None,
+			pending_active: None,
 			testing: false,
 			worker: None,
 			generation: None,
@@ -989,6 +1132,7 @@ mod tests {
 			started: true,
 			receive: Some(receive),
 			pending_save: None,
+			pending_active: None,
 			testing: false,
 			worker: None,
 			generation: None,
@@ -1037,6 +1181,7 @@ mod tests {
 		let runtime = tokio::runtime::Runtime::new().unwrap();
 		let mut manager = Manager {
 			pending_save: None,
+			pending_active: None,
 			started: false,
 			testing: true,
 			worker: None,

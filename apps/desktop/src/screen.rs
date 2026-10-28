@@ -61,9 +61,15 @@ enum Notice {
 }
 struct Live {
 	context: Context,
+	settings: Settings,
 	worker: Worker,
 	task: JoinHandle<()>,
 	events: watch::Receiver<Option<Notice>>,
+}
+struct Restart {
+	context: Context,
+	settings: Settings,
+	deadline: Instant,
 }
 struct Closing {
 	context: Context,
@@ -81,6 +87,7 @@ pub(super) struct Screen {
 	pending: Option<Pending>,
 	live: Option<Live>,
 	closing: Option<Closing>,
+	restart: Option<Restart>,
 	retiring: Option<mpsc::Receiver<Result<(), &'static str>>>,
 	source_scan: Option<SourceScan>,
 	command: Option<Command>,
@@ -88,7 +95,36 @@ pub(super) struct Screen {
 	status: &'static str,
 }
 impl Screen {
+	/// One bounded restart after an explicit route change. Never change capture source
+	/// or bypass the Linux portal picker, and never restart an already stopping share.
+	pub fn route_changed(&mut self) {
+		if self.closing.is_some() || self.restart.is_some() {
+			return;
+		}
+		let selected = self
+			.pending
+			.as_ref()
+			.map(|pending| (pending.context, pending.settings))
+			.or_else(|| self.live.as_ref().map(|live| (live.context, live.settings)));
+		let Some((context, settings)) = selected else {
+			return;
+		};
+		if settings.source == screen::SourceId::Portal {
+			self.request_stop("Route changed; choose the screen again in the system picker");
+			return;
+		}
+		self.close(
+			context,
+			"Reconnecting screen sharing after the route change…",
+		);
+		self.restart = Some(Restart {
+			context,
+			settings,
+			deadline: Instant::now() + Duration::from_secs(90),
+		});
+	}
 	pub fn stop(&mut self) {
+		self.restart = None;
 		self.pending = None;
 		self.command = None;
 		self.closing = None;
@@ -113,6 +149,7 @@ impl Screen {
 	}
 
 	fn request_stop(&mut self, message: &'static str) {
+		self.restart = None;
 		note("share_stopped", message);
 		let Some(context) = self.context() else {
 			self.status = message;
@@ -180,7 +217,8 @@ impl Screen {
 				};
 				let Some(endpoint) = endpoint.take() else {
 					let _ = token.take();
-					self.request_stop("Discord screen-share server is unavailable");
+					pending.server = None;
+					self.status = "Waiting for the screen-share server…";
 					return;
 				};
 				let Some(token) = token.take() else {
@@ -190,6 +228,9 @@ impl Screen {
 				pending.server = Some((token, endpoint));
 			}
 			screen::Event::Deleted { reason } => {
+				if self.closing.is_none() || reason.is_some() {
+					self.restart = None;
+				}
 				self.pending = None;
 				self.retire_live();
 				self.closing = None;
@@ -322,10 +363,47 @@ impl Screen {
 			self.request_stop("Screen-share permission was removed; stopping sharing");
 		}
 
-		if let Some(request) = ui.screen.request.take() {
+		let mut request = ui.screen.request.take();
+		let mut requested = ui.screen.context;
+		if request.is_some() {
+			self.restart = None;
+		}
+		if let Some(restart) = &self.restart {
+			let same_call = call_context
+				== Some((
+					restart.context.generation,
+					restart.context.channel,
+					restart.context.request,
+				)) && state.can_stream(restart.context.channel)
+				&& state.voice.active.as_ref().is_some_and(|active| {
+					active.channel == restart.context.channel
+						&& active.request == restart.context.request
+						&& matches!(
+							active.phase,
+							voice::Phase::Connected | voice::Phase::Waiting
+						)
+				});
+			if !same_call || Instant::now() >= restart.deadline {
+				self.restart = None;
+				self.status = "Screen-share recovery cancelled; share again when ready";
+			} else {
+				ctx.request_repaint_after(
+					restart.deadline.saturating_duration_since(Instant::now()),
+				);
+				if self.context().is_none() && self.retiring.is_none() {
+					let restart = self.restart.take().unwrap();
+					requested = Some((
+						restart.context.generation,
+						restart.context.channel,
+						restart.context.request,
+					));
+					request = Some(ui::screen::Request::Start(restart.settings));
+				}
+			}
+		}
+		if let Some(request) = request {
 			match request {
 				ui::screen::Request::Start(settings) => {
-					let requested = ui.screen.context;
 					let valid = settings
 						.valid()
 						.then_some(())
@@ -455,7 +533,8 @@ impl Screen {
 				ctx.request_repaint_after(SIGNAL_TIMEOUT.saturating_sub(closing.started.elapsed()));
 			}
 		}
-		ui.screen.busy = self.pending.is_some()
+		ui.screen.busy = self.restart.is_some()
+			|| self.pending.is_some()
 			|| self.live.is_some()
 			|| self.closing.is_some()
 			|| self.retiring.is_some();
@@ -540,6 +619,7 @@ impl Screen {
 		self.status = "Connecting screen-share transport…";
 		self.live = Some(Live {
 			context: pending.context,
+			settings: pending.settings,
 			worker,
 			task,
 			events,
@@ -601,6 +681,44 @@ mod tests {
 			));
 			assert!(screen.pending.is_some());
 			assert!(screen.live.is_none());
+			let old = screen.pending.as_ref().unwrap().context;
+			screen.route_changed();
+			let deadline = screen.restart.as_ref().unwrap().deadline;
+			screen.route_changed();
+			assert_eq!(screen.restart.as_ref().unwrap().deadline, deadline);
+			assert!(
+				matches!(screen.command.take(), Some(Command::Voice(voice::Command::StopStream { stream_request, .. })) if stream_request == old.stream_request)
+			);
+			let mut ended = Event::Voice(voice::Event::Stream {
+				channel,
+				request,
+				stream_request: old.stream_request,
+				event: screen::Event::Deleted { reason: None },
+			});
+			screen.observe(&state, &mut ended);
+			let call = Call {
+				generation: state.generation,
+				channel,
+				request,
+				user: Id(1),
+				peer: (channel == Id(22)).then_some(Id(2)),
+				session: "synthetic-session",
+				identity: Identity::generate(),
+			};
+			assert!(
+				matches!(screen.poll(&runtime, &state, &mut ui, &ctx, Some(call)), Some(Command::Voice(voice::Command::StartStream { stream_request, .. })) if stream_request != old.stream_request)
+			);
+			assert_eq!(
+				screen.pending.as_ref().unwrap().settings.source,
+				screen::SourceId::Display(1)
+			);
+			assert!(screen.restart.is_none());
+			screen.route_changed();
+			screen.request_stop("User stopped");
+			assert!(
+				screen.restart.is_none(),
+				"user stop always wins over recovery"
+			);
 		}
 	}
 
@@ -619,6 +737,91 @@ mod tests {
 			)),
 			started: Instant::now(),
 		}
+	}
+
+	#[test]
+	fn route_recovery_never_reopens_a_portal_picker_or_retries_a_server_end() {
+		let state = State::default();
+		let context = Context {
+			generation: state.generation,
+			channel: Id(20),
+			request: 7,
+			stream_request: 8,
+		};
+		for source in [screen::SourceId::Portal, screen::SourceId::Window(42)] {
+			let mut owner = Screen {
+				pending: Some(pending(
+					context,
+					Settings {
+						source,
+						width: 1280,
+						height: 720,
+						fps: 30,
+						cursor: true,
+						audio: false,
+					},
+				)),
+				..Screen::default()
+			};
+			owner.route_changed();
+			assert_eq!(owner.restart.is_none(), source == screen::SourceId::Portal);
+			let mut event = Event::Voice(voice::Event::Stream {
+				channel: context.channel,
+				request: context.request,
+				stream_request: context.stream_request,
+				event: screen::Event::Deleted {
+					reason: Some("server ended"),
+				},
+			});
+			owner.observe(&state, &mut event);
+			assert!(owner.restart.is_none());
+		}
+	}
+	#[test]
+	fn a_null_screen_endpoint_waits_without_restarting_its_negotiation_deadline() {
+		let state = State::default();
+		let context = Context {
+			generation: state.generation,
+			channel: Id(20),
+			request: 7,
+			stream_request: 8,
+		};
+		let mut owner = Screen {
+			pending: Some(pending(
+				context,
+				Settings {
+					source: screen::SourceId::Display(1),
+					width: 1280,
+					height: 720,
+					fps: 30,
+					cursor: true,
+					audio: false,
+				},
+			)),
+			..Screen::default()
+		};
+		let started = owner.pending.as_ref().unwrap().started;
+		let mut event = Event::Voice(voice::Event::Stream {
+			channel: context.channel,
+			request: context.request,
+			stream_request: context.stream_request,
+			event: screen::Event::Server {
+				token: None,
+				endpoint: None,
+			},
+		});
+		// A stale account event is deliberately ignored; the matching generation
+		// must exercise the endpoint branch without relaxing that guard.
+		let stale = State {
+			generation: state.generation.wrapping_add(1),
+			..State::default()
+		};
+		owner.observe(&stale, &mut event);
+		assert!(owner.pending.as_ref().unwrap().server.is_some());
+		owner.observe(&state, &mut event);
+		assert_eq!(owner.pending.as_ref().unwrap().started, started);
+		assert!(owner.pending.as_ref().unwrap().server.is_none());
+		assert!(owner.closing.is_none());
 	}
 
 	#[test]

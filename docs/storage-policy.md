@@ -1477,11 +1477,26 @@ Markdown keeps its smaller existing limits. Show more expands up to 200,000
 characters without reparsing the document on every frame. Closing or replacing a
 preview releases its cache; navigation and logout cancel the asynchronous fetch.
 
-PROTECT retains at most two session-only profiles and no serialized preferences
-containing credentials. Each credential is limited to 255 bytes, host to 253 bytes,
-engine path to 1,024 characters and imported WireGuard configuration to 4 KiB.
-The host admits one operation/result, with at most 512 displayed status characters.
-See [PROTECT](protect.md) for routed scopes and engine lifecycle limits.
+PROTECT retains at most two live route profiles, up to 16 named saved copies, one
+remembered editor snapshot and one independent applied-primary snapshot. Passwords
+and original WireGuard configurations are zeroizing in memory and saved only in the
+OS credential store. Public metadata/reference files contain no private keys or
+plaintext password fallback. Each credential is limited to 255 bytes, host to
+253 bytes and imported WireGuard configuration to 4 KiB. The applied snapshot is
+bound to the nonsecret 32-character `start-enabled` generation; reads are capped at
+33 bytes and mismatches/legacy markers require explicit recovery. The existing
+single blocking-store slot bounds activation reservations and credential writes;
+there is at most one coalesced pending applied snapshot. Reserve settings remain
+session-only. The host admits one routing operation/result, with at most 512
+visible status characters. See [PROTECT](protect.md) for startup ordering,
+migration and engine lifecycle limits.
+
+Scoped media recovery retains one outgoing share source/settings/context and its
+90-second deadline, plus at most four already-selected watched streams. It adds no
+persistent reconnect history, raw frame cache or permission bypass. An outgoing
+share is not revived after Stop/Leave. Linux portal sources require manual selection.
+Playback health exposes two local scalar atomics: queued PCM milliseconds and
+trimmed frame count. They are not network RTT, end-to-end latency or telemetry.
 
 Scheduled-event and soundboard lists use separate session-only caches, each bounded
 to 16 guilds and 1 MiB including conservative map overhead. Incoming lists are

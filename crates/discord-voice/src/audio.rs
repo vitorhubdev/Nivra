@@ -66,7 +66,10 @@ pub struct Gate {
 	output_callbacks: AtomicU64,
 	revision: AtomicU64,
 	acknowledged_revision: AtomicU64,
-	media_generation: AtomicU64,
+	capture_generation: AtomicU64,
+	playback_generation: AtomicU64,
+	playback_queue_ms: AtomicU16,
+	playback_trimmed_frames: AtomicU64,
 	input_enabled: AtomicBool,
 	input_gain: AtomicU16,
 	output_gain: AtomicU16,
@@ -88,7 +91,10 @@ impl Default for Gate {
 			output_callbacks: AtomicU64::new(0),
 			revision: AtomicU64::new(1),
 			acknowledged_revision: AtomicU64::new(0),
-			media_generation: AtomicU64::new(0),
+			capture_generation: AtomicU64::new(0),
+			playback_generation: AtomicU64::new(0),
+			playback_queue_ms: AtomicU16::new(0),
+			playback_trimmed_frames: AtomicU64::new(0),
 			input_enabled: AtomicBool::new(true),
 			input_gain: AtomicU16::new(100),
 			output_gain: AtomicU16::new(100),
@@ -501,7 +507,8 @@ impl Audio {
 	pub fn set_ready(&self, ready: bool) {
 		let established = self.gate.is_ready();
 		if self.gate.ready.swap(ready, Ordering::AcqRel) && !ready {
-			self.gate.media_generation.fetch_add(1, Ordering::AcqRel);
+			self.gate.capture_generation.fetch_add(1, Ordering::AcqRel);
+			self.gate.playback_generation.fetch_add(1, Ordering::AcqRel);
 			self.gate.echo_reset.store(true, Ordering::Release);
 			if !established {
 				// An in-flight open must not acknowledge a later security epoch.
@@ -534,11 +541,22 @@ impl Audio {
 		let mute_changed =
 			self.gate.muted.swap(muted || deafened, Ordering::AcqRel) != (muted || deafened);
 		let deafen_changed = self.gate.deafened.swap(deafened, Ordering::AcqRel) != deafened;
-		if mute_changed || deafen_changed {
-			// A quick mute/unmute may happen between callbacks: invalidate partial PCM too.
-			self.gate.media_generation.fetch_add(1, Ordering::AcqRel);
+		if mute_changed {
+			// Push-to-talk controls capture only. Resetting playback here cuts other speakers.
+			self.gate.capture_generation.fetch_add(1, Ordering::AcqRel);
 			self.gate.echo_reset.store(true, Ordering::Release);
 		}
+		if deafen_changed {
+			self.gate.playback_generation.fetch_add(1, Ordering::AcqRel);
+			self.gate.echo_reset.store(true, Ordering::Release);
+		}
+	}
+	/// Local decoded output queue only, not network or end-to-end latency.
+	pub fn playback_health(&self) -> (u16, u64) {
+		(
+			self.gate.playback_queue_ms.load(Ordering::Relaxed),
+			self.gate.playback_trimmed_frames.load(Ordering::Relaxed),
+		)
 	}
 	/// Changes are coalesced and applied on the worker, never in device callbacks.
 	pub fn set_processing(&self, mut settings: Processing) {
@@ -1007,7 +1025,7 @@ impl Capture {
 	where
 		f32: cpal::FromSample<T>,
 	{
-		let generation = gate.media_generation.load(Ordering::Acquire);
+		let generation = gate.capture_generation.load(Ordering::Acquire);
 		if generation != self.media_generation {
 			self.media_generation = generation;
 			self.reset();
@@ -1061,6 +1079,8 @@ impl Capture {
 }
 struct Playback {
 	media_generation: u64,
+	frame_has_audio: bool,
+	trimmed_frames: u64,
 	input: rtrb::Consumer<Frame>,
 	reference: Capture,
 	frame: Frame,
@@ -1077,7 +1097,7 @@ impl Playback {
 		channels: usize,
 		gate: &Gate,
 	) {
-		let generation = gate.media_generation.load(Ordering::Acquire);
+		let generation = gate.playback_generation.load(Ordering::Acquire);
 		if generation != self.media_generation {
 			self.media_generation = generation;
 			self.reset();
@@ -1097,6 +1117,21 @@ impl Playback {
 				self.reference.sample(sample);
 			}
 		}
+		let queued_samples = self.input.slots() * 960
+			+ if self.frame_has_audio {
+				960_usize.saturating_sub(self.index)
+			} else {
+				0
+			};
+		gate.playback_queue_ms.store(
+			(queued_samples / 48).min(u16::MAX as usize) as u16,
+			Ordering::Relaxed,
+		);
+		let trimmed = std::mem::take(&mut self.trimmed_frames);
+		if trimmed != 0 {
+			gate.playback_trimmed_frames
+				.fetch_add(trimmed, Ordering::Relaxed);
+		}
 		if std::mem::take(&mut self.reference.overrun) {
 			gate.echo_reset.store(true, Ordering::Release);
 		}
@@ -1104,6 +1139,8 @@ impl Playback {
 	fn new(rate: u32, input: rtrb::Consumer<Frame>, reference: rtrb::Producer<Frame>) -> Self {
 		Self {
 			media_generation: 0,
+			trimmed_frames: 0,
+			frame_has_audio: false,
 			input,
 			reference: Capture::new(rate, reference),
 			frame: [0.0; 960],
@@ -1122,6 +1159,7 @@ impl Playback {
 		}
 		self.reference.reset();
 		self.frame.fill(0.0);
+		self.frame_has_audio = false;
 		self.index = 960;
 		self.previous = 0.0;
 		self.next = 0.0;
@@ -1129,7 +1167,30 @@ impl Playback {
 	}
 	fn pull(&mut self) -> f32 {
 		if self.index == 960 {
-			self.frame = self.input.pop().unwrap_or([0.0; 960]);
+			// Hysteresis: preserve normal 20-80 ms callback bursts. Above that,
+			// keep the newest 40 ms instead of carrying a permanent backlog.
+			let queued = self.input.slots();
+			let trim = if queued > 4 {
+				queued.saturating_sub(2).min(8)
+			} else {
+				0
+			};
+			for _ in 0..trim {
+				if self.input.pop().is_ok() {
+					self.trimmed_frames += 1;
+				}
+			}
+			let previous = self.frame[959];
+			let frame = self.input.pop().ok();
+			self.frame_has_audio = frame.is_some();
+			self.frame = frame.unwrap_or([0.0; 960]);
+			if trim != 0 {
+				// A 5 ms PCM ramp masks the discontinuity without resampling speech.
+				for (index, sample) in self.frame[..240].iter_mut().enumerate() {
+					let from = amplify(previous, 1.0);
+					*sample = from + (amplify(*sample, 1.0) - from) * (index + 1) as f32 / 240.0;
+				}
+			}
 			self.index = 0;
 		}
 		let value = self.frame[self.index];
@@ -1257,7 +1318,7 @@ mod tests {
 		let second = audio.gate.revision.load(Ordering::Acquire);
 		assert_eq!(first, second); // Established devices survive a security pause.
 		assert!(audio.is_ready());
-		assert_eq!(audio.gate.media_generation.load(Ordering::Acquire), 1);
+		assert_eq!(audio.gate.capture_generation.load(Ordering::Acquire), 1);
 		// A pause while devices are still opening must invalidate their late result.
 		audio.gate.acknowledged_revision.store(0, Ordering::Release);
 		audio.set_ready(false);
@@ -1403,7 +1464,7 @@ mod tests {
 		capture.process(&[0.75; 961], 1, &audio.gate);
 		assert!(captured.pop().is_err());
 		playback.render(&mut rendered, 1, &audio.gate);
-		assert_eq!(rendered, [0.0; 2]);
+		assert_eq!(rendered, [0.5; 2]);
 		audio.set_controls(false, true);
 		playback_send.push([0.75; 960]).unwrap();
 		capture.process(&[0.75; 961], 1, &audio.gate);
@@ -1422,6 +1483,86 @@ mod tests {
 		playback.render(&mut rendered, 1, &audio.gate);
 		assert!(captured.pop().is_err());
 		assert_eq!(rendered, [0.0; 2]);
+	}
+
+	#[test]
+	fn push_to_talk_does_not_discard_remote_audio_but_deafen_still_does() {
+		let audio = audio_without_devices();
+		audio.set_ready(true);
+		assert!(
+			audio
+				.gate
+				.acknowledge(audio.gate.revision.load(Ordering::Acquire))
+		);
+		let (mut send, receive) = rtrb::RingBuffer::new(8);
+		let mut playback = Playback::new(48_000, receive, rtrb::RingBuffer::new(8).0);
+		send.push([0.25; 960]).unwrap();
+		let mut output = [0.0_f32; 2];
+		playback.render(&mut output, 1, &audio.gate);
+		for muted in [true, false, true, false] {
+			audio.set_controls(muted, false);
+			playback.render(&mut output, 1, &audio.gate);
+			assert_eq!(output, [0.25; 2]);
+		}
+		audio.set_controls(false, true);
+		audio.set_controls(false, false); // Even a transition between callbacks flushes old audio.
+		playback.render(&mut output, 1, &audio.gate);
+		assert_eq!(output, [0.0; 2]);
+	}
+	#[test]
+	fn playback_health_does_not_count_generated_underrun_silence_as_queued_audio() {
+		let audio = audio_without_devices();
+		audio.set_ready(true);
+		assert!(
+			audio
+				.gate
+				.acknowledge(audio.gate.revision.load(Ordering::Acquire))
+		);
+		let (mut send, receive) = rtrb::RingBuffer::new(8);
+		let mut playback = Playback::new(48_000, receive, rtrb::RingBuffer::new(8).0);
+		let mut output = [0.0_f32; 480];
+		playback.render(&mut output, 1, &audio.gate);
+		assert_eq!(audio.playback_health(), (0, 0));
+		send.push([0.25; 960]).unwrap();
+		playback.render(&mut output, 1, &audio.gate);
+		assert!(audio.playback_health().0 > 0);
+		for _ in 0..4 {
+			playback.render(&mut output, 1, &audio.gate);
+		}
+		assert_eq!(audio.playback_health(), (0, 0));
+	}
+
+	#[test]
+	fn playback_catches_up_after_a_burst_and_reports_only_local_queue_delay() {
+		let audio = audio_without_devices();
+		audio.set_ready(true);
+		assert!(
+			audio
+				.gate
+				.acknowledge(audio.gate.revision.load(Ordering::Acquire))
+		);
+		let (mut send, receive) = rtrb::RingBuffer::new(8);
+		let mut playback = Playback::new(48_000, receive, rtrb::RingBuffer::new(8).0);
+		for i in 0..8 {
+			send.push([i as f32 / 10.0; 960]).unwrap();
+		}
+		let mut output = [0.0_f32; 960];
+		playback.render(&mut output, 1, &audio.gate);
+		assert_eq!(
+			output[959], 0.6,
+			"six stale frames skipped, not the newest ones"
+		);
+		assert!(output.iter().all(|value| value.is_finite()));
+		let (queue_ms, skipped) = audio.playback_health();
+		assert!(queue_ms <= 21, "remaining queue: {queue_ms} ms");
+		assert_eq!(skipped, 6);
+		playback.render(&mut output, 1, &audio.gate);
+		assert_eq!(output[959], 0.7);
+		assert_eq!(
+			audio.playback_health().1,
+			6,
+			"no repeated trimming below the high watermark"
+		);
 	}
 
 	#[test]

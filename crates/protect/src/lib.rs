@@ -29,6 +29,8 @@ pub struct Profile {
 	pub port: u16,
 	username: Zeroizing<String>,
 	password: Zeroizing<String>,
+	/// Original configuration, never the temporary loopback inlet credentials.
+	wireguard: Option<Zeroizing<String>>,
 	#[allow(
 		dead_code,
 		reason = "owns the engine: dropping the profile stops the tunnel and its inlet"
@@ -45,6 +47,27 @@ impl std::fmt::Debug for Profile {
 	}
 }
 impl Profile {
+	/// A bounded, zeroizing copy for the OS credential store after successful activation.
+	pub fn configuration(&self) -> model::protect::Draft {
+		if let Some(wireguard) = &self.wireguard {
+			model::protect::Draft {
+				protocol: Protocol::WireGuard,
+				scope: self.scope,
+				wireguard: wireguard.clone(),
+				..model::protect::Draft::default()
+			}
+		} else {
+			model::protect::Draft {
+				protocol: self.protocol,
+				scope: self.scope,
+				host: self.host.clone(),
+				port: self.port,
+				username: self.username.clone(),
+				password: self.password.clone(),
+				..model::protect::Draft::default()
+			}
+		}
+	}
 	pub fn new(
 		protocol: Protocol,
 		scope: Scope,
@@ -63,21 +86,10 @@ impl Profile {
 				"Live media requires SOCKS5 UDP; HTTP and SOCKS4 support videos and files only",
 			);
 		}
-		if host.is_empty()
-			|| host.len() > 253
-			|| port == 0
-			|| host
-				.chars()
-				.any(|c| c.is_whitespace() || c.is_control() || matches!(c, '/' | '@' | '?' | '#'))
-			|| username.len() > 255
-			|| password.len() > 255
-			|| username.contains('\0')
-			|| password.contains('\0')
+		if let Some(reason) =
+			model::protect::proxy_problem(protocol, host, port, username, password)
 		{
-			return Err("Check server, port and credential lengths");
-		}
-		if protocol == Protocol::Socks4 && !password.is_empty() {
-			return Err("SOCKS4 has no password authentication; use SOCKS5");
+			return Err(reason);
 		}
 		let profile = Self {
 			protocol,
@@ -86,6 +98,7 @@ impl Profile {
 			port,
 			username: Zeroizing::new(username.to_owned()),
 			password: Zeroizing::new(password.to_owned()),
+			wireguard: None,
 			engine: None,
 		};
 		profile.url()?;
@@ -110,6 +123,7 @@ impl Profile {
 #[derive(Default)]
 struct Routes {
 	generation: u64,
+	scope_generations: [u64; 4],
 	primary: Option<Arc<Profile>>,
 	reserve: Option<Arc<Profile>>,
 	failures: u8,
@@ -146,6 +160,15 @@ pub fn apply(
 		return Err("Fallback must use the same scope");
 	}
 	let mut state = routes().write().map_err(|_| "Route state unavailable")?;
+	// Retire only transports whose route actually changes. In particular, enabling
+	// file protection must not invalidate an ongoing direct voice/stream socket.
+	let old_scope = state.primary.as_ref().map(|profile| profile.scope);
+	let new_scope = primary.as_ref().map(|profile| profile.scope);
+	for (index, traffic) in Scope::ALL.into_iter().enumerate() {
+		if scope_affected(old_scope, new_scope, traffic) {
+			state.scope_generations[index] = state.scope_generations[index].wrapping_add(1);
+		}
+	}
 	state.generation = state.generation.wrapping_add(1);
 	trace::line(&format!(
 		"route applied: generation {} primary={} reserve={}",
@@ -167,14 +190,36 @@ pub fn selected(scope: Scope) -> Result<Option<Arc<Profile>>, &'static str> {
 		.filter(|p| p.scope.contains(scope))
 		.cloned())
 }
-pub fn ensure_current(expected: u64) -> Result<(), &'static str> {
-	if generation() != expected {
+fn scope_affected(old: Option<Scope>, new: Option<Scope>, traffic: Scope) -> bool {
+	old.is_some_and(|scope| scope.contains(traffic))
+		|| new.is_some_and(|scope| scope.contains(traffic))
+}
+fn scope_index(scope: Scope) -> usize {
+	match scope {
+		Scope::Videos => 0,
+		Scope::Voice => 1,
+		Scope::Streams => 2,
+		Scope::Complete => 3,
+	}
+}
+/// Capture the epoch and route under one lock; an Apply cannot race between them.
+fn route_snapshot(scope: Scope) -> Result<(u64, Option<Arc<Profile>>), &'static str> {
+	let state = routes().read().map_err(|_| "Route state unavailable")?;
+	Ok((
+		state.scope_generations[scope_index(scope)],
+		state
+			.primary
+			.as_ref()
+			.filter(|p| p.scope.contains(scope))
+			.cloned(),
+	))
+}
+fn ensure_scope_current(scope: Scope, expected: u64) -> Result<(), &'static str> {
+	let state = routes().read().map_err(|_| "Route state unavailable")?;
+	if state.scope_generations[scope_index(scope)] != expected {
 		return Err("PROTECT route changed; reconnect before continuing");
-	};
-	routes()
-		.read()
-		.map_err(|_| "Route state unavailable")
-		.map(|_| ())
+	}
+	Ok(())
 }
 /// Dynamic route selection prevents long-lived readers from keeping an old direct
 /// connection after Apply. Idle pooling is disabled; in-flight sends are retired by the host.
@@ -339,15 +384,16 @@ async fn tunnel(p: &Profile, host: &str, port: u16) -> io::Result<TcpStream> {
 	Ok(stream)
 }
 async fn dial(scope: Scope, host: &str, port: u16) -> io::Result<TcpStream> {
-	let epoch = generation();
-	let profile = selected(scope).map_err(|_| invalid())?;
+	let (epoch, profile) = route_snapshot(scope).map_err(|_| invalid())?;
 	let stream = match profile {
 		Some(profile) => tokio::time::timeout(DEADLINE, tunnel(&profile, host, port))
 			.await
 			.map_err(|_| invalid())??,
-		None => TcpStream::connect((host, port)).await?,
+		None => tokio::time::timeout(DEADLINE, TcpStream::connect((host, port)))
+			.await
+			.map_err(|_| invalid())??,
 	};
-	ensure_current(epoch).map_err(|_| invalid())?;
+	ensure_scope_current(scope, epoch).map_err(|_| invalid())?;
 	Ok(stream)
 }
 pub async fn websocket(
@@ -361,7 +407,8 @@ pub async fn websocket(
 	),
 	tokio_tungstenite::tungstenite::Error,
 > {
-	let epoch = generation();
+	let (epoch, _) =
+		route_snapshot(scope).map_err(|_| tokio_tungstenite::tungstenite::Error::Io(invalid()))?;
 	let parsed =
 		url::Url::parse(url).map_err(|_| tokio_tungstenite::tungstenite::Error::Io(invalid()))?;
 	let host = parsed
@@ -371,9 +418,14 @@ pub async fn websocket(
 		.port_or_known_default()
 		.ok_or_else(|| tokio_tungstenite::tungstenite::Error::Io(invalid()))?;
 	let stream = dial(scope, host, port).await?;
-	let connected =
-		tokio_tungstenite::client_async_tls_with_config(url, stream, config, None).await?;
-	ensure_current(epoch).map_err(|_| tokio_tungstenite::tungstenite::Error::Io(invalid()))?;
+	let connected = tokio::time::timeout(
+		DEADLINE,
+		tokio_tungstenite::client_async_tls_with_config(url, stream, config, None),
+	)
+	.await
+	.map_err(|_| tokio_tungstenite::tungstenite::Error::Io(invalid()))??;
+	ensure_scope_current(scope, epoch)
+		.map_err(|_| tokio_tungstenite::tungstenite::Error::Io(invalid()))?;
 	Ok(connected)
 }
 
@@ -382,11 +434,14 @@ pub struct Datagram {
 	socket: UdpSocket,
 	association: Option<TcpStream>,
 	destination: SocketAddr,
-	epoch: Option<u64>,
+	epoch: Option<(Scope, u64)>,
 }
 impl Datagram {
 	fn current(&self) -> io::Result<()> {
-		if self.epoch.is_some_and(|e| ensure_current(e).is_err()) {
+		if self
+			.epoch
+			.is_some_and(|(scope, epoch)| ensure_scope_current(scope, epoch).is_err())
+		{
 			trace::line(&format!(
 				"datagram ended: opened on generation {:?}, route is now generation {}",
 				self.epoch,
@@ -400,11 +455,10 @@ impl Datagram {
 		Ok(())
 	}
 	pub async fn connect(destination: SocketAddr, scope: Scope) -> io::Result<Self> {
-		let epoch = generation();
-		let profile = selected(scope).map_err(|_| invalid())?;
+		let (epoch, profile) = route_snapshot(scope).map_err(|_| invalid())?;
 		let mut socket = Self::connect_profile(destination, profile.as_deref()).await?;
-		ensure_current(epoch).map_err(|_| invalid())?;
-		socket.epoch = Some(epoch);
+		ensure_scope_current(scope, epoch).map_err(|_| invalid())?;
+		socket.epoch = Some((scope, epoch));
 		Ok(socket)
 	}
 	async fn connect_profile(
@@ -770,6 +824,24 @@ mod tests {
 	async fn socks5_tcp_and_reserve_never_dial_direct() {
 		let _ = rustls::crypto::ring::default_provider().install_default();
 		let udp_receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+		let old_voice = Datagram::connect(udp_receiver.local_addr().unwrap(), Scope::Voice)
+			.await
+			.unwrap();
+		let old_stream = Datagram::connect(udp_receiver.local_addr().unwrap(), Scope::Streams)
+			.await
+			.unwrap();
+		let file_route = Arc::new(
+			Profile::new(Protocol::Socks5, Scope::Videos, "127.0.0.1", 1, "", "").unwrap(),
+		);
+		apply(Some(file_route), None).unwrap();
+		old_voice.send(b"voice continues").await.unwrap();
+		old_stream.send(b"stream continues").await.unwrap();
+		let voice_route =
+			Arc::new(Profile::new(Protocol::Socks5, Scope::Voice, "127.0.0.1", 1, "", "").unwrap());
+		apply(Some(voice_route), None).unwrap();
+		assert!(old_voice.send(b"must be retired").await.is_err());
+		old_stream.send(b"stream still continues").await.unwrap();
+		apply(None, None).unwrap();
 		let old_direct = Datagram::connect(udp_receiver.local_addr().unwrap(), Scope::Complete)
 			.await
 			.unwrap();
@@ -889,5 +961,35 @@ mod tests {
 				.is_err()
 		);
 		apply(None, None).unwrap();
+	}
+}
+
+#[cfg(test)]
+mod scoped_route_tests {
+	use super::*;
+	#[test]
+	fn route_changes_invalidate_exactly_the_old_and_new_scopes() {
+		let choices = [
+			None,
+			Some(Scope::Videos),
+			Some(Scope::Voice),
+			Some(Scope::Streams),
+			Some(Scope::Complete),
+		];
+		for old in choices {
+			for new in choices {
+				for traffic in Scope::ALL {
+					let expected = [old, new]
+						.into_iter()
+						.flatten()
+						.any(|scope| scope == Scope::Complete || scope == traffic);
+					assert_eq!(
+						scope_affected(old, new, traffic),
+						expected,
+						"{old:?} -> {new:?}: {traffic:?}"
+					);
+				}
+			}
+		}
 	}
 }

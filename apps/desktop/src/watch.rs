@@ -155,6 +155,27 @@ pub(super) struct Watch {
 	visible: Arc<AtomicBool>,
 }
 impl Watch {
+	/// Retire transports, not the user's watch choices. The next poll renegotiates
+	/// only streams still wanted in the same call, behind any required teardown.
+	pub fn route_changed(&mut self) {
+		for pending in self.pending.drain(..) {
+			let context = pending.context;
+			let unsent = self.outbox.iter().any(|command| matches!(command,
+				Command::Voice(voice::Command::WatchStream { channel, request, stream_request, .. })
+				if *channel == context.channel && *request == context.request && *stream_request == context.stream_request));
+			if !unsent {
+				self.outbox.push_back(stop_command(context));
+			}
+		}
+		self.outbox.retain(|command| {
+			!matches!(command, Command::Voice(voice::Command::WatchStream { .. }))
+		});
+		for live in self.lives.drain(..) {
+			live.task.abort();
+			self.outbox.push_back(stop_command(live.context));
+		}
+		self.visible.store(false, Ordering::Release);
+	}
 	pub fn stop(&mut self) {
 		self.pending.clear();
 		self.outbox.clear();
@@ -744,6 +765,32 @@ mod tests {
 		assert_eq!(streamer, Id(4));
 		assert_eq!(watch.pending.len(), 2);
 		assert!(watch.outbox.is_empty());
+		// A route change preserves intent, releases both old views, and starts fresh IDs.
+		watch.route_changed();
+		assert_eq!(state.voice.active.as_ref().unwrap().watching_all().len(), 2);
+		assert!(
+			matches!(watch_command(&mut watch, &mut state, &mut ui), Some(Command::Voice(voice::Command::StopWatching { stream_request, .. })) if stream_request == first)
+		);
+		assert!(matches!(
+			watch_command(&mut watch, &mut state, &mut ui),
+			Some(Command::Voice(voice::Command::StopWatching { .. }))
+		));
+		let Some(Command::Voice(voice::Command::WatchStream {
+			stream_request: first,
+			streamer: Id(3),
+			..
+		})) = watch_command(&mut watch, &mut state, &mut ui)
+		else {
+			panic!("first view resumes");
+		};
+		assert!(matches!(
+			watch_command(&mut watch, &mut state, &mut ui),
+			Some(Command::Voice(voice::Command::WatchStream {
+				streamer: Id(4),
+				..
+			}))
+		));
+		assert!(watch.outbox.is_empty());
 		// Forgetting one stream tears down only its negotiation.
 		state.unwatch_stream(Id(3));
 		let Some(Command::Voice(voice::Command::StopWatching { stream_request, .. })) =
@@ -754,6 +801,49 @@ mod tests {
 		assert_eq!(stream_request, first);
 		assert_eq!(watch.pending.len(), 1);
 		assert!(watch.outbox.is_empty());
+	}
+
+	#[test]
+	fn repeated_route_changes_cancel_unsent_starts_instead_of_growing_the_outbox() {
+		let mut watch = Watch::default();
+		let identity = Identity::generate();
+		for attempt in 1..=100 {
+			for streamer in 1..=4 {
+				let context = Context {
+					generation: 0,
+					channel: Id(25),
+					request: 1,
+					stream_request: attempt * 4 + streamer,
+					streamer: Id(streamer),
+				};
+				watch.pending.push(Pending {
+					context,
+					user: Id(10),
+					peer: None,
+					session: Zeroizing::new("synthetic".into()),
+					identity: identity.clone(),
+					audio: None,
+					rtc: None,
+					server: None,
+					started: Instant::now(),
+					ended: None,
+				});
+				watch
+					.outbox
+					.push_back(Command::Voice(voice::Command::WatchStream {
+						channel: context.channel,
+						request: context.request,
+						stream_request: context.stream_request,
+						streamer: context.streamer,
+					}));
+			}
+			watch.route_changed();
+			assert!(watch.pending.is_empty());
+			assert!(
+				watch.outbox.is_empty(),
+				"unsent requests require no network teardown"
+			);
+		}
 	}
 
 	#[test]

@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased — preparação da 1.0.21
+
+Esta seção não significa que a 1.0.21 foi publicada. A auditoria de dependências
+continua sendo uma barreira de lançamento; chamadas reais e desempenho de GPU
+não foram validados nesta revisão.
+
+### PROTECT e interface
+
+- Modos parciais conectam o Nivra ao Discord antes de restaurar a VPN. O modo
+  completo restaura a proteção primeiro e não libera login direto por timeout.
+- A tela de recuperação do PROTECT fica acessível antes do login. Perfil, estado,
+  escopo, falha e ações de recuperação ficam agrupados; remover uma cópia salva
+  exige confirmação na própria tela.
+- Clicar num perfil respeita o escopo escolhido na tela. Resultados anteriores de
+  testes continuam visíveis. A validação de proxy rejeita porta zero e entradas
+  incompatíveis antes de tentar aplicar a rota.
+- O perfil realmente aplicado e o último rascunho editado têm persistências
+  distintas. Instalações com o marcador antigo precisam selecionar o perfil uma
+  vez; os perfis salvos não são apagados. Reserva de ativação e gravação no cofre
+  ficam fora da thread de desenho.
+
+### Voz, transmissão e assistir
+
+- Mudo e push-to-talk não limpam mais o áudio recebido. Respostas antigas do
+  supressor DeepFilterNet não retornam após reiniciar a captura.
+- As filas locais de PCM mantêm lotes normais em ordem e descartam áudio antigo
+  quando o acúmulo excede o limite. A reprodução suaviza a transição com uma rampa
+  curta; isso não elimina atraso de rede nem garante sincronismo entre áudio e vídeo.
+- Configurações de voz mostram fila local de reprodução e quantidade de quadros
+  descartados, sem apresentar esses números como ping ou latência total.
+- Trocar a VPN invalida somente os sockets dos escopos afetados. Trocar arquivos
+  não encerra voz; trocar transmissão mantém o gateway e a voz fora desse escopo.
+- A troca de rota de transmissão pode retomar recepções ainda selecionadas e a
+  fonte de compartilhamento ainda desejada, após encerrar a anterior. Parar, sair,
+  perder permissão ou encerrar a transmissão no servidor cancela a retomada. O
+  seletor de tela do Linux não reabre sozinho. Trocas de conta/conexão completa
+  não preservam essas intenções de transmissão.
+
+### Dependências e validação
+
+- Atualizados ctutils, rustls-webpki, os certificados raiz, Tokio e clipboard-win
+  para as revisões corrigidas testadas no Windows. Não foram adicionadas exceções
+  ao cargo-audit.
+- A bateria Windows do lote completo aprovou 1.885 testes; 30 permaneceram
+  ignorados. A auditoria estrita ainda bloqueia o lançamento por crypto-bigint
+  0.5.5. Evidências e limites estão em `docs/pr-evidence/scoped-media-20261028`.
+
 ## Nivra 1.0.20
 
 Anexos `.html` abrem como página renderizada e uma citação no meio de uma mensagem deixa de ser desenhada por cima do texto seguinte. Validado por testes automáticos; nada foi exercitado numa chamada real do Discord, e a causa das quedas de mídia e do uso alto de GPU ao compartilhar tela continua sem prova.

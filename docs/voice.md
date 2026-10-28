@@ -10,6 +10,29 @@ cargo xtask package                     # standard artifact under dist
 
 Voice is included in every build without a feature flag. Source builds require CMake for bundled static libopus; Linux needs ALSA development headers. See [platform requirements](platform-support.md) and the [voice adapter README](../crates/discord-voice/README.md) for dependencies, exact resource limits and protocol tests.
 
+## Local audio queue recovery (unreleased)
+
+Mute and push-to-talk update the capture generation only. They no longer flush the
+remote playback queue; Deafen and transport readiness still control playback.
+Suppressor resets discard pending pre-mute PCM and ignore late DeepFilterNet
+results from the previous stream generation. The neural model's recurrent state
+is not re-created on every mute.
+
+Both directions retain bounded 20 ms PCM frames. Ordinary capture batches remain
+in order. Excessive capture backlog above four queued frames is trimmed to the
+newest two. Playback uses the same four-frame threshold/two-frame target at frame
+boundaries and a 5 ms ramp at the discontinuity. Callback work is bounded; there is
+no new allocation, lock, network request or dynamic queue growth in the playback
+callback. Dropping stale frames may remove a short speech segment; it is not a
+lossless time-stretch or a complete audio/video synchronization algorithm.
+
+Voice settings show queued playback milliseconds and the number of locally trimmed
+frames, sampled from atomics. Generated underrun silence is not counted as queued
+audio. The visible metric row refreshes at most twice a second. These figures do
+not measure network ping, a remote listener's delay or the screen-stream decoder
+queue. See [performance measurements](performance.md) for reproducible offline
+queue behavior and the explicitly unmeasured device/network metrics.
+
 ## Implemented behavior and limits
 
 Local call switches retain one replaceable destination while the old request and audio

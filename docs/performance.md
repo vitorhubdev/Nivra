@@ -1,5 +1,34 @@
 # Performance measurements
 
+## Scoped media queues — October 28, 2026 (unreleased)
+
+Windows audit run [40649493147](https://github.com/vitorhubdev/Nivra/actions/runs/40649493147),
+Rust 1.98.1. Baseline `95f7e393b5941168b3d6efc7d8d1c0872938ff36`; source candidate `76c05c552ee3f0877aa0a4a90db8522e8e137c97`.
+The actual `CapturePacer` module was compiled twice with `rustc --edition=2024 -O`,
+with the same deterministic driver. The driver feeds two 20-ms PCM frames every
+other tick for 100 ticks, then separately feeds eight queued frames before ticking.
+One run per revision; no wall-clock or hardware performance result is inferred.
+
+| Observation | Baseline | Revised |
+| --- | --- | --- |
+| Ordinary batch, preserved ordered frame IDs | 100 / 100 | 100 / 100 |
+| Eight-frame backlog | Sends old queued frames before reaching the latest | Drops six old frames and keeps the latest two |
+| Local extra pending frame storage | One pending frame | Eight preallocated 960-sample frames; bounded |
+| Output queue catch-up | Can retain excessive queued audio | Above four frames, trim to two and ramp over 5 ms |
+| Native CPU/RSS/p95 and standard package delta | Not measured here | Not measured here |
+
+Six frames equal 120 ms of queued audio. This is **not** a measured reduction of
+network ping, total call latency, GPU work or screen-sharing delay. Catch-up trades
+stale speech for staying near live and can omit syllables during stalls. Ordinary
+small batches remain ordered; no live audio or provider was used.
+
+Exact frame IDs, logs context, native before/after images and validation limits are
+recorded in [the evidence](pr-evidence/scoped-media-20261028/README.md) and
+[queue-comparison.json](pr-evidence/scoped-media-20261028/queue-comparison.json).
+The screenshots are offline debug builds with `--features demo`, not standard
+release packages. Dependency security still blocks 1.0.21. No new CPU/GPU speedup,
+full A/V synchronization, live call stability or binary size claim is made.
+
 ## Screen share with no viewer — evidence from a real log (October 16, 2026)
 
 Source: the owner's `nivra-ultra.log` from a 1.0.18-based build (`4bb07224`) with

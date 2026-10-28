@@ -1,0 +1,5 @@
+{
+  "before": "normal_frames=100, burst_tick_and_frame_id=[(1, 0), (2, 1), (3, 2), (4, 3), (5, 4), (6, 5), (7, 6), (8, 7)]",
+  "after": "normal_frames=100, burst_tick_and_frame_id=[(0, 6), (1, 7)]",
+  "limits": "Deterministic 20 ms PCM queue behavior only; not CPU, GPU, network latency, lip-sync or live hardware performance."
+}

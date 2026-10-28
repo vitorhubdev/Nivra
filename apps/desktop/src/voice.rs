@@ -389,6 +389,11 @@ pub struct Voice {
 	camera_visible: Arc<AtomicBool>,
 }
 impl Voice {
+	/// A partial stream route changed while account signaling and voice stayed connected.
+	pub fn stream_route_changed(&mut self) {
+		self.screen.route_changed();
+		self.watch.route_changed();
+	}
 	pub fn stop(&mut self) {
 		self.camera_test = None;
 		self.mic_preview = None;
@@ -991,6 +996,7 @@ impl Voice {
 			ui.voice_camera_status = "";
 			ui.voice_privacy_code = None;
 			ui.voice_ping_ms = None;
+			ui.voice_playback_health = None;
 			ui.voice_server_place.clear();
 			ui.voice_remote_video.clear();
 		}
@@ -1068,6 +1074,7 @@ impl Voice {
 				|| deafened || (ui.voice_push_to_talk && !ui.voice_ptt_active)
 				|| ui.voice_ptm_active;
 			live.audio.set_controls(muted, deafened);
+			ui.voice_playback_health = live.audio.is_ready().then(|| live.audio.playback_health());
 			live.audio.set_processing(ui.voice_processing.effective());
 			live.audio.set_input_enabled(state.can_speak(call.channel));
 			live.audio

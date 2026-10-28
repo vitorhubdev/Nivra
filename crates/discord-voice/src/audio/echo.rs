@@ -96,6 +96,7 @@ struct Deep {
 	load: Load,
 	misses: u32,
 	next_seq: u64,
+	stream_start: u64,
 	answers: Vec<(u64, Option<([f32; 480], Duration)>)>,
 	cover: Box<dyn FnMut(&mut [f32; 480])>,
 	cover_history: std::collections::VecDeque<(u64, [f32; 480])>,
@@ -163,6 +164,7 @@ impl Deep {
 			load: Load::default(),
 			misses: 0,
 			next_seq: 0,
+			stream_start: 0,
 			answers: Vec::new(),
 			cover,
 			cover_history: std::collections::VecDeque::new(),
@@ -170,6 +172,16 @@ impl Deep {
 			was_cover: true,
 			last_play_sample: 0.0,
 		})
+	}
+	fn reset_stream(&mut self) {
+		// Sequence IDs stay monotonic: a late worker answer cannot belong to a new speech epoch.
+		self.stream_start = self.next_seq;
+		self.answers.clear();
+		self.cover_history.clear();
+		self.input_history.clear();
+		self.misses = 0;
+		self.was_cover = true;
+		self.last_play_sample = 0.0;
 	}
 	fn process(&mut self, chunk: &mut [f32; 480], intensity: u8) -> Step {
 		let factor = (f32::from(intensity.min(100))) / 100.0;
@@ -208,7 +220,7 @@ impl Deep {
 		}
 		// Drain first (wedge), then offer; both never block. Answers for frames
 		// already played are useless, so they never enter the table.
-		let floor = seq.saturating_sub(PLAY_BEHIND);
+		let floor = seq.saturating_sub(PLAY_BEHIND).max(self.stream_start);
 		let mut live = true;
 		loop {
 			match self.responses.try_recv() {
@@ -231,13 +243,12 @@ impl Deep {
 				mpsc::TrySendError::Disconnected(_) => return Step::Failed,
 			}
 		}
-		if seq < PLAY_BEHIND {
-			// No two frames of history yet: play the current cover.
-			for i in 0..480 {
-				chunk[i] += factor * (covered[i] - chunk[i]);
-			}
+		if seq.saturating_sub(self.stream_start) < PLAY_BEHIND {
+			// Prime the fixed delay with silence; playing the current frame here would
+			// repeat the first 20 ms when the delayed pipeline catches up.
+			chunk.fill(0.0);
 			self.was_cover = true;
-			self.last_play_sample = chunk[479];
+			self.last_play_sample = 0.0;
 			return Step::Covered;
 		}
 		let play = seq - PLAY_BEHIND;
@@ -461,6 +472,11 @@ impl Echo {
 	}
 
 	pub fn reset(&mut self) {
+		if let Some(deep) = &mut self.deep {
+			deep.reset_stream();
+		}
+		self.last_capture_sample = 0.0;
+		self.mode_transition_remaining = 0;
 		let config = StreamConfig::new(48_000, 1);
 		self.processor.initialize(config, config, config, config);
 		if let Some(gain) = &mut self.gain {
@@ -743,6 +759,29 @@ mod tests {
 			"stalled frames cover without tripping the stall fallback: {}",
 			deep.misses
 		);
+	}
+
+	#[test]
+	fn deep_reset_drops_pre_mute_history_without_reusing_sequence_ids() {
+		let mut deep = Deep::start_with(
+			|| Some(()),
+			|_, frame| Some((frame, Duration::ZERO)),
+			Box::new(|_| {}),
+		)
+		.unwrap();
+		ready_deep(&mut deep);
+		for _ in 0..4 {
+			deep.process(&mut [0.9; 480], 100);
+		}
+		let next = deep.next_seq;
+		deep.reset_stream();
+		assert_eq!(deep.next_seq, next);
+		for tick in 0..6 {
+			let mut frame = [0.2; 480];
+			deep.process(&mut frame, 100);
+			let expected = if tick < 2 { 0.0 } else { 0.2 };
+			assert!(frame.iter().all(|sample| (*sample - expected).abs() < 1e-6));
+		}
 	}
 
 	// Requires the DeepFilterNet model, unavailable on Windows ARM64 (see Deep::start).

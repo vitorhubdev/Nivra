@@ -265,6 +265,7 @@ pub async fn prepare(draft: &Draft) -> Result<Arc<Profile>, &'static str> {
 		port,
 		username: Zeroizing::new(USERNAME.into()),
 		password,
+		wireguard: Some(draft.wireguard.clone()),
 		engine: Some(engine),
 	}))
 }

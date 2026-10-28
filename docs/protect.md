@@ -9,14 +9,15 @@ The application-data `nivra/protect` folder contains bounded public metadata and
 public-only `.conf` reference copies. These reference copies omit private keys,
 preshared keys, unknown directives and comments; the complete original is restored
 from the OS credential store. Losing that store means importing the original again.
-Loading, removing or testing saved copies never applies or disables the active route.
-Use Load, then Enable to change routes; Save a copy also provides duplication with
-a new name. Profiles are local to this installation, shared across its accounts.
+Clicking a saved profile connects it with the scope currently selected on the page.
+The scope stored with a saved copy does not override that choice. Advanced Load only
+fills the editor; testing and removing copies never applies or disables a route.
+Removal requires an inline confirmation. Profiles remain local to this installation,
+shared across its accounts; Save a copy also provides duplication with a new name.
 
 Import, Test, Enable, Save a copy and Load also remember the last primary draft
-automatically. On the next launch, it is restored into the editor without applying
-a route or making a network request. Unsaved editor keystrokes and the optional
-reserve draft are session-only. A separate bounded `protect/remembered` directory
+automatically. That remembered draft is editor state, not the authority for startup
+routing. Unsaved editor keystrokes and the optional reserve draft are session-only. A separate bounded `protect/remembered` directory
 holds the public pointer and reference copy; its original is in the OS credential
 store. A new generation is written before replacing the pointer, so a failed save
 keeps the previously remembered configuration. Actual persistence failures are
@@ -55,9 +56,10 @@ profiles; changing/applying routes while a batch runs requires cancelling it fir
 Credential-store work has a single process-wide slot retained by the actual blocking
 operation even if the outer task is cancelled, preventing abandoned OS calls from
 creating an unbounded worker backlog.
-Optional IP/country/flag lookups are off by default, require
-an explicit checkbox each application session, and add at most 22 seconds per profile.
-When selected, `https://ipwho.is/?fields=success,ip,country,country_code` observes the
+Exit IP/country/flag lookups are enabled by default, as in 1.0.18–1.0.20;
+the page offers Remove flags and location to disable them for the session. They add
+at most 22 seconds per profile and run only when testing/importing a profile.
+When enabled, `https://ipwho.is/?fields=success,ip,country,country_code` observes the
 exit IP through that tested profile; country is approximate. A fixed FlagCDN
 `https://flagcdn.com/32x24/{iso2}.png` URL supplies its flag through the same profile.
 Both third parties receive that route's exit IP; no account credentials are sent.
@@ -80,10 +82,48 @@ chunks with 32-chunk bridges. Engine interoperability and real provider connecti
 separate owner test; offline fixtures (a UDP loopback peer, with a lossy forwarder in the tests)
 do not establish those claims.
 
-Changing a route retires existing account/media clients and reconnects signaling
-with the current in-memory session. Active writes and transfers prevent Apply;
-calls must finish before manual Apply. Protected media sockets reject obsolete
-route generations. HTTP clients select the current route per request and disable
-idle connection reuse, trading connection setup overhead for avoiding stale pools.
+## Startup and scope changes (unreleased)
+
+| Selected mode | Startup order | Route change within partial modes |
+| --- | --- | --- |
+| Videos and files | Discord READY, then PROTECT | Keep account signaling and live voice/stream sockets |
+| Voice and camera | Discord READY, then PROTECT | Keep account signaling; retire affected voice/camera sockets |
+| Screen streams | Discord READY, then PROTECT | Keep account signaling and voice; retire screen-stream transports |
+| Complete Discord connection | PROTECT, then Discord | Entering or leaving Complete rebuilds account signaling |
+
+The saved scope must be read before deciding whether login is allowed. Loading is
+bounded to 25 seconds; restoring a known route is bounded to 90 seconds. Partial
+modes may wait for Discord READY without consuming that restore budget. Unknown,
+unreadable, legacy-unconfirmed and Complete startup configurations fail closed:
+there is no timeout-based direct login. Recovery controls are accessible before
+login; choosing Connect without PROTECT explicitly permits the direct connection.
+The product remains the Nivra Discord client, not a separate Discord app launcher.
+
+The last *applied* primary configuration has its own `protect/active/current.json`
+pointer and OS-vault entry, independent of the remembered editor draft. A random
+32-character activation marker must match that row. Reserving this marker and
+saving credentials run in the existing bounded storage worker, not the render
+callback. A crash, mismatched generation or failed vault write cannot silently
+restore some other edited profile. The optional reserve remains session-only.
+
+Migration: installations with the old `start-enabled` marker must select a saved
+profile and scope once to confirm startup routing. Their named profiles are kept;
+Nivra does not guess the previous active scope from the last edited configuration.
+
+Changing a route invalidates only the union of its old and new covered scopes.
+Existing direct/protected media sockets carry their scope and generation; unrelated
+file changes do not retire voice. Active writes and transfers still prevent Apply.
+HTTP clients select the current route per request and disable idle connection reuse,
+trading connection setup overhead for avoiding stale pools.
+
+When a screen-stream route changes without replacing the account session, still-
+selected watched streams can negotiate again. The outgoing share retains one source
+and settings snapshot, waits for the old share to stop, and may restart once within
+90 seconds in the same call. Stop, leave, server-ended shares and lost permission
+cancel that intention. Linux portal selection is never reopened automatically.
+A temporarily absent endpoint stays within the existing negotiation deadline.
+Complete-mode account replacement does not preserve these stream/share intentions.
+These state transitions have offline coverage; live cross-client/provider behavior
+and audiovisual continuity need an owner-controlled test.
 
 The implementation is original; no DiscGringo GPL source is incorporated.

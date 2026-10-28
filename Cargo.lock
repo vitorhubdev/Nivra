@@ -1002,7 +1002,7 @@ dependencies = [
 
 [[package]]
 name = "client-core"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "model",
  "session-cache",
@@ -1603,12 +1603,12 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "discord-api"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "client-core",
  "discord-protocol",
@@ -1625,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "discord-gateway"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "bytes",
  "client-core",
@@ -1646,7 +1646,7 @@ dependencies = [
 
 [[package]]
 name = "discord-protocol"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "base64 0.22.1",
  "model",
@@ -1659,7 +1659,7 @@ dependencies = [
 
 [[package]]
 name = "discord-voice"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "block2 0.6.2",
  "chacha20poly1305",
@@ -2165,7 +2165,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2211,7 +2211,7 @@ checksum = "af9673d8203fcb076b19dfd17e38b3d4ae9f44959416ea532ce72415a6020365"
 
 [[package]]
 name = "extensions"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "nivra-extension-sdk",
  "serde",
@@ -2676,7 +2676,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps 9.0.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4040,7 +4040,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "local-store"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "dirs",
  "model",
@@ -4217,7 +4217,7 @@ dependencies = [
 
 [[package]]
 name = "model"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "serde",
  "zeroize",
@@ -4338,7 +4338,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nivra"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "arboard",
  "client-core",
@@ -5240,7 +5240,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5549,7 +5549,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "platform"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "ashpd",
  "client-core",
@@ -5795,7 +5795,7 @@ dependencies = [
 
 [[package]]
 name = "protect"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "base64 0.22.1",
  "boringtun",
@@ -5814,9 +5814,9 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.13.4"
+version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
+checksum = "278e9268c93b9e498a2da46c34d90ba93a3255eb99009646398f34bc73ab36eb"
 dependencies = [
  "bitflags 2.13.2",
  "memchr",
@@ -6110,7 +6110,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "replay-bench"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "client-core",
  "model",
@@ -6316,7 +6316,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6373,7 +6373,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6672,7 +6672,7 @@ dependencies = [
 
 [[package]]
 name = "session-cache"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "model",
 ]
@@ -6898,7 +6898,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7357,10 +7357,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7374,7 +7374,7 @@ dependencies = [
 
 [[package]]
 name = "test-support"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "client-core",
  "model",
@@ -7930,7 +7930,7 @@ dependencies = [
 
 [[package]]
 name = "tray-debug"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "egui",
  "image",
@@ -8017,12 +8017,12 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "ui"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "client-core",
  "egui",
@@ -8858,7 +8858,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9544,7 +9544,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "1.0.20"
+version = "1.0.21"
 dependencies = [
  "serde_json",
 ]

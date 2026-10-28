@@ -30,7 +30,7 @@ jobs:
           cache-on-failure: true
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest@0.9.146
+          tool: cargo-nextest@0.9.146,cargo-audit@0.22.2,cargo-deny@0.20.2
       - name: Decode reviewed patches and record the baseline
         run: |
           set -euo pipefail
@@ -39,7 +39,7 @@ jobs:
           rustc --version > audit-out/TOOLCHAIN.txt
           python - <<'PY'
           import base64, hashlib, lzma, pathlib
-          patches = [('patch', 4, 'cb15f7bfdb88733be678bf130187367b5a9762dab96e27d2318a93a1593ae332'), ('followup', 2, 'bd80f8008f8e9d866e1b6ec6a2b726f245fc92b4b75d1f48bcd0500fcf13afe2'), ('offthread', 1, '0958f83d9c6c46339cc4d6f21a27c8708c807bbe3aac87a2bf9ddb1113214737')]
+          patches = [('patch', 4, 'cb15f7bfdb88733be678bf130187367b5a9762dab96e27d2318a93a1593ae332'), ('followup', 2, 'bd80f8008f8e9d866e1b6ec6a2b726f245fc92b4b75d1f48bcd0500fcf13afe2'), ('offthread', 1, '0958f83d9c6c46339cc4d6f21a27c8708c807bbe3aac87a2bf9ddb1113214737'), ('fixtures', 1, '146402e34e832700c69183a7619c6bc14f2da1073dff32bcd8931f6fc148d740')]
           for name, count, digest in patches:
               encoded = ''.join(pathlib.Path(f'.github/audit/{name}-{i}.b64').read_text().strip() for i in range(1, count + 1))
               patch = lzma.decompress(base64.b64decode(encoded, validate=True))
@@ -64,6 +64,22 @@ jobs:
           git apply audit-out/followup.patch
           git apply --check audit-out/offthread.patch
           git apply audit-out/offthread.patch
+          git apply --check audit-out/fixtures.patch
+          git apply audit-out/fixtures.patch
+          python - <<'PYCODE'
+          from pathlib import Path
+          p = Path('Cargo.toml'); source = p.read_text()
+          old = 'tokio = { version = "1.50",'
+          assert old in source
+          p.write_text(source.replace(old, 'tokio = { version = "1.53.3",', 1))
+          PYCODE
+          cargo update -p ctutils --precise 0.4.4
+          cargo update -p rustls-webpki --precise 0.103.16
+          cargo update -p webpki-roots@1.0.9 --precise 1.0.10
+          cargo update -p webpki-root-certs --precise 1.0.10
+          cargo update -p tokio --precise 1.53.3
+          cargo update -p clipboard-win --precise 5.4.3
+          cargo tree --locked -i crypto-bigint > audit-out/remaining-crypto-dependency.txt
           git add -N apps/desktop/src/protect_startup.rs
           cargo fmt --all
           cargo fmt --all -- --check
@@ -129,15 +145,21 @@ jobs:
           target/debug/examples/profile_preview.exe --demo --page=protect --width=1120 --height=760 --output=audit-out/after-protect.png
           target/debug/examples/profile_preview.exe --demo --page=protect --light --width=840 --height=760 --output=audit-out/after-protect-light.png
           target/debug/examples/profile_preview.exe --demo --page=voice --width=1120 --height=760 --output=audit-out/after-voice.png
+      - name: Dependency licenses
+        run: |
+          set -euo pipefail
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path fuzz/Cargo.toml
+          cargo xtask licenses 2>&1 | tee audit-out/licenses.log
       - name: Prepare a tested candidate without changing main
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           python - <<'PY'
-          import hashlib, json, os, pathlib, subprocess, urllib.request
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
           paths = subprocess.check_output(['git','diff','--name-only'], text=True).splitlines()
-          allowed = {'apps/desktop/src/main.rs','apps/desktop/src/protect_startup.rs','apps/desktop/src/protect_profiles.rs','apps/desktop/src/screen.rs','apps/desktop/src/watch.rs','apps/desktop/src/voice.rs','crates/discord-voice/src/audio.rs','crates/discord-voice/src/audio/echo.rs','crates/discord-voice/src/capture.rs','crates/discord-voice/src/transport.rs','crates/model/src/protect.rs','crates/protect/src/lib.rs','crates/protect/src/wireguard.rs','crates/ui/src/lib.rs','crates/ui/src/protect.rs','crates/ui/src/voice.rs','crates/ui/locales/en.ftl','crates/ui/locales/pt-BR.ftl','crates/ui/locales/es.ftl'}
+          allowed = {'Cargo.toml','Cargo.lock','apps/desktop/src/main.rs','apps/desktop/src/protect_startup.rs','apps/desktop/src/protect_profiles.rs','apps/desktop/src/screen.rs','apps/desktop/src/watch.rs','apps/desktop/src/voice.rs','crates/discord-voice/src/audio.rs','crates/discord-voice/src/audio/echo.rs','crates/discord-voice/src/capture.rs','crates/discord-voice/src/transport.rs','crates/model/src/protect.rs','crates/protect/src/lib.rs','crates/protect/src/wireguard.rs','crates/ui/src/lib.rs','crates/ui/src/protect.rs','crates/ui/src/voice.rs','crates/ui/locales/en.ftl','crates/ui/locales/pt-BR.ftl','crates/ui/locales/es.ftl'}
           assert set(paths) == allowed, f'Unexpected changed paths: {set(paths) ^ allowed}'
           repo = os.environ['GITHUB_REPOSITORY']; head = os.environ['GITHUB_SHA']
           def api(method, path, payload=None):
@@ -146,14 +168,36 @@ jobs:
               with urllib.request.urlopen(req, timeout=45) as response:
                   return json.load(response)
           entries = [{'path':p,'mode':'100644','type':'blob','content':pathlib.Path(p).read_text(encoding='utf-8')} for p in paths]
-          cleanup = ['.github/workflows/audit-source.yml','.github/workflows/audit-validate.yml'] + [f'.github/audit/{name}-{i}.b64' for name,count in [('patch',4),('followup',2),('offthread',1)] for i in range(1,count+1)]
+          for name in ['before-protect.png', 'after-protect.png', 'after-protect-light.png', 'after-voice.png']:
+              image = pathlib.Path('audit-out', name).read_bytes()
+              assert len(image) <= 2 * 1024 * 1024
+              blob = api('POST', 'git/blobs', {'content': base64.b64encode(image).decode(), 'encoding': 'base64'})
+              entries.append({'path': 'docs/pr-evidence/scoped-media-20261028/' + name, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']})
+          cleanup = ['.github/workflows/audit-source.yml','.github/workflows/audit-validate.yml'] + [f'.github/audit/{name}-{i}.b64' for name,count in [('patch',4),('followup',2),('offthread',1),('fixtures',1)] for i in range(1,count+1)]
           entries += [{'path':p,'mode':'100644','type':'blob','sha':None} for p in cleanup]
           tree = api('POST','git/trees',{'base_tree':api('GET','git/commits/'+head)['tree']['sha'],'tree':entries})
-          commit = api('POST','git/commits',{'message':'fix(media): isolate PROTECT routes and recover scoped media safely\n\nDiscord-first partial startup, fail-closed complete startup, distinct applied profile persistence, render-thread-safe storage, cancellable screen/watch recovery, independent capture/playback gates, bounded PCM catch-up and local queue metrics.\n\nValidated by scoped-media-audit on '+head+'. Synthetic/offline checks only; no live Discord, VPN-provider, CPU/GPU speedup or hardware compatibility claims.','tree':tree['sha'],'parents':[head]})
-          result = {'candidate_sha':commit['sha'],'base_sha':head,'run_id':os.environ['GITHUB_RUN_ID'],'files':paths,'patch_sha256':hashlib.sha256(pathlib.Path('audit-out/formatted.patch').read_bytes()).hexdigest(),'ref_updated':False}
+          commit = api('POST','git/commits',{'message':'fix(media): isolate PROTECT routes and recover scoped media safely\n\nDiscord-first partial startup, fail-closed complete startup, distinct applied profile persistence, render-thread-safe storage, cancellable screen/watch recovery, independent capture/playback gates, bounded PCM catch-up and local queue metrics.\n\nValidated by scoped-media-audit on '+head+'. Security is a separate strict gate and is not cleared by this candidate. Synthetic/offline checks only; no live Discord, VPN-provider, CPU/GPU speedup or hardware compatibility claims.','tree':tree['sha'],'parents':[head]})
+          result = {'candidate_sha':commit['sha'],'base_sha':head,'run_id':os.environ['GITHUB_RUN_ID'],'files':paths,'security_gate':'not-cleared; see strict dependency audit step', 'patch_sha256':hashlib.sha256(pathlib.Path('audit-out/formatted.patch').read_bytes()).hexdigest(),'ref_updated':False}
           pathlib.Path('audit-out/CANDIDATE.json').write_text(json.dumps(result,indent=2))
           print(json.dumps(result,indent=2))
           PY
+      - name: Strict dependency security gate (no advisory bypass)
+        run: |
+          python - <<'PYCODE'
+          import json, pathlib, subprocess, sys
+          exits = {}
+          for name, lock in [('root', 'Cargo.lock'), ('fuzz', 'fuzz/Cargo.lock')]:
+              command = ['cargo', 'audit', '--deny', 'warnings', '--file', lock, '--json']
+              result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+              pathlib.Path(f'audit-out/security-{name}.json').write_text(result.stdout)
+              pathlib.Path(f'audit-out/security-{name}.log').write_text(result.stderr)
+              exits[name] = result.returncode
+              print(f'{name} audit exit status: {result.returncode}')
+              print(result.stdout)
+              print(result.stderr)
+          pathlib.Path('audit-out/SECURITY_STATUS.json').write_text(json.dumps(exits, indent=2))
+          sys.exit(1 if any(exits.values()) else 0)
+          PYCODE
       - name: Preserve formatted source even when checks fail
         if: always()
         run: |
@@ -161,6 +205,8 @@ jobs:
           import pathlib, subprocess, tarfile
           out = pathlib.Path('audit-out'); out.mkdir(exist_ok=True)
           paths = subprocess.check_output(['git','diff','--name-only'], text=True).splitlines()
+          for name in ['Cargo.lock', 'fuzz/Cargo.lock']:
+              (out/('fuzz-Cargo.lock' if name.startswith('fuzz/') else name)).write_bytes(pathlib.Path(name).read_bytes())
           if paths:
               with tarfile.open(out/'changed-source.tar.gz','w:gz') as tar:
                   for p in paths:

@@ -1,0 +1,48 @@
+name: Request Nivra production release from main
+run-name: Request production release from main
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/request-nivra-production-release.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: request-nivra-production-release
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: github.repository == 'vitorhubdev/Nivra' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require main and requested release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          python3 - <<'PY'
+          import tomllib
+          with open('Cargo.toml', 'rb') as file:
+              version = tomllib.load(file)['workspace']['package']['version']
+          if version != '1.0.21':
+              raise SystemExit(f'Expected main to contain Nivra 1.0.21, got {version}')
+          PY
+      - name: Start the existing production release pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml --ref main --field channel=production
+          echo 'Requested production release.yml on main. Security, tests, and signing gates remain mandatory.' >> "$GITHUB_STEP_SUMMARY"

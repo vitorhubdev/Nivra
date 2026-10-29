@@ -6352,7 +6352,7 @@ mod tests {
 		use egui_kittest::kittest::Queryable as _;
 		let mut state = test_support::voice_demo_state();
 		state.voice.active.as_mut().unwrap().watching = vec![Id(3), Id(4)];
-		let mut view = MessagingUi {
+		let view = MessagingUi {
 			voice_stream_fullscreen: true,
 			..Default::default()
 		};
@@ -6367,10 +6367,10 @@ mod tests {
 							egui::TextureOptions::LINEAR,
 						));
 					}
-					if view.show_voice_stream_fullscreen(ui.ctx(), state) {
-						if let Some(streamer) = view.unwatch_request.take() {
-							state.unwatch_stream(streamer);
-						}
+					if view.show_voice_stream_fullscreen(ui.ctx(), state)
+						&& let Some(streamer) = view.unwatch_request.take()
+					{
+						state.unwatch_stream(streamer);
 					}
 				},
 				(view, state),

@@ -198,7 +198,7 @@ async fn exchange(downgrade: bool) {
 			credentials(2),
 			Identity::generate(),
 			None,
-			Some(sink),
+			Some((sink, None)),
 			Some(playback_tx),
 			|_| Ok(()),
 			url,

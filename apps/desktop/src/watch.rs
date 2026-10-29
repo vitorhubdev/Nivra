@@ -631,8 +631,13 @@ impl Watch {
 		let audio = pending.audio;
 		let task = runtime.spawn(async move {
 			let (status_send, status_wake) = (send.clone(), wake.clone());
-			let result =
-				discord_voice::watch_stream_with_visibility(credentials, identity, sink, decoder_visibility, audio, move |event| {
+			let result = discord_voice::watch_stream_with_visibility(
+				credentials,
+				identity,
+				sink,
+				decoder_visibility,
+				audio,
+				move |event| {
 					let status = match event {
 						Status::Connecting => "Connecting to the stream…",
 						Status::Discovering => "Checking the stream network…",
@@ -657,8 +662,9 @@ impl Watch {
 					status_send.send_replace(Some(Notice::Status(status)));
 					status_wake.request_repaint();
 					Ok(())
-				})
-				.await;
+				},
+			)
+			.await;
 			if let Err(error) = result {
 				send.send_replace(Some(Notice::Failed(error)));
 			}

@@ -480,7 +480,9 @@ pub(crate) fn spawn_decoder_with_visibility(
 	let thread_counters = counters.clone();
 	std::thread::Builder::new()
 		.name("remote-video".into())
-		.spawn(move || decode_loop_with_visibility(receive, sink, report, thread_counters, true, visible))
+		.spawn(move || {
+			decode_loop_with_visibility(receive, sink, report, thread_counters, true, visible)
+		})
 		.map_err(|_| "Could not start the video decoder thread")?;
 	Ok((
 		DecoderQueue {

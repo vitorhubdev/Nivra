@@ -86,6 +86,14 @@ impl ScreenUi {
 			self.status = "Looking for screens and windows…";
 		}
 	}
+	/// A reversible resource-saving preset; leave the original source unchanged.
+	/// Lowering output pixels and FPS reduces conversion/encode work, but a
+	/// 4K source still costs a 4K readback on the Windows capture backend.
+	fn lighter_preset(&mut self) {
+		self.height = 720;
+		self.fps = 30;
+	}
+
 	fn settings(&self) -> Option<Settings> {
 		let source = self
 			.selected
@@ -292,6 +300,9 @@ impl ScreenUi {
 					}
 				}
 			});
+			if crate::design::text_action(ui, t("Reduce PC load · 720p / 30 fps")).clicked() {
+				self.lighter_preset();
+			}
 			if let Some(max_bps) = self.settings().map(Settings::bit_rate) {
 				ui.label(
 					egui::RichText::new(format!(
@@ -590,6 +601,28 @@ mod tests {
 			(closed - height).abs() < 1.0,
 			"collapsing shrinks the dialog back"
 		);
+	}
+
+	#[test]
+	fn one_click_resource_saving_preset_is_reversible() {
+		let mut picker = ScreenUi {
+			selected: Some(SourceId::Display(1)),
+			sources: vec![Source {
+				id: SourceId::Display(1),
+				name: "Main display".into(),
+			}],
+			height: 1080,
+			fps: 60,
+			..Default::default()
+		};
+		assert_eq!(picker.settings().unwrap().bit_rate(), 16_000_000);
+		picker.lighter_preset();
+		let lighter = picker.settings().unwrap();
+		assert_eq!((lighter.width, lighter.height, lighter.fps), (1280, 720, 30));
+		assert_eq!(lighter.bit_rate(), 4_000_000);
+		picker.height = 1080;
+		picker.fps = 60;
+		assert_eq!(picker.settings().unwrap().bit_rate(), 16_000_000);
 	}
 
 	#[test]

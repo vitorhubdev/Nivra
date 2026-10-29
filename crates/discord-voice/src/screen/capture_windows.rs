@@ -95,6 +95,9 @@ struct Flags {
 	ready: Arc<AtomicBool>,
 	/// The local preview is on screen and needs a moving picture.
 	preview_visible: Arc<AtomicBool>,
+	/// Updated by the encoder thread: no GPU readback is needed for frames
+	/// that cannot leave an already-full transport queue.
+	transport_room: Arc<AtomicBool>,
 	next_frame: Instant,
 	interval: Duration,
 	waiting: bool,
@@ -110,12 +113,17 @@ impl Flags {
 	/// Time between captured frames right now. Going from idle to watched restarts the schedule so
 	/// the first real frame does not wait out the idle interval.
 	fn current_interval(&mut self, now: Instant) -> Duration {
-		if self.ready.load(Ordering::Acquire) {
+		if self.ready.load(Ordering::Acquire)
+			&& self.transport_room.load(Ordering::Acquire)
+		{
 			if std::mem::take(&mut self.waiting) {
 				self.next_frame = now;
 			}
 			self.interval
 		} else {
+			// A backpressured stream cannot send another video frame. Throttle the
+			// GPU readback as when no viewer is watching. The producer refreshes
+			// the capacity flag every 100 ms, so resumption has no long delay.
 			self.waiting = true;
 			if self.preview_visible.load(Ordering::Acquire) {
 				PREVIEW_INTERVAL.max(self.interval)
@@ -134,6 +142,8 @@ pub(crate) struct Pacing {
 	pub pending: Arc<AtomicBool>,
 	/// The local preview is on screen and needs a livelier picture while nobody watches.
 	pub preview_visible: Arc<AtomicBool>,
+	/// Whether the encoded output has room, sampled by the encoder worker.
+	pub transport_room: Arc<AtomicBool>,
 }
 
 /// Frame buffers the encoder has finished with. A full-source BGRA buffer is 33 MB at 4K30;
@@ -304,6 +314,7 @@ impl Capture {
 		let Pacing {
 			pending,
 			preview_visible,
+			transport_room,
 		} = pacing;
 		if settings.width == 0
 			|| settings.height == 0
@@ -328,6 +339,7 @@ impl Capture {
 					pending,
 					ready.clone(),
 					preview_visible,
+					transport_room.clone(),
 				)
 			}
 			SourceId::Window(id) => {
@@ -344,6 +356,7 @@ impl Capture {
 					pending,
 					ready.clone(),
 					preview_visible,
+					transport_room.clone(),
 				)
 			}
 			#[allow(unreachable_patterns)] // Portal may be absent from platform-scoped models.
@@ -400,6 +413,7 @@ fn start_item<T>(
 	pending: Arc<AtomicBool>,
 	ready: Arc<AtomicBool>,
 	preview_visible: Arc<AtomicBool>,
+	transport_room: Arc<AtomicBool>,
 ) -> Result<Capture, &'static str>
 where
 	T: NativeSource,
@@ -416,6 +430,7 @@ where
 		pending,
 		ready,
 		preview_visible,
+		transport_room,
 		next_frame: Instant::now(),
 		interval: Duration::from_secs_f64(1.0 / f64::from(settings.fps)),
 		waiting: false,
@@ -470,10 +485,32 @@ mod idle_capture_tests {
 			pending: Arc::new(AtomicBool::new(false)),
 			ready: Arc::new(AtomicBool::new(ready)),
 			preview_visible: Arc::new(AtomicBool::new(preview)),
+			transport_room: Arc::new(AtomicBool::new(true)),
 			next_frame: Instant::now(),
 			interval: Duration::from_secs_f64(1.0 / fps),
 			waiting: false,
 		}
+	}
+
+	#[test]
+	fn backpressure_limits_gpu_readbacks_and_recovers_when_send_queue_drains() {
+		let now = Instant::now();
+		let mut capture = flags(true, false, 30.0);
+		assert_eq!(capture.current_interval(now), capture.interval);
+		capture.transport_room.store(false, Ordering::Release);
+		assert_eq!(capture.current_interval(now), IDLE_INTERVAL);
+		capture.next_frame = now + IDLE_INTERVAL;
+		capture.transport_room.store(true, Ordering::Release);
+		let resumed = now + Duration::from_millis(15);
+		assert_eq!(capture.current_interval(resumed), capture.interval);
+		assert_eq!(capture.next_frame, resumed);
+
+		// A visible preview still refreshes at 10 fps when transport is full.
+		let mut visible = flags(true, true, 60.0);
+		visible.transport_room.store(false, Ordering::Release);
+		assert_eq!(visible.current_interval(now), PREVIEW_INTERVAL);
+		visible.transport_room.store(true, Ordering::Release);
+		assert_eq!(visible.current_interval(now), visible.interval);
 	}
 
 	#[test]

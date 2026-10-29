@@ -75,6 +75,17 @@ fn store_frame(
 	true
 }
 
+/// Avoid RGBA-to-Color32 conversion and a large CPU copy for frames that cannot
+/// currently reach any on-screen texture. The decoder keeps its reference state and
+/// delivers a fresh frame as soon as the view becomes visible again.
+fn store_visible_frame(
+	picture: &mut Option<egui::ColorImage>,
+	frame: discord_voice::RemoteFrame<'_>,
+	visible: bool,
+) -> bool {
+	visible && store_frame(picture, frame)
+}
+
 /// Whether a decoded stream frame reaches a visible surface: the floating window or the
 /// selected channel of a non-minimized main window.
 fn stream_visible(pip: bool, selected: Option<Id>, channel: Id, minimized: bool) -> bool {
@@ -603,13 +614,12 @@ impl Watch {
 		visible.store(true, Ordering::Release);
 		let streamer = pending.context.streamer.0;
 		let sink: discord_voice::VideoSink = Arc::new(move |frame: discord_voice::RemoteFrame| {
-			if frame.user != streamer {
+			if frame.user != streamer || !visible.load(Ordering::Acquire) {
 				return;
 			}
 			if slot
 				.lock()
-				.is_ok_and(|mut slot| store_frame(&mut slot, frame))
-				&& visible.load(Ordering::Acquire)
+				.is_ok_and(|mut slot| store_visible_frame(&mut slot, frame, true))
 			{
 				wake.request_repaint();
 			}
@@ -844,6 +854,19 @@ mod tests {
 				"unsent requests require no network teardown"
 			);
 		}
+	}
+
+	#[test]
+	fn hidden_remote_frames_do_not_allocate_preview_images() {
+		let mut frame_slot = None;
+		let pixels = [7, 8, 9, 255];
+		assert!(!store_visible_frame(&mut frame_slot, frame(1, 1, &pixels), false));
+		assert!(frame_slot.is_none());
+		assert!(store_visible_frame(&mut frame_slot, frame(1, 1, &pixels), true));
+		assert!(frame_slot.is_some());
+		// Hiding a view must leave its previous valid picture alone.
+		assert!(!store_visible_frame(&mut frame_slot, frame(1, 1, &[0, 0, 0, 0]), false));
+		assert_eq!(frame_slot.as_ref().unwrap().pixels[0], egui::Color32::from_rgba_unmultiplied(7, 8, 9, 255));
 	}
 
 	#[test]

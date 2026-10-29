@@ -35,6 +35,8 @@ use std::sync::{
 	atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 	mpsc,
 };
+#[cfg(not(target_os = "linux"))]
+use std::sync::atomic::AtomicU8;
 
 #[cfg(not(target_os = "linux"))]
 use std::time::{Duration, Instant};
@@ -112,6 +114,9 @@ pub fn sources() -> Result<Vec<Source>, &'static str> {
 pub struct Worker {
 	stop: Arc<AtomicBool>,
 	ready: Arc<AtomicBool>,
+	/// Current encoder selected at runtime; shared without locking or polling the GPU.
+	#[cfg(not(target_os = "linux"))]
+	encoder_backend: Arc<AtomicU8>,
 	preview: Arc<Mutex<Option<image::RgbaImage>>>,
 	done: Option<mpsc::Receiver<Result<(), &'static str>>>,
 	#[cfg(target_os = "linux")]
@@ -136,6 +141,10 @@ impl Worker {
 		let worker_bitrate = bitrate.clone();
 		let preview = Arc::new(Mutex::new(None));
 		let worker_preview = preview.clone();
+		#[cfg(not(target_os = "linux"))]
+		let encoder_backend = Arc::new(AtomicU8::new(0));
+		#[cfg(not(target_os = "linux"))]
+		let worker_encoder_backend = encoder_backend.clone();
 		#[cfg(target_os = "linux")]
 		let status = Arc::new(Mutex::new("Choose a screen or window in the system picker"));
 		#[cfg(target_os = "linux")]
@@ -179,6 +188,7 @@ impl Worker {
 					worker_ready,
 					worker_keyframe,
 					worker_bitrate,
+					worker_encoder_backend,
 					send,
 					audio_send,
 					worker_audio_epoch,
@@ -205,6 +215,8 @@ impl Worker {
 			Self {
 				stop,
 				ready: ready.clone(),
+				#[cfg(not(target_os = "linux"))]
+				encoder_backend,
 				preview,
 				done: Some(done),
 				#[cfg(target_os = "linux")]
@@ -231,7 +243,7 @@ impl Worker {
 		#[cfg(target_os = "linux")]
 		return self.status.try_lock().ok().map(|status| *status);
 		#[cfg(not(target_os = "linux"))]
-		None
+		encoder_backend_label(self.encoder_backend.load(Ordering::Acquire))
 	}
 
 	pub fn result(&self) -> Option<Result<(), &'static str>> {
@@ -263,6 +275,7 @@ fn encode_loop(
 	ready: Arc<AtomicBool>,
 	keyframe: Arc<AtomicBool>,
 	bitrate: Arc<AtomicU32>,
+	encoder_backend: Arc<AtomicU8>,
 	send: tokio::sync::mpsc::Sender<EncodedFrame>,
 	audio: Option<tokio::sync::mpsc::Sender<AudioChunk>>,
 	audio_epoch: Arc<AtomicU64>,
@@ -279,6 +292,8 @@ fn encode_loop(
 	#[cfg(target_os = "windows")]
 	let raw_pending = Arc::new(AtomicBool::new(false));
 	#[cfg(target_os = "windows")]
+	let transport_room = Arc::new(AtomicBool::new(true));
+	#[cfg(target_os = "windows")]
 	let _native = capture::Capture::start(
 		settings,
 		raw_send,
@@ -289,6 +304,7 @@ fn encode_loop(
 		capture::Pacing {
 			pending: raw_pending.clone(),
 			preview_visible: preview_visible.clone(),
+			transport_room: transport_room.clone(),
 		},
 	)?;
 	#[cfg(not(target_os = "windows"))]
@@ -310,6 +326,11 @@ fn encode_loop(
 	let mut audio_failure_logged = false;
 
 	while !stop.load(Ordering::Acquire) && !send.is_closed() {
+		// Cross-thread feedback to Windows' capture callback. When the encoded
+		// queue is full, prefer a slow local preview instead of repeated D3D11
+		// CopyResource/Map readbacks for frames that cannot be transmitted.
+		#[cfg(target_os = "windows")]
+		transport_room.store(send.capacity() > 0, Ordering::Release);
 		#[cfg(target_os = "windows")]
 		if _native.failed() && !audio_failure_logged {
 			audio_failure_logged = true;
@@ -363,6 +384,7 @@ fn encode_loop(
 		// Local capture remains available while alone; only secure media is encoded or queued.
 		if !ready.load(Ordering::Acquire) {
 			encoding = None;
+			report_encoder_backend(&encoder_backend, 0, wake);
 			keyframe.store(true, Ordering::Release);
 			continue;
 		}
@@ -387,11 +409,9 @@ fn encode_loop(
 		if encoding.is_none() {
 			encoding = Some(ScreenEncoder::new(settings, target)?);
 		}
-		if encoding
-			.as_mut()
-			.expect("secure screen encoder")
-			.set_bitrate(target)?
-		{
+		let encoder = encoding.as_mut().expect("secure screen encoder");
+		if encoder.set_bitrate(target)? {
+			report_encoder_backend(&encoder_backend, encoder.mode(), wake);
 			keyframe.store(true, Ordering::Release);
 		}
 		// Retain one current source snapshot, never encoded media, for a viewer's keyframe
@@ -413,10 +433,12 @@ fn encode_loop(
 		}
 		let force_keyframe = keyframe.swap(false, Ordering::AcqRel);
 		let started = metrics.start();
-		let encoded = encoding.as_mut().expect("secure screen encoder").encode(
+		let encoder = encoding.as_mut().expect("secure screen encoder");
+		let encoded = encoder.encode(
 			latest_frame.as_ref().expect("latest screen frame"),
 			force_keyframe,
 		);
+		report_encoder_backend(&encoder_backend, encoder.mode(), wake);
 		metrics.finish(crate::diagnostics::Stage::Encode, started);
 		metrics.poll(false, 0, false, 0);
 		let (data, is_keyframe) = encoded?;
@@ -434,12 +456,38 @@ fn encode_loop(
 			timestamp: (origin.elapsed().as_micros() * 90 / 1000) as u32,
 			keyframe: is_keyframe,
 		};
-		if send.try_send(frame).is_err() {
+		let sent = send.try_send(frame);
+		#[cfg(target_os = "windows")]
+		transport_room.store(send.capacity() > 0, Ordering::Release);
+		if sent.is_err() {
 			keyframe.store(true, Ordering::Release);
 		}
 	}
 	capture_stop.store(true, Ordering::Release);
 	Ok(())
+}
+
+/// Lock-free encoder status is only updated when its label changes.
+#[cfg(not(target_os = "linux"))]
+fn report_encoder_backend(state: &AtomicU8, mode: u8, wake: &impl Fn()) {
+	if state.swap(mode, Ordering::AcqRel) != mode {
+		wake();
+	}
+}
+
+/// The UI must distinguish hardware encoding from the CPU fallback without claiming the
+/// selected adapter is necessarily NVIDIA/AMD/Intel.
+#[cfg(not(target_os = "linux"))]
+fn encoder_backend_label(mode: u8) -> Option<&'static str> {
+	match mode {
+		1 => Some(if cfg!(target_os = "windows") {
+			"H.264 · GPU encoding (Media Foundation)"
+		} else {
+			"H.264 · GPU encoding (VideoToolbox)"
+		}),
+		2 => Some("H.264 · CPU encoding (OpenH264) · higher system load"),
+		_ => None,
+	}
 }
 
 /// The superseded snapshot's buffer goes back to the capture pool on Windows.
@@ -520,6 +568,11 @@ impl ScreenEncoder {
 			settings,
 			bitrate,
 		})
+	}
+
+	/// 1 = hardware H.264, 2 = software OpenH264.
+	fn mode(&self) -> u8 {
+		if self.hardware.is_some() { 1 } else { 2 }
 	}
 
 	fn set_bitrate(&mut self, bitrate: u32) -> Result<bool, &'static str> {
@@ -785,6 +838,28 @@ fn fit_frame(frame: RawFrame, width: u32, height: u32) -> Result<Vec<u8>, &'stat
 mod tests {
 	use super::*;
 
+	#[cfg(not(target_os = "linux"))]
+	#[test]
+	fn selected_encoder_label_reflects_hardware_and_software_fallback() {
+		let state = AtomicU8::new(0);
+		let wake_count = AtomicU32::new(0);
+		let wake = || { wake_count.fetch_add(1, Ordering::Relaxed); };
+		assert_eq!(encoder_backend_label(state.load(Ordering::Acquire)), None);
+		report_encoder_backend(&state, 1, &wake);
+		assert!(encoder_backend_label(state.load(Ordering::Acquire))
+			.unwrap()
+			.contains("GPU encoding"));
+		report_encoder_backend(&state, 1, &wake);
+		assert_eq!(wake_count.load(Ordering::Relaxed), 1);
+		report_encoder_backend(&state, 2, &wake);
+		assert!(encoder_backend_label(state.load(Ordering::Acquire))
+			.unwrap()
+			.contains("CPU encoding"));
+		assert_eq!(wake_count.load(Ordering::Relaxed), 2);
+		report_encoder_backend(&state, 0, &wake);
+		assert!(encoder_backend_label(state.load(Ordering::Acquire)).is_none());
+	}
+
 	#[test]
 	fn idle_screen_keyframe_uses_latest_snapshot_only_when_ready() {
 		let frame = |value| RawFrame {
@@ -825,6 +900,8 @@ mod tests {
 			ready: Arc::new(AtomicBool::new(false)),
 			preview: Arc::new(Mutex::new(Some(preview))),
 			done: None,
+			#[cfg(not(target_os = "linux"))]
+			encoder_backend: Arc::new(AtomicU8::new(0)),
 			#[cfg(target_os = "linux")]
 			status: Arc::new(Mutex::new("")),
 			preview_visible: Arc::new(AtomicBool::new(true)),

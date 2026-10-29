@@ -1429,7 +1429,10 @@ pub fn account_row_with_remove(
 		paint_avatar(ui, name, 34.0, avatar);
 		let text = egui::Rect::from_min_max(
 			egui::pos2(rect.left() + 58.0, rect.top() + 8.0),
-			egui::pos2(rect.right() - if removable { 50.0 } else { 34.0 }, rect.bottom() - 8.0),
+			egui::pos2(
+				rect.right() - if removable { 50.0 } else { 34.0 },
+				rect.bottom() - 8.0,
+			),
 		);
 		ui.scope_builder(egui::UiBuilder::new().max_rect(text), |ui| {
 			ui.spacing_mut().item_spacing.y = 1.0;
@@ -3183,8 +3186,7 @@ mod sign_in_widget_tests {
 		let mut harness = egui_kittest::HarnessBuilder::default()
 			.allow_missing_glyphs()
 			.build_ui(|ui| {
-				let (row, remove) =
-					account_row_with_remove(ui, "Riley Quinn", "@riley", true);
+				let (row, remove) = account_row_with_remove(ui, "Riley Quinn", "@riley", true);
 				let remove = remove.expect("saved account can be forgotten");
 				assert!(remove.rect.width() >= 36.0);
 				assert!(remove.rect.height() >= 36.0);

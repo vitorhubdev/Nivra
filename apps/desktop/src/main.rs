@@ -1203,7 +1203,12 @@ fn expired_session_notice(auth: &AuthState) -> Option<&'static str> {
 
 /// Prevent a second token handoff while another login, a credential-store operation
 /// or a full PROTECT route is still pending. A previous failed login remains retryable.
-fn token_login_available(auth: &AuthState, authorized: bool, has_input: bool, blocked: bool) -> bool {
+fn token_login_available(
+	auth: &AuthState,
+	authorized: bool,
+	has_input: bool,
+	blocked: bool,
+) -> bool {
 	authorized && has_input && !blocked && !matches!(auth, AuthState::Authenticating)
 }
 /// Records acceptance in memory and queues it for the next preferences save.
@@ -9302,8 +9307,18 @@ mod tests {
 			true,
 			false,
 		));
-		assert!(!token_login_available(&AuthState::Failed, false, true, false));
-		assert!(!token_login_available(&AuthState::Failed, true, false, false));
+		assert!(!token_login_available(
+			&AuthState::Failed,
+			false,
+			true,
+			false
+		));
+		assert!(!token_login_available(
+			&AuthState::Failed,
+			true,
+			false,
+			false
+		));
 		assert!(!token_login_available(&AuthState::Failed, true, true, true));
 	}
 

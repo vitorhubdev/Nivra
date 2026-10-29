@@ -1013,19 +1013,11 @@ impl MessagingUi {
 					rect.right_top() + egui::vec2(-44.0, 8.0),
 					egui::Vec2::splat(36.0),
 				);
-				ui.painter().rect_filled(
-					button,
-					8,
-					egui::Color32::from_rgb(142, 44, 58),
-				);
+				ui.painter()
+					.rect_filled(button, 8, egui::Color32::from_rgb(142, 44, 58));
 				let mut action_ui = ui.new_child(egui::UiBuilder::new().max_rect(button));
-				crate::icons::button(
-					&mut action_ui,
-					crate::icons::Icon::Close,
-					36.0,
-					label,
-				)
-				.clicked()
+				crate::icons::button(&mut action_ui, crate::icons::Icon::Close, 36.0, label)
+					.clicked()
 			} else {
 				let button = egui::Rect::from_min_size(
 					rect.right_top() + egui::vec2(-146.0, 8.0),
@@ -1215,10 +1207,7 @@ impl MessagingUi {
 							.fill(egui::Color32::from_rgb(142, 44, 58))
 							.corner_radius(8),
 					)
-					.on_hover_text(crate::tr_ui!(
-						ui,
-						"Stop receiving this screen share"
-					))
+					.on_hover_text(crate::tr_ui!(ui, "Stop receiving this screen share"))
 					.clicked()
 				{
 					stop_watching = true;
@@ -1321,11 +1310,8 @@ impl MessagingUi {
 					rect.left_top() + egui::vec2(8.0, 8.0),
 					egui::Vec2::splat(36.0),
 				);
-				ui.painter().rect_filled(
-					button,
-					8,
-					egui::Color32::from_black_alpha(190),
-				);
+				ui.painter()
+					.rect_filled(button, 8, egui::Color32::from_black_alpha(190));
 				let mut audio_ui = ui.new_child(egui::UiBuilder::new().max_rect(button));
 				Some(crate::icons::button(
 					&mut audio_ui,
@@ -1337,20 +1323,22 @@ impl MessagingUi {
 				None
 			}
 		} else {
-			Some(ui.put(
-				egui::Rect::from_min_size(
-					rect.left_top() + egui::vec2(8.0, 8.0),
-					egui::vec2(124.0, 36.0),
+			Some(
+				ui.put(
+					egui::Rect::from_min_size(
+						rect.left_top() + egui::vec2(8.0, 8.0),
+						egui::vec2(124.0, 36.0),
+					),
+					egui::Button::new(
+						RichText::new(audio_label)
+							.size(13.0)
+							.color(egui::Color32::WHITE),
+					)
+					.truncate()
+					.fill(egui::Color32::from_black_alpha(190))
+					.corner_radius(8),
 				),
-				egui::Button::new(
-					RichText::new(audio_label)
-						.size(13.0)
-						.color(egui::Color32::WHITE),
-				)
-				.truncate()
-				.fill(egui::Color32::from_black_alpha(190))
-				.corner_radius(8),
-			))
+			)
 		};
 		if let Some(audio) = audio {
 			egui::Popup::menu(&audio)
@@ -1370,14 +1358,9 @@ impl MessagingUi {
 			ui.painter()
 				.rect_filled(button, 8, egui::Color32::from_rgb(142, 44, 58));
 			let mut stop_ui = ui.new_child(egui::UiBuilder::new().max_rect(button));
-			crate::icons::button(
-				&mut stop_ui,
-				crate::icons::Icon::Close,
-				36.0,
-				stop_label,
-			)
-			.on_hover_text(stop_hint)
-			.clicked()
+			crate::icons::button(&mut stop_ui, crate::icons::Icon::Close, 36.0, stop_label)
+				.on_hover_text(stop_hint)
+				.clicked()
 		} else {
 			let button = egui::Rect::from_min_size(
 				rect.right_top() + egui::vec2(-142.0, 8.0),
@@ -6351,7 +6334,17 @@ mod tests {
 			.get_by_role_and_label(egui::Role::Button, "Stop watching")
 			.click();
 		harness.run();
-		assert!(harness.state().1.voice.active.as_ref().unwrap().watching_all().is_empty());
+		assert!(
+			harness
+				.state()
+				.1
+				.voice
+				.active
+				.as_ref()
+				.unwrap()
+				.watching_all()
+				.is_empty()
+		);
 	}
 
 	#[test]
@@ -6394,7 +6387,10 @@ mod tests {
 		harness.run();
 		let (view, state) = harness.state();
 		assert!(!view.voice_stream_fullscreen);
-		assert_eq!(state.voice.active.as_ref().unwrap().watching_all(), &[Id(4)]);
+		assert_eq!(
+			state.voice.active.as_ref().unwrap().watching_all(),
+			&[Id(4)]
+		);
 	}
 
 	#[test]

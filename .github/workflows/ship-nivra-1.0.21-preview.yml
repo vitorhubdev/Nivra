@@ -1,0 +1,83 @@
+name: Ship Nivra 1.0.21 preview from main
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ship-nivra-1.0.21-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: nivra-v1.0.21-rc.1-release-request
+  cancel-in-progress: false
+
+jobs:
+  request:
+    if: github.repository == 'vitorhubdev/Nivra' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: v1.0.21-rc.1
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate revision, version and resolved PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+            echo 'main moved since this workflow checked out; refusing stale release.'; exit 1;
+          }
+          python3 - <<'PY'
+          import pathlib
+          import tomllib
+          with pathlib.Path('Cargo.toml').open('rb') as handle:
+              version = tomllib.load(handle)['workspace']['package']['version']
+          assert version == '1.0.21', f'Unexpected version: {version}'
+          audit = pathlib.Path('.cargo/audit.toml').read_text()
+          assert 'RUSTSEC-2026-0387' in audit, 'The preview must document the temporary security exception'
+          PY
+          test "$(gh api "repos/${GH_REPO}/pulls/138" --jq .merged)" = true || {
+            echo 'Copilot PR #138 is not merged into main'; exit 1;
+          }
+      - name: Create immutable preview tag and dispatch full CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          if gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" --jq .object.sha >/tmp/tag-sha 2>/dev/null; then
+            test "$(cat /tmp/tag-sha)" = "$sha" || {
+              echo "Existing ${TAG} points to another commit; refusing retag"; exit 1;
+            }
+          else
+            gh api "repos/${GH_REPO}/git/refs" --method POST \
+              --field "ref=refs/tags/${TAG}" \
+              --field "sha=${sha}"
+          fi
+          gh workflow run ci.yml --ref "${TAG}"
+          {
+            echo "### Preview build requested"
+            echo "- Tag: ${TAG}"
+            echo "- Commit: ${sha}"
+            echo "- Native tests, fuzzing, licensing and cargo-audit remain mandatory."
+            echo "- This preview discloses the unresolved crypto-bigint advisory."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove merged Copilot branch, leaving only main
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref='heads/copilot/fix-security-job-failure'
+          if gh api "repos/${GH_REPO}/git/ref/${ref}" >/dev/null 2>&1; then
+            gh api "repos/${GH_REPO}/git/refs/${ref}" --method DELETE
+            echo "Removed merged branch: ${ref}" >> "$GITHUB_STEP_SUMMARY"
+          fi

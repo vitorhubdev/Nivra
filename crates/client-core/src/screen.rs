@@ -41,7 +41,7 @@ impl Settings {
 	}
 
 	pub fn bit_rate(self) -> u32 {
-		let base = match (self.width, self.height) {
+		let base: u32 = match (self.width, self.height) {
 			(854, 480) => 2_000_000,
 			(1920, 1080) => 8_000_000,
 			_ => 4_000_000,

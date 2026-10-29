@@ -30,8 +30,7 @@ pub fn preview_format(filename: &str, content_type: Option<&str>) -> Option<Prev
 	if !matches!(
 		crate::attachments::file_kind(filename, content_type),
 		FileKind::Text | FileKind::Code
-	)
-	{
+	) {
 		return None;
 	}
 	let extension = filename
@@ -52,9 +51,9 @@ pub fn preview_format(filename: &str, content_type: Option<&str>) -> Option<Prev
 		"html" | "htm" | "xhtml" => return Some(PreviewFormat::Html),
 		"rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "json" | "toml" | "yaml" | "yml" | "css"
 		| "c" | "h" | "cpp" | "hpp" | "java" | "kt" | "swift" | "go" | "rb" | "sh" | "xml"
-		| "sql" | "mjs" | "cjs" | "lua" | "ps1" | "bat" | "cmd" | "ini" | "cfg"
-		| "conf" | "properties" | "diff" | "patch" | "tex" | "scss" | "less"
-		| "vue" | "svelte" | "graphql" | "ipynb" => return Some(PreviewFormat::Code),
+		| "sql" | "mjs" | "cjs" | "lua" | "ps1" | "bat" | "cmd" | "ini" | "cfg" | "conf"
+		| "properties" | "diff" | "patch" | "tex" | "scss" | "less" | "vue" | "svelte"
+		| "graphql" | "ipynb" => return Some(PreviewFormat::Code),
 		_ => {}
 	}
 	if mime == "text/markdown" {
@@ -65,9 +64,15 @@ pub fn preview_format(filename: &str, content_type: Option<&str>) -> Option<Prev
 	}
 	if matches!(
 		mime.as_str(),
-		"application/json" | "application/ld+json" | "application/xml"
-			| "application/yaml" | "application/toml" | "application/javascript"
-	) || mime.ends_with("+json") || mime.ends_with("+xml") {
+		"application/json"
+			| "application/ld+json"
+			| "application/xml"
+			| "application/yaml"
+			| "application/toml"
+			| "application/javascript"
+	) || mime.ends_with("+json")
+		|| mime.ends_with("+xml")
+	{
 		return Some(PreviewFormat::Code);
 	}
 	Some(PreviewFormat::Plain)
@@ -219,8 +224,7 @@ impl TextPreview {
 
 	/// Render the Markdown page only when not displaying literal source.
 	pub fn shows_markdown(&self) -> bool {
-		!self.view_source
-			&& (self.format == PreviewFormat::Markdown || self.rendered.is_some())
+		!self.view_source && (self.format == PreviewFormat::Markdown || self.rendered.is_some())
 	}
 
 	/// Markdown and HTML support both readable and source views.
@@ -400,7 +404,13 @@ mod tests {
 
 	#[test]
 	fn structured_office_documents_are_not_plain_text_previews() {
-		for name in ["contract.docx", "report.odt", "legacy.doc", "formatted.rtf", "book.epub"] {
+		for name in [
+			"contract.docx",
+			"report.odt",
+			"legacy.doc",
+			"formatted.rtf",
+			"book.epub",
+		] {
 			assert_eq!(crate::attachments::file_kind(name, None), FileKind::Other);
 			assert_eq!(preview_format(name, None), None);
 		}
@@ -408,9 +418,18 @@ mod tests {
 			assert_eq!(crate::attachments::file_kind(name, None), FileKind::Text);
 			assert_eq!(preview_format(name, None), Some(PreviewFormat::Plain));
 		}
-		assert_eq!(preview_format("data", Some("application/json")), Some(PreviewFormat::Code));
-		assert_eq!(preview_format("update.patch", None), Some(PreviewFormat::Code));
-		assert_eq!(preview_format("notes.mdown", None), Some(PreviewFormat::Markdown));
+		assert_eq!(
+			preview_format("data", Some("application/json")),
+			Some(PreviewFormat::Code)
+		);
+		assert_eq!(
+			preview_format("update.patch", None),
+			Some(PreviewFormat::Code)
+		);
+		assert_eq!(
+			preview_format("notes.mdown", None),
+			Some(PreviewFormat::Markdown)
+		);
 	}
 
 	#[test]

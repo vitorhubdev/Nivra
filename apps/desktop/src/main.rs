@@ -8532,8 +8532,7 @@ impl eframe::App for Desktop {
 				} else {
 					let runtime = self.runtime.handle().clone();
 					let parent = self.window.clone();
-					let (send, receive) =
-						std::sync::mpsc::sync_channel::<Option<bool>>(1);
+					let (send, receive) = std::sync::mpsc::sync_channel::<Option<bool>>(1);
 					self.save_txt_done = Some(receive);
 					let _ = std::thread::Builder::new()
 						.name("nivra-save-txt".into())

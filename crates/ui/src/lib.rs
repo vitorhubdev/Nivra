@@ -274,13 +274,41 @@ mod preview_tests {
 				},
 			);
 		harness.run();
-		assert!(harness.state().view.preview.as_ref().unwrap().shows_markdown());
-		harness.get_by_role_and_label(egui::Role::Button, "Source").click();
+		assert!(
+			harness
+				.state()
+				.view
+				.preview
+				.as_ref()
+				.unwrap()
+				.shows_markdown()
+		);
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Source")
+			.click();
 		harness.run();
-		assert!(!harness.state().view.preview.as_ref().unwrap().shows_markdown());
-		harness.get_by_role_and_label(egui::Role::Button, "Rendered").click();
+		assert!(
+			!harness
+				.state()
+				.view
+				.preview
+				.as_ref()
+				.unwrap()
+				.shows_markdown()
+		);
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Rendered")
+			.click();
 		harness.run();
-		assert!(harness.state().view.preview.as_ref().unwrap().shows_markdown());
+		assert!(
+			harness
+				.state()
+				.view
+				.preview
+				.as_ref()
+				.unwrap()
+				.shows_markdown()
+		);
 	}
 
 	#[test]
@@ -304,11 +332,15 @@ mod preview_tests {
 				},
 			);
 		harness.run();
-		harness.get_by_role_and_label(egui::Role::Button, "Edit a copy").click();
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Edit a copy")
+			.click();
 		harness.run();
 		let preview = harness.state().view.preview.as_ref().unwrap();
 		assert_eq!(preview.edit_draft.as_deref(), Some("# Title\n\nBody text"));
-		harness.get_by_role_and_label(egui::Role::Button, "Save local copy").click();
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Save local copy")
+			.click();
 		harness.run();
 		let view = &harness.state().view;
 		assert_eq!(view.preview.as_ref().unwrap().text, "# Title\n\nBody text");
@@ -4163,7 +4195,10 @@ impl MessagingUi {
 		let mut edit_changed = false;
 		// Take the draft out of the preview for this frame. TextEdit receives an
 		// exclusive mutable String without cloning tens of KiB every repaint.
-		let mut edit_draft = self.preview.as_mut().and_then(|preview| preview.edit_draft.take());
+		let mut edit_draft = self
+			.preview
+			.as_mut()
+			.and_then(|preview| preview.edit_draft.take());
 		// Move the pending external link out so the shared borrow of `preview`
 		// cannot overlap a mutable borrow of the timeline.
 		let mut opening = self.timeline.opening.take();
@@ -4223,21 +4258,31 @@ impl MessagingUi {
 					}
 					if editing {
 						ui.horizontal_wrapped(|ui| {
-							if crate::dialog::action(ui, "Save local copy", crate::dialog::Action::Neutral)
-								.clicked()
+							if crate::dialog::action(
+								ui,
+								"Save local copy",
+								crate::dialog::Action::Neutral,
+							)
+							.clicked()
 							{
 								save_edit = true;
 							}
-							if crate::dialog::action(ui, "Cancel editing", crate::dialog::Action::Neutral)
-								.clicked()
+							if crate::dialog::action(
+								ui,
+								"Cancel editing",
+								crate::dialog::Action::Neutral,
+							)
+							.clicked()
 							{
 								cancel_edit = true;
 							}
 						});
 						ui.label(
-							RichText::new("Local copy only. Saving does not edit the Discord attachment.")
-								.size(12.0)
-								.color(design::palette(ui).muted),
+							RichText::new(
+								"Local copy only. Saving does not edit the Discord attachment.",
+							)
+							.size(12.0)
+							.color(design::palette(ui).muted),
 						);
 						if discard_warning {
 							ui.label(
@@ -4245,13 +4290,21 @@ impl MessagingUi {
 									.color(design::palette(ui).warning),
 							);
 							ui.horizontal_wrapped(|ui| {
-								if crate::dialog::action(ui, "Discard and close", crate::dialog::Action::Danger)
-									.clicked()
+								if crate::dialog::action(
+									ui,
+									"Discard and close",
+									crate::dialog::Action::Danger,
+								)
+								.clicked()
 								{
 									confirm_discard = true;
 								}
-								if crate::dialog::action(ui, "Keep editing", crate::dialog::Action::Neutral)
-									.clicked()
+								if crate::dialog::action(
+									ui,
+									"Keep editing",
+									crate::dialog::Action::Neutral,
+								)
+								.clicked()
 								{
 									keep_editing = true;
 								}
@@ -4351,16 +4404,15 @@ impl MessagingUi {
 						toggle_maximized = true;
 					}
 					if can_switch_view
-						&& !editing
-						&& crate::dialog::action(
-							ui,
-							crate::i18n::text(
-								language,
-								if viewing_source { "Rendered" } else { "Source" },
-							),
-							crate::dialog::Action::Neutral,
-						)
-						.clicked()
+						&& !editing && crate::dialog::action(
+						ui,
+						crate::i18n::text(
+							language,
+							if viewing_source { "Rendered" } else { "Source" },
+						),
+						crate::dialog::Action::Neutral,
+					)
+					.clicked()
 					{
 						switch_view = true;
 					}
@@ -4378,9 +4430,11 @@ impl MessagingUi {
 				);
 			} else if self.timeline.save_txt_request.is_none() {
 				// Reuse the existing native file picker; never modify the remote attachment.
-				self.timeline.save_txt_request = Some((preview.filename.clone(), draft.as_bytes().to_vec()));
+				self.timeline.save_txt_request =
+					Some((preview.filename.clone(), draft.as_bytes().to_vec()));
 			} else {
-				self.toasts.push(design::Level::Error, "A text save is already pending");
+				self.toasts
+					.push(design::Level::Error, "A text save is already pending");
 			}
 		}
 		if cancel_edit {
@@ -4410,13 +4464,7 @@ impl MessagingUi {
 			preview.show_more();
 		}
 		if copy && let Some(preview) = self.preview.as_mut() {
-			ctx.copy_text(
-				preview
-					.edit_draft
-					.as_ref()
-					.unwrap_or(&preview.text)
-					.clone(),
-			);
+			ctx.copy_text(preview.edit_draft.as_ref().unwrap_or(&preview.text).clone());
 			preview.copied = true;
 		}
 		if toggle_maximized && let Some(preview) = self.preview.as_mut() {

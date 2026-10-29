@@ -47,15 +47,15 @@ pub fn file_kind(filename: &str, content_type: Option<&str>) -> FileKind {
 		"zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" => {
 			return FileKind::Archive;
 		}
-		"txt" | "md" | "markdown" | "mdown" | "log" | "csv" | "tsv" | "srt" | "vtt"
-		| "nfo" | "rst" | "adoc" => return FileKind::Text,
+		"txt" | "md" | "markdown" | "mdown" | "log" | "csv" | "tsv" | "srt" | "vtt" | "nfo"
+		| "rst" | "adoc" => return FileKind::Text,
 		// These are structured documents, not plain text. Keep the download path.
 		"doc" | "docx" | "odt" | "rtf" | "epub" => return FileKind::Other,
 		"rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "json" | "toml" | "yaml" | "yml" | "html"
 		| "htm" | "xhtml" | "css" | "c" | "h" | "cpp" | "hpp" | "java" | "kt" | "swift" | "go"
-		| "rb" | "sh" | "xml" | "sql" | "mjs" | "cjs" | "lua" | "ps1" | "bat" | "cmd"
-		| "ini" | "cfg" | "conf" | "properties" | "diff" | "patch" | "tex" | "scss"
-		| "less" | "vue" | "svelte" | "graphql" | "ipynb" => return FileKind::Code,
+		| "rb" | "sh" | "xml" | "sql" | "mjs" | "cjs" | "lua" | "ps1" | "bat" | "cmd" | "ini"
+		| "cfg" | "conf" | "properties" | "diff" | "patch" | "tex" | "scss" | "less" | "vue"
+		| "svelte" | "graphql" | "ipynb" => return FileKind::Code,
 		"mp3" | "wav" | "ogg" | "flac" | "m4a" | "aac" | "opus" => return FileKind::Audio,
 		"mp4" | "mov" | "webm" | "mkv" | "avi" | "m4v" => return FileKind::Video,
 		_ => {}
@@ -72,9 +72,15 @@ pub fn file_kind(filename: &str, content_type: Option<&str>) -> FileKind {
 		FileKind::Text
 	} else if matches!(
 		mime.as_str(),
-		"application/json" | "application/ld+json" | "application/xml"
-			| "application/yaml" | "application/toml" | "application/javascript"
-	) || mime.ends_with("+json") || mime.ends_with("+xml") {
+		"application/json"
+			| "application/ld+json"
+			| "application/xml"
+			| "application/yaml"
+			| "application/toml"
+			| "application/javascript"
+	) || mime.ends_with("+json")
+		|| mime.ends_with("+xml")
+	{
 		FileKind::Code
 	} else if mime.contains("zip") || mime.contains("compressed") || mime.contains("tar") {
 		FileKind::Archive

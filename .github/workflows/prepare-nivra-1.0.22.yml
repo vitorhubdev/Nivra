@@ -1,4 +1,5 @@
 name: Prepare 1.0.22 formatting and manifests on main
+# Retry after fixing parser syntax in text_preview.rs
 
 on:
   push:

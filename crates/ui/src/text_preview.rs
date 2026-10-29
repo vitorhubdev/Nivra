@@ -27,7 +27,7 @@ pub enum PreviewFormat {
 /// The preview format for a filename/type pair, or `None` for anything that is
 /// not plain text, markdown or source code.
 pub fn preview_format(filename: &str, content_type: Option<&str>) -> Option<PreviewFormat> {
-	!matches!(
+	if !matches!(
 		crate::attachments::file_kind(filename, content_type),
 		FileKind::Text | FileKind::Code
 	)

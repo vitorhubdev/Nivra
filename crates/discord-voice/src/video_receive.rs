@@ -1374,7 +1374,10 @@ mod tests {
 		let mut allocation = None;
 		for _ in 0..4 {
 			for (decoder, data, dimensions) in &mut streams {
-				assert_eq!(decoder.decode(data, &mut scratch, true), Ok(Some(*dimensions)));
+				assert_eq!(
+					decoder.decode(data, &mut scratch, true),
+					Ok(Some(*dimensions))
+				);
 				let bytes = dimensions.0 as usize * dimensions.1 as usize * 4;
 				assert!(
 					scratch[..bytes]
@@ -1425,7 +1428,8 @@ mod tests {
 			for _ in 0..60 {
 				for (decoder, data) in decoders.iter_mut().zip(&streams) {
 					let previous = scratch.len();
-					let (width, height) = decoder.decode(data, &mut scratch, true).unwrap().unwrap();
+					let (width, height) =
+						decoder.decode(data, &mut scratch, true).unwrap().unwrap();
 					std::hint::black_box(&scratch[..width as usize * height as usize * 4]);
 					length_changes += usize::from(previous != scratch.len());
 					peak_capacity = peak_capacity.max(scratch.capacity());

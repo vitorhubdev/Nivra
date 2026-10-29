@@ -1,5 +1,5 @@
 name: Prepare 1.0.22 formatting and manifests on main
-# Streaming audit pass: format sender/receiver performance fixes, bounded UI metrics, and validate on main.
+# Streaming audit follow-up: format the refactored Windows capture flags before strict CI.
 # Retry after fixing parser syntax in text_preview.rs
 
 on:

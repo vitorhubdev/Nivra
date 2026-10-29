@@ -618,7 +618,10 @@ mod tests {
 		assert_eq!(picker.settings().unwrap().bit_rate(), 16_000_000);
 		picker.lighter_preset();
 		let lighter = picker.settings().unwrap();
-		assert_eq!((lighter.width, lighter.height, lighter.fps), (1280, 720, 30));
+		assert_eq!(
+			(lighter.width, lighter.height, lighter.fps),
+			(1280, 720, 30)
+		);
 		assert_eq!(lighter.bit_rate(), 4_000_000);
 		picker.height = 1080;
 		picker.fps = 60;

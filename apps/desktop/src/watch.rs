@@ -860,13 +860,28 @@ mod tests {
 	fn hidden_remote_frames_do_not_allocate_preview_images() {
 		let mut frame_slot = None;
 		let pixels = [7, 8, 9, 255];
-		assert!(!store_visible_frame(&mut frame_slot, frame(1, 1, &pixels), false));
+		assert!(!store_visible_frame(
+			&mut frame_slot,
+			frame(1, 1, &pixels),
+			false
+		));
 		assert!(frame_slot.is_none());
-		assert!(store_visible_frame(&mut frame_slot, frame(1, 1, &pixels), true));
+		assert!(store_visible_frame(
+			&mut frame_slot,
+			frame(1, 1, &pixels),
+			true
+		));
 		assert!(frame_slot.is_some());
 		// Hiding a view must leave its previous valid picture alone.
-		assert!(!store_visible_frame(&mut frame_slot, frame(1, 1, &[0, 0, 0, 0]), false));
-		assert_eq!(frame_slot.as_ref().unwrap().pixels[0], egui::Color32::from_rgba_unmultiplied(7, 8, 9, 255));
+		assert!(!store_visible_frame(
+			&mut frame_slot,
+			frame(1, 1, &[0, 0, 0, 0]),
+			false
+		));
+		assert_eq!(
+			frame_slot.as_ref().unwrap().pixels[0],
+			egui::Color32::from_rgba_unmultiplied(7, 8, 9, 255)
+		);
 	}
 
 	#[test]

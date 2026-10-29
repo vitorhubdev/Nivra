@@ -30,13 +30,13 @@ use openh264::{
 	},
 	formats::{BgraSliceU8, YUVBuffer, YUVSource},
 };
+#[cfg(not(target_os = "linux"))]
+use std::sync::atomic::AtomicU8;
 use std::sync::{
 	Arc, Mutex,
 	atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 	mpsc,
 };
-#[cfg(not(target_os = "linux"))]
-use std::sync::atomic::AtomicU8;
 
 #[cfg(not(target_os = "linux"))]
 use std::time::{Duration, Instant};
@@ -843,18 +843,24 @@ mod tests {
 	fn selected_encoder_label_reflects_hardware_and_software_fallback() {
 		let state = AtomicU8::new(0);
 		let wake_count = AtomicU32::new(0);
-		let wake = || { wake_count.fetch_add(1, Ordering::Relaxed); };
+		let wake = || {
+			wake_count.fetch_add(1, Ordering::Relaxed);
+		};
 		assert_eq!(encoder_backend_label(state.load(Ordering::Acquire)), None);
 		report_encoder_backend(&state, 1, &wake);
-		assert!(encoder_backend_label(state.load(Ordering::Acquire))
-			.unwrap()
-			.contains("GPU encoding"));
+		assert!(
+			encoder_backend_label(state.load(Ordering::Acquire))
+				.unwrap()
+				.contains("GPU encoding")
+		);
 		report_encoder_backend(&state, 1, &wake);
 		assert_eq!(wake_count.load(Ordering::Relaxed), 1);
 		report_encoder_backend(&state, 2, &wake);
-		assert!(encoder_backend_label(state.load(Ordering::Acquire))
-			.unwrap()
-			.contains("CPU encoding"));
+		assert!(
+			encoder_backend_label(state.load(Ordering::Acquire))
+				.unwrap()
+				.contains("CPU encoding")
+		);
 		assert_eq!(wake_count.load(Ordering::Relaxed), 2);
 		report_encoder_backend(&state, 0, &wake);
 		assert!(encoder_backend_label(state.load(Ordering::Acquire)).is_none());

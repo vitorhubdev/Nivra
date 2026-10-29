@@ -113,9 +113,7 @@ impl Flags {
 	/// Time between captured frames right now. Going from idle to watched restarts the schedule so
 	/// the first real frame does not wait out the idle interval.
 	fn current_interval(&mut self, now: Instant) -> Duration {
-		if self.ready.load(Ordering::Acquire)
-			&& self.transport_room.load(Ordering::Acquire)
-		{
+		if self.ready.load(Ordering::Acquire) && self.transport_room.load(Ordering::Acquire) {
 			if std::mem::take(&mut self.waiting) {
 				self.next_frame = now;
 			}

@@ -6387,9 +6387,11 @@ mod tests {
 		harness.run();
 		let (view, state) = harness.state();
 		assert!(!view.voice_stream_fullscreen);
+		// Fullscreen shows the last selected view, Id(4). Stopping it leaves
+		// the other watched stream active and does not leave the voice call.
 		assert_eq!(
 			state.voice.active.as_ref().unwrap().watching_all(),
-			&[Id(4)]
+			&[Id(3)]
 		);
 	}
 

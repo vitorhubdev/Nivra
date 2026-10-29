@@ -74,10 +74,10 @@ jobs:
       # The release executable is the long step. PRs compile and test only.
       # Main pushes and v* tags still build and upload dist/.
       - name: Package app without demo or developer features
-        if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || (github.event_name == 'workflow_dispatch' && runner.os == 'Windows' && runner.arch == 'X64')
+        if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || (github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/tags/v') || (runner.os == 'Windows' && runner.arch == 'X64')))
         run: cargo xtask package
       - uses: actions/upload-artifact@v7.0.1
-        if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || (github.event_name == 'workflow_dispatch' && runner.os == 'Windows' && runner.arch == 'X64')
+        if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || (github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/tags/v') || (runner.os == 'Windows' && runner.arch == 'X64')))
         with:
           name: nivra-${{ runner.os }}-${{ runner.arch }}-unsigned
           path: dist/
@@ -170,7 +170,7 @@ jobs:
           retention-days: 7
 
   publish:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(github.ref, 'refs/tags/v')
     needs: [native, extension-sdk, security, licenses, fuzz]
     runs-on: ubuntu-latest
     permissions:
@@ -235,13 +235,27 @@ jobs:
           # Notes come from the CHANGELOG section of this version, so a release
           # never repeats an older round's text.
           notes="$(mktemp)"
-          awk -v want="## Nivra ${version}" '
-            $0 == want { printing = 1; next }
-            printing && /^## / { exit }
-            printing { print }
-          ' "${GITHUB_WORKSPACE}/CHANGELOG.md" > "$notes"
+          if [[ "$version" == *-rc.* ]]; then
+            awk '
+              /^## Unreleased/ { printing = 1; next }
+              printing && /^## / { exit }
+              printing { print }
+            ' "${GITHUB_WORKSPACE}/CHANGELOG.md" > "$notes"
+            printf '\nAVISO DE SEGURANÇA (PRÉ-LANÇAMENTO): este build mantém crypto-bigint 0.5.5, afetado por RUSTSEC-2026-0387 (operações criptográficas com variação de tempo). O Copilot apenas documentou a exceção no cargo-audit; a vulnerabilidade NÃO está corrigida. Não recomendado para comunicação sensível.\n' >> "$notes"
+          else
+            awk -v want="## Nivra ${version}" '
+              $0 == want { printing = 1; next }
+              printing && /^## / { exit }
+              printing { print }
+            ' "${GITHUB_WORKSPACE}/CHANGELOG.md" > "$notes"
+          fi
           if [ ! -s "$notes" ]; then
             printf 'Nivra %s\n\nSem notas no CHANGELOG para esta versão.\n' "${version}" > "$notes"
           fi
           printf '\nEstes pacotes não têm assinatura. O Windows pode mostrar "Proteção do Windows" ao abrir o .exe; escolha "Mais informações" e "Executar assim mesmo".\n' >> "$notes"
-          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "Nivra ${version}" --notes-file "$notes" --verify-tag Nivra-"${tag}"-* SHA256SUMS.txt
+          for expected in "Windows-X64.exe" "Windows-ARM64.exe" "Linux-X64.tar.gz" "macOS-ARM64.zip"; do
+            test -s "Nivra-${tag}-${expected}" || { echo "Missing release package: ${expected}"; exit 1; }
+          done
+          release_flags=()
+          if [[ "$version" == *-rc.* ]]; then release_flags=(--prerelease --latest=false); fi
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "Nivra ${version}" --notes-file "$notes" --verify-tag "${release_flags[@]}" Nivra-"${tag}"-* SHA256SUMS.txt

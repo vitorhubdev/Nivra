@@ -306,12 +306,15 @@ fn encode_loop(
 	let mut next_preview = Instant::now();
 	let mut latest_frame = None;
 	let mut metrics = crate::diagnostics::Metrics::new(crate::diagnostics::Scope::ScreenVideo);
+	#[cfg(target_os = "windows")]
+	let mut audio_failure_logged = false;
 
 	while !stop.load(Ordering::Acquire) && !send.is_closed() {
 		#[cfg(target_os = "windows")]
-		if _native.failed() {
-			return Err(
-				"System audio capture stopped; check your output device or share without audio",
+		if _native.failed() && !audio_failure_logged {
+			audio_failure_logged = true;
+			platform::diagnostics::warn(
+				"System audio capture stopped; screen video remains active without audio",
 			);
 		}
 		if capture_stop.load(Ordering::Acquire) {

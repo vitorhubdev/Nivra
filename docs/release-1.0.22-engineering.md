@@ -62,6 +62,19 @@ stops repainting when settled, and respects reduced-motion preferences. New
 modal content inherits those animations rather than introducing endless
 spinners or a new graphics framework.
 
+## Windows screen-share audio resilience
+
+In the pre-1.0.22 Windows implementation, the WASAPI audio worker shared the
+screen capture's stop flag. A non-fatal system-audio error thus stopped the
+whole screen video. The corrected design uses a separate audio-only cancellation
+flag: a startup or later loopback failure is diagnosed but **video capture can
+continue**. It does not promise recovery of system audio without explicitly
+restarting that capture, and requires a hardware regression test with WASAPI.
+
+The text-reader dialog also reuses the shared animated modal and adds a
+low-cost file-type/size/status subtitle. This is presentation metadata, not a
+new render loop or background animation.
+
 ## Dependency/size decision log
 
 - The desktop pins egui/eframe and wgpu integration to an immutable Git

@@ -4228,9 +4228,22 @@ impl MessagingUi {
 			preview.format == text_preview::PreviewFormat::Html && preview.shows_markdown();
 		// A maximized preview fills the viewport (the dialog clamps to it) and
 		// grows the scroll body, so long `.md`/`.txt` files are easier to read.
-		let available_body_height = (ctx.content_rect().height() - 200.0).max(1.0);
+		let available_body_height = (ctx.content_rect().height() - 275.0).max(1.0);
 		let max_body_height = available_body_height.min(if maximized { 1200.0 } else { 420.0 });
+		let document_type = match preview.format {
+			text_preview::PreviewFormat::Markdown => "Markdown",
+			text_preview::PreviewFormat::Html => "Static HTML",
+			text_preview::PreviewFormat::Code => "Source code",
+			text_preview::PreviewFormat::Plain => "Plain text",
+		};
+		let mode = if editing { "Local edit" } else { "Preview" };
+		let subtitle = format!(
+			"{document_type} · {:.1} KiB · {mode}",
+			preview.text.len() as f64 / 1024.0,
+		);
 		let response = crate::dialog::Dialog::new("text-preview", preview.filename.clone())
+			.subtitle(subtitle)
+			.icon(crate::icons::Icon::FileText)
 			.width(if maximized { 1100.0 } else { 640.0 })
 			.show(ctx, |d| {
 				d.content(|ui| {
@@ -4326,6 +4339,7 @@ impl MessagingUi {
 									.add(
 										egui::TextEdit::multiline(draft)
 											.code_editor()
+											.hint_text("Edit local text copy")
 											.desired_width(f32::INFINITY)
 											.desired_rows(16)
 											.char_limit(text_preview::MAX_EDIT_BYTES),

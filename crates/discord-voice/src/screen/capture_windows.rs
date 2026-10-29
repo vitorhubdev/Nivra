@@ -350,7 +350,14 @@ impl Capture {
 			_ => return Err("The desktop screen picker is available only on Linux"),
 		}?;
 		if let Some(send) = audio {
-			capture.audio = Some(audio::Audio::start(send, stop, ready, audio_epoch)?);
+			match audio::Audio::start(send, stop, ready, audio_epoch) {
+				Ok(worker) => capture.audio = Some(worker),
+				Err(reason) => {
+					platform::diagnostics::warn(&format!(
+						"System audio capture unavailable; screen video will continue: {reason}"
+					));
+				}
+			}
 		}
 		Ok(capture)
 	}

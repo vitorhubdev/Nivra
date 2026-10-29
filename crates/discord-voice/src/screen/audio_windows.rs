@@ -13,13 +13,22 @@ pub(super) struct Audio {
 }
 
 #[cfg(target_os = "windows")]
+fn independent_audio_stop(_screen_stop: &Arc<AtomicBool>) -> Arc<AtomicBool> {
+	// Audio ending must not set the video capture's stop flag.
+	Arc::new(AtomicBool::new(false))
+}
+
+#[cfg(target_os = "windows")]
 impl Audio {
 	pub(super) fn start(
 		send: Sender<AudioChunk>,
-		stop: Arc<AtomicBool>,
+		screen_stop: Arc<AtomicBool>,
 		ready: Arc<AtomicBool>,
 		audio_epoch: Arc<AtomicU64>,
 	) -> Result<Self, &'static str> {
+		// WASAPI failures must never stop the independent video capture worker.
+		// Drop of Capture/Audio owns this flag and joins the audio worker.
+		let stop = independent_audio_stop(&screen_stop);
 		let failed = Arc::new(AtomicBool::new(false));
 		let input = Samples {
 			send,
@@ -392,6 +401,16 @@ impl Samples {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[cfg(target_os = "windows")]
+	#[test]
+	fn audio_error_and_shutdown_do_not_disconnect_screen_capture() {
+		let screen_stop = Arc::new(AtomicBool::new(false));
+		let audio_stop = independent_audio_stop(&screen_stop);
+		assert!(!Arc::ptr_eq(&screen_stop, &audio_stop));
+		audio_stop.store(true, Ordering::Release);
+		assert!(!screen_stop.load(Ordering::Acquire));
+	}
 
 	#[test]
 	fn loopback_samples_are_gated_sanitized_and_bounded() {

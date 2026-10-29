@@ -1,6 +1,43 @@
 # Changelog
 
-## Unreleased — preparação da 1.0.21
+## Unreleased
+
+Alterações para futuras versões serão registradas aqui, depois da 1.0.22.
+
+## Nivra 1.0.22
+
+Lançamento nativo Windows x64/ARM64, Linux x64 e macOS ARM64. Revisão visual e funcional de login, acesso às transmissões e desempenho de mídia. O visual Nivra, a identidade violeta e as preferências de movimento reduzido foram preservados.
+
+### Login, navegação e acessibilidade
+
+- Campo de token opcional com rótulo visível e associado à acessibilidade; autenticações paralelas ficam bloqueadas enquanto há login, limpeza de credenciais ou inicialização completa do PROTECT.
+- Seletor de idioma no fluxo rolável do login, evitando sobreposição com o cartão em janelas pequenas. A ação de login esclarece que abre a página do Discord em uma janela separada.
+- Ação de remover conta salva aumentada para 36 px, com indicação de foco e separação visual da seleção da conta; confirmação destrutiva permanece obrigatória.
+- As ações de assistir, parar de assistir, tela cheia, PiP e áudio estão visualmente separadas, com áreas de clique maiores e botões acessíveis mesmo em tiles compactos.
+- Tela cheia agora tem **Sair da tela cheia** e **Parar de assistir** como ações independentes. Ao parar, somente a transmissão exibida termina; outras visualizações e a chamada continuam.
+- A prévia local da própria tela também oferece **Parar de compartilhar** diretamente, sem depender do botão menor da barra de chamadas.
+
+### Streaming, áudio e desempenho
+
+- Indicador da implementação H.264 efetivamente selecionada (codificação GPU por Media Foundation/VideoToolbox ou fallback OpenH264 por CPU).
+- No Windows, diminuição da frequência de leitura de quadros D3D11 quando a fila de transmissão está cheia, retomando-a após aliviar o congestionamento. Uma falha de captura de áudio WASAPI não encerra o vídeo.
+- Ao assistir, transmissão oculta deixa de copiar texturas RGBA para a interface; OpenH264 conserva a decodificação das referências de H.264, evitando reconexões por ocultação.
+- Preset reversível **720p/30 FPS**, com indicação do teto de bitrate; segue ativo o controle de bitrate adaptativo da rede.
+- Melhorias anteriores desta série em mudo/PTT, recuperação de saída de áudio e mensagens, PROTECT e filas continuam incluídas.
+
+### Anexos
+
+- Markdown passa a alternar entre visualização formatada e fonte. Textos completos e pequenos (até 64 KiB) permitem editar uma cópia local e salvá-la pelo seletor nativo, sem alterar anexos remotos.
+- Reconhecimento mais preciso de CSV, TSV, legendas, arquivos de configuração e código. DOCX, ODT, RTF e EPUB permanecem disponíveis para baixar/abrir com aplicativos apropriados, sem serem decodificados erroneamente como texto simples.
+
+### Validação e limitações
+
+- [CI da revisão validada](https://github.com/vitorhubdev/Nivra/actions/runs/40887692784): testes e empacotamento aprovados em Windows x64, Windows ARM64, Linux x64 e macOS ARM64; auditoria, fuzzing, licenças e extensões aprovados com as exceções documentadas.
+- O protocolo de Go Live desta versão ainda negocia **H.264**; não há negociação automática de AV1/HEVC/VP9. O caminho D3D11 GPU→RAM ainda tem custo alto em telas grandes; não foi medida redução percentual de CPU/GPU ou latência em hardware real.
+- **AVISO DE SEGURANÇA — pendência não corrigida:** a dependência transitiva `crypto-bigint 0.5.5`, usada na cadeia DAVE/P-256, permanece afetada por `RUSTSEC-2026-0387`. O cargo-audit aceita uma exceção explícita; aprovação do CI **não significa remediação**. Avalie o risco antes de usar a versão em comunicação sensível. O mesmo vale para as demais exceções documentadas no audit.toml.
+- Nivra é um cliente Discord não oficial. Sessões reais, fidelidade visual no hardware do proprietário e interoperabilidade de chamadas externas não foram validadas nessa rodada. Os executáveis desta rota de distribuição não têm assinatura de editor.
+
+## Notas históricas de desenvolvimento — preparação da 1.0.21
 
 Esta seção não significa que a 1.0.21 foi publicada. A auditoria de dependências
 continua sendo uma barreira de lançamento; chamadas reais e desempenho de GPU

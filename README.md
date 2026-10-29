@@ -39,25 +39,25 @@
 
 Stable builds are published on the [Releases page](https://github.com/vitorhubdev/Nivra/releases/latest). On Windows, download the single `.exe` and open it: there is nothing to extract. Only the assets attached to a release on that page are Nivra binaries.
 
-| System | Asset (v1.0.20) | Notes |
+| System | Asset (v1.0.22) | Notes |
 | --- | --- | --- |
-| Windows x64 | `Nivra-v1.0.20-Windows-X64.exe` | Single executable, no installer |
-| Windows ARM64 | `Nivra-v1.0.20-Windows-ARM64.exe` | Maximum noise suppression (DeepFilterNet) is unavailable and falls back to RNNoise |
-| Linux x64 | `Nivra-v1.0.20-Linux-X64.tar.gz` | Extract and run |
-| macOS Apple Silicon | `Nivra-v1.0.20-macOS-ARM64.zip` | Intel macOS is not published |
+| Windows x64 | `Nivra-v1.0.22-Windows-X64.exe` | Single executable, no installer |
+| Windows ARM64 | `Nivra-v1.0.22-Windows-ARM64.exe` | Maximum noise suppression (DeepFilterNet) is unavailable and falls back to RNNoise |
+| Linux x64 | `Nivra-v1.0.22-Linux-X64.tar.gz` | Extract and run |
+| macOS Apple Silicon | `Nivra-v1.0.22-macOS-ARM64.zip` | Intel macOS is not published |
 
 Every release also attaches a `SHA256SUMS.txt` checksum file. Verify the file you downloaded before running it:
 
 ```powershell
 # Windows (PowerShell) — compare the output with the matching line in SHA256SUMS.txt
-Get-FileHash .\Nivra-v1.0.20-Windows-X64.exe -Algorithm SHA256
+Get-FileHash .\Nivra-v1.0.22-Windows-X64.exe -Algorithm SHA256
 ```
 
 ```sh
 # Linux — checks the files that are present and ignores the rest of the manifest
 sha256sum --ignore-missing -c SHA256SUMS.txt
 # macOS — compare the printed hash with the matching line in SHA256SUMS.txt
-shasum -a 256 Nivra-v1.0.20-macOS-ARM64.zip
+shasum -a 256 Nivra-v1.0.22-macOS-ARM64.zip
 ```
 
 **Signing status differs by platform.** Windows and Linux packages are unsigned. The macOS `.app` is ad-hoc signed and not notarized (tag builds); a manual release-workflow build with Apple credentials is Developer ID-signed and notarized instead. If Gatekeeper still warns about the app you downloaded, right-click it, choose **Open**, and confirm; macOS also allows it later under System Settings → Privacy & Security. On Windows, SmartScreen may show *"Windows protected your PC"*: choose **More info** → **Run anyway**.
@@ -74,7 +74,7 @@ Nivra is built around three voice pillars, each covered by an offline, measured 
 
 These pillars are synthetic, offline tests. Live Discord interoperability and physical microphone/speaker behavior remain unverified. The [Performance](#performance) section carries the Serein reference figures; Nivra's own memory and CPU measurement is still pending.
 
-**New in 1.0.20:** an `.html` attachment now opens as a rendered page (static: no scripts, styles or network requests, only `http(s)` links, with a Source/Rendered switch), and a quote in the middle of a message or embed is no longer drawn on top of the text after it. All of it is covered by automated tests only: nothing was exercised on a real Discord call, and the cause of the media drops and of the high GPU use while sharing the screen is still unproven. See [CHANGELOG.md](CHANGELOG.md), [docs/protect.md](docs/protect.md) and [docs/performance.md](docs/performance.md).
+**New in 1.0.22:** streamlined sign-in, accessible account management and direct Stop watching/Stop sharing controls; separate Full screen/PiP/audio actions; the actual GPU-vs-CPU H.264 encoder indicator; reduced capture work during congestion; hidden-view decoding optimization; 720p/30 FPS low-load preset; and bounded Markdown/TXT editing of local copies. These improvements passed automated multiplatform tests, but live Discord calls and owner GPU timings are not yet verified. **Known security issue:** the cargo-audit exception for `RUSTSEC-2026-0387` (transitive `crypto-bigint 0.5.5`) is not a fix; assess risk before using sensitive calls. See [CHANGELOG.md](CHANGELOG.md), [docs/streaming-performance-audit-1.0.22.md](docs/streaming-performance-audit-1.0.22.md), and [docs/design.md](docs/design.md).
 
 **Recently added** (1.0.12–1.0.14):
 

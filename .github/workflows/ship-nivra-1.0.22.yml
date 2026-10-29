@@ -1,0 +1,82 @@
+name: Publish Nivra 1.0.22 from main
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ship-nivra-1.0.22.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: nivra-v1.0.22-release-request
+  cancel-in-progress: false
+
+jobs:
+  request:
+    if: github.repository == 'vitorhubdev/Nivra' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: v1.0.22
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate source revision, changelog and previous successful CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+            echo 'main moved since this workflow checked out; refusing stale release.'; exit 1;
+          }
+          python3 - <<'PY'
+          import pathlib
+          import tomllib
+          with pathlib.Path('Cargo.toml').open('rb') as handle:
+              version = tomllib.load(handle)['workspace']['package']['version']
+          assert version == '1.0.22', f'Unexpected version: {version}'
+          audit = pathlib.Path('.cargo/audit.toml').read_text()
+          assert 'RUSTSEC-2026-0387' in audit, 'The known crypto risk must remain documented'
+          changes = pathlib.Path('CHANGELOG.md').read_text()
+          assert '## Nivra 1.0.22\n' in changes, 'Release changelog entry missing'
+          notes = changes.split('## Nivra 1.0.22\n', 1)[1].split('\n## ', 1)[0]
+          assert 'RUSTSEC-2026-0387' in notes, 'The release must disclose the security advisory'
+          assert 'Parar de compartilhar' in notes, 'Release notes unexpectedly empty'
+          PY
+          test "$(gh api "repos/${GH_REPO}/actions/runs/40887692784" --jq .conclusion)" = success || {
+            echo 'Reviewed 1.0.22 CI not green'; exit 1;
+          }
+          test "$(gh api "repos/${GH_REPO}/actions/runs/40887692784" --jq .head_sha)" = 8cf1e31bdeead22dfaa705cff3aeb2070dd88db2 || {
+            echo 'Unexpected reviewed CI commit'; exit 1;
+          }
+      - name: Create immutable v1.0.22 tag and dispatch complete release CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          if gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" --jq .object.sha >/tmp/tag-sha 2>/dev/null; then
+            test "$(cat /tmp/tag-sha)" = "$sha" || {
+              echo "Existing ${TAG} points to another commit; refusing retag"; exit 1;
+            }
+          else
+            gh api "repos/${GH_REPO}/git/refs" --method POST \
+              --field "ref=refs/tags/${TAG}" \
+              --field "sha=${sha}"
+          fi
+          gh workflow run ci.yml --ref "${TAG}"
+          {
+            echo "### Nivra 1.0.22 release build requested"
+            echo "- Tag: ${TAG}"
+            echo "- Commit: ${sha}"
+            echo "- Native tests, fuzzing, licensing and cargo-audit remain mandatory."
+            echo "- Release notes disclose the unresolved RUSTSEC-2026-0387 advisory; this is not remediation."
+          } >> "$GITHUB_STEP_SUMMARY"

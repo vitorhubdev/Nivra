@@ -135,6 +135,7 @@ impl Flags {
 struct Handler(Flags, crate::diagnostics::Metrics, readback::Reader);
 
 /// What the encode loop shares with the capture callback to pace it.
+#[derive(Clone)]
 pub(crate) struct Pacing {
 	/// A frame is still being handled; the callback skips new ones meanwhile.
 	pub pending: Arc<AtomicBool>,
@@ -309,11 +310,6 @@ impl Capture {
 		audio_epoch: Arc<AtomicU64>,
 		pacing: Pacing,
 	) -> Result<Self, &'static str> {
-		let Pacing {
-			pending,
-			preview_visible,
-			transport_room,
-		} = pacing;
 		if settings.width == 0
 			|| settings.height == 0
 			|| settings.width > MAX_FRAME_WIDTH
@@ -334,10 +330,8 @@ impl Capture {
 					monitor,
 					frames,
 					stop.clone(),
-					pending,
 					ready.clone(),
-					preview_visible,
-					transport_room.clone(),
+					pacing.clone(),
 				)
 			}
 			SourceId::Window(id) => {
@@ -351,10 +345,8 @@ impl Capture {
 					window,
 					frames,
 					stop.clone(),
-					pending,
 					ready.clone(),
-					preview_visible,
-					transport_room.clone(),
+					pacing.clone(),
 				)
 			}
 			#[allow(unreachable_patterns)] // Portal may be absent from platform-scoped models.
@@ -408,10 +400,8 @@ fn start_item<T>(
 	item: T,
 	frames: SyncSender<RawFrame>,
 	stop: Arc<AtomicBool>,
-	pending: Arc<AtomicBool>,
 	ready: Arc<AtomicBool>,
-	preview_visible: Arc<AtomicBool>,
-	transport_room: Arc<AtomicBool>,
+	pacing: Pacing,
 ) -> Result<Capture, &'static str>
 where
 	T: NativeSource,
@@ -422,6 +412,11 @@ where
 	if width == 0 || height == 0 || width > MAX_FRAME_WIDTH || height > MAX_FRAME_HEIGHT {
 		return Err("Selected source exceeds the 4K capture limit");
 	}
+	let Pacing {
+		pending,
+		preview_visible,
+		transport_room,
+	} = pacing;
 	let flags = Flags {
 		frames,
 		stop,

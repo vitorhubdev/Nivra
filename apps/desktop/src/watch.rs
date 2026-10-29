@@ -609,6 +609,7 @@ impl Watch {
 		let slot = frames.clone();
 		let wake = ctx.clone();
 		let visible = self.visible.clone();
+		let decoder_visibility = visible.clone();
 		// A fresh view starts woken: the first poll corrects this flag, while starting
 		// hidden would delay the first frame until an unrelated repaint.
 		visible.store(true, Ordering::Release);
@@ -631,7 +632,7 @@ impl Watch {
 		let task = runtime.spawn(async move {
 			let (status_send, status_wake) = (send.clone(), wake.clone());
 			let result =
-				discord_voice::watch_stream(credentials, identity, sink, audio, move |event| {
+				discord_voice::watch_stream_with_visibility(credentials, identity, sink, decoder_visibility, audio, move |event| {
 					let status = match event {
 						Status::Connecting => "Connecting to the stream…",
 						Status::Discovering => "Checking the stream network…",

@@ -68,8 +68,13 @@ transport is not ready or the encoded queue is full. The 1.0.22 audit adds:
    immediately reversible. It saves conversion/encode work, but does not
    eliminate 4K readback.
 4. **Hidden remote view CPU reduction**: skip copying RGBA to egui's ColorImage
-   when no view is visible, leaving decoder reference state and on-screen
-   resumption intact.
+   when no view is visible. In the follow-up pass, the OpenH264 software
+   decoder also continues decoding the H.264 reference pictures while hidden
+   but skips the YUV→RGBA conversion until the user returns. Decoder picture
+   accounting must continue to avoid false stream-stall/keyframe requests;
+   the older public `watch_stream` interface remains compatible.
+   Hardware decode output conversion is still platform-specific, and further
+   GPU-native presentation remains a separate project.
 
 No percentage improvement to system latency, FPS, CPU, GPU or bandwidth is
 claimed without a comparable before/after measurement.

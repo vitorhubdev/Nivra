@@ -462,6 +462,16 @@ impl Receivers {
 /// Decoder thread: cleartext access units in, bounded RGBA frames out through the sink.
 /// Dropping the returned sender ends the thread and releases every decoder.
 pub(crate) fn spawn_decoder(sink: VideoSink) -> Result<(DecoderQueue, Lost), &'static str> {
+	spawn_decoder_with_visibility(sink, None)
+}
+
+/// An optional visibility signal only affects expensive decoded RGBA delivery.
+/// The H.264 decoder must still consume prediction frames while hidden to preserve its
+/// reference chain and accept the next visible frame without a keyframe round trip.
+pub(crate) fn spawn_decoder_with_visibility(
+	sink: VideoSink,
+	visible: Option<Arc<AtomicBool>>,
+) -> Result<(DecoderQueue, Lost), &'static str> {
 	// Keep short bursts, but recover from a fresh keyframe instead of replaying stale video.
 	let (send, receive) = sync_channel(16);
 	let lost: Lost = Arc::new(Mutex::new(Vec::new()));
@@ -470,7 +480,7 @@ pub(crate) fn spawn_decoder(sink: VideoSink) -> Result<(DecoderQueue, Lost), &'s
 	let thread_counters = counters.clone();
 	std::thread::Builder::new()
 		.name("remote-video".into())
-		.spawn(move || decode_loop(receive, sink, report, thread_counters, true))
+		.spawn(move || decode_loop_with_visibility(receive, sink, report, thread_counters, true, visible))
 		.map_err(|_| "Could not start the video decoder thread")?;
 	Ok((
 		DecoderQueue {
@@ -594,7 +604,12 @@ impl Backend {
 	}
 	/// Feed one access unit. Software pictures are returned; hardware ones were already
 	/// delivered to the sink. `scratch` is reused so no frame-sized buffer is zeroed per frame.
-	fn decode(&mut self, data: &[u8], scratch: &mut Vec<u8>) -> Result<Option<(u32, u32)>, ()> {
+	fn decode(
+		&mut self,
+		data: &[u8],
+		scratch: &mut Vec<u8>,
+		visible: bool,
+	) -> Result<Option<(u32, u32)>, ()> {
 		match self {
 			Self::Hardware(decoder) => decoder.decode(data).map(|()| None).map_err(|_| ()),
 			Self::Software(decoder) => {
@@ -605,6 +620,11 @@ impl Backend {
 				};
 				let (width, height) = openh264::formats::YUVSource::dimensions(&decoded);
 				let (width, height) = bounded(width, height)?;
+				// Even when hidden, keep decoding H.264 prediction frames. Skip only the
+				// expensive planar-to-RGBA conversion and the sink callback.
+				if !visible {
+					return Ok(Some((width, height)));
+				}
 				let bytes = width as usize * height as usize * 4;
 				// Shared across participants: retain initialized bytes when resolutions alternate.
 				if scratch.len() < bytes {
@@ -624,12 +644,24 @@ impl Backend {
 	}
 }
 
+#[cfg(test)]
 fn decode_loop(
 	receive: Receiver<Decode>,
 	sink: VideoSink,
 	lost: Lost,
 	counters: Arc<DecoderCounters>,
 	prefer_hardware: bool,
+) {
+	decode_loop_with_visibility(receive, sink, lost, counters, prefer_hardware, None);
+}
+
+fn decode_loop_with_visibility(
+	receive: Receiver<Decode>,
+	sink: VideoSink,
+	lost: Lost,
+	counters: Arc<DecoderCounters>,
+	prefer_hardware: bool,
+	visible: Option<Arc<AtomicBool>>,
 ) {
 	let mut decoders: HashMap<u64, Backend> = HashMap::new();
 	let mut active: HashMap<u64, Arc<AtomicBool>> = HashMap::new();
@@ -710,7 +742,10 @@ fn decode_loop(
 		}
 		let decoder = decoders.get_mut(&frame.user).expect("decoder inserted");
 		let hardware = !matches!(decoder, Backend::Software(_));
-		let decoded = match decoder.decode(&frame.data, &mut scratch) {
+		let display_visible = visible
+			.as_ref()
+			.is_none_or(|visible| visible.load(Ordering::Acquire));
+		let decoded = match decoder.decode(&frame.data, &mut scratch, display_visible) {
 			Ok(Some(picture)) => picture,
 			Ok(None) => {
 				decoder_counts(&decoders, &counters);
@@ -739,7 +774,12 @@ fn decode_loop(
 		if !lifetime.load(Ordering::Acquire) {
 			continue;
 		}
+		// A valid hidden picture still counts as a received picture. Otherwise
+		// the transport mistakenly diagnoses a stalled stream and spams PLI/IDR.
 		counters.pictures.fetch_add(1, Ordering::Relaxed);
+		if !display_visible {
+			continue;
+		}
 		sink(RemoteFrame {
 			user: frame.user,
 			width,
@@ -819,6 +859,44 @@ mod tests {
 		let (send, receive) = sync_channel(1);
 		assert!(queue.send.send(Decode::Barrier(send)).is_ok());
 		receive.recv_timeout(Duration::from_secs(10)).unwrap()
+	}
+
+	#[test]
+	fn invisible_software_watch_keeps_h264_references_without_rgba_conversions() {
+		let data = decoder_cleanup_keyframe(32, 32);
+		let (queue, receive) = decoder_cleanup_queue(5);
+		let counters = queue.counters.clone();
+		let visible = Arc::new(AtomicBool::new(false));
+		let worker_visible = visible.clone();
+		let seen = Arc::new(Mutex::new(Vec::new()));
+		let frames = seen.clone();
+		let worker = std::thread::spawn(move || {
+			decode_loop_with_visibility(
+				receive,
+				Arc::new(move |frame| frames.lock().unwrap().push(frame.user)),
+				Arc::default(),
+				counters,
+				false,
+				Some(worker_visible),
+			)
+		});
+		let frame = || Encoded {
+			user: 7,
+			data: data.clone(),
+			keyframe: true,
+		};
+		assert!(offer(&queue, frame()).unwrap());
+		// The decoder decoded a picture, but did not allocate a packed RGBA scratch.
+		assert_eq!(decoder_cleanup_sync(&queue), 0);
+		assert!(seen.lock().unwrap().is_empty());
+		assert_eq!(queue.counters.pictures.load(Ordering::Relaxed), 1);
+		visible.store(true, Ordering::Release);
+		assert!(offer(&queue, frame()).unwrap());
+		assert!(decoder_cleanup_sync(&queue) >= 32 * 32 * 4);
+		assert_eq!(*seen.lock().unwrap(), vec![7]);
+		assert_eq!(queue.counters.pictures.load(Ordering::Relaxed), 2);
+		drop(queue);
+		worker.join().unwrap();
 	}
 
 	#[test]
@@ -1458,13 +1536,13 @@ mod tests {
 			.unwrap();
 			let mut scratch = Vec::new();
 			// Session start-up (IOSurface, Metal) is a one-time cost; time steady state only.
-			let _ = decoder.decode(&frames[0], &mut scratch);
+			let _ = decoder.decode(&frames[0], &mut scratch, true);
 			decoder.flush();
 			count.store(0, std::sync::atomic::Ordering::Relaxed);
 			let start = std::time::Instant::now();
 			let mut pictures = 0;
 			for frame in &frames[1..] {
-				if let Ok(Some(_)) = decoder.decode(frame, &mut scratch) {
+				if let Ok(Some(_)) = decoder.decode(frame, &mut scratch, true) {
 					pictures += 1;
 				}
 			}

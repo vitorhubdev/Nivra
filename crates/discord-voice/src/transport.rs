@@ -6,7 +6,7 @@ use crate::{
 	heartbeat::{Echo, Ledger},
 	video_receive::{
 		DecoderQueue, Encoded, Receivers, VideoSink, has_parameter_sets, is_keyframe, offer, pli,
-		remove as remove_decoder, retain_sources, spawn_decoder,
+		remove as remove_decoder, retain_sources, spawn_decoder, spawn_decoder_with_visibility,
 	},
 };
 use client_core::voice::VoiceConnection;
@@ -1311,13 +1311,38 @@ pub async fn watch_stream(
 	audio: Option<SyncSender<Frame>>,
 	emit: impl Fn(Status) -> Result<(), ()> + Send + 'static,
 ) -> Result<(), &'static str> {
+	watch_stream_inner(credentials, identity, sink, None, audio, emit).await
+}
+
+/// Watch with a display-visibility signal. While the view is hidden the decoder
+/// still consumes H.264 prediction frames, but can skip expensive software
+/// YUV->RGBA conversion. Audio and keyframe accounting remain active.
+pub async fn watch_stream_with_visibility(
+	credentials: VoiceConnection,
+	identity: Arc<Identity>,
+	sink: VideoSink,
+	visible: Arc<AtomicBool>,
+	audio: Option<SyncSender<Frame>>,
+	emit: impl Fn(Status) -> Result<(), ()> + Send + 'static,
+) -> Result<(), &'static str> {
+	watch_stream_inner(credentials, identity, sink, Some(visible), audio, emit).await
+}
+
+async fn watch_stream_inner(
+	credentials: VoiceConnection,
+	identity: Arc<Identity>,
+	sink: VideoSink,
+	visible: Option<Arc<AtomicBool>>,
+	audio: Option<SyncSender<Frame>>,
+	emit: impl Fn(Status) -> Result<(), ()> + Send + 'static,
+) -> Result<(), &'static str> {
 	let url = endpoint(&credentials.endpoint)?;
 	crate::timer::isolated("nivra-watch", move || {
 		run_stream_inner(
 			credentials,
 			identity,
 			None,
-			Some(sink),
+			Some((sink, visible)),
 			audio,
 			emit,
 			url,
@@ -1331,13 +1356,16 @@ async fn run_stream_inner(
 	credentials: VoiceConnection,
 	identity: Arc<Identity>,
 	mut video: Option<crate::screen::Video>,
-	sink: Option<VideoSink>,
+	sink: Option<(VideoSink, Option<Arc<AtomicBool>>)>,
 	audio: Option<SyncSender<Frame>>,
 	emit: impl Fn(Status) -> Result<(), ()>,
 	url: String,
 	local_test: bool,
 ) -> Result<(), &'static str> {
-	let (decoder, lost) = match sink.map(spawn_decoder).transpose()? {
+	let (decoder, lost) = match sink
+		.map(|(sink, visible)| spawn_decoder_with_visibility(sink, visible))
+		.transpose()?
+	{
 		Some((decoder, lost)) => (Some(decoder), Some(lost)),
 		None => (None, None),
 	};

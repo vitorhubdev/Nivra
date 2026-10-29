@@ -1,5 +1,5 @@
 name: Prepare 1.0.22 formatting and manifests on main
-# Streaming audit follow-up: format localized performance labels and cross-platform CI.
+# Streaming receiver pass: format viewer-visibility decode improvements and run native CI.
 # Retry after fixing parser syntax in text_preview.rs
 
 on:
@@ -79,6 +79,9 @@ jobs:
               'crates/discord-voice/src/screen/audio_windows.rs',
               'crates/discord-voice/src/screen/capture_windows.rs',
               'crates/discord-voice/src/screen.rs',
+              'crates/discord-voice/src/video_receive.rs',
+              'crates/discord-voice/src/transport.rs',
+              'crates/discord-voice/src/lib.rs',
           }
           changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
           if changed - allowed:
@@ -92,7 +95,10 @@ jobs:
             crates/ui/src/voice.rs \
             crates/discord-voice/src/screen/audio_windows.rs \
             crates/discord-voice/src/screen/capture_windows.rs \
-            crates/discord-voice/src/screen.rs
+            crates/discord-voice/src/screen.rs \
+            crates/discord-voice/src/video_receive.rs \
+            crates/discord-voice/src/transport.rs \
+            crates/discord-voice/src/lib.rs
           git fetch origin main --depth=1
           test "$(git rev-parse origin/main)" = "$BASE_SHA" || {
             echo 'main changed; refusing stale commit'; exit 1;

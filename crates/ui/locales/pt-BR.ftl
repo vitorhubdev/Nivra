@@ -1831,3 +1831,8 @@ Reconnecting screen sharing after the route change… = "Reconectando o comparti
 Screen-share recovery cancelled; share again when ready = "A retomada do compartilhamento foi cancelada; compartilhe novamente quando estiver pronto"
 Waiting for the screen-share server… = "Aguardando o servidor de compartilhamento…"
 WireGuard configuration exceeds 4 KiB = "A configuração WireGuard excede 4 KiB"
+# Stream performance hints and runtime encoder backend (1.0.22).
+Reduce PC load · 720p / 30 fps = "Reduzir uso do PC · 720p / 30 fps"
+H.264 · GPU encoding (Media Foundation) = "H.264 · codificação pela GPU (Media Foundation)"
+H.264 · GPU encoding (VideoToolbox) = "H.264 · codificação pela GPU (VideoToolbox)"
+H.264 · CPU encoding (OpenH264) · higher system load = "H.264 · codificação pela CPU (OpenH264) · maior consumo"

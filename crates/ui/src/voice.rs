@@ -1753,7 +1753,10 @@ impl MessagingUi {
 			if self.screen.context == Some((state.generation, channel, call.request)) {
 				let status = self.screen.capture_status.unwrap_or(self.screen.status);
 				if !status.is_empty() {
-					notices.push((status.into(), false));
+					notices.push((
+						crate::i18n::text_str(self.language, status).into_owned(),
+						false,
+					));
 				}
 			}
 			if !self.voice_camera_status.is_empty() {
@@ -4421,6 +4424,10 @@ impl MessagingUi {
 						"Camera settings",
 					);
 					self.camera_settings_popup(&camera_settings, state.demo);
+					let share_backend_hint = self
+						.screen
+						.capture_status
+						.map(|status| crate::i18n::text_str(self.language, status).into_owned());
 					share_clicked = card_action(
 						ui,
 						width,
@@ -4433,7 +4440,7 @@ impl MessagingUi {
 							t("Share your screen")
 						},
 						if can_share {
-							if let Some(status) = self.screen.capture_status {
+							if let Some(status) = share_backend_hint.as_deref() {
 								status
 							} else if self.screen.busy {
 								t("Stop sharing your screen")

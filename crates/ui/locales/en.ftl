@@ -1831,3 +1831,8 @@ Reconnecting screen sharing after the route change… = "Reconnecting screen sha
 Screen-share recovery cancelled; share again when ready = "Screen-share recovery cancelled; share again when ready"
 Waiting for the screen-share server… = "Waiting for the screen-share server…"
 WireGuard configuration exceeds 4 KiB = "WireGuard configuration exceeds 4 KiB"
+# Stream performance hints and runtime encoder backend (1.0.22).
+Reduce PC load · 720p / 30 fps = "Reduce PC load · 720p / 30 fps"
+H.264 · GPU encoding (Media Foundation) = "H.264 · GPU encoding (Media Foundation)"
+H.264 · GPU encoding (VideoToolbox) = "H.264 · GPU encoding (VideoToolbox)"
+H.264 · CPU encoding (OpenH264) · higher system load = "H.264 · CPU encoding (OpenH264) · higher system load"

@@ -1,5 +1,5 @@
 name: Prepare 1.0.22 formatting and manifests on main
-# Streaming audit follow-up: format the refactored Windows capture flags before strict CI.
+# Streaming audit follow-up: format localized performance labels and cross-platform CI.
 # Retry after fixing parser syntax in text_preview.rs
 
 on:
@@ -75,6 +75,7 @@ jobs:
               'crates/ui/src/screen.rs', 'crates/client-core/src/screen.rs',
               'apps/desktop/src/main.rs',
               'apps/desktop/src/watch.rs',
+              'crates/ui/src/voice.rs',
               'crates/discord-voice/src/screen/audio_windows.rs',
               'crates/discord-voice/src/screen/capture_windows.rs',
               'crates/discord-voice/src/screen.rs',
@@ -88,6 +89,7 @@ jobs:
             crates/ui/src/lib.rs crates/ui/src/attachments.rs crates/ui/src/text_preview.rs \
             crates/ui/src/screen.rs crates/client-core/src/screen.rs apps/desktop/src/main.rs \
             apps/desktop/src/watch.rs \
+            crates/ui/src/voice.rs \
             crates/discord-voice/src/screen/audio_windows.rs \
             crates/discord-voice/src/screen/capture_windows.rs \
             crates/discord-voice/src/screen.rs

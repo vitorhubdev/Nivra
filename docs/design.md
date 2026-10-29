@@ -100,8 +100,35 @@ Voice follows Discord's call screens: a black stage with 80px participant avatar
 above the conversation) or 16:9 tiles with name badges (guild channels), a bottom control bar
 of dark pills (mute with settings chevron, camera, screen share, activities, soundboard, more)
 and a red hang-up button, a green "In a call" badge in the header, mute/deafen toggles in the
-account card, and a "Voice Connected" panel above it while connected. Camera, screen share,
-activities and soundboard are shown disabled: Nivra has no such features.
+account card, and a "Voice Connected" panel above it while connected. Camera and screen sharing
+are available when local capture, gateway support and channel permissions allow; unsupported
+activities and soundboard actions remain unavailable.
+
+## Sign-in and watched-stream control refinement (1.0.22)
+
+The identity stays unchanged: dark/bright Nivra surfaces, violet primary action, Inter
+type, 8–16 px rounded corners, existing icons and short hover transitions with reduced-motion
+support. Refinement does not add libraries, animated backgrounds or new navigation.
+
+- The sign-in card keeps returning accounts prominent and Discord sign-in as the single
+  primary next action. The language menu follows the scrollable sign-in content, rather
+  than painting in the bottom corner over small windows. The external login action has
+  brief context. The destructive *forget saved account* button is a named, focus-visible
+  36 px target separated from the row's account-selection target.
+- The optional owner-supplied session-token field has a visible accessibility-linked
+  label. Concurrent token handoffs, credential cleanup and complete PROTECT startup
+  prevent a second connection action. Tokens remain masked, bounded and outside
+  plaintext storage, and no login challenge handling is bypassed.
+- The watched video tile exposes a named Stop watching action even in compact layouts,
+  with separate audio, full-screen and picture-in-picture controls when there is room.
+  In full-screen viewing, Stop watching and Exit full screen are distinct 40 px buttons.
+  Stop applies before fullscreen's early frame return, so it does not depend on the
+  hidden call-stage controls.
+- The broadcaster's local screen tile also exposes an explicit Stop sharing action
+  independent of the account card/call toolbar. Destructive media actions use the
+  existing red affordance; keyboard focus and hover status remain visible.
+- Native egui role/button tests use synthetic participants and fake video. Live Discord
+  media and real keyboard/screen-reader behavior are not inferred from these fixtures.
 
 ## Verification notes
 

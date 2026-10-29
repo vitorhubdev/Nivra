@@ -1388,6 +1388,7 @@ pub fn account_row(ui: &mut egui::Ui, name: &str, handle: &str) -> egui::Respons
 
 /// `account_row` with an optional trailing remove control in place of the chevron. The
 /// second response is that control; it is registered after the row so it wins the click.
+/// The forget control has its own 36px accessible hit target and never overlaps the label.
 pub fn account_row_with_remove(
 	ui: &mut egui::Ui,
 	name: &str,
@@ -1428,7 +1429,7 @@ pub fn account_row_with_remove(
 		paint_avatar(ui, name, 34.0, avatar);
 		let text = egui::Rect::from_min_max(
 			egui::pos2(rect.left() + 58.0, rect.top() + 8.0),
-			egui::pos2(rect.right() - 34.0, rect.bottom() - 8.0),
+			egui::pos2(rect.right() - if removable { 50.0 } else { 34.0 }, rect.bottom() - 8.0),
 		);
 		ui.scope_builder(egui::UiBuilder::new().max_rect(text), |ui| {
 			ui.spacing_mut().item_spacing.y = 1.0;
@@ -1468,22 +1469,30 @@ pub fn account_row_with_remove(
 	});
 	let remove = removable.then(|| {
 		let bin = egui::Rect::from_center_size(
-			egui::pos2(rect.right() - 22.0, rect.center().y),
-			egui::Vec2::splat(28.0),
+			egui::pos2(rect.right() - 24.0, rect.center().y),
+			egui::Vec2::splat(36.0),
 		);
 		let remove = ui.interact(bin, response.id.with("remove"), egui::Sense::click());
 		if ui.is_rect_visible(rect) {
 			let over = enabled && (remove.hovered() || remove.has_focus());
 			if over {
 				ui.painter()
-					.circle_filled(bin.center(), 14.0, p.danger.gamma_multiply(0.16));
+					.circle_filled(bin.center(), 18.0, p.danger.gamma_multiply(0.16));
 			}
 			crate::icons::paint(
 				ui.painter(),
 				crate::icons::Icon::Close,
-				bin.shrink(8.0),
+				bin.shrink(9.0),
 				if over { p.danger } else { p.muted },
 			);
+			if remove.has_focus() {
+				ui.painter().rect_stroke(
+					bin.expand(2.0),
+					10,
+					Stroke::new(2.0, p.accent),
+					egui::StrokeKind::Outside,
+				);
+			}
 		}
 		remove.widget_info(|| {
 			egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("Forget {name}"))
@@ -3168,6 +3177,35 @@ mod sign_in_widget_tests {
 
 	/// The sign-in screen depends on these two: a row that reports a click and shows both
 	/// identity lines, and an expander that reports a click without owning its own state.
+	#[test]
+	fn saved_account_forget_target_is_named_and_large_enough() {
+		use egui_kittest::kittest::Queryable as _;
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui(|ui| {
+				let (row, remove) =
+					account_row_with_remove(ui, "Riley Quinn", "@riley", true);
+				let remove = remove.expect("saved account can be forgotten");
+				assert!(remove.rect.width() >= 36.0);
+				assert!(remove.rect.height() >= 36.0);
+				assert!(row.rect.contains(remove.rect.center()));
+				assert!(remove.rect.center().x > row.rect.center().x);
+			});
+		harness.run();
+		assert!(
+			harness
+				.query_by_role_and_label(egui::Role::Button, "Forget Riley Quinn")
+				.is_some(),
+			"the destructive action is a separate, named keyboard target",
+		);
+		assert!(
+			harness
+				.query_by_role_and_label(egui::Role::Button, "Riley Quinn @riley")
+				.is_some(),
+			"selecting the saved account is still an independent action",
+		);
+	}
+
 	#[test]
 	fn account_row_and_disclosure_click_and_label_themselves() {
 		for light in [false, true] {

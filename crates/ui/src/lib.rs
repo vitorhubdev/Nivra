@@ -4991,6 +4991,11 @@ impl MessagingUi {
 			return commands;
 		}
 		if self.show_voice_stream_fullscreen(ui.ctx(), state) {
+			// The fullscreen stage returns early, so its Stop watching action
+			// must be applied here rather than waiting for the hidden call bar.
+			if let Some(streamer) = self.unwatch_request.take() {
+				state.unwatch_stream(streamer);
+			}
 			ui.painter()
 				.rect_filled(ui.max_rect(), 0, egui::Color32::BLACK);
 			return commands;

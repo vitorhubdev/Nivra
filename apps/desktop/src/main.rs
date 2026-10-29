@@ -1200,6 +1200,12 @@ fn notices_prompt(demo: bool, settings: &app_settings::Settings, unread: bool) -
 fn expired_session_notice(auth: &AuthState) -> Option<&'static str> {
 	matches!(auth, AuthState::Expired).then_some(SESSION_EXPIRED_SIGN_IN_AGAIN)
 }
+
+/// Prevent a second token handoff while another login, a credential-store operation
+/// or a full PROTECT route is still pending. A previous failed login remains retryable.
+fn token_login_available(auth: &AuthState, authorized: bool, has_input: bool, blocked: bool) -> bool {
+	authorized && has_input && !blocked && !matches!(auth, AuthState::Authenticating)
+}
 /// Records acceptance in memory and queues it for the next preferences save.
 fn accept_notices(settings: &mut app_settings::Settings) {
 	settings.current.notices_accepted = true;
@@ -5592,31 +5598,29 @@ impl Desktop {
 								.size(12.0)
 								.color(p.muted),
 							);
+							// A fixed bottom-left language picker used to overlap the card on
+							// short windows. Keep it in the same keyboard-accessible scroll
+							// path as the rest of sign-in, with room for its focus outline.
+							ui.add_space(12.0);
+							ui.horizontal_centered(|ui| {
+								ui.spacing_mut().item_spacing.x = 8.0;
+								ui::icons::inline(ui, ui::icons::Icon::Globe, 18.0, p.muted);
+								egui::ComboBox::from_id_salt("sign-in-language")
+									.selected_text(self.messaging.language.label())
+									.width(154.0)
+									.show_ui(ui, |ui| {
+										for language in model::Language::ALL {
+											ui.selectable_value(
+												&mut self.messaging.language,
+												language,
+												language.label(),
+											);
+										}
+									});
+							});
 							ui.add_space(24.0);
 						});
 					});
-				let globe = egui::Rect::from_min_size(
-					egui::pos2(ui.max_rect().left() + 16.0, ui.max_rect().bottom() - 48.0),
-					egui::vec2(180.0, 32.0),
-				);
-				ui.scope_builder(egui::UiBuilder::new().max_rect(globe), |ui| {
-					ui.horizontal(|ui| {
-						ui.spacing_mut().item_spacing.x = 6.0;
-						ui::icons::inline(ui, ui::icons::Icon::Globe, 16.0, p.muted);
-						egui::ComboBox::from_id_salt("sign-in-language")
-							.selected_text(self.messaging.language.label())
-							.width(140.0)
-							.show_ui(ui, |ui| {
-								for language in model::Language::ALL {
-									ui.selectable_value(
-										&mut self.messaging.language,
-										language,
-										language.label(),
-									);
-								}
-							});
-					});
-				});
 			});
 	}
 	/// Sign-in card: saved accounts first for returning owners, one clear primary action,
@@ -5649,7 +5653,11 @@ impl Desktop {
 						.iter()
 						.any(|account| account.has_token);
 				let waiting = self.state.auth == AuthState::Authenticating;
-				let idle = !waiting && !self.forgetting;
+				let idle = !waiting
+					&& !self.forgetting
+					&& self.cache_pending == 0
+					&& !self.cache_clears.pending()
+					&& !self.protect_startup.blocks_login();
 				self.sign_in_header(ui, returning);
 				ui.add_space(16.0);
 				if returning {
@@ -5700,7 +5708,16 @@ impl Desktop {
 						}
 					}
 				}
-				ui.add_space(12.0);
+				ui.add_space(7.0);
+				ui.label(
+					egui::RichText::new(ui::i18n::text(
+						self.messaging.language,
+						"Opens Discord's sign-in page in a separate window.",
+					))
+					.size(12.0)
+					.color(p.muted),
+				);
+				ui.add_space(8.0);
 				self.sign_in_status(ui);
 				ui.add_space(12.0);
 				let (line, _) = ui.allocate_exact_size(
@@ -6178,19 +6195,45 @@ impl Desktop {
 						.wrap(),
 					);
 					ui.add_space(8.0);
-					ui::design::input(
-						ui,
-						egui::TextEdit::singleline(&mut *self.token_input)
-							.password(true)
-							.char_limit(2048)
-							.hint_text(ui::i18n::text(
+					let token_label = ui.label(
+						egui::RichText::new(ui::i18n::text(
 							self.messaging.language,
 							"Session token",
-						)),
+						))
+						.size(13.0)
+						.color(p.text_strong),
 					);
+					ui.add_space(4.0);
+					let blocked = self.forgetting
+						|| self.cache_pending > 0
+						|| self.cache_clears.pending()
+						|| self.protect_startup.blocks_login();
+					ui.add_enabled_ui(
+						!blocked && self.state.auth != AuthState::Authenticating,
+						|ui| {
+							ui::design::input(
+								ui,
+								egui::TextEdit::singleline(&mut *self.token_input)
+									.password(true)
+									.char_limit(2048)
+									.hint_text(ui::i18n::text(
+										self.messaging.language,
+										"Session token",
+									)),
+							)
+						},
+					)
+					.inner
+					.labelled_by(token_label.id);
 					ui.add_space(8.0);
+					let token_ready = token_login_available(
+						&self.state.auth,
+						self.authorized,
+						!self.token_input.is_empty(),
+						blocked,
+					);
 					let connect = ui
-						.add_enabled_ui(self.authorized && !self.token_input.is_empty(), |ui| {
+						.add_enabled_ui(token_ready, |ui| {
 							ui::design::button(
 								ui,
 								ui::i18n::text(self.messaging.language, "Connect with this token"),
@@ -9244,6 +9287,26 @@ mod tests {
 			}
 		}
 	}
+	#[test]
+	fn token_sign_in_rejects_parallel_handoffs_and_blocked_routes() {
+		assert!(token_login_available(
+			&AuthState::Unauthenticated,
+			true,
+			true,
+			false,
+		));
+		assert!(token_login_available(&AuthState::Failed, true, true, false));
+		assert!(!token_login_available(
+			&AuthState::Authenticating,
+			true,
+			true,
+			false,
+		));
+		assert!(!token_login_available(&AuthState::Failed, false, true, false));
+		assert!(!token_login_available(&AuthState::Failed, true, false, false));
+		assert!(!token_login_available(&AuthState::Failed, true, true, true));
+	}
+
 	#[test]
 	fn expired_session_shows_sign_in_warning() {
 		assert_eq!(

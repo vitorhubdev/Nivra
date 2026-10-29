@@ -937,7 +937,7 @@ impl MessagingUi {
 		if !ui.is_rect_visible(rect) {
 			return None;
 		}
-		let compact = rect.height() < 132.0;
+		let compact = rect.height() < 132.0 || rect.width() < 280.0;
 		let hint = match tile {
 			Tile::LocalScreen => {
 				self.screen_tile(ui, rect, compact);
@@ -987,7 +987,7 @@ impl MessagingUi {
 		None
 	}
 
-	fn screen_tile(&self, ui: &mut egui::Ui, rect: egui::Rect, compact: bool) {
+	fn screen_tile(&mut self, ui: &mut egui::Ui, rect: egui::Rect, compact: bool) {
 		let content = self
 			.screen
 			.preview
@@ -1003,6 +1003,46 @@ impl MessagingUi {
 			.unwrap_or(rect);
 		if !compact {
 			name_badge(ui, content, "Your screen", None);
+		}
+		// Keep the Stop action next to the user's own picture, even when
+		// the rest of the call controls are offscreen or collapsed.
+		if self.screen.busy {
+			let label = crate::i18n::text(self.language, "Stop sharing");
+			let clicked = if compact {
+				let button = egui::Rect::from_min_size(
+					rect.right_top() + egui::vec2(-44.0, 8.0),
+					egui::Vec2::splat(36.0),
+				);
+				ui.painter().rect_filled(
+					button,
+					8,
+					egui::Color32::from_rgb(142, 44, 58),
+				);
+				let mut action_ui = ui.new_child(egui::UiBuilder::new().max_rect(button));
+				crate::icons::button(
+					&mut action_ui,
+					crate::icons::Icon::Close,
+					36.0,
+					label,
+				)
+				.clicked()
+			} else {
+				let button = egui::Rect::from_min_size(
+					rect.right_top() + egui::vec2(-146.0, 8.0),
+					egui::vec2(138.0, 38.0),
+				);
+				ui.put(
+					button,
+					egui::Button::new(label)
+						.fill(egui::Color32::from_rgb(142, 44, 58))
+						.corner_radius(8),
+				)
+				.on_hover_text(crate::tr_ui!(ui, "Stop sharing your screen"))
+				.clicked()
+			};
+			if clicked {
+				self.screen.request = Some(crate::screen::Request::Stop);
+			}
 		}
 	}
 
@@ -1129,6 +1169,7 @@ impl MessagingUi {
 		}
 		let screen = ctx.content_rect();
 		let id = egui::Id::unique("voice-stream-fullscreen");
+		let mut stop_watching = false;
 		let modal = egui::Modal::new(id)
 			.area(
 				egui::Modal::default_area(id)
@@ -1149,18 +1190,38 @@ impl MessagingUi {
 					egui::Image::from_texture((texture.id(), image.size())).paint_at(ui, image);
 				}
 				let exit = egui::Rect::from_min_size(
-					ui.max_rect().right_top() + egui::vec2(-142.0, 16.0),
-					egui::vec2(126.0, 34.0),
+					ui.max_rect().right_top() + egui::vec2(-170.0, 16.0),
+					egui::vec2(154.0, 40.0),
 				);
 				if ui
 					.put(
 						exit,
-						egui::Button::new("Exit full screen")
-							.fill(egui::Color32::from_black_alpha(180)),
+						egui::Button::new(crate::tr_ui!(ui, "Exit full screen"))
+							.fill(egui::Color32::from_black_alpha(190))
+							.corner_radius(8),
 					)
 					.clicked()
 				{
 					self.exit_voice_stream_fullscreen(ui.ctx());
+				}
+				let stop = egui::Rect::from_min_size(
+					ui.max_rect().right_top() + egui::vec2(-170.0, 64.0),
+					egui::vec2(154.0, 40.0),
+				);
+				if ui
+					.put(
+						stop,
+						egui::Button::new(crate::tr_ui!(ui, "Stop watching"))
+							.fill(egui::Color32::from_rgb(142, 44, 58))
+							.corner_radius(8),
+					)
+					.on_hover_text(crate::tr_ui!(
+						ui,
+						"Stop receiving this screen share"
+					))
+					.clicked()
+				{
+					stop_watching = true;
 				}
 				let audio = egui::Rect::from_min_size(
 					ui.max_rect().left_bottom() + egui::vec2(16.0, -50.0),
@@ -1182,6 +1243,17 @@ impl MessagingUi {
 						self.stream_audio_controls(ui)
 					});
 			});
+		if stop_watching {
+			if let Some(streamer) = state
+				.voice
+				.active
+				.as_ref()
+				.and_then(|call| call.watching_primary())
+			{
+				self.unwatch_request = Some(streamer);
+			}
+			self.exit_voice_stream_fullscreen(ctx);
+		}
 		if modal.should_close() {
 			self.exit_voice_stream_fullscreen(ctx);
 		}
@@ -1233,49 +1305,115 @@ impl MessagingUi {
 				rect
 			}
 		};
-		let audio = ui.put(
-			egui::Rect::from_min_size(
-				rect.left_top() + egui::vec2(8.0, 8.0),
-				egui::vec2(110.0_f32.min((rect.width() - 16.0).max(0.0)), 26.0),
-			),
-			egui::Button::new(
-				RichText::new(if self.voice_stream_volume() == 0 {
-					"Stream muted"
-				} else {
-					"Stream audio"
-				})
-				.size(12.0)
-				.color(egui::Color32::WHITE),
-			)
-			.truncate()
-			.fill(egui::Color32::from_black_alpha(170))
-			.corner_radius(6),
+		let audio_label = crate::i18n::text(
+			self.language,
+			if self.voice_stream_volume() == 0 {
+				"Stream muted"
+			} else {
+				"Stream audio"
+			},
 		);
-		egui::Popup::menu(&audio)
-			.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-			.show(|ui| {
-				crate::anim::popup_motion(ui);
-				self.stream_audio_controls(ui)
-			});
+		// Place audio to the left and Stop to the right. Compact tiles use
+		// accessible icons; larger tiles keep visible labels and 36px targets.
+		let audio = if compact {
+			if rect.width() >= 100.0 {
+				let button = egui::Rect::from_min_size(
+					rect.left_top() + egui::vec2(8.0, 8.0),
+					egui::Vec2::splat(36.0),
+				);
+				ui.painter().rect_filled(
+					button,
+					8,
+					egui::Color32::from_black_alpha(190),
+				);
+				let mut audio_ui = ui.new_child(egui::UiBuilder::new().max_rect(button));
+				Some(crate::icons::button(
+					&mut audio_ui,
+					crate::icons::Icon::Speaker,
+					36.0,
+					audio_label,
+				))
+			} else {
+				None
+			}
+		} else {
+			Some(ui.put(
+				egui::Rect::from_min_size(
+					rect.left_top() + egui::vec2(8.0, 8.0),
+					egui::vec2(124.0, 36.0),
+				),
+				egui::Button::new(
+					RichText::new(audio_label)
+						.size(13.0)
+						.color(egui::Color32::WHITE),
+				)
+				.truncate()
+				.fill(egui::Color32::from_black_alpha(190))
+				.corner_radius(8),
+			))
+		};
+		if let Some(audio) = audio {
+			egui::Popup::menu(&audio)
+				.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+				.show(|ui| {
+					crate::anim::popup_motion(ui);
+					self.stream_audio_controls(ui)
+				});
+		}
+		let stop_label = crate::i18n::text(self.language, "Stop watching");
+		let stop_hint = crate::i18n::text(self.language, "Stop receiving this screen share");
+		let stopped = if compact {
+			let button = egui::Rect::from_min_size(
+				rect.right_top() + egui::vec2(-44.0, 8.0),
+				egui::Vec2::splat(36.0),
+			);
+			ui.painter()
+				.rect_filled(button, 8, egui::Color32::from_rgb(142, 44, 58));
+			let mut stop_ui = ui.new_child(egui::UiBuilder::new().max_rect(button));
+			crate::icons::button(
+				&mut stop_ui,
+				crate::icons::Icon::Close,
+				36.0,
+				stop_label,
+			)
+			.on_hover_text(stop_hint)
+			.clicked()
+		} else {
+			let button = egui::Rect::from_min_size(
+				rect.right_top() + egui::vec2(-142.0, 8.0),
+				egui::vec2(134.0, 36.0),
+			);
+			ui.put(
+				button,
+				egui::Button::new(stop_label)
+					.fill(egui::Color32::from_rgb(142, 44, 58))
+					.corner_radius(8),
+			)
+			.on_hover_text(stop_hint)
+			.clicked()
+		};
+		if stopped {
+			self.unwatch_request = Some(streamer);
+		}
 		if compact {
 			return;
 		}
 		name_badge(ui, content, &format!("{name}'s screen"), None);
-		// "Stop watching" sits in the corner; the other two stack under it so none hides another.
+		// The three named actions never overlap or mask the watched picture.
 		let full_rect = egui::Rect::from_min_size(
-			content.right_top() + egui::vec2(-118.0, 42.0),
-			egui::vec2(110.0_f32.min(content.width().max(1.0)), 28.0),
+			rect.right_top() + egui::vec2(-130.0, 52.0),
+			egui::vec2(122.0, 36.0),
 		);
 		let pip_rect = egui::Rect::from_min_size(
-			content.right_top() + egui::vec2(-118.0, 76.0),
-			egui::vec2(110.0_f32.min(content.width().max(1.0)), 28.0),
+			rect.right_top() + egui::vec2(-130.0, 96.0),
+			egui::vec2(122.0, 36.0),
 		);
 		if ui
 			.put(
 				full_rect,
-				egui::Button::new("Full screen")
-					.fill(egui::Color32::from_black_alpha(170))
-					.corner_radius(6),
+				egui::Button::new(crate::tr_ui!(ui, "Full screen"))
+					.fill(egui::Color32::from_black_alpha(190))
+					.corner_radius(8),
 			)
 			.on_hover_text(crate::tr_ui!(ui, "Watch this screen share in full screen"))
 			.clicked()
@@ -1286,8 +1424,8 @@ impl MessagingUi {
 			.put(
 				pip_rect,
 				egui::Button::new(crate::tr_ui!(ui, "Picture-in-picture"))
-					.fill(egui::Color32::from_black_alpha(170))
-					.corner_radius(6),
+					.fill(egui::Color32::from_black_alpha(190))
+					.corner_radius(8),
 			)
 			.on_hover_text(crate::tr_ui!(
 				ui,
@@ -1297,18 +1435,6 @@ impl MessagingUi {
 		{
 			self.voice_stream_pip = !self.voice_stream_pip;
 			ui.ctx().request_repaint();
-		}
-		if tile_button(
-			ui,
-			content,
-			"Stop watching",
-			egui::Color32::from_black_alpha(170),
-			design::palette(ui).danger,
-			"Stop receiving this screen share",
-		)
-		.clicked()
-		{
-			self.unwatch_request = Some(streamer);
 		}
 	}
 
@@ -3602,13 +3728,17 @@ impl MessagingUi {
 			t("Share your screen")
 		};
 		let color = if self.screen.busy {
-			design::palette(ui).accent
+			design::palette(ui).danger
 		} else {
 			STAGE_TEXT
 		};
 		if control(
 			ui,
-			crate::icons::Icon::ScreenShare,
+			if self.screen.busy {
+				crate::icons::Icon::Close
+			} else {
+				crate::icons::Icon::ScreenShare
+			},
 			48.0,
 			enabled,
 			color,
@@ -5215,7 +5345,7 @@ fn tile_button(
 	let galley = ui
 		.painter()
 		.layout_no_wrap(label.to_owned(), font, egui::Color32::WHITE);
-	let size = egui::vec2(galley.size().x + 20.0, 26.0);
+	let size = egui::vec2(galley.size().x + 24.0, 36.0);
 	let button = egui::Rect::from_min_size(
 		egui::pos2(rect.right() - 8.0 - size.x, rect.top() + 8.0),
 		size,
@@ -6171,6 +6301,100 @@ mod tests {
 		view.show_call_switch(&egui::Context::default(), state, commands);
 		assert!(state.voice.active.is_none());
 		assert!(commands.is_empty());
+	}
+
+	#[test]
+	fn local_screen_tile_offers_a_direct_stop_sharing_action() {
+		use egui_kittest::kittest::Queryable as _;
+		let mut view = MessagingUi::default();
+		view.screen.busy = true;
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				|ui, view: &mut MessagingUi| {
+					let (rect, _) =
+						ui.allocate_exact_size(egui::vec2(400.0, 240.0), egui::Sense::hover());
+					view.screen_tile(ui, rect, false);
+				},
+				view,
+			);
+		harness.run();
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Stop sharing")
+			.click();
+		harness.run();
+		assert!(matches!(
+			harness.state().screen.request,
+			Some(crate::screen::Request::Stop)
+		));
+	}
+
+	#[test]
+	fn compact_watched_stream_keeps_stop_action_keyboard_accessible() {
+		use egui_kittest::kittest::Queryable as _;
+		let mut state = test_support::voice_demo_state();
+		let channel = state.voice.active.as_ref().unwrap().channel;
+		state.voice.active.as_mut().unwrap().watching = vec![Id(3)];
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				move |ui, (view, state): &mut (MessagingUi, State)| {
+					let (rect, _) =
+						ui.allocate_exact_size(egui::vec2(150.0, 96.0), egui::Sense::hover());
+					view.stream_tile(ui, state, rect, channel, Id(3), true);
+					view.apply_watch_request(state);
+				},
+				(MessagingUi::default(), state),
+			);
+		harness.run();
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Stop watching")
+			.click();
+		harness.run();
+		assert!(harness.state().1.voice.active.as_ref().unwrap().watching_all().is_empty());
+	}
+
+	#[test]
+	fn fullscreen_stream_can_stop_watching_without_leaving_call() {
+		use egui_kittest::kittest::Queryable as _;
+		let mut state = test_support::voice_demo_state();
+		state.voice.active.as_mut().unwrap().watching = vec![Id(3), Id(4)];
+		let mut view = MessagingUi {
+			voice_stream_fullscreen: true,
+			..Default::default()
+		};
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				|ui, (view, state): &mut (MessagingUi, State)| {
+					if view.voice_stream_view.is_none() {
+						view.voice_stream_view = Some(ui.ctx().load_texture(
+							"synthetic-watch",
+							egui::ColorImage::example(),
+							egui::TextureOptions::LINEAR,
+						));
+					}
+					if view.show_voice_stream_fullscreen(ui.ctx(), state) {
+						if let Some(streamer) = view.unwatch_request.take() {
+							state.unwatch_stream(streamer);
+						}
+					}
+				},
+				(view, state),
+			);
+		harness.run();
+		assert!(
+			harness
+				.query_by_role_and_label(egui::Role::Button, "Exit full screen")
+				.is_some()
+		);
+		harness
+			.get_by_role_and_label(egui::Role::Button, "Stop watching")
+			.click();
+		harness.run();
+		let (view, state) = harness.state();
+		assert!(!view.voice_stream_fullscreen);
+		assert_eq!(state.voice.active.as_ref().unwrap().watching_all(), &[Id(4)]);
 	}
 
 	#[test]

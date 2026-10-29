@@ -1,4 +1,4 @@
-//! Bounded, read-only preview of text, markdown and code attachments.
+//! Bounded preview of text and code with opt-in editing of small local copies.
 //!
 //! Nothing here performs I/O: the desktop fetches a bounded body off the render
 //! thread and hands it in. The module only decides whether the bytes are worth
@@ -10,6 +10,8 @@ use crate::attachments::FileKind;
 pub const MAX_PREVIEW_BYTES: u64 = 256 * 1024;
 /// Longest decoded body kept, so one pathological line cannot blow up layout.
 pub const MAX_PREVIEW_CHARS: usize = 200_000;
+/// Large or truncated previews stay read-only; keep egui text editing responsive.
+pub const MAX_EDIT_BYTES: usize = 64 * 1024;
 /// Bytes inspected for NUL when deciding whether a file is binary.
 const BINARY_SNIFF_BYTES: usize = 8192;
 
@@ -25,8 +27,10 @@ pub enum PreviewFormat {
 /// The preview format for a filename/type pair, or `None` for anything that is
 /// not plain text, markdown or source code.
 pub fn preview_format(filename: &str, content_type: Option<&str>) -> Option<PreviewFormat> {
-	if crate::attachments::file_kind(filename, content_type) != FileKind::Text
-		&& crate::attachments::file_kind(filename, content_type) != FileKind::Code
+	!matches!(
+		crate::attachments::file_kind(filename, content_type),
+		FileKind::Text | FileKind::Code
+	)
 	{
 		return None;
 	}
@@ -44,11 +48,13 @@ pub fn preview_format(filename: &str, content_type: Option<&str>) -> Option<Prev
 		})
 		.unwrap_or_default();
 	match extension.as_str() {
-		"md" | "markdown" => return Some(PreviewFormat::Markdown),
+		"md" | "markdown" | "mdown" => return Some(PreviewFormat::Markdown),
 		"html" | "htm" | "xhtml" => return Some(PreviewFormat::Html),
 		"rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "json" | "toml" | "yaml" | "yml" | "css"
 		| "c" | "h" | "cpp" | "hpp" | "java" | "kt" | "swift" | "go" | "rb" | "sh" | "xml"
-		| "sql" => return Some(PreviewFormat::Code),
+		| "sql" | "mjs" | "cjs" | "lua" | "ps1" | "bat" | "cmd" | "ini" | "cfg"
+		| "conf" | "properties" | "diff" | "patch" | "tex" | "scss" | "less"
+		| "vue" | "svelte" | "graphql" | "ipynb" => return Some(PreviewFormat::Code),
 		_ => {}
 	}
 	if mime == "text/markdown" {
@@ -56,6 +62,13 @@ pub fn preview_format(filename: &str, content_type: Option<&str>) -> Option<Prev
 	}
 	if mime == "text/html" || mime == "application/xhtml+xml" {
 		return Some(PreviewFormat::Html);
+	}
+	if matches!(
+		mime.as_str(),
+		"application/json" | "application/ld+json" | "application/xml"
+			| "application/yaml" | "application/toml" | "application/javascript"
+	) || mime.ends_with("+json") || mime.ends_with("+xml") {
+		return Some(PreviewFormat::Code);
 	}
 	Some(PreviewFormat::Plain)
 }
@@ -187,8 +200,12 @@ pub struct TextPreview {
 	pub copied: bool,
 	/// Markdown made from an HTML body by `html_preview`, or `None` for anything else.
 	pub rendered: Option<String>,
-	/// An HTML body is shown as source instead of rendered.
+	/// Source/rendered mode for HTML and Markdown.
 	pub view_source: bool,
+	/// A separate local draft, never a mutation of the Discord attachment.
+	pub edit_draft: Option<String>,
+	/// Confirm closing a modified draft instead of silently losing it.
+	pub discard_confirm: bool,
 }
 
 impl TextPreview {
@@ -200,14 +217,31 @@ impl TextPreview {
 		}
 	}
 
-	/// The body is markdown (a `.md` file or a rendered HTML page).
+	/// Render the Markdown page only when not displaying literal source.
 	pub fn shows_markdown(&self) -> bool {
-		self.format == PreviewFormat::Markdown || (self.rendered.is_some() && !self.view_source)
+		!self.view_source
+			&& (self.format == PreviewFormat::Markdown || self.rendered.is_some())
 	}
 
-	/// An HTML body can be flipped between its rendered page and its source.
+	/// Markdown and HTML support both readable and source views.
 	pub fn can_switch_view(&self) -> bool {
-		self.rendered.is_some()
+		self.format == PreviewFormat::Markdown || self.rendered.is_some()
+	}
+
+	/// Editing never starts on a partial response or a large/binary file.
+	pub fn can_edit(&self) -> bool {
+		!self.truncated
+			&& self.text.len() <= MAX_EDIT_BYTES
+			&& matches!(self.format, PreviewFormat::Plain | PreviewFormat::Markdown)
+	}
+
+	pub fn begin_edit(&mut self) -> bool {
+		if !self.can_edit() || self.edit_draft.is_some() {
+			return false;
+		}
+		self.edit_draft = Some(self.text.clone());
+		self.discard_confirm = false;
+		true
 	}
 
 	pub fn switch_view(&mut self) {
@@ -287,6 +321,8 @@ mod tests {
 			copied: false,
 			rendered: Some("# Hi".into()),
 			view_source: false,
+			edit_draft: None,
+			discard_confirm: false,
 		};
 		assert!(preview.shows_markdown() && preview.can_switch_view());
 		assert_eq!(preview.visible_text(), "# Hi");
@@ -308,6 +344,73 @@ mod tests {
 			"<h1>Hi</h1>",
 			"no page to switch to"
 		);
+	}
+
+	#[test]
+	fn markdown_shows_source_only_after_toggle() {
+		let mut preview = TextPreview {
+			filename: "README.md".into(),
+			format: PreviewFormat::Markdown,
+			text: "# Title\nBody".into(),
+			truncated: false,
+			shown: PREVIEW_WINDOW_CHARS,
+			maximized: false,
+			copied: false,
+			rendered: None,
+			view_source: false,
+			edit_draft: None,
+			discard_confirm: false,
+		};
+		assert!(preview.can_switch_view() && preview.shows_markdown());
+		preview.switch_view();
+		assert!(!preview.shows_markdown());
+		assert_eq!(preview.visible_text(), "# Title\nBody");
+		preview.switch_view();
+		assert!(preview.shows_markdown());
+	}
+
+	#[test]
+	fn editable_copies_require_complete_small_plain_text() {
+		let mut preview = TextPreview {
+			filename: "notes.txt".into(),
+			format: PreviewFormat::Plain,
+			text: "hello".into(),
+			truncated: false,
+			shown: PREVIEW_WINDOW_CHARS,
+			maximized: false,
+			copied: false,
+			rendered: None,
+			view_source: false,
+			edit_draft: None,
+			discard_confirm: false,
+		};
+		assert!(preview.begin_edit());
+		assert_eq!(preview.edit_draft.as_deref(), Some("hello"));
+		assert!(!preview.begin_edit());
+		preview.edit_draft = None;
+		preview.truncated = true;
+		assert!(!preview.begin_edit());
+		preview.truncated = false;
+		preview.text = "x".repeat(MAX_EDIT_BYTES + 1);
+		assert!(!preview.begin_edit());
+		preview.text = "small".into();
+		preview.format = PreviewFormat::Html;
+		assert!(!preview.begin_edit());
+	}
+
+	#[test]
+	fn structured_office_documents_are_not_plain_text_previews() {
+		for name in ["contract.docx", "report.odt", "legacy.doc", "formatted.rtf", "book.epub"] {
+			assert_eq!(crate::attachments::file_kind(name, None), FileKind::Other);
+			assert_eq!(preview_format(name, None), None);
+		}
+		for name in ["budget.csv", "values.tsv", "captions.srt", "captions.vtt"] {
+			assert_eq!(crate::attachments::file_kind(name, None), FileKind::Text);
+			assert_eq!(preview_format(name, None), Some(PreviewFormat::Plain));
+		}
+		assert_eq!(preview_format("data", Some("application/json")), Some(PreviewFormat::Code));
+		assert_eq!(preview_format("update.patch", None), Some(PreviewFormat::Code));
+		assert_eq!(preview_format("notes.mdown", None), Some(PreviewFormat::Markdown));
 	}
 
 	#[test]
@@ -407,6 +510,8 @@ mod tests {
 			copied: false,
 			rendered: None,
 			view_source: false,
+			edit_draft: None,
+			discard_confirm: false,
 		};
 		assert_eq!(preview.visible_text().chars().count(), PREVIEW_WINDOW_CHARS);
 		assert!(preview.has_more());

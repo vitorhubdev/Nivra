@@ -22,6 +22,8 @@ mod preview_tests {
 			copied: false,
 			rendered: None,
 			view_source: false,
+			edit_draft: None,
+			discard_confirm: false,
 		}
 	}
 
@@ -248,6 +250,71 @@ mod preview_tests {
 		assert!(
 			harness.state().view.preview.is_some(),
 			"copying must keep the preview open"
+		);
+	}
+
+	#[test]
+	fn markdown_reader_can_switch_between_rendered_and_source_views() {
+		use egui_kittest::kittest::Queryable as _;
+		struct Fixture {
+			view: MessagingUi,
+		}
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				|ui, fixture: &mut Fixture| {
+					fixture.view.show_preview(ui.ctx());
+				},
+				Fixture {
+					view: {
+						let mut view = MessagingUi::default();
+						view.set_preview(sample());
+						view
+					},
+				},
+			);
+		harness.run();
+		assert!(harness.state().view.preview.as_ref().unwrap().shows_markdown());
+		harness.get_by_role_and_label(egui::Role::Button, "Source").click();
+		harness.run();
+		assert!(!harness.state().view.preview.as_ref().unwrap().shows_markdown());
+		harness.get_by_role_and_label(egui::Role::Button, "Rendered").click();
+		harness.run();
+		assert!(harness.state().view.preview.as_ref().unwrap().shows_markdown());
+	}
+
+	#[test]
+	fn editing_a_preview_stages_only_a_local_save_request() {
+		use egui_kittest::kittest::Queryable as _;
+		struct Fixture {
+			view: MessagingUi,
+		}
+		let mut harness = egui_kittest::HarnessBuilder::default()
+			.allow_missing_glyphs()
+			.build_ui_state(
+				|ui, fixture: &mut Fixture| {
+					fixture.view.show_preview(ui.ctx());
+				},
+				Fixture {
+					view: {
+						let mut view = MessagingUi::default();
+						view.set_preview(sample());
+						view
+					},
+				},
+			);
+		harness.run();
+		harness.get_by_role_and_label(egui::Role::Button, "Edit a copy").click();
+		harness.run();
+		let preview = harness.state().view.preview.as_ref().unwrap();
+		assert_eq!(preview.edit_draft.as_deref(), Some("# Title\n\nBody text"));
+		harness.get_by_role_and_label(egui::Role::Button, "Save local copy").click();
+		harness.run();
+		let view = &harness.state().view;
+		assert_eq!(view.preview.as_ref().unwrap().text, "# Title\n\nBody text");
+		assert_eq!(
+			view.timeline.save_txt_request.as_ref(),
+			Some(&("notes.md".to_owned(), b"# Title\n\nBody text".to_vec()))
 		);
 	}
 
@@ -4088,13 +4155,23 @@ impl MessagingUi {
 		let mut copy = false;
 		let mut toggle_maximized = false;
 		let mut switch_view = false;
+		let mut begin_edit = false;
+		let mut cancel_edit = false;
+		let mut save_edit = false;
+		let mut confirm_discard = false;
+		let mut keep_editing = false;
+		let mut edit_changed = false;
+		// Take the draft out of the preview for this frame. TextEdit receives an
+		// exclusive mutable String without cloning tens of KiB every repaint.
+		let mut edit_draft = self.preview.as_mut().and_then(|preview| preview.edit_draft.take());
 		// Move the pending external link out so the shared borrow of `preview`
 		// cannot overlap a mutable borrow of the timeline.
 		let mut opening = self.timeline.opening.take();
 		let Some(preview) = self.preview.as_ref() else {
 			return false;
 		};
-		if preview.shows_markdown()
+		if edit_draft.is_none()
+			&& preview.shows_markdown()
 			&& self
 				.preview_formatted
 				.as_ref()
@@ -4109,7 +4186,11 @@ impl MessagingUi {
 		let copied = preview.copied;
 		let can_switch_view = preview.can_switch_view();
 		let viewing_source = preview.view_source;
-		let static_page = preview.shows_markdown() && preview.can_switch_view();
+		let can_edit = preview.can_edit();
+		let editing = edit_draft.is_some();
+		let discard_warning = preview.discard_confirm;
+		let static_page =
+			preview.format == text_preview::PreviewFormat::Html && preview.shows_markdown();
 		// A maximized preview fills the viewport (the dialog clamps to it) and
 		// grows the scroll body, so long `.md`/`.txt` files are easier to read.
 		let available_body_height = (ctx.content_rect().height() - 200.0).max(1.0);
@@ -4140,12 +4221,70 @@ impl MessagingUi {
 						);
 						ui.add_space(4.0);
 					}
+					if editing {
+						ui.horizontal_wrapped(|ui| {
+							if crate::dialog::action(ui, "Save local copy", crate::dialog::Action::Neutral)
+								.clicked()
+							{
+								save_edit = true;
+							}
+							if crate::dialog::action(ui, "Cancel editing", crate::dialog::Action::Neutral)
+								.clicked()
+							{
+								cancel_edit = true;
+							}
+						});
+						ui.label(
+							RichText::new("Local copy only. Saving does not edit the Discord attachment.")
+								.size(12.0)
+								.color(design::palette(ui).muted),
+						);
+						if discard_warning {
+							ui.label(
+								RichText::new("Unsaved edits. Discard these changes and close?")
+									.color(design::palette(ui).warning),
+							);
+							ui.horizontal_wrapped(|ui| {
+								if crate::dialog::action(ui, "Discard and close", crate::dialog::Action::Danger)
+									.clicked()
+								{
+									confirm_discard = true;
+								}
+								if crate::dialog::action(ui, "Keep editing", crate::dialog::Action::Neutral)
+									.clicked()
+								{
+									keep_editing = true;
+								}
+							});
+						}
+					} else if can_edit
+						&& crate::dialog::action(ui, "Edit a copy", crate::dialog::Action::Neutral)
+							.clicked()
+					{
+						begin_edit = true;
+					}
 					egui::ScrollArea::vertical()
 						.max_height(max_body_height)
 						.auto_shrink([false, false])
 						.show(ui, |ui| {
 							ui.set_width(ui.available_width());
-							if preview.shows_markdown() {
+							if let Some(draft) = edit_draft.as_mut() {
+								edit_changed |= ui
+									.add(
+										egui::TextEdit::multiline(draft)
+											.code_editor()
+											.desired_width(f32::INFINITY)
+											.desired_rows(16)
+											.char_limit(text_preview::MAX_EDIT_BYTES),
+									)
+									.changed();
+								if draft.len() > text_preview::MAX_EDIT_BYTES {
+									ui.colored_label(
+										design::palette(ui).danger,
+										"Local edit exceeds the 64 KiB safe save limit.",
+									);
+								}
+							} else if preview.shows_markdown() {
 								let mut images = crate::avatars::Avatars::default();
 								let mut profile = crate::profiles::ProfileSession::default();
 								self.preview_formatted
@@ -4212,6 +4351,7 @@ impl MessagingUi {
 						toggle_maximized = true;
 					}
 					if can_switch_view
+						&& !editing
 						&& crate::dialog::action(
 							ui,
 							crate::i18n::text(
@@ -4230,11 +4370,53 @@ impl MessagingUi {
 		if opening.is_some() {
 			self.timeline.opening = opening;
 		}
+		if save_edit && let Some(draft) = edit_draft.as_ref() {
+			if draft.len() > text_preview::MAX_EDIT_BYTES {
+				self.toasts.push(
+					design::Level::Error,
+					"Local edit exceeds the 64 KiB safe save limit",
+				);
+			} else if self.timeline.save_txt_request.is_none() {
+				// Reuse the existing native file picker; never modify the remote attachment.
+				self.timeline.save_txt_request = Some((preview.filename.clone(), draft.as_bytes().to_vec()));
+			} else {
+				self.toasts.push(design::Level::Error, "A text save is already pending");
+			}
+		}
+		if cancel_edit {
+			edit_draft = None;
+		}
+		let has_unsaved_edits = edit_draft
+			.as_ref()
+			.is_some_and(|draft| draft != &preview.text);
+		let attempted_close = close;
+		if close && has_unsaved_edits && !confirm_discard {
+			close = false;
+		}
+		if let Some(preview) = self.preview.as_mut() {
+			preview.edit_draft = edit_draft;
+			if begin_edit {
+				preview.begin_edit();
+			}
+			if edit_changed {
+				preview.copied = false;
+			}
+			preview.discard_confirm = !keep_editing
+				&& !cancel_edit
+				&& ((attempted_close && has_unsaved_edits && !confirm_discard)
+					|| preview.discard_confirm);
+		}
 		if more && let Some(preview) = self.preview.as_mut() {
 			preview.show_more();
 		}
 		if copy && let Some(preview) = self.preview.as_mut() {
-			ctx.copy_text(preview.text.clone());
+			ctx.copy_text(
+				preview
+					.edit_draft
+					.as_ref()
+					.unwrap_or(&preview.text)
+					.clone(),
+			);
 			preview.copied = true;
 		}
 		if toggle_maximized && let Some(preview) = self.preview.as_mut() {
@@ -4244,7 +4426,7 @@ impl MessagingUi {
 			preview.switch_view();
 			self.preview_formatted = None;
 		}
-		if close {
+		if confirm_discard || close {
 			self.close_preview();
 		}
 		true

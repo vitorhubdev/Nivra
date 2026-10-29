@@ -292,6 +292,16 @@ impl ScreenUi {
 					}
 				}
 			});
+			if let Some(max_bps) = self.settings().map(Settings::bit_rate) {
+				ui.label(
+					egui::RichText::new(format!(
+						"Up to {:.1} Mb/s; transport feedback adjusts the bitrate.",
+						f64::from(max_bps) / 1_000_000.0
+					))
+					.size(12.0)
+					.color(colors.muted),
+				);
+			}
 			crate::design::switch(
 				ui,
 				t("Show cursor"),

@@ -1,0 +1,100 @@
+name: Prepare 1.0.22 formatting and manifests on main
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/prepare-nivra-1.0.22.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nivra-1.0.22-prepare-main
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'vitorhubdev/Nivra' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt
+      - name: Format approved first-pass code and synchronize 1.0.22
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "BASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import pathlib, subprocess, tomllib
+          with pathlib.Path('Cargo.toml').open('rb') as manifest:
+              version = tomllib.load(manifest)['workspace']['package']['version']
+          if version == '1.0.21':
+              subprocess.run(['python3', '.github/release/version.py', '1.0.22'], check=True)
+          elif version != '1.0.22':
+              raise SystemExit(f'Refusing unexpected source version: {version}')
+          PY
+          cargo fmt --all
+          cargo fmt --manifest-path fuzz/Cargo.toml --all
+          cargo fmt --all -- --check
+          cargo metadata --no-deps --locked --format-version 1 >/dev/null
+          python3 - <<'PY'
+          import pathlib, tomllib
+          assert tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version'] == '1.0.22'
+          for lock_path in ('Cargo.lock', 'fuzz/Cargo.lock'):
+              packages = tomllib.loads(pathlib.Path(lock_path).read_text())['package']
+              matching = [p for p in packages if p['name'] == 'nivra' and 'source' not in p]
+              if matching:
+                  assert all(p['version'] == '1.0.22' for p in matching), lock_path
+          PY
+      - name: Commit only affected source/manifest paths to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess
+          allowed = {
+              'Cargo.toml', 'Cargo.lock', 'fuzz/Cargo.lock',
+              'packaging/macos/Info.plist', 'crates/ui/src/lib.rs',
+              'crates/ui/src/attachments.rs', 'crates/ui/src/text_preview.rs',
+              'crates/ui/src/screen.rs', 'crates/client-core/src/screen.rs',
+              'apps/desktop/src/main.rs',
+          }
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          if changed - allowed:
+              raise SystemExit(f'Unexpected formatter changes: {sorted(changed - allowed)}')
+          PY
+          git diff --check
+          git add Cargo.toml Cargo.lock fuzz/Cargo.lock packaging/macos/Info.plist \
+            crates/ui/src/lib.rs crates/ui/src/attachments.rs crates/ui/src/text_preview.rs \
+            crates/ui/src/screen.rs crates/client-core/src/screen.rs apps/desktop/src/main.rs
+          git fetch origin main --depth=1
+          test "$(git rev-parse origin/main)" = "$BASE_SHA" || {
+            echo 'main changed; refusing stale commit'; exit 1;
+          }
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'chore(release): format and synchronize Nivra 1.0.22 on main'
+            git push origin HEAD:main
+          fi
+          echo "Prepared main SHA $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Trigger full CI explicitly after bot commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --ref main
+          echo "Dispatched cross-platform Rust CI for the formatted 1.0.22 main." >> "$GITHUB_STEP_SUMMARY"

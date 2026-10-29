@@ -960,7 +960,7 @@ struct Desktop {
 	pointer: pointer::Pointer,
 	downloads: downloads::Downloads,
 	batch_downloads: batch_downloads::BatchDownloads,
-	save_txt_done: Option<std::sync::mpsc::Receiver<bool>>,
+	save_txt_done: Option<std::sync::mpsc::Receiver<Option<bool>>>,
 	/// Bounded text preview fetched off the render thread, drained each frame.
 	preview_done:
 		Option<std::sync::mpsc::Receiver<Result<ui::text_preview::TextPreview, &'static str>>>,
@@ -1334,6 +1334,8 @@ fn start_text_preview(
 				copied: false,
 				rendered,
 				view_source: false,
+				edit_draft: None,
+				discard_confirm: false,
 			})
 		}
 		.await;
@@ -8015,14 +8017,19 @@ impl eframe::App for Desktop {
 			.and_then(|done| match done.try_recv() {
 				Ok(saved) => Some(saved),
 				Err(std::sync::mpsc::TryRecvError::Empty) => None,
-				Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(false),
+				Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Some(false)),
 			}) {
 			self.save_txt_done = None;
-			if done {
-				self.messaging.toasts.push(
+			match done {
+				Some(true) => self.messaging.toasts.push(
 					ui::design::Level::Success,
 					ui::i18n::text(self.messaging.language, "Selection saved"),
-				);
+				),
+				Some(false) => self.messaging.toasts.push(
+					ui::design::Level::Error,
+					"Could not save the local text file",
+				),
+				None => {} // The user cancelled the native file picker.
 			}
 			ctx.request_repaint();
 		}
@@ -8517,24 +8524,32 @@ impl eframe::App for Desktop {
 			if let Some((filename, bytes)) = self.messaging.take_save_txt_request()
 				&& !self.fixture_only
 			{
-				let runtime = self.runtime.handle().clone();
-				let parent = self.window.clone();
-				let (send, receive) = std::sync::mpsc::sync_channel::<bool>(1);
-				self.save_txt_done = Some(receive);
-				std::thread::Builder::new()
-					.name("nivra-save-txt".into())
-					.spawn(move || {
-						runtime.block_on(async {
-							let Some(path) =
-								platform::save::text_destination(parent, &filename).await
-							else {
-								return;
-							};
-							let saved = std::fs::write(&path, &bytes).is_ok();
-							let _ = send.send(saved);
+				if self.save_txt_done.is_some() {
+					self.messaging.toasts.push(
+						ui::design::Level::Info,
+						"Complete the previous local save first",
+					);
+				} else {
+					let runtime = self.runtime.handle().clone();
+					let parent = self.window.clone();
+					let (send, receive) =
+						std::sync::mpsc::sync_channel::<Option<bool>>(1);
+					self.save_txt_done = Some(receive);
+					let _ = std::thread::Builder::new()
+						.name("nivra-save-txt".into())
+						.spawn(move || {
+							runtime.block_on(async {
+								let Some(path) =
+									platform::save::text_destination(parent, &filename).await
+								else {
+									let _ = send.send(None);
+									return;
+								};
+								let saved = std::fs::write(&path, &bytes).is_ok();
+								let _ = send.send(Some(saved));
+							});
 						});
-					})
-					.ok();
+				}
 			}
 
 			// Inline preview: resolve the signed source, fetch a bounded text body off the
@@ -9544,6 +9559,8 @@ mod tests {
 			copied: false,
 			rendered: None,
 			view_source: false,
+			edit_draft: None,
+			discard_confirm: false,
 		});
 		let mut settings = loaded_settings();
 		settings.current.notices_accepted = true;

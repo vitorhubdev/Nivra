@@ -46,7 +46,9 @@ impl Settings {
 			(1920, 1080) => 8_000_000,
 			_ => 4_000_000,
 		};
-		(base * if self.fps == 60 { 2 } else { 1 }).min(16_000_000)
+		// Keep per-frame quality approximately constant at 15/30/60 fps.
+		// The old 15 fps preset spent the same bits/sec as 30 fps.
+		base.saturating_mul(self.fps.clamp(15, 60)) / 30
 	}
 }
 
@@ -75,5 +77,32 @@ impl Event {
 			}
 			_ => 0,
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn screen_bitrate_scales_with_selected_frame_rate() {
+		let mut settings = Settings {
+			source: SourceId::Display(1),
+			width: 1920,
+			height: 1080,
+			fps: 30,
+			cursor: true,
+			audio: false,
+		};
+		assert!(settings.valid());
+		assert_eq!(settings.bit_rate(), 8_000_000);
+		settings.fps = 15;
+		assert_eq!(settings.bit_rate(), 4_000_000);
+		settings.fps = 60;
+		assert_eq!(settings.bit_rate(), 16_000_000);
+		settings.fps = 30;
+		settings.width = 854;
+		settings.height = 480;
+		assert_eq!(settings.bit_rate(), 2_000_000);
 	}
 }

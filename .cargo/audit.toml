@@ -37,4 +37,10 @@ ignore = [
     "RUSTSEC-2026-0370",
     "RUSTSEC-2026-0371",
     "RUSTSEC-2026-0372",
+    # crypto-bigint 0.5.5 (RUSTSEC-2026-0387) arrives transitively via
+    # davey 0.1.4 -> p256 0.13.2 -> elliptic-curve 0.13.8. The fixed line starts
+    # at >=0.7.6, but the current p256/elliptic-curve line cannot consume that
+    # semver bump, and 0.7.6 is yanked upstream. Re-check when davey/openmls
+    # can move to a newer p256/elliptic-curve stack.
+    "RUSTSEC-2026-0387",
 ]

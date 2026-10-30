@@ -17,12 +17,15 @@ jobs:
   repair:
     if: github.repository == 'vitorhubdev/Nivra' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: write
       actions: write
     env:
       CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -37,11 +40,22 @@ jobs:
           mkdir -p /tmp/protect-evidence
           git rev-parse HEAD > /tmp/protect-evidence/baseline.txt
           python3 -m py_compile .github/maintenance/protect-core.py .github/maintenance/protect-ui.py .github/maintenance/protect-finalize.py
+      - name: Reserve native build disk space on the disposable runner
+        run: |
+          set -euo pipefail
+          df -h / | tee /tmp/protect-evidence/disk-before.txt
+          # These preinstalled SDKs are unused by this Linux Rust/GTK job.
+          # Never remove repository sources, credentials or evidence.
+          for unused_sdk in /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache/CodeQL; do
+            if [ -d "$unused_sdk" ]; then sudo rm -rf -- "$unused_sdk"; fi
+          done
+          df -h / | tee /tmp/protect-evidence/disk-after.txt
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2.9.2
         with:
+          key: protect-nodebug-v1
           cache-on-failure: true
       - name: Native UI and offline renderer dependencies
         run: |
@@ -110,6 +124,7 @@ jobs:
           timeout 90 xvfb-run -a -s '-screen 0 1600x1200x24' target/debug/examples/profile_preview --demo --page=protect --protect-http --protect-pt --light --width=760 --height=1000 --output=docs/pr-evidence/protect-validation/after-http-light.png
           cp docs/pr-evidence/protect-validation/*.png /tmp/protect-evidence/
           cargo clippy --locked -p nivra --features demo --example profile_preview -- -D warnings
+          df -h / | tee /tmp/protect-evidence/disk-final.txt
       - name: Review bounded changed paths and fast-forward only main
         run: |
           set -euo pipefail

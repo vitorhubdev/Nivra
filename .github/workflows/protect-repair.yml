@@ -1,0 +1,137 @@
+name: PROTECT repair and behavioral validation
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/protect-repair.yml'
+      - '.github/maintenance/protect-core.py'
+      - '.github/maintenance/protect-ui.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: protect-repair-main
+  cancel-in-progress: false
+jobs:
+  repair:
+    if: github.repository == 'vitorhubdev/Nivra' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: write
+    env:
+      CARGO_BUILD_JOBS: '2'
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 1
+      - name: Record immutable baseline and validate task scripts
+        run: |
+          set -euo pipefail
+          echo "BASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          mkdir -p /tmp/protect-evidence
+          git rev-parse HEAD > /tmp/protect-evidence/baseline.txt
+          python3 -m py_compile .github/maintenance/protect-core.py .github/maintenance/protect-ui.py
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          cache-on-failure: true
+      - name: Native UI and offline renderer dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libvulkan-dev libasound2-dev libpulse-dev cmake pkg-config clang dpkg-dev desktop-file-utils fonts-noto-cjk xvfb xauth mesa-vulkan-drivers
+      - name: Apply reviewed source edits on main
+        run: |
+          set -euo pipefail
+          python3 .github/maintenance/protect-core.py
+          python3 .github/maintenance/protect-ui.py
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          git diff --binary > /tmp/protect-evidence/source.patch
+      - name: WireGuard, HTTP, SOCKS and shared model regression tests
+        run: |
+          set -euo pipefail
+          cargo test --locked -p protect -p model -- --test-threads=1 2>&1 | tee /tmp/protect-evidence/core-tests.log
+          cargo clippy --locked -p protect -p model --all-targets -- -D warnings 2>&1 | tee /tmp/protect-evidence/core-clippy.log
+      - name: Native UI behavior and profile persistence regressions
+        run: |
+          set -euo pipefail
+          cargo test --locked -p ui --lib protect:: -- --test-threads=1 2>&1 | tee /tmp/protect-evidence/ui-tests.log
+          cargo test --locked -p nivra --bin nivra protect_ -- --test-threads=1 2>&1 | tee /tmp/protect-evidence/desktop-tests.log
+          cargo clippy --locked --workspace --all-targets -- -D warnings 2>&1 | tee /tmp/protect-evidence/workspace-clippy.log
+      - name: Render synthetic native PROTECT screens without accounts or networking
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('apps/desktop/examples/profile_preview.rs')
+          text = path.read_text()
+          marker = '\t\t\tOk(Box::new(Preview {'
+          assert text.count(marker) == 1
+          fixture = '''            // Explicit synthetic PROTECT fixture; this executable has no live host.
+                      if args.iter().any(|arg| arg == "--protect-http") {
+                          messaging.set_protect_draft(model::protect::Draft {
+                              protocol: model::protect::Protocol::Http,
+                              scope: model::protect::Scope::Streams,
+                              host: "192.0.2.20".into(), port: 80,
+                              ..Default::default()
+                          });
+                      }
+                      if args.iter().any(|arg| arg == "--protect-pt") {
+                          for language in model::Language::ALL {
+                              if language.label().contains("Portugu") {
+                                  messaging.language = language;
+                                  break;
+                              }
+                          }
+                      }
+          '''
+          path.write_text(text.replace(marker, fixture+marker))
+          PY
+          cargo fmt --all
+          cargo build --locked -p nivra --features demo --example profile_preview
+          mkdir -p /tmp/nivra-xdg docs/pr-evidence/protect-validation
+          chmod 700 /tmp/nivra-xdg
+          export XDG_RUNTIME_DIR=/tmp/nivra-xdg LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=vulkan
+          timeout 90 xvfb-run -a -s '-screen 0 1600x1200x24' target/debug/examples/profile_preview --demo --page=protect --protect-http --protect-pt --width=1120 --height=1000 --output=docs/pr-evidence/protect-validation/after-http.png
+          timeout 90 xvfb-run -a -s '-screen 0 1600x1200x24' target/debug/examples/profile_preview --demo --page=protect --protect-http --protect-pt --light --width=760 --height=1000 --output=docs/pr-evidence/protect-validation/after-http-light.png
+          cp docs/pr-evidence/protect-validation/*.png /tmp/protect-evidence/
+          cargo clippy --locked -p nivra --features demo --example profile_preview -- -D warnings
+      - name: Review bounded changed paths and fast-forward only main
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          git diff --check
+          python3 - <<'PY'
+          import pathlib, subprocess
+          allowed = {'crates/protect/src/wireguard.rs','crates/protect/src/wg_engine.rs','crates/protect/src/lib.rs','crates/model/src/protect.rs','crates/ui/src/protect.rs','apps/desktop/src/main.rs','apps/desktop/src/protect_profiles.rs','apps/desktop/examples/profile_preview.rs','docs/protect.md','crates/ui/locales/en.ftl','crates/ui/locales/pt-BR.ftl','crates/ui/locales/es.ftl'}
+          changed = set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          assert changed <= allowed, sorted(changed-allowed)
+          for path in pathlib.Path('docs/pr-evidence/protect-validation').glob('*.png'):
+              assert path.stat().st_size <= 2*1024*1024
+          subprocess.run(['git','add','--',*sorted(changed),'docs/pr-evidence/protect-validation/after-http.png','docs/pr-evidence/protect-validation/after-http-light.png'],check=True)
+          PY
+          git fetch origin main --depth=1
+          test "$(git rev-parse origin/main)" = "$BASE_SHA" || { echo 'main advanced; refusing stale push'; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(protect): accept mixed IPv4 profiles and expose compatible proxy actions' -m 'Validated parser, encrypted loopback TCP/UDP, proxy routing, model, native PROTECT UI and profile tests. Honor configured in-tunnel IPv4 DNS; preserve explicit port 80; reject malformed/v6-only routes without direct fallback. No real provider or Discord-account test. Native screenshots are offline synthetic fixtures; performance percentage unmeasured. Existing named profile is saved before predecessor deletion. Only task files, no release tag or security waivers changed.'
+          git push origin HEAD:main
+          git rev-parse HEAD | tee /tmp/protect-evidence/pushed-commit.txt
+          gh workflow run ci.yml --ref main
+          echo 'Validated changes pushed to main; full platform CI requested.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve inspectable evidence even if validation fails
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: protect-repair-evidence
+          path: /tmp/protect-evidence/
+          if-no-files-found: error
+          retention-days: 14

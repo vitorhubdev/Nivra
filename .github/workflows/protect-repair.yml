@@ -94,8 +94,7 @@ jobs:
           marker = '\t\t\tOk(Box::new(Preview {'
           assert text.count(marker) == 1
           fixture = '''            // Explicit synthetic PROTECT fixture; no live host is present.
-                      // Start the accepted account fixture, then select the real native
-                      // PROTECT settings page after all generic fixture initialization.
+                      // Select the real native PROTECT page after generic fixture setup.
                       if args.iter().any(|arg| arg == "--protect-http") {
                           messaging.set_protect_draft(model::protect::Draft {
                               protocol: model::protect::Protocol::Http,
@@ -103,7 +102,7 @@ jobs:
                               host: "192.0.2.20".into(), port: 80,
                               ..Default::default()
                           });
-                          messaging.preview_settings(client_core::settings::Page::Protect);
+                          messaging.preview_settings(ui::Page::Protect);
                       }
                       if args.iter().any(|arg| arg == "--protect-pt") {
                           for language in model::Language::ALL {

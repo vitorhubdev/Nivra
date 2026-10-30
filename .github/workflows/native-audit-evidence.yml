@@ -8,6 +8,7 @@ permissions:
   contents: read
 jobs:
   source:
+    name: Immutable tracked source snapshot
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

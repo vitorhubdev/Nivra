@@ -3,6 +3,10 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    paths-ignore:
+      - '.github/maintenance/**'
+      - '.github/workflows/native-audit-evidence.yml'
+      - '.github/workflows/native-validated-release.yml'
   workflow_dispatch:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -55,7 +59,9 @@ jobs:
         if: always()
         with:
           name: noise-suppression-audio-${{ runner.os }}-${{ runner.arch }}
-          path: crates/discord-voice/test-assets/*.wav
+          path: |
+            crates/discord-voice/test-assets/*.wav
+            crates/discord-voice/test-assets/deepfilter-real-model.txt
           if-no-files-found: ignore
       - name: Check the release feature set and policy
         run: |
@@ -70,14 +76,15 @@ jobs:
       - run: cargo replay --soak 5
       - name: Linux package regression
         if: runner.os == 'Linux'
-        run: PYTHONDONTWRITEBYTECODE=1 python3 packaging/linux/test_package.py
-      # The release executable is the long step. PRs compile and test only.
-      # Main pushes and v* tags still build and upload dist/.
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 packaging/linux/test_package.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packaging/windows -p 'test_compress_portable.py'
+      # PRs compile and test only. Main and tags package every platform.
       - name: Package app without demo or developer features
-        if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || (github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/tags/v') || (runner.os == 'Windows' && runner.arch == 'X64')))
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         run: cargo xtask package
       - uses: actions/upload-artifact@v7.0.1
-        if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || (github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/tags/v') || (runner.os == 'Windows' && runner.arch == 'X64')))
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         with:
           name: nivra-${{ runner.os }}-${{ runner.arch }}-unsigned
           path: dist/
@@ -175,15 +182,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      # The artifact API needs actions: read; unspecified permissions are none.
       actions: read
     steps:
-      # The release notes come from CHANGELOG.md, so the repository has to be here.
       - uses: actions/checkout@v7.0.1
         with:
-          sparse-checkout: CHANGELOG.md
-      # actions/download-artifact@v8 fails the tag run with `digest-mismatch`, so the
-      # packaged builds are pulled through the API, which this job already uses.
+          sparse-checkout: |
+            CHANGELOG.md
+            packaging/windows
       - name: Collect the packaged builds
         env:
           GH_TOKEN: ${{ github.token }}
@@ -221,6 +226,9 @@ jobs:
               Windows)
                 exe="$(find "$dir" -type f -name Nivra.exe -print -quit)"
                 cp "$exe" "Nivra-${tag}-Windows-${arch}.exe"
+                python3 "${GITHUB_WORKSPACE}/packaging/windows/compress_portable.py" \
+                  "Nivra-${tag}-Windows-${arch}.exe" "Nivra-${tag}-Windows-${arch}.zip" \
+                  > "Nivra-${tag}-Windows-${arch}-sizes.json"
                 ;;
               macOS)
                 app="$(find "$dir" -type d -name Nivra.app -print -quit)"
@@ -232,8 +240,6 @@ jobs:
             esac
           done
           sha256sum Nivra-"${tag}"-* > SHA256SUMS.txt
-          # Notes come from the CHANGELOG section of this version, so a release
-          # never repeats an older round's text.
           notes="$(mktemp)"
           if [[ "$version" == *-rc.* ]]; then
             awk '
@@ -252,7 +258,7 @@ jobs:
           if [ ! -s "$notes" ]; then
             printf 'Nivra %s\n\nSem notas no CHANGELOG para esta versão.\n' "${version}" > "$notes"
           fi
-          printf '\nEstes pacotes não têm assinatura. O Windows pode mostrar "Proteção do Windows" ao abrir o .exe; escolha "Mais informações" e "Executar assim mesmo".\n' >> "$notes"
+          printf '\nEstes pacotes não têm assinatura digital. Verifique a origem e o SHA256 antes de executar.\n' >> "$notes"
           for expected in "Windows-X64.exe" "Windows-ARM64.exe" "Linux-X64.tar.gz" "macOS-ARM64.zip"; do
             test -s "Nivra-${tag}-${expected}" || { echo "Missing release package: ${expected}"; exit 1; }
           done

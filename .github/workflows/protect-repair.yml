@@ -73,8 +73,12 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
           path = Path('apps/desktop/examples/profile_preview.rs')
           text = path.read_text()
+          pattern = r'(?m)^([ \t]*)view_source: false,[ \t]*$'
+          text, repaired = re.subn(pattern, lambda m: m.group(0) + '\n' + m.group(1) + 'edit_draft: None,\n' + m.group(1) + 'discard_confirm: false,', text)
+          assert repaired == 3, f'Unexpected TextPreview fixture count: {repaired}'
           marker = '\t\t\tOk(Box::new(Preview {'
           assert text.count(marker) == 1
           fixture = '''            // Explicit synthetic PROTECT fixture; this executable has no live host.

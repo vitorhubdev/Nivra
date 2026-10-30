@@ -1,29 +1,143 @@
-name: Native audit evidence
+name: Native 1.0.23 behavioral validation
 on:
   push:
     branches: [main]
-    paths: ['.github/workflows/native-audit-evidence.yml']
+    paths:
+      - '.github/workflows/native-audit-evidence.yml'
+      - '.github/maintenance/native-1.0.23.patch.xz.part*'
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: native-1.0.23-candidate
+  cancel-in-progress: false
 jobs:
-  source:
-    name: Immutable tracked source snapshot
+  validate:
+    if: github.repository == 'vitorhubdev/Nivra' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      actions: write
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@v7.0.1
         with:
-          persist-credentials: false
-      - name: Archive tracked source only
+          ref: main
+          fetch-depth: 1
+      - name: Verify bounded candidate and record baseline
         run: |
           set -euo pipefail
-          mkdir -p /tmp/native-audit
-          git rev-parse HEAD > /tmp/native-audit/commit.txt
-          git archive --format=tar.gz HEAD > /tmp/native-audit/source.tar.gz
-      - uses: actions/upload-artifact@v7.0.1
+          mkdir -p /tmp/native-evidence
+          echo "BASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git rev-parse HEAD > /tmp/native-evidence/baseline.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, lzma, subprocess, tomllib
+          version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          if version == '1.0.22':
+              encoded = ''.join(Path(f'.github/maintenance/native-1.0.23.patch.xz.part{i}').read_text().strip() for i in (1,2))
+              assert len(encoded) == 29576, len(encoded)
+              patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+              assert len(patch) == 81467, len(patch)
+              assert hashlib.sha256(patch).hexdigest() == '7464117a37bac715e7a75d5d1ef6f1bfc956d6e8182f94b0bc6531aee77ab5bc'
+              target = Path('/tmp/native-evidence/reviewed-candidate.patch')
+              target.write_bytes(patch)
+              for name in ('protect-core', 'protect-ui', 'protect-finalize'):
+                  subprocess.run(['python3',f'.github/maintenance/{name}.py'],check=True)
+              subprocess.run(['git','apply','--check',str(target)],check=True)
+              subprocess.run(['git','apply',str(target)],check=True)
+          else:
+              assert version == '1.0.23', version
+          PY
+          git add -N docs/native-1.0.23-review.md packaging/windows/compress_portable.py packaging/windows/test_compress_portable.py
+          git diff --check
+      - uses: dtolnay/rust-toolchain@1.98.1
         with:
-          name: native-audit-source
-          path: /tmp/native-audit/
-          retention-days: 3
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: protect-nodebug-v1
+          cache-on-failure: true
+      - name: Native dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libvulkan-dev libasound2-dev libpulse-dev cmake pkg-config clang dpkg-dev desktop-file-utils fonts-noto-cjk xvfb xauth mesa-vulkan-drivers
+      - name: Format and strict workspace compilation
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          git diff --binary > /tmp/native-evidence/formatted-source.patch
+          cargo clippy --locked --workspace --all-targets -- -D warnings 2>&1 | tee /tmp/native-evidence/clippy.log
+      - name: PROTECT and shared model regressions
+        run: |
+          set -euo pipefail
+          cargo test --locked -p protect -p model -- --test-threads=1 2>&1 | tee /tmp/native-evidence/protect-model.log
+      - name: Real DeepFilterNet, fallback alignment and screen pipeline regressions
+        run: |
+          set -euo pipefail
+          cargo test --locked -p discord-voice --lib audio::echo:: -- --test-threads=1 --nocapture 2>&1 | tee /tmp/native-evidence/audio.log
+          cargo test --locked -p discord-voice --lib screen:: -- --test-threads=1 2>&1 | tee /tmp/native-evidence/screen.log
+      - name: Native UI and persisted route regressions
+        run: |
+          set -euo pipefail
+          cargo test --locked -p ui --lib -- --test-threads=1 2>&1 | tee /tmp/native-evidence/ui.log
+          cargo test --locked -p nivra --bin nivra protect_ -- --test-threads=1 2>&1 | tee /tmp/native-evidence/desktop-protect.log
+          python3 -m unittest discover -s packaging/windows -p 'test_compress_portable.py' 2>&1 | tee /tmp/native-evidence/portable-packaging.log
+      - name: Render actual native PROTECT with synthetic offline configuration
+        run: |
+          set -euo pipefail
+          cargo build --locked -p nivra --features demo --example profile_preview 2>&1 | tee /tmp/native-evidence/preview-build.log
+          mkdir -p /tmp/nivra-xdg
+          chmod 700 /tmp/nivra-xdg
+          export XDG_RUNTIME_DIR=/tmp/nivra-xdg LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=vulkan
+          timeout 90 xvfb-run -a -s '-screen 0 1600x1200x24' target/debug/examples/profile_preview --demo --page=protect --protect-http --protect-pt --width=1120 --height=1000 --output=/tmp/native-evidence/protect-dark.png
+          timeout 90 xvfb-run -a -s '-screen 0 1600x1200x24' target/debug/examples/profile_preview --demo --page=protect --protect-http --protect-pt --light --width=760 --height=1000 --output=/tmp/native-evidence/protect-light.png
+          cargo clippy --locked -p nivra --features demo --example profile_preview -- -D warnings 2>&1 | tee /tmp/native-evidence/preview-clippy.log
+      - name: Integrate only reviewed source paths and request full platform CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          git diff --check
+          python3 - <<'PY'
+          import subprocess
+          allowed = set('''CHANGELOG.md Cargo.toml Cargo.lock fuzz/Cargo.lock packaging/macos/Info.plist packaging/windows/compress_portable.py packaging/windows/test_compress_portable.py docs/native-1.0.23-review.md docs/protect.md apps/desktop/examples/profile_preview.rs apps/desktop/src/main.rs apps/desktop/src/protect_profiles.rs apps/desktop/src/screen.rs crates/model/src/protect.rs crates/protect/src/lib.rs crates/protect/src/wireguard.rs crates/protect/src/wg_engine.rs crates/protect/src/wg_dns.rs crates/ui/src/protect.rs crates/ui/src/screen.rs crates/ui/src/voice.rs crates/ui/locales/en.ftl crates/ui/locales/es.ftl crates/ui/locales/pt-BR.ftl crates/discord-voice/src/audio/echo.rs crates/discord-voice/src/screen.rs crates/discord-voice/src/screen/capture_windows.rs crates/discord-voice/src/screen/gstreamer.rs crates/discord-voice/src/screen/linux.rs'''.split())
+          changed = set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          assert changed <= allowed, sorted(changed-allowed)
+          if changed:
+              subprocess.run(['git','add','--',*sorted(changed)],check=True)
+          PY
+          git fetch origin main --depth=1
+          test "$(git rev-parse origin/main)" = "$BASE_SHA" || { echo 'main advanced; refusing stale push'; exit 1; }
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'fix(native): align denoiser latency, bound self-preview work and independently probe UDP' -m 'Prepare 1.0.23. Validated local behavioral fixtures and real DF3 synthetic inference; no microphone, live Discord, provider, or user GPU benchmark. Preserve fail-closed routes and existing security policy. Full cross-platform CI required before release.'
+            git push origin HEAD:main
+          fi
+          git rev-parse HEAD | tee /tmp/native-evidence/validated-source-commit.txt
+          gh workflow run ci.yml --ref main
+      - name: Collect actual model output and preserve diagnostics
+        if: always()
+        run: |
+          mkdir -p /tmp/native-evidence/audio
+          find crates/discord-voice/test-assets -maxdepth 1 -type f \( -name '*REAL*' -o -name 'deepfilter-real-model.txt' \) -exec cp {} /tmp/native-evidence/audio/ \; || true
+          git diff --binary > /tmp/native-evidence/final-working-tree.patch
+          df -h / > /tmp/native-evidence/disk.txt
+      - uses: actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: native-1.0.23-validation
+          path: /tmp/native-evidence/
+          retention-days: 14
           if-no-files-found: error

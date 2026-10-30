@@ -74,7 +74,7 @@ mod wireguard_ipv6_tests {
     use super::*;
     #[tokio::test]
     async fn ipv6_under_wireguard_fails_before_opening_a_udp_association() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let profile = Profile {
             protocol: Protocol::Socks5, scope: Scope::Streams,
             host: "127.0.0.1".into(), port: listener.local_addr().unwrap().port(),

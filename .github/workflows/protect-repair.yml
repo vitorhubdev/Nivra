@@ -6,6 +6,7 @@ on:
       - '.github/workflows/protect-repair.yml'
       - '.github/maintenance/protect-core.py'
       - '.github/maintenance/protect-ui.py'
+      - '.github/maintenance/protect-finalize.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -35,7 +36,7 @@ jobs:
           echo "BASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           mkdir -p /tmp/protect-evidence
           git rev-parse HEAD > /tmp/protect-evidence/baseline.txt
-          python3 -m py_compile .github/maintenance/protect-core.py .github/maintenance/protect-ui.py
+          python3 -m py_compile .github/maintenance/protect-core.py .github/maintenance/protect-ui.py .github/maintenance/protect-finalize.py
       - uses: dtolnay/rust-toolchain@1.98.1
         with:
           components: rustfmt, clippy
@@ -51,6 +52,7 @@ jobs:
           set -euo pipefail
           python3 .github/maintenance/protect-core.py
           python3 .github/maintenance/protect-ui.py
+          python3 .github/maintenance/protect-finalize.py
           cargo fmt --all
           cargo fmt --all -- --check
           git diff --check

@@ -1,0 +1,28 @@
+name: Native audit evidence
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/native-audit-evidence.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Archive tracked source only
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/native-audit
+          git rev-parse HEAD > /tmp/native-audit/commit.txt
+          git archive --format=tar.gz HEAD > /tmp/native-audit/source.tar.gz
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: native-audit-source
+          path: /tmp/native-audit/
+          retention-days: 3
+          if-no-files-found: error

@@ -44,8 +44,6 @@ jobs:
         run: |
           set -euo pipefail
           df -h / | tee /tmp/protect-evidence/disk-before.txt
-          # These preinstalled SDKs are unused by this Linux Rust/GTK job.
-          # Never remove repository sources, credentials or evidence.
           for unused_sdk in /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache/CodeQL; do
             if [ -d "$unused_sdk" ]; then sudo rm -rf -- "$unused_sdk"; fi
           done
@@ -95,7 +93,9 @@ jobs:
           assert repaired == 3, f'Unexpected TextPreview fixture count: {repaired}'
           marker = '\t\t\tOk(Box::new(Preview {'
           assert text.count(marker) == 1
-          fixture = '''            // Explicit synthetic PROTECT fixture; this executable has no live host.
+          fixture = '''            // Explicit synthetic PROTECT fixture; no live host is present.
+                      // Start the accepted account fixture, then select the real native
+                      // PROTECT settings page after all generic fixture initialization.
                       if args.iter().any(|arg| arg == "--protect-http") {
                           messaging.set_protect_draft(model::protect::Draft {
                               protocol: model::protect::Protocol::Http,
@@ -103,6 +103,7 @@ jobs:
                               host: "192.0.2.20".into(), port: 80,
                               ..Default::default()
                           });
+                          messaging.preview_settings(client_core::settings::Page::Protect);
                       }
                       if args.iter().any(|arg| arg == "--protect-pt") {
                           for language in model::Language::ALL {
@@ -120,8 +121,8 @@ jobs:
           mkdir -p /tmp/nivra-xdg docs/pr-evidence/protect-validation
           chmod 700 /tmp/nivra-xdg
           export XDG_RUNTIME_DIR=/tmp/nivra-xdg LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=vulkan
-          timeout 90 xvfb-run -a -s '-screen 0 1600x1200x24' target/debug/examples/profile_preview --demo --page=protect --protect-http --protect-pt --width=1120 --height=1000 --output=docs/pr-evidence/protect-validation/after-http.png
-          timeout 90 xvfb-run -a -s '-screen 0 1600x1200x24' target/debug/examples/profile_preview --demo --page=protect --protect-http --protect-pt --light --width=760 --height=1000 --output=docs/pr-evidence/protect-validation/after-http-light.png
+          timeout 90 xvfb-run -a -s '-screen 0 1600x1200x24' target/debug/examples/profile_preview --demo --page=account --protect-http --protect-pt --width=1120 --height=1000 --output=docs/pr-evidence/protect-validation/after-http.png
+          timeout 90 xvfb-run -a -s '-screen 0 1600x1200x24' target/debug/examples/profile_preview --demo --page=account --protect-http --protect-pt --light --width=760 --height=1000 --output=docs/pr-evidence/protect-validation/after-http-light.png
           cp docs/pr-evidence/protect-validation/*.png /tmp/protect-evidence/
           cargo clippy --locked -p nivra --features demo --example profile_preview -- -D warnings
           df -h / | tee /tmp/protect-evidence/disk-final.txt
